@@ -147,7 +147,7 @@ export function completionVerb(type: ActivityType): string {
 }
 ```
 
-The same applies to `ActivityStatus`, `ListBehaviour`, `ErrorCode`, `splitMode`, and every
+The same applies to `ActivityStatus`, `ListItemState`, `ErrorCode`, `splitMode`, and every
 `details.kind` branch.
 
 ### 1.6 `satisfies` over annotation
@@ -172,7 +172,7 @@ export const ACTIVITY_TYPE_ICON = {
 Adding an `ActivityType` without adding a row here is a compile error, which is exactly what
 `design-system.md` §5.2 requires.
 
-Use this pattern only over a **genuinely closed** enum — `ActivityType`, `ListBehaviour`,
+Use this pattern only over a **genuinely closed** enum — `ActivityType`, `ListItemState`,
 `ActivityStatus`, `DefaultSlot`. Do not build an exhaustive map over something open-ended
 such as a list template key; templates are configuration and a new one must never be a
 compile error (`../02-architecture/data-model.md` §4.6).
@@ -1102,14 +1102,14 @@ Operational notes:
   legacy or seeded duplicate ranks within one committed generation; it is not the allocation
   strategy. If equal-rank neighbours prevent a valid between-rank calculation, run the
   bounded list repair, re-read, and retry rather than calling `lexoRankBetween(a, a)`.
-- `rankRepairId` and `behaviourMigrationId` are read gates, not sort hints. Every list-item
+- `rankRepairId` and `schemaMigrationId` are read gates, not sort hints. Every list-item
   page strongly reads META, rejects either marker, runs its item Query with
   `ConsistentRead: true`, then strongly rereads META before serialisation. Both reads must have
   the same `rankVersion` and no marker; otherwise the service drains bounded work when
   applicable and returns `503 internal` with `Retry-After: 1` and no item rows. Cursors bind
   that fenced version; final repair/migration transactions clear their marker and advance the version, so
   an old cursor restarts at page one. A reader never exposes a page containing mixed rank or
-  behaviour generations, including when an operation begins between the first META read and
+  schema generations, including when an operation begins between the first META read and
   the Query.
 
 ---

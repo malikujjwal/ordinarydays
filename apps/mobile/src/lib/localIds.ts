@@ -42,6 +42,6 @@ function encodeRandom(bytes: Uint8Array): string {
  * The union is closed on purpose: a new prefix is a decision about what a client may name,
  * so it is made here rather than by passing a different string at a call site.
  */
-export function newLocalId(prefix: 'rem' | 'ing'): string {
+export function newLocalId(prefix: 'rem' | 'ing' | 'sub'): string {
   return `${prefix}_${encodeTime(Date.now())}${encodeRandom(getRandomBytes(10))}`;
 }

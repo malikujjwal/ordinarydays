@@ -36,17 +36,18 @@ const listMetaRow = (overrides: Record<string, unknown> = {}) => ({
   pk: `LIST#${LST}`,
   sk: 'META',
   entity: 'List',
+  schemaVersion: 2,
   listId: LST,
   ownerId: DEV,
-  behaviour: 'collection',
   templateKey: 'groceries',
   title: 'Groceries',
   icon: 'cart',
   emptyStateCopy: 'Add something to buy.',
-  capabilities: { checkable: true, supportsLocation: false },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: {},
   slot: 'groceries',
   itemCount: 2,
-  uncheckedCount: 2,
+  doneCount: 0,
   memberCount: 1,
   rankVersion: 0,
   archived: false,
@@ -74,7 +75,7 @@ const itemRow = (itemId: string, rank: string) => ({
   rank,
   itemRevision: 0,
   title: 'Chicken',
-  checked: false,
+  state: 'open',
 });
 
 const linkRow = (itemId: string) => ({
@@ -177,15 +178,16 @@ describe('creating a list', () => {
     expect(body.data.listId).toMatch(/^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
     expect(body.data).toMatchObject({
       ownerId: DEV,
-      behaviour: 'collection',
+      schemaVersion: 2,
       templateKey: 'groceries',
       title: 'Trader Joe’s',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       slot: 'groceries',
       itemCount: 0,
-      uncheckedCount: 0,
+      doneCount: 0,
       memberCount: 1,
       rankVersion: 0,
       archived: false,
@@ -237,6 +239,8 @@ describe('creating a list', () => {
   it.each([
     ['behaviour', 'collection'],
     ['capabilities', { checkable: true, supportsLocation: false }],
+    ['itemStateMode', { mode: 'checkbox' }],
+    ['featureConfig', {}],
     ['slot', 'groceries'],
     ['icon', 'cart'],
     ['emptyStateCopy', 'Add something.'],
@@ -486,7 +490,7 @@ describe('GET /v1/lists/:id', () => {
     const body = await (await get(createApp(), `/v1/lists/${LST}`)).json();
 
     expect(body.data.list).not.toHaveProperty('rankRepairId');
-    expect(body.data.list).not.toHaveProperty('behaviourMigrationId');
+    expect(body.data.list).not.toHaveProperty('schemaMigrationId');
   });
 
   it('joins only the caller’s readable viewerLink onto the fenced first page', async () => {

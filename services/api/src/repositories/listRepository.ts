@@ -8,10 +8,8 @@ import {
   activity as activitySchema,
   defaultSlot as defaultSlotSchema,
   instant,
-  listBehaviour as listBehaviourSchema,
   listIndex as listIndexSchema,
   listItemActivityLink as listItemActivityLinkSchema,
-  listItemDetails as listItemDetailsSchema,
   listItem as listItemSchema,
   listMember as listMemberSchema,
   list as listSchema,
@@ -20,13 +18,13 @@ import type { Instant } from '@od/shared/time';
 import type {
   Activity,
   DefaultSlot,
+  ItemStateMode,
   List,
-  ListBehaviour,
-  ListCapabilities,
+  ListFeatureConfig,
   ListIndex,
   ListItem,
   ListItemActivityLink,
-  ListItemDetails,
+  ListItemFeatures,
   ListMember,
 } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
@@ -56,7 +54,6 @@ import { receiptItem } from './idempotencyRepository.js';
 import {
   activityMeta,
   activityTombstone,
-  listBehaviourMigration,
   listBulkOperation,
   listItemActivityLink,
   listItemActivityLinkAllPrefix,
@@ -79,6 +76,11 @@ import {
   LIST_ITEM_ACTIVITY_LINK_ENTITY,
   listItemActivityLinkRow,
 } from './listLinkRow.js';
+import {
+  hasCanonicalListShape,
+  isCanonicalListRow,
+  migrateListAggregateOnRead,
+} from './listSchemaMigration.js';
 import type { StoredItem } from './migrate.js';
 import { MAX_TRANSACT_ITEMS, TransactionBuilder, transactWrite } from './tx.js';
 import {
@@ -89,7 +91,7 @@ import {
 /**
  * The storage half of Lists and ListItems (`data-model.md` patterns 7, 8, 8b and 8d).
  *
- * This module stores rather than decides. Services resolve templates, validate capabilities,
+ * This module stores rather than decides. Services resolve presets, validate typed settings,
  * authorise through `assertListAccess`, hash Undo tokens, and orchestrate repair/migration.
  * Every write here is deterministic: ids and timestamps are arguments, never minted or read
  * inside a mutation. The exported generators sit beside those writes for callers that need
@@ -128,24 +130,23 @@ const ENTITY = {
   /** Written first in Phase 6; the delete cascade already iterates it (§P3-05). */
   member: 'ListMember',
   rankRepair: 'ListRankRepair',
-  behaviourMigration: 'ListBehaviourMigration',
   bulkOperation: 'ListBulkOperation',
   undo: 'ListUndo',
   tombstone: 'ListTombstone',
   sourceList: 'SourceList',
 } as const;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const PAGE_SIZE = 50;
 const TABLE_KEY = ['pk', 'sk'] as const;
 const MAX_MUTATION_ATTEMPTS = 5;
 
 const GATE_NAMES = {
   '#rankRepairId': 'rankRepairId',
-  '#behaviourMigrationId': 'behaviourMigrationId',
+  '#schemaMigrationId': 'schemaMigrationId',
 } as const;
 const GATES_ABSENT =
-  'attribute_not_exists(#rankRepairId) AND attribute_not_exists(#behaviourMigrationId)';
+  'attribute_not_exists(#rankRepairId) AND attribute_not_exists(#schemaMigrationId)';
 const ITEM_VERSION_INCREMENT = 1;
 
 /**
@@ -270,7 +271,7 @@ export class ListItemNotFoundError extends Error {
   }
 }
 
-/** A public item read crossed a rank/behaviour generation and must be retried from page one. */
+/** A public item read crossed a rank/schema generation and must be retried from page one. */
 export class ListReadFenceError extends Error {
   constructor() {
     super('The list changed while it was being read.');
@@ -405,16 +406,22 @@ function assertListAccessGrant(
 }
 
 async function getLiveListMetaStrong(listId: string): Promise<List | undefined> {
-  const row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
+  let row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
   if (row === undefined) return undefined;
   const deleting = await getItem<StoredItem>(listTombstone(listId), {
     consistentRead: true,
   });
-  return deleting === undefined ? parseList(row) : undefined;
+  if (deleting !== undefined) return undefined;
+  // A strong fenced read must observe a marker that appeared after its first META read.
+  // Draining it here would hide the generation change and require the worker row to exist
+  // before `assertSameFence` can reject the page. Only legacy-shaped META needs migration;
+  // canonical-shaped META remains parseable while gated.
+  if (!hasCanonicalListShape(row)) row = await migrateListAggregateOnRead(listId, row);
+  return parseList(row);
 }
 
 function assertFenceOpen(list: List): void {
-  if (list.rankRepairId !== undefined || list.behaviourMigrationId !== undefined) {
+  if (list.rankRepairId !== undefined || list.schemaMigrationId !== undefined) {
     throw new ListReadFenceError();
   }
 }
@@ -576,8 +583,10 @@ export async function getListMetaForDeletion(
   access: ListAccessGrant,
 ): Promise<List | undefined> {
   assertListAccessGrant(userId, listId, access);
-  const row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
-  return row === undefined ? undefined : parseList(row);
+  let row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
+  if (row === undefined) return undefined;
+  if (!isCanonicalListRow(row)) row = await migrateListAggregateOnRead(listId, row);
+  return parseList(row);
 }
 
 export interface UserListEntry {
@@ -628,13 +637,17 @@ export async function listListsForUser(
     ]),
     strong,
   );
+  const listRows = rows.filter((row) => row.entity === ENTITY.list);
+  const migratedRows = await Promise.all(
+    listRows.map(async (row) =>
+      isCanonicalListRow(row) ? row : migrateListAggregateOnRead(String(row.listId), row),
+    ),
+  );
   const lists = new Map(
-    rows
-      .filter((row) => row.entity === ENTITY.list)
-      .map((row) => {
-        const list = parseList(row);
-        return [list.listId, list] as const;
-      }),
+    migratedRows.map((row) => {
+      const list = parseList(row);
+      return [list.listId, list] as const;
+    }),
   );
   const deleting = new Set(
     rows
@@ -907,12 +920,11 @@ export interface WatchFollowUpSource {
  *
  * ## What the fence is protecting here
  *
- * §P3-16's edge case: a list changed away from `behaviour: 'watch'` loses its items' typed
- * `details`, and P3-09 removes them a chunk at a time. Mid-migration the rows are a mix of
- * both shapes, so an unfenced read could find watch `details` on a row the migration has not
- * reached yet and offer to update progress the user has just chosen to delete.
+ * The schema-migration edge case: a legacy watch aggregate is converted a page at a time.
+ * Mid-migration the rows are a mix of both shapes, so an unfenced read could find legacy
+ * watch progress on a row the migration has not reached yet.
  *
- * A missing list, a non-`watch` one, a missing pointer and a missing item are all
+ * A missing List, no compatible exposed state/Progress, a missing pointer and a missing item are all
  * `undefined` — one absent thing among four, with nothing to tell apart. A fence failure
  * still **throws** `ListReadFenceError`, as it does at every other call site rather than
  * being quietly special here; turning that into "no follow-up" is the caller's policy
@@ -928,7 +940,10 @@ export async function readWatchFollowUpSource(
   const before = await getLiveListMetaStrong(listId);
   if (before === undefined) return undefined;
   assertFenceOpen(before);
-  if (before.behaviour !== 'watch') return undefined;
+  const episodeProgressEnabled =
+    before.featureConfig.progress?.enabled === true &&
+    before.featureConfig.progress.kind === 'episode';
+  if (!episodeProgressEnabled && before.itemStateMode.mode === 'none') return undefined;
 
   const [linkRow, resolved] = await Promise.all([
     getItem<StoredItem>(listItemActivityLink(listId, userId, itemId), {
@@ -1079,7 +1094,8 @@ export async function snapshotListItems(
 
 export interface ListMetaPatch {
   readonly title?: string;
-  readonly capabilities?: ListCapabilities;
+  readonly itemStateMode?: ItemStateMode;
+  readonly featureConfig?: ListFeatureConfig;
   readonly slot?: List['slot'];
   readonly archived?: boolean;
 }
@@ -1094,34 +1110,18 @@ export interface RemovedListDefault {
  * What an Undo of one additive settings operation would write back
  * (`data-model.md` §3.3, §7 "Undo List operation").
  *
- * Only the fields the forward change actually altered are present, so compensation restores
- * what was touched and nothing else. `title` is deliberately absent from this and from the
- * preconditions: a rename has no undo row in `interaction-contract.md` §4.1, so it records
- * no inverse and a settings operation that also renamed does not put the old title back.
+ * Only fields the forward change actually altered are present, so compensation restores what
+ * was touched and nothing else. Every effective setting, including title, receives the same
+ * six-second Undo offer.
  */
 export interface ListSettingsInverse {
-  readonly behaviour?: ListBehaviour;
-  /**
-   * **Only the flags this operation moved**, never the whole pair.
-   *
-   * Turning `Show checkboxes` off and, six seconds later, `Add a place to items` on are two
-   * operations on one object. A whole-pair inverse makes the first Undo either refuse — its
-   * precondition names a `supportsLocation` that has since moved — or put the newer choice
-   * back where it was. Recording one flag restores one flag, which is what the user was
-   * offered when they were shown a toast for one switch.
-   */
-  readonly capabilities?: Partial<ListCapabilities>;
+  readonly title?: string;
+  readonly itemStateMode?: ItemStateMode;
+  readonly featureConfig?: ListFeatureConfig;
   readonly slot?: DefaultSlot | null;
   readonly archived?: boolean;
   /** Restored only while nothing newer occupies that slot (P3-12). */
   readonly removedDefault?: RemovedListDefault;
-  /**
-   * The `details` compensation writes back onto every affected item — the source behaviour's
-   * default. Absent means the items had none and compensation removes the attribute.
-   */
-  readonly restoreDetails?: ListItemDetails;
-  /** The items the forward behaviour change transformed. */
-  readonly affectedItemIds?: readonly string[];
 }
 
 /**
@@ -1132,9 +1132,9 @@ export interface ListSettingsInverse {
  * returns the typed no-longer-applicable result, writing nothing, when any has moved on.
  */
 export interface ListSettingsPreconditions {
-  readonly behaviour?: ListBehaviour;
-  /** The same flags {@link ListSettingsInverse.capabilities} names, at their new values. */
-  readonly capabilities?: Partial<ListCapabilities>;
+  readonly title?: string;
+  readonly itemStateMode?: ItemStateMode;
+  readonly featureConfig?: ListFeatureConfig;
   readonly slot?: DefaultSlot | null;
   readonly archived?: boolean;
   /**
@@ -1143,7 +1143,6 @@ export interface ListSettingsPreconditions {
    * longer applicable. Absent means the forward change removed `details` and the items must
    * still have none.
    */
-  readonly itemDetails?: ListItemDetails;
   /** The profile slot the forward change emptied must still be empty. */
   readonly defaultSlotAbsent?: DefaultSlot;
 }
@@ -1151,7 +1150,7 @@ export interface ListSettingsPreconditions {
 /** One retained, single-use settings Undo operation, minted by the service that wrote it. */
 export interface ListSettingsUndo {
   readonly operationId: string;
-  readonly kind: 'settings' | 'behaviour_upgrade';
+  readonly kind: 'settings';
   /** Only the hash enters this retained Undo row; the exact-response receipt is separate. */
   readonly tokenHash: string;
   readonly undoExpiresAt: string;
@@ -1160,43 +1159,27 @@ export interface ListSettingsUndo {
 }
 
 const settingsInverseSchema = z.object({
-  behaviour: listBehaviourSchema.optional(),
-  capabilities: z
-    .object({
-      checkable: z.boolean().optional(),
-      supportsLocation: z.boolean().optional(),
-    })
-    .optional(),
+  title: z.string().min(1).optional(),
+  itemStateMode: z.unknown().optional(),
+  featureConfig: z.unknown().optional(),
   slot: defaultSlotSchema.nullable().optional(),
   archived: z.boolean().optional(),
   removedDefault: z
     .object({ slot: defaultSlotSchema, listId: z.string().min(1) })
     .optional(),
-  restoreDetails: listItemDetailsSchema.optional(),
-  affectedItemIds: z.array(z.string().min(1)).optional(),
 });
 
 const settingsPreconditionsSchema = z.object({
-  behaviour: listBehaviourSchema.optional(),
-  capabilities: z
-    .object({
-      checkable: z.boolean().optional(),
-      supportsLocation: z.boolean().optional(),
-    })
-    .optional(),
+  title: z.string().min(1).optional(),
+  itemStateMode: z.unknown().optional(),
+  featureConfig: z.unknown().optional(),
   slot: defaultSlotSchema.nullable().optional(),
   archived: z.boolean().optional(),
-  itemDetails: listItemDetailsSchema.optional(),
   defaultSlotAbsent: defaultSlotSchema.optional(),
 });
 
 /** Every kind of compensation one retained operation can carry (`data-model.md` §3.3). */
-export type ListUndoKind =
-  | 'delete_item'
-  | 'clear_checked'
-  | 'uncheck_all'
-  | 'settings'
-  | 'behaviour_upgrade';
+export type ListUndoKind = 'delete_item' | 'clear_done' | 'reopen_done' | 'settings';
 
 export interface ListUndoOperation {
   readonly listId: string;
@@ -1220,13 +1203,7 @@ export interface ListUndoOperation {
 const listUndoSchema = z.object({
   listId: z.string().min(1),
   operationId: z.string().min(1),
-  kind: z.enum([
-    'delete_item',
-    'clear_checked',
-    'uncheck_all',
-    'settings',
-    'behaviour_upgrade',
-  ]),
+  kind: z.enum(['delete_item', 'clear_done', 'reopen_done', 'settings']),
   tokenHash: z.string().min(1),
   undoExpiresAt: z.string().min(1),
   affectedItemIds: z.array(z.string().min(1)).default([]),
@@ -1373,7 +1350,13 @@ export async function patchListMeta(
   };
   const sets = ['#updatedAt = :updatedAt'];
 
-  for (const field of ['title', 'capabilities', 'slot', 'archived'] as const) {
+  for (const field of [
+    'title',
+    'itemStateMode',
+    'featureConfig',
+    'slot',
+    'archived',
+  ] as const) {
     if (!(field in patch)) continue;
     names[`#${field}`] = field;
     values[`:${field}`] = patch[field];
@@ -1957,18 +1940,18 @@ export function appendListItemCreates(
   }
 
   const meta = builder.length;
-  const unchecked = created.filter((item) => !item.checked).length;
+  const done = created.filter((item) => item.state === 'done').length;
   builder.add({
     Update: {
       Key: listMeta(listId),
       UpdateExpression:
-        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
+        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #doneCount = #doneCount + :done, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
       ConditionExpression: `#rankVersion = :expectedVersion AND ${itemVersionCondition(itemVersion(basis.list))} AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
       ExpressionAttributeNames: {
         '#rankVersion': 'rankVersion',
         '#itemVersion': 'itemVersion',
         '#itemCount': 'itemCount',
-        '#uncheckedCount': 'uncheckedCount',
+        '#doneCount': 'doneCount',
         '#lastItemActivityAt': 'lastItemActivityAt',
         ...GATE_NAMES,
       },
@@ -1979,7 +1962,7 @@ export function appendListItemCreates(
         ':expectedItemVersion': itemVersion(basis.list),
         ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
         ':count': created.length,
-        ':unchecked': unchecked,
+        ':done': done,
         ':maxBefore': MAX_LIST_ITEMS - created.length,
       },
     },
@@ -1992,8 +1975,8 @@ export function appendListItemCreates(
  *
  * The P3-17 caller composes these writes with the one META/version update, creates, source
  * markers and receipt. Conditioned on the `itemRevision` the caller read, which is what makes
- * the *unchecked* classification behind the extension safe: the revision moves when `checked`
- * does, so a row checked in between fails here rather than being extended when §7.3 says it
+ * the non-`done` classification behind the extension safe: the revision moves when `state`
+ * does, so a row completed in between fails here rather than being extended when §7.3 says it
  * should have become a new row.
  */
 export function appendSourceLabelExtension(
@@ -2196,12 +2179,12 @@ export async function createListItems(
     }
 
     const metaIndex = builder.length;
-    const unchecked = created.filter((item) => !item.checked).length;
+    const done = created.filter((item) => item.state === 'done').length;
     builder.add({
       Update: {
         Key: listMeta(listId),
         UpdateExpression:
-          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
+          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #doneCount = #doneCount + :done, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
         /**
          * **The item cap is enforced here, in the transaction**, not only by the service's
          * precheck. Two creates against a 499-item list both pass that precheck, and the
@@ -2213,7 +2196,7 @@ export async function createListItems(
           '#rankVersion': 'rankVersion',
           '#itemVersion': 'itemVersion',
           '#itemCount': 'itemCount',
-          '#uncheckedCount': 'uncheckedCount',
+          '#doneCount': 'doneCount',
           '#lastItemActivityAt': 'lastItemActivityAt',
           ...GATE_NAMES,
         },
@@ -2223,7 +2206,7 @@ export async function createListItems(
           ':nextVersion': state.list.rankVersion + 1,
           ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           ':count': created.length,
-          ':unchecked': unchecked,
+          ':done': done,
           ':maxBefore': MAX_LIST_ITEMS - created.length,
         },
       },
@@ -2315,8 +2298,8 @@ export async function reorderListItem(
       itemRevision: nextRevision,
       updatedAt: options.now,
     };
-    const uncheckedDelta =
-      current.item.checked === next.checked ? 0 : next.checked ? -1 : 1;
+    const doneDelta =
+      Number(next.state === 'done') - Number(current.item.state === 'done');
     const builder = new TransactionBuilder(
       'reorderListItem',
       options.idempotencyReceipt === undefined ? 0 : 1,
@@ -2362,19 +2345,19 @@ export async function reorderListItem(
       {
         Update: {
           Key: listMeta(listId),
-          // The counter moves only when a folded-in patch flipped `checked`; a plain drag
+          // The counter moves only when a folded-in patch changed intrinsic state; a plain drag
           // touches the version and nothing else, so the action count is unchanged either
           // way (acceptance criterion 16).
           UpdateExpression:
-            uncheckedDelta === 0
+            doneDelta === 0
               ? 'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement'
-              : 'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
+              : 'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #doneCount :doneDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
           ExpressionAttributeNames: {
             '#rankVersion': 'rankVersion',
             '#itemVersion': 'itemVersion',
             '#lastItemActivityAt': 'lastItemActivityAt',
-            ...(uncheckedDelta === 0 ? {} : { '#uncheckedCount': 'uncheckedCount' }),
+            ...(doneDelta === 0 ? {} : { '#doneCount': 'doneCount' }),
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
@@ -2382,7 +2365,7 @@ export async function reorderListItem(
             ':expectedVersion': state.list.rankVersion,
             ':nextVersion': state.list.rankVersion + 1,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
-            ...(uncheckedDelta === 0 ? {} : { ':uncheckedDelta': uncheckedDelta }),
+            ...(doneDelta === 0 ? {} : { ':doneDelta': doneDelta }),
           },
         },
       },
@@ -2406,10 +2389,9 @@ export async function reorderListItem(
 
 export interface ListItemFieldPatch {
   readonly title?: string;
-  readonly checked?: boolean;
+  readonly state?: ListItem['state'];
   readonly note?: string | null;
-  readonly location?: ListItem['location'] | null;
-  readonly details?: ListItemDetails | null;
+  readonly features?: ListItemFeatures | null;
 }
 
 /**
@@ -2426,8 +2408,8 @@ function withPatchApplied(
   if (patch === undefined) return row;
   const next: StoredItem = { ...row };
   if (patch.title !== undefined) next.title = patch.title;
-  if (patch.checked !== undefined) next.checked = patch.checked;
-  for (const field of ['note', 'location', 'details'] as const) {
+  if (patch.state !== undefined) next.state = patch.state;
+  for (const field of ['note', 'features'] as const) {
     if (!(field in patch)) continue;
     const value = patch[field];
     if (value === null || value === undefined) delete next[field];
@@ -2439,8 +2421,8 @@ function withPatchApplied(
 function applyItemPatch(item: ListItem, patch: ListItemFieldPatch): ListItem {
   const next: ListItem = { ...item, itemRevision: item.itemRevision + 1 };
   if (patch.title !== undefined) next.title = patch.title;
-  if (patch.checked !== undefined) next.checked = patch.checked;
-  for (const field of ['note', 'location', 'details'] as const) {
+  if (patch.state !== undefined) next.state = patch.state;
+  for (const field of ['note', 'features'] as const) {
     if (!(field in patch)) continue;
     const value = patch[field];
     if (value === null || value === undefined) delete next[field];
@@ -2475,7 +2457,7 @@ export async function patchListItemFields(
     const sets = ['#itemRevision = :nextRevision', '#updatedAt = :updatedAt'];
     const removes: string[] = [];
 
-    for (const field of ['title', 'checked', 'note', 'location', 'details'] as const) {
+    for (const field of ['title', 'state', 'note', 'features'] as const) {
       if (!(field in patch)) continue;
       names[`#${field}`] = field;
       const value = patch[field];
@@ -2519,9 +2501,9 @@ export async function patchListItemFields(
       },
     );
 
-    const uncheckedDelta =
-      current.item.checked === next.checked ? 0 : next.checked ? -1 : 1;
-    if (uncheckedDelta === 0) {
+    const doneDelta =
+      Number(next.state === 'done') - Number(current.item.state === 'done');
+    if (doneDelta === 0) {
       builder.add({
         Update: {
           Key: listMeta(listId),
@@ -2544,16 +2526,16 @@ export async function patchListItemFields(
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'SET #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement',
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #doneCount :delta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
-            '#uncheckedCount': 'uncheckedCount',
+            '#doneCount': 'doneCount',
             '#itemVersion': 'itemVersion',
             '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
-            ':delta': uncheckedDelta,
+            ':delta': doneDelta,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
             ':lastItemActivityAt': now,
           },
@@ -2588,7 +2570,7 @@ export interface RankRepairEntry {
  * is created `snapshotting` in the **same transaction** as the marker, and any later caller
  * can finish the snapshot under the gate. Without it, a crash between the two writes would
  * leave a marker naming nothing: every read and mutation gated forever, with no record to
- * resume from (§P3-03, and the same shape P3-09's behaviour migration uses).
+ * resume from (§P3-03; schema migration uses the same resumable-work lesson).
  */
 export interface RankRepairWork {
   readonly listId: string;
@@ -2624,16 +2606,14 @@ export const RANK_REPAIR_CHUNK = 25;
 
 /**
  * Every ranked row, unpaged and unfenced — the snapshot read a worker takes under its own
- * marker, shared by rank repair and behaviour migration.
+ * marker, used by rank repair and other bounded internal workers.
  *
  * Deliberately not `listItems`: that one refuses to read while a marker stands, which is
  * exactly the state this runs in. Bounded by `MAX_LIST_ITEMS`, so `queryAll` is safe here
  * and is not safe for anything a user can grow without limit.
  *
- * It parses rows against the **stored** item schema, whose `details` union accepts either
- * behaviour's arm. That is what lets the behaviour worker read a partly-transformed list:
- * during a migration the rows are a mix of source-shaped and target-shaped, which no public
- * read can observe because the marker gates every one of them.
+ * It parses rows against the canonical stored item schema. Legacy schema conversion uses its
+ * dedicated raw compatibility reader while the schema-migration marker gates public reads.
  */
 async function readAllItemsUnfenced(listId: string): Promise<ListItem[]> {
   const prefix = listItemPrefix(listId);
@@ -2957,607 +2937,6 @@ export async function finishRankRepair(work: RankRepairWork): Promise<void> {
   );
 }
 
-/** One snapshotted item, addressed by the key and revision the migration will rewrite. */
-export interface BehaviourMigrationEntry {
-  readonly itemId: string;
-  /** The rank is **not** changed by a behaviour migration; it is here to address the row. */
-  readonly rank: string;
-  readonly fromRevision: number;
-}
-
-/** The destructive shape computed from the gated item snapshot. */
-export interface BehaviourMigrationLoss {
-  readonly itemCount: number;
-  readonly fields: readonly string[];
-}
-
-/**
- * The resumable behaviour-migration record. Internal: never serialised to a client.
- *
- * The same shape rank repair uses, for the same reasons (§P3-09, `data-model.md` §7 "Change
- * List behaviour"), plus the three fields that make this migration a *transformation* rather
- * than a renumber:
- *
- * - `toDetails` is the **exact** target `details` value, decided once by the service and
- *   stored, so every chunk and every resumption writes the identical value and the Undo
- *   inverse can name it. Absent means the target behaviour carries no `details` at all, and
- *   the rewrite removes the attribute.
- * - `fromBehaviour` is what compensation restores.
- * - `expectedUpdatedAt` is the `If-Match` the install matched. Nothing may change `META`
- *   while the marker stands, so the final transaction re-asserts it rather than trusting
- *   that.
- *
- * ## Why the answer is decided at step one
- *
- * `committedAt` is the `updatedAt` the final transaction will write, and `undo` is the offer
- * the response will carry. Both are fixed when the operation is **accepted**, not when it
- * happens to commit, because any caller may finish it: a request blocked by the gate drains
- * it, and if the client that started it never comes back, that drain is the only thing that
- * ungates the list. Every finisher therefore commits the same representation, and a replay
- * that arrives after somebody else's drain reads exactly the response the operation always
- * had rather than a second, differently-stamped one.
- *
- * `receipt` is the response receipt that final transaction must write, for the same reason:
- * **any** finisher has to record the answer under the originating caller's key. Without it, a
- * blocked read that completes somebody else's migration leaves no receipt at all, and the
- * client's replay finds none — and then fails its own `If-Match`, because finishing moved
- * `updatedAt`. The operation would have succeeded while its author was told it conflicted,
- * with the Undo token unreachable after the work row was deleted, if the receipt were omitted.
- *
- * The Undo token is held here in the clear while the migration runs: the row is internal,
- * never serialised, and deleted by the same transaction that stores its hash and the bounded
- * exact-response receipt. The retained `UNDO#` authority stores only the hash; the receipt
- * keeps the capability-bearing response long enough to recover a lost success. Minting a
- * fresh token per attempt would make the answer depend on which request happened to commit,
- * which is the one thing this record exists to prevent.
- *
- * **No `ttl`.** Every other internal row here expires with the replay window, and this one
- * must not: its `META` marker has no expiry, so a work record that aged out would leave a
- * gate nothing can drain, finish or roll back — every read and mutation on the list refused
- * for good. It is removed by the final transaction, by a rollback, or by the delete cascade.
- */
-export interface BehaviourMigrationWork {
-  readonly listId: string;
-  readonly operationId: string;
-  readonly state: 'snapshotting' | 'rewriting';
-  readonly fromBehaviour: ListBehaviour;
-  readonly toBehaviour: ListBehaviour;
-  readonly toDetails?: ListItemDetails;
-  readonly entries: BehaviourMigrationEntry[];
-  /** Index of the next entry to rewrite. A crash resumes here. */
-  readonly cursor: number;
-  /** The `rankVersion` the marker was installed under. */
-  readonly rankVersion: number;
-  readonly expectedUpdatedAt: string;
-  /** The `updatedAt` the final transaction writes, whoever runs it. */
-  readonly committedAt: string;
-  /** The prepared 6-second offer. Absent when the change loses data, which is not undoable. */
-  readonly undo?: { readonly token: string; readonly expiresAt: string };
-  /**
-   * The retained operation this migration is the compensation **for**, spent by the same
-   * transaction that finishes it (P3-10).
-   *
-   * A behaviour-upgrade Undo used to consume its token in a transaction after the migration's.
-   * A crash in between left the operation unconsumed while the receipt made the replay a
-   * no-op, so the cleanup never ran — and once the list was upgraded again, that old token's
-   * preconditions were true once more and it could undo somebody else's operation. Single-use
-   * has to be enforced by the write that uses it.
-   */
-  readonly consumesUndoOperationId?: string;
-  /**
-   * The response receipt the final transaction writes, whoever runs it. Absent only while a
-   * `snapshotting` record has not been filled in.
-   */
-  readonly receipt?: IdempotencyReceipt;
-  /**
-   * Items carrying data this change removes, counted over the **gated** snapshot.
-   *
-   * The authoritative count: the marker is down when it is taken, so no item can gain or lose
-   * the data underneath it. The installer compares it against the count it previewed before
-   * installing and rolls the operation back if they disagree — a confirmation is only worth
-   * anything if it names what is actually about to go.
-   */
-  readonly lossCount?: number;
-  /** Ordered user-facing field labels computed from the same gated rows as `lossCount`. */
-  readonly lossFields?: string[];
-}
-
-const behaviourMigrationSchema = z.object({
-  listId: z.string().min(1),
-  operationId: z.string().min(1),
-  state: z.enum(['snapshotting', 'rewriting']),
-  fromBehaviour: listBehaviourSchema,
-  toBehaviour: listBehaviourSchema,
-  toDetails: listItemDetailsSchema.optional(),
-  entries: z
-    .array(
-      z.object({
-        itemId: z.string().min(1),
-        rank: z.string().min(1),
-        fromRevision: z.number().int().nonnegative(),
-      }),
-    )
-    .default([]),
-  cursor: z.number().int().nonnegative(),
-  rankVersion: z.number().int().nonnegative(),
-  expectedUpdatedAt: z.string().min(1),
-  committedAt: z.string().min(1),
-  undo: z.object({ token: z.string().min(1), expiresAt: z.string().min(1) }).optional(),
-  consumesUndoOperationId: z.string().min(1).optional(),
-  receipt: z
-    .object({
-      userId: z.string().min(1),
-      key: z.string().min(1),
-      route: z.string().min(1),
-      status: z.number().int(),
-      body: z.string().min(1),
-      ttl: z.number().int(),
-      createdAt: z.string().min(1),
-    })
-    .optional(),
-  lossCount: z.number().int().nonnegative().optional(),
-  lossFields: z.array(z.string().min(1)).optional(),
-});
-
-/**
- * Items per migration transaction: two actions each — the ranked row in place and its
- * locator — plus the deletion gate and the cursor advance.
- *
- * Two rather than repair's three because the rank does not move, so the row is an `Update`
- * at its existing key instead of a delete-and-put. `(100 − 2) / 2` is 49; 40 leaves room and
- * still puts a full 500-item list inside one request's drain.
- */
-export const BEHAVIOUR_MIGRATION_CHUNK = 40;
-
-/** Another caller already installed a marker; drain theirs rather than starting a second. */
-export class BehaviourMigrationAlreadyStartedError extends Error {
-  constructor() {
-    super('This list already has work in progress.');
-    this.name = 'BehaviourMigrationAlreadyStartedError';
-  }
-}
-
-/**
- * Another caller advanced this migration first.
- *
- * Two requests may drain one operation — a replay of the same key and a blocked read — and
- * they cooperate rather than conflict: the loser re-reads the authoritative cursor and
- * continues from there.
- */
-export class BehaviourMigrationContendedError extends Error {
-  constructor() {
-    super('Another caller advanced this migration.');
-    this.name = 'BehaviourMigrationContendedError';
-  }
-}
-
-export interface BeginBehaviourMigrationOptions {
-  readonly operationId: string;
-  readonly toBehaviour: ListBehaviour;
-  /** Absent means the target behaviour has no `details`, and the rewrite removes them. */
-  readonly toDetails?: ListItemDetails;
-  /** The `If-Match` the service already compared against its own read. */
-  readonly expectedUpdatedAt: string;
-  /** Complete-item generation the deciding preview was read under. */
-  readonly expectedItemVersion: number;
-  /** Also the `updatedAt` the final transaction will write. */
-  readonly now: string;
-  /** The prepared Undo offer. Absent when the change loses data (§4.1). */
-  readonly undo?: { readonly token: string; readonly expiresAt: string };
-  /** The retained operation this migration compensates, spent by its final transaction. */
-  readonly consumesUndoOperationId?: string;
-  /** The response receipt the final transaction commits, whichever caller runs it. */
-  readonly receipt: IdempotencyReceipt;
-  /**
-   * Describes the data the change removes over the gated snapshot. Pure, and the service's
-   * rule rather than storage's — the repository calls it while it holds the rows and stores
-   * the count and ordered labels together.
-   */
-  readonly describeLoss: (items: readonly ListItem[]) => BehaviourMigrationLoss;
-}
-
-/**
- * Installs the migration marker, then snapshots the items it will transform.
- *
- * **Public behaviour does not change here**, and that is the whole point of the three steps
- * (§P3-09). This transaction leaves `META.behaviour`, `META.updatedAt` and every item
- * exactly as they were; all it does is close the gate. Flipping behaviour first would let a
- * client read a `watch` list whose items are still `collection`-shaped, and a crash would
- * leave it that way permanently.
- *
- * **Marker and work record land together**, as in `beginRankRepair`: writing the marker
- * alone leaves a window in which a crash gates the list forever against a record nobody has,
- * while committing an empty `snapshotting` record beside it means any later caller can pick
- * the work up. The snapshot is taken *after* the gate is closed, which is what makes each
- * entry's `fromRevision` stay true until that entry is rewritten.
- */
-export async function beginBehaviourMigration(
-  userId: string,
-  listId: string,
-  access: ListAccessGrant,
-  options: BeginBehaviourMigrationOptions,
-): Promise<BehaviourMigrationWork> {
-  assertListAccessGrant(userId, listId, access);
-  const list = await getLiveListMetaStrong(listId);
-  if (list === undefined) throw new ListNotFoundError();
-  assertFenceOpen(list);
-
-  const pending: BehaviourMigrationWork = {
-    listId,
-    operationId: options.operationId,
-    state: 'snapshotting',
-    fromBehaviour: list.behaviour,
-    toBehaviour: options.toBehaviour,
-    ...(options.toDetails === undefined ? {} : { toDetails: options.toDetails }),
-    entries: [],
-    cursor: 0,
-    rankVersion: list.rankVersion,
-    expectedUpdatedAt: options.expectedUpdatedAt,
-    committedAt: options.now,
-    ...(options.undo === undefined ? {} : { undo: options.undo }),
-    ...(options.consumesUndoOperationId === undefined
-      ? {}
-      : { consumesUndoOperationId: options.consumesUndoOperationId }),
-    receipt: options.receipt,
-  };
-
-  await transactWrite(
-    new TransactionBuilder('beginBehaviourMigration')
-      .add(
-        listDeletionGate(listId),
-        {
-          Update: {
-            Key: listMeta(listId),
-            UpdateExpression: 'SET #behaviourMigrationId = :operationId',
-            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND #rankVersion = :expectedVersion AND ${itemVersionCondition(options.expectedItemVersion)} AND ${GATES_ABSENT}`,
-            ExpressionAttributeNames: {
-              '#updatedAt': 'updatedAt',
-              '#rankVersion': 'rankVersion',
-              '#itemVersion': 'itemVersion',
-              ...GATE_NAMES,
-            },
-            ExpressionAttributeValues: {
-              ':operationId': options.operationId,
-              ':expectedUpdatedAt': options.expectedUpdatedAt,
-              ':expectedVersion': list.rankVersion,
-              ':expectedItemVersion': options.expectedItemVersion,
-            },
-          },
-        },
-        {
-          Put: {
-            Item: stamp(ENTITY.behaviourMigration, options.now, options.now, {
-              ...listBehaviourMigration(listId, options.operationId),
-              ...pending,
-            }),
-            ConditionExpression: 'attribute_not_exists(pk)',
-          },
-        },
-      )
-      .build(),
-    {
-      operation: 'beginBehaviourMigration',
-      onConditionFailed: (index) =>
-        index === 0
-          ? new ListNotFoundError()
-          : new BehaviourMigrationAlreadyStartedError(),
-    },
-  );
-
-  return snapshotBehaviourMigration(pending, options.now, options.describeLoss);
-}
-
-/**
- * Fills a `snapshotting` record's entries and moves it to `rewriting`.
- *
- * Separate from the install because it runs **under the marker**, where every item mutation
- * is gated and the snapshot therefore cannot go stale. Idempotent: a caller that finds the
- * record still `snapshotting` — because the installer crashed, or lost a race — recomputes
- * the same entries from the same gated rows and commits them conditionally.
- */
-export async function snapshotBehaviourMigration(
-  work: BehaviourMigrationWork,
-  now: string,
-  describeLoss: (items: readonly ListItem[]) => BehaviourMigrationLoss,
-): Promise<BehaviourMigrationWork> {
-  if (work.state === 'rewriting') return work;
-
-  const items = await readAllItemsUnfenced(work.listId);
-  const entries: BehaviourMigrationEntry[] = items.map((item) => ({
-    itemId: item.itemId,
-    rank: item.rank,
-    fromRevision: item.itemRevision,
-  }));
-  /**
-   * Counted from the same gated read as the entries, and stored with them, so it describes
-   * exactly the rows this operation is about to rewrite. Any caller that fills a
-   * `snapshotting` record computes the same number from the same rows.
-   */
-  const loss = describeLoss(items);
-
-  await transactWrite(
-    new TransactionBuilder('snapshotBehaviourMigration')
-      .add({
-        Update: {
-          Key: listBehaviourMigration(work.listId, work.operationId),
-          UpdateExpression:
-            'SET #entries = :entries, #lossCount = :lossCount, #lossFields = :lossFields, #state = :rewriting, #updatedAt = :now',
-          ConditionExpression: '#state = :snapshotting',
-          ExpressionAttributeNames: {
-            '#entries': 'entries',
-            '#lossCount': 'lossCount',
-            '#lossFields': 'lossFields',
-            '#state': 'state',
-            '#updatedAt': 'updatedAt',
-          },
-          ExpressionAttributeValues: {
-            ':entries': entries,
-            ':lossCount': loss.itemCount,
-            ':lossFields': [...loss.fields],
-            ':rewriting': 'rewriting',
-            ':snapshotting': 'snapshotting',
-            ':now': now,
-          },
-        },
-      })
-      .build(),
-    {
-      operation: 'snapshotBehaviourMigration',
-      // A concurrent drain snapshotted first. Its entries are the ones to use — both read
-      // the same gated rows — but only one is stored, so the loser re-reads.
-      onConditionFailed: () => new BehaviourMigrationContendedError(),
-    },
-  );
-
-  return {
-    ...work,
-    state: 'rewriting',
-    entries,
-    lossCount: loss.itemCount,
-    lossFields: [...loss.fields],
-  };
-}
-
-/** The in-flight work for a marker, or `undefined` once the record has been cleared. */
-export async function getBehaviourMigrationWork(
-  listId: string,
-  operationId: string,
-): Promise<BehaviourMigrationWork | undefined> {
-  const row = await getItem<StoredItem>(listBehaviourMigration(listId, operationId), {
-    consistentRead: true,
-  });
-  return row === undefined
-    ? undefined
-    : (behaviourMigrationSchema.parse(row) as BehaviourMigrationWork);
-}
-
-/**
- * Transforms one bounded chunk and advances the stored cursor in the same transaction, so a
- * crash resumes at an entry boundary and never half-migrates an item.
- *
- * Two actions per entry: the ranked row's `details` in place at its existing key, and its
- * identity locator, both conditional on the snapshotted `itemRevision` and both advancing it
- * — the same revision fence an ordinary field PATCH uses, applied in bulk under the marker.
- * A failed condition means a concurrent drain of this same operation already did this entry;
- * the caller re-reads the authoritative cursor and continues.
- *
- * The row is rewritten **by key**, without reading it: the target `details` is a constant
- * decided at install time, so there is nothing per-item to merge and no reason to spend a
- * `BatchGetItem` on 40 rows to write a value that does not depend on them.
- */
-export async function applyBehaviourMigrationChunk(
-  work: BehaviourMigrationWork,
-): Promise<BehaviourMigrationWork> {
-  const slice = work.entries.slice(work.cursor, work.cursor + BEHAVIOUR_MIGRATION_CHUNK);
-  if (slice.length === 0) return work;
-
-  const builder = new TransactionBuilder('applyBehaviourMigrationChunk').add(
-    listDeletionGate(work.listId),
-  );
-  for (const entry of slice) {
-    const nextRevision = entry.fromRevision + 1;
-    builder.add(
-      {
-        Update: {
-          Key: listItemKey(work.listId, entry.rank, entry.itemId),
-          UpdateExpression:
-            work.toDetails === undefined
-              ? 'SET #itemRevision = :nextRevision REMOVE #details'
-              : 'SET #details = :details, #itemRevision = :nextRevision',
-          /**
-           * The revision fence doubles as an existence check: an `Update` against a missing
-           * key would otherwise create one, and this condition cannot hold on a row that is
-           * not there.
-           */
-          ConditionExpression: '#itemRevision = :expectedRevision',
-          ExpressionAttributeNames: {
-            '#details': 'details',
-            '#itemRevision': 'itemRevision',
-          },
-          ExpressionAttributeValues: {
-            ':expectedRevision': entry.fromRevision,
-            ':nextRevision': nextRevision,
-            ...(work.toDetails === undefined ? {} : { ':details': work.toDetails }),
-          },
-        },
-      },
-      {
-        Update: {
-          Key: listItemLocator(work.listId, entry.itemId),
-          UpdateExpression: 'SET #itemRevision = :nextRevision',
-          ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
-          ExpressionAttributeNames: {
-            '#rank': 'rank',
-            '#itemRevision': 'itemRevision',
-          },
-          ExpressionAttributeValues: {
-            ':rank': entry.rank,
-            ':expectedRevision': entry.fromRevision,
-            ':nextRevision': nextRevision,
-          },
-        },
-      },
-    );
-  }
-
-  const nextCursor = work.cursor + slice.length;
-  builder.add({
-    Update: {
-      Key: listBehaviourMigration(work.listId, work.operationId),
-      UpdateExpression: 'SET #cursor = :nextCursor',
-      ConditionExpression: '#cursor = :expectedCursor',
-      ExpressionAttributeNames: { '#cursor': 'cursor' },
-      ExpressionAttributeValues: {
-        ':nextCursor': nextCursor,
-        ':expectedCursor': work.cursor,
-      },
-    },
-  });
-
-  await transactWrite(builder.build(), {
-    operation: 'applyBehaviourMigrationChunk',
-    onConditionFailed: (index) =>
-      index === 0 ? new ListNotFoundError() : new BehaviourMigrationContendedError(),
-  });
-  return { ...work, cursor: nextCursor };
-}
-
-/**
- * Removes an installed migration that must not proceed, leaving the list exactly as it was.
- *
- * The one path that clears a marker without changing behaviour. It exists for a single case:
- * the gated snapshot disagrees with the count the caller previewed before installing, so the
- * confirmation this operation is running under does not describe what it would destroy. The
- * `cursor = 0` condition is what makes it safe — nothing has been rewritten yet, so there is
- * nothing to put back — and a rolled-back operation leaves no receipt, so its key is free for
- * the caller's next attempt.
- */
-export async function abandonBehaviourMigration(
-  work: BehaviourMigrationWork,
-): Promise<void> {
-  await transactWrite(
-    new TransactionBuilder('abandonBehaviourMigration')
-      .add(
-        {
-          Update: {
-            Key: listMeta(work.listId),
-            UpdateExpression: 'REMOVE #behaviourMigrationId',
-            ConditionExpression: '#behaviourMigrationId = :operationId',
-            ExpressionAttributeNames: { '#behaviourMigrationId': 'behaviourMigrationId' },
-            ExpressionAttributeValues: { ':operationId': work.operationId },
-          },
-        },
-        {
-          Delete: {
-            Key: listBehaviourMigration(work.listId, work.operationId),
-            ConditionExpression: '#cursor = :zero',
-            ExpressionAttributeNames: { '#cursor': 'cursor' },
-            ExpressionAttributeValues: { ':zero': 0 },
-          },
-        },
-      )
-      .build(),
-    {
-      operation: 'abandonBehaviourMigration',
-      onConditionFailed: () => new BehaviourMigrationContendedError(),
-    },
-  );
-}
-
-export interface FinishBehaviourMigrationOptions {
-  /** Present only when the change lost nothing; a lossy one is not undoable (§4.1). */
-  readonly undo?: ListSettingsUndo;
-}
-
-/**
- * The final transaction: flip the behaviour, clear the marker, advance `rankVersion`, record
- * the Undo inverse and the response receipt, and delete the work row — atomically.
- *
- * This is the only write that changes `List.behaviour`, which is what keeps public schema
- * validation from ever observing an item whose `details.behaviour` disagrees with its list:
- * before it, every item already carries the target shape and the list still advertises the
- * old one; after it, both agree. Advancing the version invalidates every item cursor issued
- * before the migration, so a client paging across it gets the retryable `503` and restarts at
- * page one rather than resuming through rewritten rows.
- *
- * The receipt joins **here**, not the install, because the response body names the new
- * behaviour and the new version. A receipt written at step one would replay a list that did
- * not exist yet for the next 24 hours. It comes from the **work record**, not from whoever
- * happens to be finishing: a blocked read that completes somebody else's migration must still
- * record that operation's answer under that operation's key, or its author's replay finds no
- * receipt and is told its `If-Match` conflicts — by the very write it asked for.
- */
-export async function finishBehaviourMigration(
-  work: BehaviourMigrationWork,
-  options: FinishBehaviourMigrationOptions,
-): Promise<void> {
-  const builder = new TransactionBuilder(
-    'finishBehaviourMigration',
-    work.receipt === undefined ? 0 : 1,
-  ).add({
-    Update: {
-      Key: listMeta(work.listId),
-      /**
-       * **`updatedAt`, and not `lastItemActivityAt`** — §P3-47 names this case outright. A
-       * behaviour change is a change to the *list*, not to its items, however many item rows
-       * the migration rewrites on the way; the card should say the list was changed, and the
-       * settings sheet holding a stale token should conflict.
-       */
-      UpdateExpression:
-        'SET #behaviour = :toBehaviour, #rankVersion = :nextVersion, #updatedAt = :committedAt REMOVE #behaviourMigrationId ADD #itemVersion :itemVersionIncrement',
-      ConditionExpression:
-        '#behaviourMigrationId = :operationId AND #rankVersion = :expectedVersion AND #updatedAt = :expectedUpdatedAt',
-      ExpressionAttributeNames: {
-        '#behaviour': 'behaviour',
-        '#rankVersion': 'rankVersion',
-        '#itemVersion': 'itemVersion',
-        '#updatedAt': 'updatedAt',
-        '#behaviourMigrationId': 'behaviourMigrationId',
-      },
-      ExpressionAttributeValues: {
-        ':toBehaviour': work.toBehaviour,
-        ':operationId': work.operationId,
-        ':expectedVersion': work.rankVersion,
-        ':nextVersion': work.rankVersion + 1,
-        ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
-        ':expectedUpdatedAt': work.expectedUpdatedAt,
-        ':committedAt': work.committedAt,
-      },
-    },
-  });
-  if (options.undo !== undefined) {
-    builder.add({
-      Put: {
-        Item: settingsUndoItem(work.listId, options.undo, work.committedAt),
-        ConditionExpression: 'attribute_not_exists(pk)',
-      },
-    });
-  }
-  /**
-   * A migration that **is** a compensation spends its source operation here, not afterwards.
-   * The condition is `consumed = false`, so the operation is single-use however many times
-   * this transaction is retried, and no crash can leave a spent inverse looking unspent.
-   */
-  if (work.consumesUndoOperationId !== undefined) {
-    builder.add(
-      consumeUndoAction(work.listId, work.consumesUndoOperationId, work.committedAt),
-    );
-  }
-  builder.add({
-    Delete: { Key: listBehaviourMigration(work.listId, work.operationId) },
-  });
-  const receiptIndex = builder.length;
-  if (work.receipt !== undefined) builder.addReserved(receiptItem(work.receipt));
-
-  await transactWrite(builder.build(), {
-    operation: 'finishBehaviourMigration',
-    onConditionFailed: (index) =>
-      work.receipt !== undefined && index === receiptIndex
-        ? new IdempotencyRaceError()
-        : new BehaviourMigrationContendedError(),
-  });
-}
-
 /** The single-use record every reversible bulk operation leaves behind. */
 function bulkUndoItem(
   listId: string,
@@ -3833,11 +3212,11 @@ export async function deleteListItem(
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :minusOne, #doneCount :doneDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#itemCount': 'itemCount',
-            '#uncheckedCount': 'uncheckedCount',
+            '#doneCount': 'doneCount',
             '#itemVersion': 'itemVersion',
             '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
@@ -3845,7 +3224,7 @@ export async function deleteListItem(
           ExpressionAttributeValues: {
             ':lastItemActivityAt': options.now,
             ':minusOne': -1,
-            ':uncheckedDelta': current.item.checked ? 0 : -1,
+            ':doneDelta': current.item.state === 'done' ? -1 : 0,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           },
         },
@@ -3893,7 +3272,7 @@ export async function deleteListItem(
 export interface BulkItemOperationWork {
   readonly listId: string;
   readonly operationId: string;
-  readonly kind: 'clear_checked' | 'uncheck_all';
+  readonly kind: 'clear_done' | 'reopen_done';
   /** Taken once, before the first chunk. What the operation applies, and what Undo reverses. */
   readonly itemIds: readonly string[];
   /** How many of them are done. A retry resumes here. */
@@ -3910,7 +3289,7 @@ export interface BulkItemOperationWork {
 const bulkOperationSchema = z.object({
   listId: z.string().min(1),
   operationId: z.string().min(1),
-  kind: z.enum(['clear_checked', 'uncheck_all']),
+  kind: z.enum(['clear_done', 'reopen_done']),
   itemIds: z.array(z.string().min(1)).default([]),
   cursor: z.number().int().nonnegative(),
   acceptedAt: instant.optional(),
@@ -4000,7 +3379,7 @@ export interface BulkOperationPlan {
 
 export interface RunBulkOperationOptions {
   readonly operationId: string;
-  readonly kind: 'clear_checked' | 'uncheck_all';
+  readonly kind: 'clear_done' | 'reopen_done';
   readonly now: string;
   readonly plan: (itemIds: readonly string[]) => BulkOperationPlan;
 }
@@ -4014,7 +3393,7 @@ export interface BulkOperationResult {
 /**
  * Runs one bulk checked operation to completion, resuming one already started (§P3-10).
  *
- * Three phases, for the reason the behaviour migration has three: the snapshot cannot be
+ * Three phases because the snapshot cannot be
  * written in the same transaction that takes it, and the work has to survive between them.
  *
  * 1. The stable snapshot is taken, the caller plans the answer, and one transaction installs
@@ -4041,8 +3420,10 @@ export async function runBulkCheckedOperation(
   const storedWork = await getBulkItemOperation(listId, options.operationId);
   let work: AcceptedBulkItemOperationWork;
   if (storedWork === undefined) {
-    const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
-    const itemIds = checked.map((item) => item.itemId);
+    const doneItems = (await readAllItemsUnfenced(listId)).filter(
+      (item) => item.state === 'done',
+    );
+    const itemIds = doneItems.map((item) => item.itemId);
     const plan = options.plan(itemIds);
     const acceptedAt = instant.parse(options.now);
     work = {
@@ -4135,7 +3516,7 @@ async function applyBulkChunk(
     remaining.map(async (itemId) => {
       const item = current.get(itemId);
       if (item === undefined) return { itemId, item: undefined, cost: 1 };
-      if (work.kind === 'uncheck_all') return { itemId, item, cost: 2 };
+      if (work.kind === 'reopen_done') return { itemId, item, cost: 2 };
       const relationships = await readRelationshipSnapshot(list, itemId);
       return {
         itemId,
@@ -4173,24 +3554,24 @@ async function applyBulkChunk(
     if (entry.item === undefined) continue;
     const item = entry.item;
     const ingredientIdentity = ingredientIdentities.get(item.itemId);
-    if (work.kind === 'uncheck_all') {
-      if (!item.checked) continue;
+    if (work.kind === 'reopen_done') {
+      if (item.state !== 'done') continue;
       const nextRevision = item.itemRevision + 1;
       builder.add(
         {
           Update: {
             Key: listItemKey(listId, item.rank, item.itemId),
             UpdateExpression:
-              'SET #checked = :false, #itemRevision = :next, #updatedAt = :now',
-            ConditionExpression: '#itemRevision = :expected AND #checked = :true',
+              'SET #state = :open, #itemRevision = :next, #updatedAt = :now',
+            ConditionExpression: '#itemRevision = :expected AND #state = :done',
             ExpressionAttributeNames: {
-              '#checked': 'checked',
+              '#state': 'state',
               '#itemRevision': 'itemRevision',
               '#updatedAt': 'updatedAt',
             },
             ExpressionAttributeValues: {
-              ':false': false,
-              ':true': true,
+              ':open': 'open',
+              ':done': 'done',
               ':expected': item.itemRevision,
               ':next': nextRevision,
               ':now': now,
@@ -4336,20 +3717,20 @@ async function applyBulkChunk(
          * exactly once however many transactions the operation needs.
          */
         UpdateExpression:
-          work.kind === 'uncheck_all'
-            ? 'SET #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement'
-            : 'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
+          work.kind === 'reopen_done'
+            ? 'SET #lastItemActivityAt = :lastItemActivityAt ADD #doneCount :delta, #itemVersion :itemVersionIncrement'
+            : 'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :delta, #doneCount :delta, #itemVersion :itemVersionIncrement',
         ConditionExpression: GATES_ABSENT,
         ExpressionAttributeNames: {
-          ...(work.kind === 'uncheck_all'
-            ? { '#uncheckedCount': 'uncheckedCount' }
-            : { '#itemCount': 'itemCount' }),
+          ...(work.kind === 'reopen_done'
+            ? { '#doneCount': 'doneCount' }
+            : { '#itemCount': 'itemCount', '#doneCount': 'doneCount' }),
           '#itemVersion': 'itemVersion',
           '#lastItemActivityAt': 'lastItemActivityAt',
           ...GATE_NAMES,
         },
         ExpressionAttributeValues: {
-          ':delta': work.kind === 'uncheck_all' ? applied : -applied,
+          ':delta': -applied,
           ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           ':lastItemActivityAt': now,
         },
@@ -4427,7 +3808,7 @@ interface ResumableCompensateOptions extends CompensateOptions {
  * independently deleted is simply gone. Compensation restores what the operation changed and
  * nothing else, which is what makes it safe on a shared list.
  */
-export async function recheckListItems(
+export async function restoreDoneStates(
   userId: string,
   listId: string,
   access: ListAccessGrant,
@@ -4437,7 +3818,7 @@ export async function recheckListItems(
   await readMutationState(userId, listId, access);
   const wanted = new Set(itemIds);
   const surviving = (await readAllItemsUnfenced(listId)).filter(
-    (item) => wanted.has(item.itemId) && !item.checked,
+    (item) => wanted.has(item.itemId) && item.state !== 'done',
   );
   const chunks = costedChunks(surviving, () => 2);
   const lastIndex = chunks.length - 1;
@@ -4455,7 +3836,7 @@ export async function recheckListItems(
     await retryMutation(async () => {
       const isLast = index === lastIndex;
       const builder = new TransactionBuilder(
-        'recheckListItems',
+        'restoreDoneStates',
         isLast && options.receiptFor !== undefined ? 1 : 0,
       ).add(listDeletionGate(listId));
 
@@ -4466,7 +3847,7 @@ export async function recheckListItems(
             Update: {
               Key: listItemKey(listId, item.rank, item.itemId),
               UpdateExpression:
-                'SET #checked = :true, #itemRevision = :next, #updatedAt = :now',
+                'SET #state = :done, #itemRevision = :next, #updatedAt = :now',
               /**
                * The revision this chunk read. An item somebody has touched since fails the
                * condition and the chunk retries against the newer row — it never re-checks a
@@ -4474,12 +3855,12 @@ export async function recheckListItems(
                */
               ConditionExpression: '#itemRevision = :expected',
               ExpressionAttributeNames: {
-                '#checked': 'checked',
+                '#state': 'state',
                 '#itemRevision': 'itemRevision',
                 '#updatedAt': 'updatedAt',
               },
               ExpressionAttributeValues: {
-                ':true': true,
+                ':done': 'done',
                 ':expected': item.itemRevision,
                 ':next': nextRevision,
                 ':now': options.now,
@@ -4508,17 +3889,17 @@ export async function recheckListItems(
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'SET #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :taken, #itemVersion :itemVersionIncrement',
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #doneCount :taken, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
-            '#uncheckedCount': 'uncheckedCount',
+            '#doneCount': 'doneCount',
             '#itemVersion': 'itemVersion',
             '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':lastItemActivityAt': options.now,
-            ':taken': -chunk.length,
+            ':taken': chunk.length,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           },
         },
@@ -4539,7 +3920,7 @@ export async function recheckListItems(
       }
 
       await transactWrite(builder.build(), {
-        operation: 'recheckListItems',
+        operation: 'restoreDoneStates',
         onConditionFailed: (entry) => {
           if (entry === 0) return new ListNotFoundError();
           return new RetryableListMutationConflictError();
@@ -4740,13 +4121,13 @@ export async function restoreListItems(
           Update: {
             Key: listMeta(listId),
             UpdateExpression:
-              'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :count, #uncheckedCount :unchecked, #itemVersion :itemVersionIncrement',
+              'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :count, #doneCount :done, #itemVersion :itemVersionIncrement',
             ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
             ExpressionAttributeNames: {
               '#rankVersion': 'rankVersion',
               '#itemVersion': 'itemVersion',
               '#itemCount': 'itemCount',
-              '#uncheckedCount': 'uncheckedCount',
+              '#doneCount': 'doneCount',
               '#lastItemActivityAt': 'lastItemActivityAt',
               ...GATE_NAMES,
             },
@@ -4756,7 +4137,7 @@ export async function restoreListItems(
               ':nextVersion': nextVersion,
               ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
               ':count': chunk.length,
-              ':unchecked': chunk.filter((entry) => !entry.item.checked).length,
+              ':done': chunk.filter((entry) => entry.item.state === 'done').length,
             },
           },
         });
@@ -4814,10 +4195,9 @@ export async function restoreListItem(
  * precondition becomes a condition on the same `META` update that applies the inverse, so the
  * whole compensation either lands on the state it was recorded against or lands not at all.
  *
- * Capabilities are written and checked through **document paths**, one flag at a time. That
- * is what lets `Show checkboxes` be undone while `Add a place to items` has moved since: a
- * whole-object write would put the other switch back where it was, and a whole-object
- * condition would refuse an Undo that is still perfectly applicable.
+ * Each supplied settings field has its own precondition. That lets one switch be undone while
+ * an unrelated setting changed later: a whole-row inverse would put the other edit back where
+ * it was, and a whole-row condition would refuse an Undo that is still applicable.
  *
  * A slot inverse also restores the exact profile default the forward change removed, and only
  * while that slot is still empty — a newer destination chosen since makes the **whole**
@@ -4839,19 +4219,17 @@ export async function applyListSettingsInverse(
   const sets = ['#updatedAt = :now'];
   const conditions: string[] = [];
 
-  if (inverse.capabilities !== undefined) {
-    names['#capabilities'] = 'capabilities';
-    for (const [flag, prior] of Object.entries(inverse.capabilities)) {
-      names[`#${flag}`] = flag;
-      values[`:prior_${flag}`] = prior;
-      sets.push(`#capabilities.#${flag} = :prior_${flag}`);
+  for (const field of ['title', 'itemStateMode', 'featureConfig'] as const) {
+    if (inverse[field] !== undefined) {
+      names[`#${field}`] = field;
+      values[`:prior_${field}`] = inverse[field];
+      sets.push(`#${field} = :prior_${field}`);
     }
-  }
-  for (const [flag, expected] of Object.entries(preconditions.capabilities ?? {})) {
-    names['#capabilities'] = 'capabilities';
-    names[`#${flag}`] = flag;
-    values[`:expected_${flag}`] = expected;
-    conditions.push(`#capabilities.#${flag} = :expected_${flag}`);
+    if (preconditions[field] !== undefined) {
+      names[`#${field}`] = field;
+      values[`:expected_${field}`] = preconditions[field];
+      conditions.push(`#${field} = :expected_${field}`);
+    }
   }
   if ('slot' in inverse) {
     names['#slot'] = 'slot';
@@ -4872,11 +4250,6 @@ export async function applyListSettingsInverse(
     names['#archived'] = 'archived';
     values[':expectedArchived'] = preconditions.archived;
     conditions.push('#archived = :expectedArchived');
-  }
-  if (preconditions.behaviour !== undefined) {
-    names['#behaviour'] = 'behaviour';
-    values[':expectedBehaviour'] = preconditions.behaviour;
-    conditions.push('#behaviour = :expectedBehaviour');
   }
 
   const builder = new TransactionBuilder(
@@ -5125,18 +4498,16 @@ export async function deleteList(
  *
  * ## It does not advance `updatedAt`, and that is not an oversight
  *
- * The behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and
- * condition-checks it (P3-09). Moving the version underneath an in-flight migration fails that
- * condition **permanently** — the retry re-reads the same stored value and fails again —
- * stranding `behaviourMigrationId` on the List and gating every item read and mutation into
- * `503` for ever. Freshening a concurrency token is not worth bricking a list.
+ * Rank repair and aggregate conversion pin the List snapshot while their marker is present.
+ * Moving the version underneath in-flight work would make its final condition fail
+ * permanently, so freshening a concurrency token is not worth stranding the list.
  *
  * It is safe to leave alone because {@link patchListMeta} is `SET` over named fields and never
  * a whole-item `Put`, so no client holding a pre-clear copy can write the attribute back. The
  * worst case is one stale render of a link that has gone, corrected by the next read.
  *
  * For the same reason the write is **not** gated on the migration or repair markers: removing
- * an unrelated META attribute leaves `updatedAt`, `rankVersion` and `behaviourMigrationId`
+ * an unrelated META attribute leaves `updatedAt`, `rankVersion` and migration markers
  * untouched, so every in-flight condition still holds — while gating it would let a running
  * migration block a Plan deletion and leave behind the dangling link this exists to remove.
  */

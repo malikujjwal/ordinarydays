@@ -1,5 +1,3 @@
-import type { ListBehaviourConfirmation } from './types/list.js';
-
 /**
  * The closed set of error codes the API may return.
  *
@@ -55,8 +53,6 @@ export interface AppErrorBody {
     details?: ErrorDetail[];
     requestId: string;
   };
-  /** Present only when a destructive List behaviour change needs a fresh confirmation. */
-  confirmation?: ListBehaviourConfirmation;
 }
 
 /** Narrows an unknown response body to the error envelope. */

@@ -99,9 +99,7 @@ test('a drag moves one item, and moving to the head actually moves it', async ({
   const writes = requests.filter(
     (line) => !line.startsWith('GET ') && line.includes('/v1/'),
   );
-  expect(writes).toEqual([
-    `PATCH http://localhost:3000/v1/lists/${listId}/items/${thirdId}`,
-  ]);
+  expect(writes).toEqual([`PATCH ${API}/v1/lists/${listId}/items/${thirdId}`]);
 
   // ---- Back down, to prove the id form travels too ------------------------------
   await drag(page, thirdId, 2);

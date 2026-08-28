@@ -2565,6 +2565,12 @@ actual and diff. Platform-specific approved baselines may differ, but each is ex
 environment. Token, contrast, dynamic type, keyboard, screen-reader, reduced-motion, hit-target
 and focus-restoration requirements still bind; pixel fidelity cannot waive accessibility.
 
+The canonical reference is
+`docs/04-conventions/visual-references/p3-33-list-settings.png`. A first baseline may not be
+approved merely because it matches the implementation that generated it. Side-by-side approval
+explicitly records spacing, section gaps, row height, segmented-control geometry, switch
+alignment, selected state and sheet sizing; only later CI runs use pixel identity as the gate.
+
 **Future task impact.** This task is inserted before the former P3-33 and all still-unimplemented
 P3-33–P3-50 ids move by one. Amend their contracts now and build them only on the new model:
 

@@ -1192,10 +1192,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           intent.seq,
           canonical.updatedAt,
         );
-      } else if (
-        intent.mutationKey[1] === 'patch' ||
-        intent.mutationKey[1] === 'behaviour'
-      ) {
+      } else if (intent.mutationKey[1] === 'patch') {
         if (canonical?.listId !== intent.entityId) {
           throw new Error('List settings acknowledgement omitted its canonical List.');
         }
@@ -1206,11 +1203,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
            * neither. A settings PATCH keeps the subset for its own reason — it must not
            * restate fields it never touched.
            */
-          if (intent.mutationKey[1] === 'behaviour') {
-            await lists.installCanonicalRow(transaction, canonical);
-          } else {
-            await lists.applySettings(transaction, canonical);
-          }
+          await lists.applySettings(transaction, canonical);
         }
         /*
          * The offer's existence is what says an Undo was promised, not a re-reading of the

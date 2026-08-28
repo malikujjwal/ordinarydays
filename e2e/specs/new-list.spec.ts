@@ -15,8 +15,8 @@ import { API, e2eHeaders } from '../support/api';
  *
  * The title is the founder's own trap: `Costco run` is a phrase a matcher would have to guess
  * about, and this flow asserts the stored `templateKey` is still `groceries` afterwards. The
- * other direction is asserted too: `Blank` is an explicit tap that stores `simple-list` with
- * the visible title `Simple list`, not a fallback something landed on.
+ * other direction is asserted too: `Blank` is an explicit tap that stores `blank` with the
+ * visible title `Untitled list`, not a fallback something landed on.
  *
  * ## The absence, watched rather than assumed
  *
@@ -51,15 +51,26 @@ async function expectNoSeriousA11yViolations(page: Page, where: string): Promise
 async function storedList(
   request: APIRequestContext,
   title: string,
-): Promise<{ templateKey: string; behaviour: string; title: string }> {
+): Promise<{
+  templateKey: string;
+  title: string;
+  itemStateMode: { mode: string };
+  slot: string | null;
+}> {
   const response = await request.get(`${API}/v1/lists`, { headers: e2eHeaders() });
   expect(response.ok(), await response.text()).toBe(true);
   const body = (await response.json()) as {
-    data: { title: string; templateKey: string; behaviour: string }[];
+    data: {
+      title: string;
+      templateKey: string;
+      itemStateMode: { mode: string };
+      slot: string | null;
+    }[];
   };
   const match = body.data.find((list) => list.title === title);
   expect(match, `no stored list titled "${title}"`).toBeDefined();
-  return match as { templateKey: string; behaviour: string; title: string };
+  if (match === undefined) throw new Error(`No stored list titled "${title}".`);
+  return match;
 }
 
 test('creates a list from an explicit style, and the typed title never changes it', async ({
@@ -93,7 +104,11 @@ test('creates a list from an explicit style, and the typed title never changes i
   await expect(testId(page, 'list-style-chooser')).toBeVisible();
   await expect(testId(page, 'new-list-title')).toHaveCount(0);
   await expect(testId(page, 'new-list-create')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Blank. A plain list' })).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'Blank. Start without a category or item details',
+    }),
+  ).toBeVisible();
   await expectNoSeriousA11yViolations(page, '/lists/new (style chooser)');
 
   await testId(page, 'list-style-groceries').click();
@@ -125,23 +140,24 @@ test('creates a list from an explicit style, and the typed title never changes i
   // Assertion 3: the tap chose the style, and `Costco run` did not change it.
   const groceries = await storedList(request, groceriesTitle);
   expect(groceries.templateKey).toBe('groceries');
-  expect(groceries.behaviour).toBe('collection');
+  expect(groceries.itemStateMode).toEqual({ mode: 'checkbox' });
+  expect(groceries.slot).toBe('groceries');
 
   /**
-   * Assertion 4: the other direction. `Blank` is an explicit tap that stores `simple-list`
-   * with the visible title prefilled as `Simple list` — there is no no-selection fallback,
-   * so a list is `simple-list` because somebody chose it.
+   * Assertion 4: the other direction. `Blank` is an explicit tap that stores `blank` with
+   * the visible title prefilled as `Untitled list` — there is no no-selection fallback,
+   * so a list is `blank` because somebody chose it.
    */
   await testId(page, 'lists-new').click();
   await expect(testId(page, 'list-style-chooser')).toBeVisible();
-  await testId(page, 'list-style-simple-list').click();
-  await expect(testId(page, 'new-list-title')).toHaveValue('Simple list');
+  await testId(page, 'list-style-blank').click();
+  await expect(testId(page, 'new-list-title')).toHaveValue('Untitled list');
   await testId(page, 'new-list-title').fill(blankTitle);
   await testId(page, 'new-list-create').click();
 
   await expect(testId(page, 'lists-screen')).toBeVisible();
   const blank = await storedList(request, blankTitle);
-  expect(blank.templateKey).toBe('simple-list');
+  expect(blank.templateKey).toBe('blank');
 
   // Assertion 5: across the whole flow, the sheet never fetched the templates route.
   expect(templateOrModelRequests()).toEqual([]);

@@ -241,7 +241,7 @@ export function useMotion(): MotionTokens {
   return useMemo(
     () => ({
       duration: reduced
-        ? { instant: 0, fast: 0, base: 0, slow: 0, max: 0 }
+        ? { instant: 0, fast: 0, base: 0, switch: 0, slow: 0, max: 0 }
         : motion.duration,
       easing: motion.easing,
       spring: motion.spring,

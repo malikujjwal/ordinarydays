@@ -341,4 +341,291 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toEqual({ name: 'list_archive_undo_offers' });
   });
+
+  it('atomically upgrades legacy List projections and every queued payload without losing lane identity', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 13));
+
+    const listId = 'lst_legacy_pending';
+    const firstItemId = 'itm_legacy_edit';
+    const createdItemId = 'itm_legacy_create';
+    await database.run(
+      `INSERT INTO list_rows (
+         list_id, position, owner_id, behaviour, template_key, title, icon,
+         empty_state_copy, checkable, supports_location, slot, source_activity_id,
+         item_count, unchecked_count, member_count, rank_version, archived,
+         updated_at, last_item_activity_at
+       ) VALUES (?, 0, 'usr_owner', 'watch', 'legacy-watch', 'Queue', 'play',
+         'Add a title.', 0, 0, 'watch', 'act_source', 2, 2, 1, 4, 0,
+         '2026-08-28T10:00:00.000Z', '2026-08-28T10:00:00.000Z');`,
+      [listId],
+    );
+    await database.run(
+      `INSERT INTO list_items VALUES (?, ?, 'a', 'Edited show', 'Keep note', 0,
+         '{"label":"Cinema"}', 'act_source', 'Source',
+         '{"behaviour":"watch","watchStatus":"watching","mediaKind":"show","season":2,"episode":4}');`,
+      [firstItemId, listId],
+    );
+    await database.run(
+      `INSERT INTO list_items VALUES (?, ?, 'b', 'Created show', NULL, 0,
+         NULL, NULL, NULL,
+         '{"behaviour":"watch","watchStatus":"watched","mediaKind":"show","season":1,"episode":8}');`,
+      [createdItemId, listId],
+    );
+
+    const appendLegacyIntent = async (
+      intentId: string,
+      seq: number,
+      name: string,
+      variables: object,
+      entityId = listId,
+      status = 'queued',
+    ) =>
+      database?.run(
+        `INSERT INTO outbox_intents (
+         intent_id, mutation_key_json, variables_json, entity_id, ordering_key,
+         status, created_at, seq, attempts, semantic_key
+       ) VALUES (?, ?, ?, ?, ?, ?, 100, ?, 2, ?);`,
+        [
+          intentId,
+          JSON.stringify(['list', name]),
+          JSON.stringify(variables),
+          entityId,
+          `list:${listId}`,
+          status,
+          seq,
+          `legacy:${intentId}`,
+        ],
+      );
+    await appendLegacyIntent('settings-intent', 1, 'patch', {
+      listId,
+      intentId: 'settings-intent',
+      idempotencyKey: 'settings-intent',
+      ifMatch: 'v1',
+      input: { capabilities: { checkable: false } },
+      previous: { capabilities: { checkable: true } },
+    });
+    await appendLegacyIntent(
+      'behaviour-intent',
+      2,
+      'behaviour',
+      {
+        listId,
+        intentId: 'behaviour-intent',
+        idempotencyKey: 'behaviour-intent',
+        ifMatch: 'v2',
+        input: { behaviour: 'watch' },
+        previous: { behaviour: 'collection' },
+      },
+      listId,
+      'in_flight',
+    );
+    await appendLegacyIntent(
+      'item-edit-intent',
+      3,
+      'item-patch',
+      {
+        listId,
+        itemId: firstItemId,
+        intentId: 'item-edit-intent',
+        idempotencyKey: 'item-edit-intent',
+        input: {
+          checked: false,
+          location: { label: 'Cinema' },
+          details: {
+            behaviour: 'watch',
+            watchStatus: 'watching',
+            mediaKind: 'show',
+            season: 2,
+            episode: 4,
+          },
+        },
+      },
+      firstItemId,
+    );
+    await appendLegacyIntent(
+      'item-create-intent',
+      4,
+      'item-create',
+      {
+        listId,
+        itemId: createdItemId,
+        intentId: 'item-create-intent',
+        idempotencyKey: 'item-create-intent',
+        rank: 'b',
+        input: {
+          itemId: createdItemId,
+          title: 'Created show',
+          details: {
+            behaviour: 'watch',
+            watchStatus: 'watched',
+            mediaKind: 'show',
+            season: 1,
+            episode: 8,
+          },
+        },
+      },
+      createdItemId,
+    );
+    await appendLegacyIntent('bulk-intent', 5, 'clear-checked', {
+      listId,
+      idempotencyKey: 'bulk-intent',
+    });
+    await appendLegacyIntent(
+      'reorder-intent',
+      6,
+      'item-patch',
+      {
+        listId,
+        itemId: firstItemId,
+        intentId: 'reorder-intent',
+        idempotencyKey: 'reorder-intent',
+        input: { afterItemId: null },
+      },
+      firstItemId,
+    );
+    await database.run('UPDATE outbox_meta SET next_seq = 7 WHERE singleton = 1;');
+    await database.run(
+      `INSERT INTO list_archive_undo_offers (
+         original_intent_id, current_intent_id, list_id, created_at
+       ) VALUES ('behaviour-intent', 'behaviour-intent', ?, 100);`,
+      [listId],
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT schema_version, item_state_mode_json, feature_config_json,
+              rank_version, source_activity_id
+       FROM list_rows WHERE list_id = ?;`,
+        [listId],
+      ),
+    ).toEqual({
+      schema_version: 2,
+      item_state_mode_json: JSON.stringify({
+        mode: 'stages',
+        labels: { open: 'Want to watch', active: 'Watching', done: 'Watched' },
+        groupByState: true,
+      }),
+      feature_config_json: JSON.stringify({
+        progress: { enabled: true, kind: 'episode' },
+      }),
+      rank_version: 5,
+      source_activity_id: 'act_source',
+    });
+    expect(
+      await database.all(
+        `SELECT item_id, state, features_json, source_activity_id, source_label
+       FROM list_items ORDER BY rank;`,
+      ),
+    ).toEqual([
+      {
+        item_id: firstItemId,
+        state: 'active',
+        features_json: JSON.stringify({
+          place: { label: 'Cinema' },
+          progress: { kind: 'episode', mediaKind: 'show', season: 2, episode: 4 },
+        }),
+        source_activity_id: 'act_source',
+        source_label: 'Source',
+      },
+      {
+        item_id: createdItemId,
+        state: 'done',
+        features_json: JSON.stringify({
+          progress: { kind: 'episode', mediaKind: 'show', season: 1, episode: 8 },
+        }),
+        source_activity_id: null,
+        source_label: null,
+      },
+    ]);
+
+    const migratedIntents = await database.all(
+      `SELECT intent_id, mutation_key_json, variables_json, entity_id, ordering_key,
+              status, seq, attempts, depends_on_intent_id
+       FROM outbox_intents ORDER BY seq;`,
+    );
+    expect(migratedIntents).toHaveLength(7);
+    expect(migratedIntents[0]).toMatchObject({
+      intent_id: 'settings-intent',
+      entity_id: listId,
+      ordering_key: `list:${listId}`,
+      status: 'queued',
+      seq: 1,
+      attempts: 2,
+    });
+    expect(JSON.parse(String(migratedIntents[0]?.variables_json))).toMatchObject({
+      input: { itemStateMode: { mode: 'none' } },
+      previous: { itemStateMode: { mode: 'checkbox' } },
+    });
+    expect(JSON.parse(String(migratedIntents[1]?.mutation_key_json))).toEqual([
+      'list',
+      'patch',
+    ]);
+    expect(JSON.parse(String(migratedIntents[1]?.variables_json))).toMatchObject({
+      input: {
+        itemStateMode: { mode: 'stages' },
+        featureConfig: { progress: { enabled: true, kind: 'episode' } },
+      },
+      previous: { itemStateMode: { mode: 'none' }, featureConfig: {} },
+    });
+    expect(migratedIntents[1]).toMatchObject({
+      intent_id: 'behaviour-intent',
+      status: 'in_flight',
+      seq: 2,
+      attempts: 2,
+    });
+    expect(JSON.parse(String(migratedIntents[2]?.variables_json))).toMatchObject({
+      input: {
+        state: 'active',
+        features: {
+          place: { label: 'Cinema' },
+          progress: { kind: 'episode', mediaKind: 'show', season: 2, episode: 4 },
+        },
+      },
+    });
+    const migratedCreate = JSON.parse(String(migratedIntents[3]?.variables_json));
+    expect(migratedCreate.input).toMatchObject({
+      itemId: createdItemId,
+      title: 'Created show',
+      features: {
+        progress: { kind: 'episode', mediaKind: 'show', season: 1, episode: 8 },
+      },
+    });
+    expect(migratedCreate.input).not.toHaveProperty('state');
+    expect(JSON.parse(String(migratedIntents[4]?.mutation_key_json))).toEqual([
+      'list',
+      'clear-checked',
+    ]);
+    expect(JSON.parse(String(migratedIntents[5]?.variables_json))).toMatchObject({
+      input: { afterItemId: null },
+    });
+    expect(migratedIntents[6]).toMatchObject({
+      intent_id: `item-create-intent:p333-state:${createdItemId}`,
+      entity_id: createdItemId,
+      ordering_key: `list:${listId}`,
+      status: 'queued',
+      seq: 7,
+      attempts: 0,
+      depends_on_intent_id: 'item-create-intent',
+    });
+    expect(JSON.parse(String(migratedIntents[6]?.variables_json))).toMatchObject({
+      input: { state: 'done' },
+    });
+    expect(
+      await database.first(
+        `SELECT original_intent_id, current_intent_id, list_id
+       FROM list_archive_undo_offers;`,
+      ),
+    ).toEqual({
+      original_intent_id: 'behaviour-intent',
+      current_intent_id: 'behaviour-intent',
+      list_id: listId,
+    });
+    expect(
+      await database.first('SELECT next_seq FROM outbox_meta WHERE singleton = 1;'),
+    ).toEqual({ next_seq: 8 });
+  });
 });

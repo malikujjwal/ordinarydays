@@ -608,7 +608,7 @@ model call; the validated target is never truncated, defaulted or inferred.
 **The pipeline**, in order:
 
 ```
-kill switch  →  validate target and list access/behaviour  →  rate limits  →  cache lookup
+kill switch  →  validate target, List access and enabled typed features  →  rate limits  →  cache lookup
 →  spend reservation  →  select target-compatible schema and build request
 →  provider.complete()  →  spend reconciliation  →  schema validation  →  grounding
 →  deterministic resolution  →  confidence derivation  →  exact request-target echo

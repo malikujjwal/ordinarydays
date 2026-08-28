@@ -538,7 +538,7 @@ describe('the projection returns only the caller’s link', () => {
     rank: 'n',
     itemRevision: 1,
     title: 'Zahav',
-    checked: false,
+    state: 'open',
   });
 
   /**
@@ -560,7 +560,7 @@ describe('the projection returns only the caller’s link', () => {
       ]) as never,
     );
 
-    const page = await listItemService.listItemsFor(USER, LIST, undefined);
+    const page = await listItemService.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(linkedRow(page.items[0])?.viewerLink?.activityId).toBe(ACT);
     /**
@@ -587,7 +587,7 @@ describe('the projection returns only the caller’s link', () => {
       ]) as never,
     );
 
-    const page = await listItemService.listItemsFor(USER, LIST, undefined);
+    const page = await listItemService.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(page.items[0]?.item).toEqual(item);
   });
@@ -609,10 +609,12 @@ describe('deleting a ListItem clears its pointers, and every Plan survives', () 
   it('goes through the repository delete and touches no Activity directly', async () => {
     mocks.getListMeta.mockResolvedValue({
       listId: LIST,
-      behaviour: 'collection',
-      capabilities: { checkable: true, supportsLocation: false },
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       archived: false,
       rankVersion: 1,
+      doneCount: 0,
       updatedAt: NOW,
     } as never);
     mocks.deleteListItem.mockResolvedValue({ itemId: ITEM } as never);

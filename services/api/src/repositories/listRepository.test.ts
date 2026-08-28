@@ -45,17 +45,18 @@ const NOW = instant.parse('2026-08-23T14:00:00.000Z');
 const LATER = instant.parse('2026-08-23T14:01:00.000Z');
 
 const list = (overrides: Partial<List> = {}): List => ({
+  schemaVersion: 2,
   listId: LIST_ID,
   ownerId: ALICE,
-  behaviour: 'collection',
-  templateKey: 'simple-list',
+  templateKey: 'checklist',
   title: 'Errands',
   icon: 'list',
   emptyStateCopy: 'Nothing here yet.',
-  capabilities: { checkable: true, supportsLocation: false },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: {},
   slot: null,
   itemCount: 0,
-  uncheckedCount: 0,
+  doneCount: 0,
   memberCount: 1,
   rankVersion: 0,
   archived: false,
@@ -68,7 +69,6 @@ const listRow = (overrides: Partial<List> = {}) => ({
   ...keys.listMeta(LIST_ID),
   entity: 'List',
   createdAt: NOW,
-  schemaVersion: 1,
   ...list(overrides),
 });
 
@@ -91,7 +91,7 @@ const item = (overrides: Partial<ListItem> = {}): ListItem => ({
   rank: 'V',
   itemRevision: 0,
   title: 'Milk',
-  checked: false,
+  state: 'open',
   ...overrides,
 });
 
@@ -226,13 +226,13 @@ const MANUAL = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A2';
 const OTHER = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A3';
 const GONE = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A4';
 
-describe('the bulk checked operations', () => {
+describe('the bulk done-state operations', () => {
   const checkedItems = (count: number): ListItem[] =>
     Array.from({ length: count }, (_, index) =>
       item({
         itemId: `itm_01J8XKQ2M4N5P6R7S8T9V0W1${String(index).padStart(2, '0')}`,
         rank: `a${String(index)}`,
-        checked: true,
+        state: 'done',
         title: `Item ${String(index)}`,
       }),
     );
@@ -256,7 +256,7 @@ describe('the bulk checked operations', () => {
     receipt,
   });
 
-  const run = (kind: 'clear_checked' | 'uncheck_all') =>
+  const run = (kind: 'clear_done' | 'reopen_done') =>
     repository.runBulkCheckedOperation(ALICE, LIST_ID, access, {
       operationId: 'blk_op',
       kind,
@@ -270,22 +270,22 @@ describe('the bulk checked operations', () => {
    * before anything is applied, naming every id the operation will take.
    */
   it('deletes only the checked rows under one operation naming them all', async () => {
-    seedChecked(3, [item({ itemId: ITEM_B, rank: 'z0', checked: false })]);
+    seedChecked(3, [item({ itemId: ITEM_B, rank: 'z0', state: 'open' })]);
 
-    const result = await run('clear_checked');
+    const result = await run('clear_done');
 
     expect(result.affectedCount).toBe(3);
     expect(result.undoToken).toBe('blk_op.secret');
     const undos = written('ListUndo');
     expect(undos).toHaveLength(1);
     expect(undos[0]).toMatchObject({
-      kind: 'clear_checked',
+      kind: 'clear_done',
       consumed: false,
       tokenHash: 'stored-hash',
       affectedItemIds: checkedItems(3).map((value) => value.itemId),
     });
     expect(written('ListItemTombstone')).toHaveLength(3);
-    // The unchecked row is not touched.
+    // The open row is not touched.
     expect(
       transacted().some((entry) => String(entry.Delete?.Key?.sk ?? '').includes(ITEM_B)),
     ).toBe(false);
@@ -299,13 +299,13 @@ describe('the bulk checked operations', () => {
   it('records the prepared answer, and deletes it when the operation finishes', async () => {
     seedChecked(2);
 
-    await run('clear_checked');
+    await run('clear_done');
 
     const work = written('ListBulkOperation');
     expect(work).toHaveLength(1);
     expect(work[0]).toMatchObject({
       operationId: 'blk_op',
-      kind: 'clear_checked',
+      kind: 'clear_done',
       cursor: 0,
       acceptedAt: LATER,
       undoToken: 'blk_op.secret',
@@ -336,7 +336,7 @@ describe('the bulk checked operations', () => {
           createdAt: NOW,
           listId: LIST_ID,
           operationId: 'blk_op',
-          kind: 'clear_checked',
+          kind: 'clear_done',
           itemIds: checkedItems(2).map((value) => value.itemId),
           cursor: 1,
           acceptedAt: NOW,
@@ -351,7 +351,7 @@ describe('the bulk checked operations', () => {
 
     const result = await repository.runBulkCheckedOperation(ALICE, LIST_ID, access, {
       operationId: 'blk_op',
-      kind: 'clear_checked',
+      kind: 'clear_done',
       now: LATER,
       plan: planSpy,
     });
@@ -382,7 +382,7 @@ describe('the bulk checked operations', () => {
       createdAt: NOW,
       listId: LIST_ID,
       operationId: 'blk_op',
-      kind: 'clear_checked' as const,
+      kind: 'clear_done' as const,
       itemIds: checkedItems(2).map((value) => value.itemId),
       cursor: 1,
       undoToken: 'blk_op.legacy-secret',
@@ -401,7 +401,7 @@ describe('the bulk checked operations', () => {
 
     await repository.runBulkCheckedOperation(ALICE, LIST_ID, access, {
       operationId: 'blk_op',
-      kind: 'clear_checked',
+      kind: 'clear_done',
       now: LATER,
       plan: vi.fn(plan),
     });
@@ -418,11 +418,11 @@ describe('the bulk checked operations', () => {
     expect(resumedMeta?.ExpressionAttributeValues?.[':lastItemActivityAt']).toBe(NOW);
   });
 
-  /** Every deleted row was checked, so none of them was contributing to `uncheckedCount`. */
-  it('moves itemCount and leaves uncheckedCount alone', async () => {
+  /** Every deleted row is done, so both aggregate counters move together. */
+  it('moves itemCount and doneCount together', async () => {
     seedChecked(2);
 
-    await run('clear_checked');
+    await run('clear_done');
 
     const meta = transacted().find(
       (entry) =>
@@ -430,7 +430,7 @@ describe('the bulk checked operations', () => {
         String(entry.Update.UpdateExpression).includes('itemCount'),
     )?.Update;
     expect(meta?.UpdateExpression).toBe(
-      'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
+      'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :delta, #doneCount :delta, #itemVersion :itemVersionIncrement',
     );
     expect(meta?.ExpressionAttributeValues).toMatchObject({
       ':delta': -2,
@@ -443,7 +443,7 @@ describe('the bulk checked operations', () => {
   it('records an empty operation when nothing is checked', async () => {
     seedChecked(0);
 
-    await expect(run('clear_checked')).resolves.toMatchObject({ affectedCount: 0 });
+    await expect(run('clear_done')).resolves.toMatchObject({ affectedCount: 0 });
     expect(written('ListUndo')[0]).toMatchObject({ affectedItemIds: [] });
     expect(written('ListItemTombstone')).toHaveLength(0);
   });
@@ -451,30 +451,30 @@ describe('the bulk checked operations', () => {
   it('unchecks exactly the checked set, advancing both revisions', async () => {
     seedChecked(2);
 
-    const result = await run('uncheck_all');
+    const result = await run('reopen_done');
 
     expect(result.affectedCount).toBe(2);
-    expect(written('ListUndo')[0]).toMatchObject({ kind: 'uncheck_all' });
+    expect(written('ListUndo')[0]).toMatchObject({ kind: 'reopen_done' });
     const rowUpdate = transacted().find((entry) =>
-      String(entry.Update?.UpdateExpression ?? '').includes('#checked = :false'),
+      String(entry.Update?.UpdateExpression ?? '').includes('#state = :open'),
     )?.Update;
     expect(rowUpdate?.ConditionExpression).toContain('#itemRevision = :expected');
-    expect(rowUpdate?.ConditionExpression).toContain('#checked = :true');
+    expect(rowUpdate?.ConditionExpression).toContain('#state = :done');
     expect(rowUpdate?.ExpressionAttributeValues).toMatchObject({ ':next': 1 });
     const meta = transacted().find(
       (entry) =>
         entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
-        String(entry.Update.UpdateExpression).includes('uncheckedCount'),
+        String(entry.Update.UpdateExpression).includes('doneCount'),
     )?.Update;
-    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':delta': 2 });
+    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':delta': -2 });
   });
 
   it('records an empty uncheck-all when nothing is checked', async () => {
     seedChecked(0);
 
-    await expect(run('uncheck_all')).resolves.toMatchObject({ affectedCount: 0 });
+    await expect(run('reopen_done')).resolves.toMatchObject({ affectedCount: 0 });
     expect(written('ListUndo')[0]).toMatchObject({
-      kind: 'uncheck_all',
+      kind: 'reopen_done',
       affectedItemIds: [],
     });
   });
@@ -488,17 +488,17 @@ describe('the bulk checked operations', () => {
       key.sk === keys.listMeta(LIST_ID).sk ? listRow() : undefined,
     );
     const rows = [
-      itemRow(item({ itemId: SURVIVOR, rank: 'a0', checked: false })),
+      itemRow(item({ itemId: SURVIVOR, rank: 'a0', state: 'open' })),
       // Already checked again by hand — not this operation's to touch.
-      itemRow(item({ itemId: MANUAL, rank: 'a1', checked: true })),
+      itemRow(item({ itemId: MANUAL, rank: 'a1', state: 'done' })),
       // Never part of the operation.
-      itemRow(item({ itemId: OTHER, rank: 'a2', checked: false })),
+      itemRow(item({ itemId: OTHER, rank: 'a2', state: 'open' })),
     ];
     vi.mocked(base.queryAll).mockImplementation(async (_key, options) =>
       options?.skPrefix === 'ITEM#' ? rows : [],
     );
 
-    const rechecked = await repository.recheckListItems(
+    const rechecked = await repository.restoreDoneStates(
       ALICE,
       LIST_ID,
       access,
@@ -508,7 +508,7 @@ describe('the bulk checked operations', () => {
 
     expect(rechecked).toBe(1);
     const updated = transacted().filter((entry) =>
-      String(entry.Update?.UpdateExpression ?? '').includes('#checked = :true'),
+      String(entry.Update?.UpdateExpression ?? '').includes('#state = :done'),
     );
     expect(updated).toHaveLength(1);
     expect(String(updated[0]?.Update?.Key?.sk)).toContain(SURVIVOR);
@@ -530,13 +530,13 @@ describe('the bulk checked operations', () => {
     );
     vi.mocked(base.queryAll).mockImplementation(async (_key, options) =>
       options?.skPrefix === 'ITEM#'
-        ? [itemRow(item({ itemId: SURVIVOR, rank: 'a0', checked: false }))]
+        ? [itemRow(item({ itemId: SURVIVOR, rank: 'a0', state: 'open' }))]
         : [],
     );
     const receiptFor = vi.fn(() => receipt);
 
     await expect(
-      repository.recheckListItems(ALICE, LIST_ID, access, [SURVIVOR], {
+      repository.restoreDoneStates(ALICE, LIST_ID, access, [SURVIVOR], {
         operationId: 'op_bulk',
         now: LATER,
         previouslyAffectedCount: 2,
@@ -547,7 +547,7 @@ describe('the bulk checked operations', () => {
   });
 
   it('records each non-final re-check chunk on the retained Undo operation', async () => {
-    const rows = checkedItems(49).map((value) => itemRow({ ...value, checked: false }));
+    const rows = checkedItems(49).map((value) => itemRow({ ...value, state: 'open' }));
     vi.mocked(base.getItem).mockImplementation(async (key) =>
       key.sk === keys.listMeta(LIST_ID).sk ? listRow() : undefined,
     );
@@ -555,7 +555,7 @@ describe('the bulk checked operations', () => {
       options?.skPrefix === 'ITEM#' ? rows : [],
     );
 
-    await repository.recheckListItems(
+    await repository.restoreDoneStates(
       ALICE,
       LIST_ID,
       access,
@@ -582,7 +582,7 @@ describe('the bulk checked operations', () => {
     vi.mocked(base.queryAll).mockResolvedValue([]);
 
     await expect(
-      repository.recheckListItems(ALICE, LIST_ID, access, [GONE], {
+      repository.restoreDoneStates(ALICE, LIST_ID, access, [GONE], {
         operationId: 'op_bulk',
         now: LATER,
       }),
@@ -602,33 +602,31 @@ describe('the settings inverse', () => {
    * where it was, and a whole-object condition would refuse an Undo that is still perfectly
    * applicable.
    */
-  it('writes and checks capability flags through document paths', async () => {
+  it('writes and checks the canonical feature configuration', async () => {
     await repository.applyListSettingsInverse(
       ALICE,
       LIST_ID,
       access,
-      { capabilities: { checkable: true } },
-      { capabilities: { checkable: false } },
+      { featureConfig: { place: { enabled: true } } },
+      { featureConfig: { place: { enabled: false } } },
       { ...inverseOptions, receiptFor: () => receipt },
     );
 
     const update = transacted().find(
       (entry) => entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk,
     )?.Update;
-    expect(update?.UpdateExpression).toContain(
-      '#capabilities.#checkable = :prior_checkable',
-    );
+    expect(update?.UpdateExpression).toContain('#featureConfig = :prior_featureConfig');
     expect(update?.ConditionExpression).toContain(
-      '#capabilities.#checkable = :expected_checkable',
+      '#featureConfig = :expected_featureConfig',
     );
     expect(update?.ExpressionAttributeValues).toMatchObject({
-      ':prior_checkable': true,
-      ':expected_checkable': false,
+      ':prior_featureConfig': { place: { enabled: true } },
+      ':expected_featureConfig': { place: { enabled: false } },
     });
     // The gate aliases the shared condition names must be declared with the rest.
     expect(update?.ExpressionAttributeNames).toMatchObject({
       '#rankRepairId': 'rankRepairId',
-      '#behaviourMigrationId': 'behaviourMigrationId',
+      '#schemaMigrationId': 'schemaMigrationId',
     });
   });
 
@@ -709,7 +707,7 @@ describe('the settings inverse', () => {
       entity: 'ListUndo',
       listId: LIST_ID,
       operationId: 'op_bulk',
-      kind: 'clear_checked',
+      kind: 'reopen_done',
       tokenHash: 'hash',
       undoExpiresAt: LATER,
       acceptedAt: NOW,
@@ -919,7 +917,8 @@ describe('identity and list storage', () => {
     mockLiveList(
       list({
         title: 'New',
-        capabilities: { checkable: false, supportsLocation: true },
+        itemStateMode: { mode: 'none' },
+        featureConfig: { place: { enabled: true } },
         slot: 'groceries',
         archived: true,
         updatedAt: LATER,
@@ -932,7 +931,8 @@ describe('identity and list storage', () => {
       access,
       {
         title: 'New',
-        capabilities: { checkable: false, supportsLocation: true },
+        itemStateMode: { mode: 'none' },
+        featureConfig: { place: { enabled: true } },
         slot: 'groceries',
         archived: true,
       },
@@ -1020,18 +1020,6 @@ describe('fenced reads', () => {
     await expect(repository.listItems(ALICE, LIST_ID, access)).rejects.toBeInstanceOf(
       repository.ListReadFenceError,
     );
-
-    vi.mocked(base.getItem)
-      .mockReset()
-      .mockResolvedValueOnce(listRow({ rankVersion: 2 }))
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(
-        listRow({ rankVersion: 2, behaviourMigrationId: 'migration' }),
-      )
-      .mockResolvedValueOnce(undefined);
-    await expect(repository.listItems(ALICE, LIST_ID, access)).rejects.toBeInstanceOf(
-      repository.ListReadFenceError,
-    );
   });
 
   it('returns caller links in requested order and drops misses', async () => {
@@ -1080,14 +1068,18 @@ describe('fenced reads', () => {
  *
  * One fence around three keyed reads. What matters is that the fence really is one — a
  * pointer read under one `rankVersion` and an item under the next is exactly the mixed
- * generation the fence exists to refuse — and that a list which is no longer a `watch` list
- * answers `undefined` before either of them is issued.
+ * generation the fence exists to refuse — and that a list with neither episode Progress nor
+ * exposed state answers `undefined` before either of them is issued.
  */
 describe('the watch follow-up source', () => {
-  const watchList = () => list({ behaviour: 'watch', title: 'Movies and shows' });
+  const watchList = () =>
+    list({
+      title: 'Movies and shows',
+      featureConfig: { progress: { enabled: true, kind: 'episode' } },
+    });
   const watched = () =>
     item({
-      details: { behaviour: 'watch', mediaKind: 'show', watchStatus: 'want', episode: 4 },
+      features: { progress: { kind: 'episode', mediaKind: 'show', episode: 4 } },
     });
 
   const mockSource = (
@@ -1115,19 +1107,29 @@ describe('the watch follow-up source', () => {
     ).resolves.toEqual({ list: watchList(), link: viewerLink(), item: watched() });
   });
 
-  it.each([
-    ['the list is no longer a watch list', { meta: list() }],
-    ['the caller has no pointer to the item', { link: undefined }],
-  ])('answers undefined when %s', async (_why, options) => {
-    mockSource(options);
+  it.each([['the caller has no pointer to the item', { link: undefined }]])(
+    'answers undefined when %s',
+    async (_why, options) => {
+      mockSource(options);
+
+      await expect(
+        repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it('still reads the source when exposed state can supply the fallback', async () => {
+    mockSource({ meta: list({ featureConfig: {} }) });
 
     await expect(
       repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 
-  it('never reads the pointer or the item for a list of another behaviour', async () => {
-    mockSource({ meta: list() });
+  it('never reads the pointer or item when episode progress and state are both hidden', async () => {
+    mockSource({
+      meta: list({ featureConfig: {}, itemStateMode: { mode: 'none' } }),
+    });
 
     await repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A);
 
@@ -1165,17 +1167,6 @@ describe('the watch follow-up source', () => {
     ).rejects.toBeInstanceOf(repository.ListReadFenceError);
   });
 
-  /** A migration is removing these very fields; describing them would offer to restore them. */
-  it('refuses a read taken across a behaviour migration', async () => {
-    mockSource({
-      meta: { ...watchList(), behaviourMigrationId: 'op_01J8XKQ2M4N5P6R7S8T9V0W1B1' },
-    });
-
-    await expect(
-      repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
-    ).rejects.toBeInstanceOf(repository.ListReadFenceError);
-  });
-
   it('refuses a caller whose grant is for another list', async () => {
     mockSource();
 
@@ -1197,7 +1188,7 @@ describe('rank allocation and item mutations', () => {
       ALICE,
       LIST_ID,
       access,
-      { itemId: ITEM_A, title: 'One', checked: false },
+      { itemId: ITEM_A, title: 'One', state: 'open' },
       { now: NOW },
     );
     expect(one).toMatchObject({ rank: 'V', itemRevision: 0 });
@@ -1207,8 +1198,8 @@ describe('rank allocation and item mutations', () => {
       LIST_ID,
       access,
       [
-        { itemId: ITEM_A, title: 'One', checked: false },
-        { itemId: ITEM_B, title: 'Two', checked: true },
+        { itemId: ITEM_A, title: 'One', state: 'open' },
+        { itemId: ITEM_B, title: 'Two', state: 'done' },
       ],
       // The receipt is built from the created items, so the stored response carries the
       // ranks this call allocated rather than a placeholder (P3-08).
@@ -1220,7 +1211,7 @@ describe('rank allocation and item mutations', () => {
     expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':count': 2,
-      ':unchecked': 1,
+      ':done': 1,
       ':itemVersionIncrement': 1,
     });
     await expect(
@@ -1238,7 +1229,7 @@ describe('rank allocation and item mutations', () => {
         ALICE,
         LIST_ID,
         access,
-        { itemId: ITEM_A, title: 'Collision', checked: false },
+        { itemId: ITEM_A, title: 'Collision', state: 'open' },
         { now: NOW },
       ),
     ).rejects.toBeInstanceOf(repository.ListItemIdUnavailableError);
@@ -1253,7 +1244,7 @@ describe('rank allocation and item mutations', () => {
       ALICE,
       LIST_ID,
       access,
-      { itemId: ITEM_B, title: 'Retry', checked: false },
+      { itemId: ITEM_B, title: 'Retry', state: 'open' },
       { now: NOW },
     );
     expect(tx.transactWrite).toHaveBeenCalledTimes(2);
@@ -1271,7 +1262,7 @@ describe('rank allocation and item mutations', () => {
         ALICE,
         LIST_ID,
         access,
-        { itemId: repository.newItemId(), title: 'Equal', checked: false },
+        { itemId: repository.newItemId(), title: 'Equal', state: 'open' },
         { now: NOW, afterItemId: null },
       ),
     ).rejects.toBeInstanceOf(repository.ListRankRepairRequiredError);
@@ -1283,7 +1274,7 @@ describe('rank allocation and item mutations', () => {
         ALICE,
         LIST_ID,
         access,
-        { itemId: repository.newItemId(), title: 'Overflow', checked: false },
+        { itemId: repository.newItemId(), title: 'Overflow', state: 'open' },
         { now: NOW },
       ),
     ).rejects.toBeInstanceOf(repository.ListRankRepairRequiredError);
@@ -1329,11 +1320,28 @@ describe('rank allocation and item mutations', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
-  it('patches supplied fields, removes nullable fields and moves checked counters', async () => {
+  it('does not move doneCount when a reordered item moves between non-done states', async () => {
+    const current = item({ rank: 'W', state: 'open' });
+    mockResolvedItem(current, list({ rankVersion: 8 }));
+    vi.mocked(base.query).mockResolvedValue({
+      items: [itemRow(item({ itemId: ITEM_B, rank: 'V' }))],
+    });
+
+    const moved = await repository.reorderListItem(ALICE, LIST_ID, access, ITEM_A, {
+      now: LATER,
+      afterItemId: null,
+      patch: { state: 'active' },
+    });
+
+    expect(moved.state).toBe('active');
+    const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(items?.[4]?.Update?.UpdateExpression).not.toContain('doneCount');
+  });
+
+  it('patches supplied fields, removes nullable fields and moves done counters', async () => {
     const current = item({
       note: 'Remove',
-      location: { label: 'Shop' },
-      details: { behaviour: 'watch', watchStatus: 'want' },
+      features: { place: { label: 'Shop' } },
     });
     mockResolvedItem(current);
     const patched = await repository.patchListItemFields(
@@ -1341,27 +1349,27 @@ describe('rank allocation and item mutations', () => {
       LIST_ID,
       access,
       ITEM_A,
-      { title: 'Oat milk', checked: true, note: null, location: null, details: null },
+      { title: 'Oat milk', state: 'done', note: null, features: null },
       LATER,
     );
 
     expect(patched).toEqual({
       ...item(),
       title: 'Oat milk',
-      checked: true,
+      state: 'done',
       itemRevision: 1,
     });
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
     expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(items?.[1]?.Update?.UpdateExpression).toContain('REMOVE');
     expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({
-      ':delta': -1,
+      ':delta': 1,
       ':itemVersionIncrement': 1,
       ':lastItemActivityAt': LATER,
     });
   });
 
-  it('advances itemVersion under the gates when a field patch does not change checked', async () => {
+  it('advances itemVersion under the gates when a field patch does not change state', async () => {
     mockResolvedItem();
     await repository.patchListItemFields(
       ALICE,
@@ -1381,6 +1389,22 @@ describe('rank allocation and item mutations', () => {
         ':lastItemActivityAt': LATER,
       },
     });
+  });
+
+  it('does not move doneCount between open and active', async () => {
+    mockResolvedItem(item({ state: 'open' }));
+
+    await repository.patchListItemFields(
+      ALICE,
+      LIST_ID,
+      access,
+      ITEM_A,
+      { state: 'active' },
+      LATER,
+    );
+
+    const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(items?.[3]?.Update?.UpdateExpression).not.toContain('doneCount');
   });
 });
 
@@ -1416,7 +1440,7 @@ describe('delete, restore and cascade', () => {
     });
     expect(items?.[6]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':minusOne': -1,
-      ':uncheckedDelta': -1,
+      ':doneDelta': 0,
       ':itemVersionIncrement': 1,
     });
   });
@@ -1481,7 +1505,7 @@ describe('delete, restore and cascade', () => {
    * multi-item form needs.
    */
   it('restores the exact snapshot only for its matching operation', async () => {
-    const snapshot = item({ checked: true });
+    const snapshot = item({ state: 'done' });
     const tombstone = {
       ...keys.listItemTombstone(LIST_ID, ITEM_A),
       entity: 'ListItemTombstone',
@@ -1524,7 +1548,7 @@ describe('delete, restore and cascade', () => {
   });
 
   it('includes committed restore chunks in the final receipt after a crash', async () => {
-    const snapshot = item({ checked: true });
+    const snapshot = item({ state: 'done' });
     const tombstone = {
       ...keys.listItemTombstone(LIST_ID, ITEM_A),
       entity: 'ListItemTombstone',
@@ -1829,19 +1853,19 @@ describe('the composable list-write primitives', () => {
 
       expect(items[spans.meta]?.Update?.ConditionExpression).toContain('rankRepairId');
       expect(items[spans.meta]?.Update?.ConditionExpression).toContain(
-        'behaviourMigrationId',
+        'schemaMigrationId',
       );
     });
 
-    it('counts only unchecked rows toward uncheckedCount', () => {
+    it('counts only done rows toward doneCount', () => {
       const { spans, items } = appended([
         item(),
-        item({ itemId: ITEM_B, rank: 'W', checked: true }),
+        item({ itemId: ITEM_B, rank: 'W', state: 'done' }),
       ]);
 
       expect(items[spans.meta]?.Update?.ExpressionAttributeValues).toMatchObject({
         ':count': 2,
-        ':unchecked': 1,
+        ':done': 1,
       });
     });
 
@@ -1895,7 +1919,7 @@ describe('the composable list-write primitives', () => {
     });
 
     /**
-     * The classification behind an extension is "this row is **unchecked**", and
+     * The classification behind an extension is "this row is **open**", and
      * `itemRevision` moves when `checked` does — so this condition is what stops a row
      * checked in between being extended when §7.3 says it should have become a new row.
      */
@@ -1987,8 +2011,7 @@ describe('clearSourceActivity', () => {
   });
 
   /**
-   * Advancing the version would fail the behaviour-migration finisher's pinned
-   * `expectedUpdatedAt` **permanently**, stranding the marker and gating the list into `503`.
+   * Advancing a version while exceptional list work is in flight could strand its marker.
    * The attribute leaves; nothing else moves.
    */
   it('removes only the attribute, moving no version', async () => {
@@ -2000,11 +2023,11 @@ describe('clearSourceActivity', () => {
     expect(optionsOf()?.expression).not.toContain('itemVersion');
   });
 
-  /** Not gated: a running migration must not be able to block a Plan deletion. */
+  /** Not gated: background list work must not be able to block a Plan deletion. */
   it('does not condition on the migration or repair markers', async () => {
     await repository.clearSourceActivity(LIST_ID, ACTIVITY_ID);
 
-    expect(optionsOf()?.condition).not.toContain('behaviourMigrationId');
+    expect(optionsOf()?.condition).not.toContain('schemaMigrationId');
     expect(optionsOf()?.condition).not.toContain('rankRepairId');
   });
 

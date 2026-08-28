@@ -77,7 +77,7 @@ const storedLink = (listId: string, viewerUserId: string, itemId: string) =>
 const setUp = async (itemTitle = 'Zahav') => {
   const listRes = await request(app(), 'POST', '/v1/lists', {
     title: 'Restaurants',
-    templateKey: 'restaurants-to-try',
+    templateKey: 'blank',
   });
   expect(listRes.status).toBe(201);
   const list = (await listRes.json()).data as List;

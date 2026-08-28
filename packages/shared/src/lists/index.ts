@@ -20,6 +20,16 @@
 
 export { type ListTemplateSeed, listTemplateSeed } from './creationSeed.js';
 export { formatIngredientTitle } from './formatIngredientTitle.js';
+export {
+  type LegacyListAggregate,
+  type ListAggregate,
+  migrateLegacyListAggregate,
+} from './migrateLegacyListAggregate.js';
+export {
+  adaptListItemToPlan,
+  type ExplicitPlanKind,
+  type ListItemPlanDraft,
+} from './planAdapters.js';
 export { type LabelSourceMeal, provenanceLabel } from './provenanceLabel.js';
 export {
   resolveSlot,

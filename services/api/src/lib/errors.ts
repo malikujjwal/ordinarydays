@@ -1,5 +1,4 @@
 import type { ErrorCode, ErrorDetail } from '@od/shared/errors';
-import type { ListBehaviourConfirmation } from '@od/shared/types';
 
 /**
  * One error class, one table, one place (`tech-stack.md` §4.4).
@@ -14,7 +13,6 @@ export class AppError extends Error {
     message: string,
     readonly details?: ErrorDetail[],
     readonly retryAfterSeconds?: number,
-    readonly confirmation?: ListBehaviourConfirmation,
   ) {
     super(message);
     this.name = 'AppError';

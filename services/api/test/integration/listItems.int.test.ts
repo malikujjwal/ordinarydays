@@ -61,20 +61,21 @@ const request = (
     }),
   );
 
-/** Seeds a list directly: P3-09 owns `PATCH /v1/lists/:id`, so capabilities are set here. */
+/** Seeds a canonical list directly so each item test controls its feature gates. */
 async function seedList(overrides: Partial<List> = {}): Promise<List> {
   const list: List = {
+    schemaVersion: 2,
     listId: repository.newListId(),
     ownerId: DEV,
-    behaviour: 'collection',
     templateKey: 'checklist',
     title: 'Errands',
     icon: 'check-square',
     emptyStateCopy: 'Add something to check off.',
-    capabilities: { checkable: true, supportsLocation: false },
+    itemStateMode: { mode: 'checkbox' },
+    featureConfig: {},
     slot: null,
     itemCount: 0,
-    uncheckedCount: 0,
+    doneCount: 0,
     memberCount: 1,
     rankVersion: 0,
     archived: false,
@@ -119,7 +120,7 @@ describe('creating an item', () => {
 
     expect(res.status).toBe(201);
     expect(body.data.title).toBe('Eggs');
-    expect(body.data.checked).toBe(false);
+    expect(body.data.state).toBe('open');
     expect(body.data.itemId).toMatch(/^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
     expect(body.data).not.toHaveProperty('itemRevision');
     expect(body.data).not.toHaveProperty('pk');
@@ -142,11 +143,11 @@ describe('creating an item', () => {
     expect(third.data.itemId).toBeDefined();
     const meta = await metaOf(list.listId);
     expect(meta?.itemCount).toBe(3);
-    expect(meta?.uncheckedCount).toBe(3);
+    expect(meta?.doneCount).toBe(0);
   });
 
   it('400s the 501st item with exactly "List is full."', async () => {
-    const list = await seedList({ itemCount: 500, uncheckedCount: 500 });
+    const list = await seedList({ itemCount: 500, doneCount: 0 });
 
     const res = await addItem(list.listId, { title: 'One too many' });
     const body = await res.json();
@@ -201,141 +202,50 @@ describe('creating an item', () => {
 });
 
 /**
- * Acceptance criterion 18: **both halves** of each gate, on every behaviour. A stored flag
- * left behind by a behaviour change must not resurrect a control the renderer does not have.
+ * Each typed feature is independently gated, and disabling one retains stored values.
  */
-describe('the two-part capability gates', () => {
-  it('refuses checked on a collection with checkable off, and accepts it once on', async () => {
-    const off = await seedList({
-      capabilities: { checkable: false, supportsLocation: false },
-    });
-    const created = await (await addItem(off.listId, { title: 'Eggs' })).json();
-    const itemId = created.data.itemId as string;
-
-    const refused = await request(
-      app(),
-      'PATCH',
-      `/v1/lists/${off.listId}/items/${itemId}`,
-      { checked: true },
-    );
-    expect(refused.status).toBe(400);
-    expect((await refused.json()).error.details?.[0]?.path).toBe('checked');
-
-    // The same list with the capability on — the gate is the row's flag, not a template key.
-    const on = await seedList({
-      capabilities: { checkable: true, supportsLocation: false },
-    });
-    const there = await (await addItem(on.listId, { title: 'Eggs' })).json();
-    const accepted = await request(
-      app(),
-      'PATCH',
-      `/v1/lists/${on.listId}/items/${there.data.itemId}`,
-      { checked: true },
-    );
-    expect(accepted.status).toBe(200);
-    expect((await accepted.json()).data.checked).toBe(true);
-    expect((await metaOf(on.listId))?.uncheckedCount).toBe(0);
-  });
-
-  it.each(['watch', 'meals'] as const)(
-    'refuses checked on a %s list even with the stored flag true',
-    async (behaviour) => {
-      const list = await seedList({
-        behaviour,
-        templateKey: behaviour === 'watch' ? 'watchlist' : 'meals-to-try',
-        // Retained from a previous collection generation, and meaningless here.
-        capabilities: { checkable: true, supportsLocation: true },
-      });
-      const details =
-        behaviour === 'watch'
-          ? { behaviour: 'watch', watchStatus: 'want' }
-          : { behaviour: 'meals' };
-      const created = await (
-        await addItem(list.listId, { title: 'Severance', details })
-      ).json();
-
-      const res = await request(
-        app(),
-        'PATCH',
-        `/v1/lists/${list.listId}/items/${created.data.itemId}`,
-        { checked: true },
-      );
-
-      expect(res.status).toBe(400);
-      expect((await res.json()).error.details?.[0]?.path).toBe('checked');
-    },
-  );
-
-  it('refuses a location when supportsLocation is off, and accepts it when on', async () => {
-    const off = await seedList();
+describe('feature gates and retained values', () => {
+  it('refuses a disabled place and accepts it once enabled', async () => {
+    const off = await seedList({ featureConfig: {} });
     const refused = await addItem(off.listId, {
       title: 'Zahav',
-      location: { label: 'Zahav' },
+      features: { place: { label: 'Zahav' } },
     });
     expect(refused.status).toBe(400);
-    expect((await refused.json()).error.details?.[0]?.path).toBe('location');
+    expect((await refused.json()).error.details?.[0]?.path).toBe('features.place');
 
-    const on = await seedList({
-      capabilities: { checkable: true, supportsLocation: true },
-    });
+    const on = await seedList({ featureConfig: { place: { enabled: true } } });
     const accepted = await addItem(on.listId, {
       title: 'Zahav',
-      location: { label: 'Zahav', address: '237 St James Pl' },
+      features: { place: { label: 'Zahav', address: '237 St James Pl' } },
     });
     expect(accepted.status).toBe(201);
-    expect((await accepted.json()).data.location.label).toBe('Zahav');
+    expect((await accepted.json()).data.features.place.label).toBe('Zahav');
   });
 
-  it('refuses a location on watch and meals even with the stored flag true', async () => {
+  it('refuses a progress value whose kind differs from the list configuration', async () => {
     const list = await seedList({
-      behaviour: 'watch',
-      templateKey: 'watchlist',
-      capabilities: { checkable: true, supportsLocation: true },
+      featureConfig: { progress: { enabled: true, kind: 'text' } },
     });
-
     const res = await addItem(list.listId, {
       title: 'Severance',
-      details: { behaviour: 'watch', watchStatus: 'want' },
-      location: { label: 'Sofa' },
+      features: { progress: { kind: 'episode', episode: 4 } },
     });
-
     expect(res.status).toBe(400);
-    expect((await res.json()).error.details?.[0]?.path).toBe('location');
+    expect((await res.json()).error.details?.[0]?.path).toBe('features.progress.kind');
   });
 
-  it('refuses details whose discriminant does not match the list behaviour', async () => {
-    const watch = await seedList({ behaviour: 'watch', templateKey: 'watchlist' });
-
-    const wrong = await addItem(watch.listId, {
-      title: 'Chicken tacos',
-      details: { behaviour: 'meals' },
-    });
-    expect(wrong.status).toBe(400);
-    expect((await wrong.json()).error.details?.[0]?.path).toBe('details.behaviour');
-
-    // And a collection carries no details shape at all.
-    const collection = await seedList();
-    const none = await addItem(collection.listId, {
-      title: 'Severance',
-      details: { behaviour: 'watch', watchStatus: 'want' },
-    });
-    expect(none.status).toBe(400);
-  });
-
-  it('retains a hidden value rather than clearing it', async () => {
-    const list = await seedList({
-      capabilities: { checkable: true, supportsLocation: true },
-    });
+  it('retains a feature value byte-identically when the feature is disabled', async () => {
+    const list = await seedList({ featureConfig: { place: { enabled: true } } });
+    const place = { label: 'Zahav', address: '237 St James Pl' };
     const created = await (
-      await addItem(list.listId, { title: 'Zahav', location: { label: 'Zahav' } })
+      await addItem(list.listId, { title: 'Zahav', features: { place } })
     ).json();
-
-    // The capability goes off underneath the item, as a later settings change would do.
     await repository.patchListMeta(
       DEV,
       list.listId,
       (await repository.getListPointer(DEV, list.listId)) as never,
-      { capabilities: { checkable: true, supportsLocation: false } },
+      { featureConfig: { place: { enabled: false } } },
       NOW,
       '2026-08-24T10:00:00.000Z',
     );
@@ -345,64 +255,39 @@ describe('the two-part capability gates', () => {
       'GET',
       `/v1/lists/${list.listId}/items/${created.data.itemId}`,
     );
-    expect((await item.json()).data.location.label).toBe('Zahav');
+    expect((await item.json()).data.features.place).toEqual(place);
   });
 
-  /**
-   * **Clearing is as gated as setting.** Turning a capability off hides values and never
-   * destroys them (`plans-and-lists.md` §5.5), so a `null` must not be the back door that
-   * removes what the toggle promised to keep.
-   */
-  it('refuses to clear a hidden location, and the value survives', async () => {
-    const list = await seedList({
-      capabilities: { checkable: true, supportsLocation: true },
-    });
+  it('refuses to clear a hidden feature, so disabling cannot destroy its value', async () => {
+    const list = await seedList({ featureConfig: { place: { enabled: true } } });
     const created = await (
-      await addItem(list.listId, { title: 'Zahav', location: { label: 'Zahav' } })
+      await addItem(list.listId, {
+        title: 'Zahav',
+        features: { place: { label: 'Zahav' } },
+      })
     ).json();
     await repository.patchListMeta(
       DEV,
       list.listId,
       (await repository.getListPointer(DEV, list.listId)) as never,
-      { capabilities: { checkable: true, supportsLocation: false } },
+      { featureConfig: { place: { enabled: false } } },
       NOW,
       '2026-08-24T10:00:00.000Z',
     );
 
-    const res = await request(
+    const refused = await request(
       app(),
       'PATCH',
       `/v1/lists/${list.listId}/items/${created.data.itemId}`,
-      { location: null },
+      { features: { place: null } },
     );
-
-    expect(res.status).toBe(400);
-    expect((await res.json()).error.details?.[0]?.path).toBe('location');
+    expect(refused.status).toBe(400);
     const after = await request(
       app(),
       'GET',
       `/v1/lists/${list.listId}/items/${created.data.itemId}`,
     );
-    expect((await after.json()).data.location.label).toBe('Zahav');
-  });
-
-  it('refuses to clear details, which only a behaviour migration may remove', async () => {
-    const list = await seedList({ behaviour: 'watch', templateKey: 'watchlist' });
-    const created = await (
-      await addItem(list.listId, {
-        title: 'Severance',
-        details: { behaviour: 'watch', watchStatus: 'want' },
-      })
-    ).json();
-
-    const res = await request(
-      app(),
-      'PATCH',
-      `/v1/lists/${list.listId}/items/${created.data.itemId}`,
-      { details: null },
-    );
-
-    expect(res.status).toBe(400);
+    expect((await after.json()).data.features.place.label).toBe('Zahav');
   });
 });
 
@@ -582,7 +467,7 @@ describe('bulk creation', () => {
   });
 
   it('400s a batch that would cross the 500-item cap, writing nothing', async () => {
-    const list = await seedList({ itemCount: 499, uncheckedCount: 499 });
+    const list = await seedList({ itemCount: 499, doneCount: 0 });
 
     const res = await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
       items: [{ title: 'One' }, { title: 'Two' }],
@@ -689,38 +574,36 @@ describe('patching an item', () => {
       app(),
       'PATCH',
       `/v1/lists/${list.listId}/items/${third.data.itemId}`,
-      { title: 'Third, renamed', checked: true, afterItemId: null },
+      { title: 'Third, renamed', state: 'done', afterItemId: null },
     );
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data.title).toBe('Third, renamed');
-    expect(body.data.checked).toBe(true);
+    expect(body.data.state).toBe('done');
     expect((await itemsOf(list.listId)).map((item) => item.title)).toEqual([
       'Third, renamed',
       'One',
       'Two',
     ]);
-    // The folded-in `checked` still moves the counter.
-    expect((await metaOf(list.listId))?.uncheckedCount).toBe(2);
+    // The folded-in state change still moves the counter.
+    expect((await metaOf(list.listId))?.doneCount).toBe(1);
     expect(first.data.itemId).toBeDefined();
   });
 
-  it('refuses a folded-in field the list’s capabilities do not allow', async () => {
-    const list = await seedList({
-      capabilities: { checkable: false, supportsLocation: false },
-    });
+  it('refuses a folded-in feature the list does not enable', async () => {
+    const list = await seedList({ featureConfig: {} });
     const created = await (await addItem(list.listId, { title: 'Eggs' })).json();
 
     const res = await request(
       app(),
       'PATCH',
       `/v1/lists/${list.listId}/items/${created.data.itemId}`,
-      { checked: true, afterItemId: null },
+      { features: { place: { label: 'Shop' } }, afterItemId: null },
     );
 
     expect(res.status).toBe(400);
-    expect((await res.json()).error.details?.[0]?.path).toBe('checked');
+    expect((await res.json()).error.details?.[0]?.path).toBe('features.place');
   });
 
   it('404s an item that is not on this list', async () => {
@@ -953,10 +836,10 @@ describe('the two timestamps (P3-47)', () => {
   });
 
   /**
-   * **The canonical pair**, and the one §P3-47 names first: checking an item moves the
+   * **The canonical pair**, and the one §P3-47 names first: completing an item moves the
    * display timestamp and leaves the concurrency token byte-identical.
    */
-  it('checking an item moves lastItemActivityAt and leaves updatedAt byte-identical', async () => {
+  it('completing an item moves lastItemActivityAt and leaves updatedAt byte-identical', async () => {
     const list = await seedList();
     const item = await seedItem(list.listId);
     const before = await stampsOf(list.listId);
@@ -965,7 +848,7 @@ describe('the two timestamps (P3-47)', () => {
       app(),
       'PATCH',
       `/v1/lists/${list.listId}/items/${item.itemId}`,
-      { checked: true },
+      { state: 'done' },
     );
     expect(res.status).toBe(200);
 
@@ -1000,7 +883,7 @@ describe('the two timestamps (P3-47)', () => {
    * **The regression the whole split exists to prevent.**
    *
    * An item write must not refresh the token an open settings sheet is holding. If it did,
-   * a stale `If-Match` would start *succeeding* after somebody checked something off — which
+   * a stale `If-Match` would start *succeeding* after somebody completed an item — which
    * is a lost update, and one nothing else in the suite would catch.
    */
   it('still fails a stale If-Match after an unrelated item write', async () => {
@@ -1020,7 +903,7 @@ describe('the two timestamps (P3-47)', () => {
 
     // …and an ordinary item write lands in between, which must not rehabilitate it.
     await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
-      checked: true,
+      state: 'done',
     });
 
     const stale = await request(
@@ -1123,7 +1006,7 @@ describe('the two timestamps (P3-47)', () => {
       const list = await seedList();
       const item = await seedItem(list.listId);
       await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
-        checked: true,
+        state: 'done',
       });
 
       const result = await around(list.listId, () =>
@@ -1146,7 +1029,7 @@ describe('the two timestamps (P3-47)', () => {
     for (const title of ['Eggs', 'Milk', 'Bread']) {
       const item = await seedItem(list.listId, title);
       await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
-        checked: true,
+        state: 'done',
       });
     }
     const before = await stampsOf(list.listId);
@@ -1174,7 +1057,7 @@ describe('the two timestamps (P3-47)', () => {
     const list = await seedList();
     const item = await seedItem(list.listId);
     await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
-      checked: true,
+      state: 'done',
     });
 
     const cleared = await request(
@@ -1206,7 +1089,7 @@ describe('the two timestamps (P3-47)', () => {
    * settings sheet holding a stale token should conflict.
    */
   it.each([
-    ['a capability toggle', { capabilities: { checkable: false } }],
+    ['a presentation change', { itemStateMode: { mode: 'none' } }],
     ['an archive', { archived: true }],
   ])('%s moves updatedAt and not lastItemActivityAt', async (_label, patch) => {
     const list = await seedList();
@@ -1216,30 +1099,6 @@ describe('the two timestamps (P3-47)', () => {
     const res = await request(app(), 'PATCH', `/v1/lists/${list.listId}`, patch, {
       'If-Match': before.updatedAt,
     });
-    expect(res.status).toBe(200);
-
-    const after = await stampsOf(list.listId);
-    expect(after.lastItemActivityAt).toBe(before.lastItemActivityAt);
-    expect(after.updatedAt).not.toBe(before.updatedAt);
-  });
-
-  /**
-   * A behaviour migration rewrites every item row, and still moves `updatedAt` rather than
-   * this — §P3-47 names the case. It is a change to the *list*, whatever it costs in item
-   * writes to carry out.
-   */
-  it('a behaviour migration moves updatedAt and not lastItemActivityAt', async () => {
-    const list = await seedList();
-    await seedItem(list.listId);
-    const before = await stampsOf(list.listId);
-
-    const res = await request(
-      app(),
-      'POST',
-      `/v1/lists/${list.listId}/behaviour`,
-      { behaviour: 'watch' },
-      { 'If-Match': before.updatedAt },
-    );
     expect(res.status).toBe(200);
 
     const after = await stampsOf(list.listId);

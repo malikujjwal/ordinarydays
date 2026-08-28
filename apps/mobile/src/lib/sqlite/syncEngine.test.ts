@@ -3647,15 +3647,16 @@ describe('serialized native convergence guard', () => {
     const list: List = {
       listId: 'lst_01J0000000000000000000000A',
       ownerId: OWNER,
-      behaviour: 'collection',
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
       slot: null,
       itemCount: 3,
-      uncheckedCount: 2,
+      doneCount: 1,
       memberCount: 1,
       rankVersion: 0,
       archived: false,
@@ -3718,15 +3719,16 @@ describe('serialized native convergence guard', () => {
     const list: List = {
       listId: 'lst_01J0000000000000000000000C',
       ownerId: OWNER,
-      behaviour: 'collection',
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
       slot: null,
       itemCount: 3,
-      uncheckedCount: 2,
+      doneCount: 1,
       memberCount: 1,
       rankVersion: 0,
       archived: false,
@@ -3763,9 +3765,6 @@ describe('serialized native convergence guard', () => {
         throw new Error('unexpected list item PATCH');
       },
       patch,
-      changeBehaviour: async () => {
-        throw new Error('unexpected List behaviour POST');
-      },
       remove: async () => {
         throw new Error('unexpected List DELETE');
       },
@@ -3799,28 +3798,22 @@ describe('serialized native convergence guard', () => {
     expect(await outbox.all()).toEqual([]);
   });
 
-  /**
-   * The P3-32 inventory extension, settled (§P3-09).
-   *
-   * A behaviour acknowledgement installs the **whole** canonical row rather than the settings
-   * subset: the migration moves `behaviour` and advances `rankVersion`, and `applySettings`
-   * writes neither. The Undo token is installed because an offer is waiting for one, which is
-   * the enqueue-time decision rather than a re-reading of the payload.
-   */
-  it('settles a behaviour upgrade with the canonical row and its Undo receipt', async () => {
-    if (database === undefined) throw new Error('missing List behaviour database');
+  /** A canonical settings acknowledgement installs the whole server row and Undo receipt. */
+  it('settles an item-state mode change with the canonical row and its Undo receipt', async () => {
+    if (database === undefined) throw new Error('missing List settings database');
     const list: List = {
       listId: 'lst_01J0000000000000000000000D',
       ownerId: OWNER,
-      behaviour: 'collection',
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
       slot: null,
       itemCount: 3,
-      uncheckedCount: 2,
+      doneCount: 1,
       memberCount: 1,
       rankVersion: 0,
       archived: false,
@@ -3829,22 +3822,25 @@ describe('serialized native convergence guard', () => {
     };
     const acknowledged: List = {
       ...list,
-      behaviour: 'watch',
-      rankVersion: 1,
+      itemStateMode: {
+        mode: 'stages',
+        labels: { open: 'Queued', active: 'Watching', done: 'Watched' },
+        groupByState: true,
+      },
       updatedAt: instant.parse('2026-08-20T00:00:00.000Z'),
     };
     const lists = new ListsRepository(database, new RepositorySubscriptions());
     const listService = new ListTransactionService(outbox, lists);
     await transactions.run(async (transaction) => {
       await lists.replaceCanonical(transaction, [list]);
-      await listService.changeBehaviour(
+      await listService.patchSettings(
         transaction,
         list,
-        { behaviour: 'watch' },
+        { itemStateMode: acknowledged.itemStateMode },
         'upgrade-intent',
       );
     });
-    const changeBehaviour = vi.fn(async () => ({
+    const patchSettings = vi.fn(async () => ({
       list: acknowledged,
       undoToken: 'server-upgrade-token',
       undoExpiresAt: '2026-08-20T00:00:06.000Z',
@@ -3859,10 +3855,7 @@ describe('serialized native convergence guard', () => {
       patchItem: async () => {
         throw new Error('unexpected list item PATCH');
       },
-      patch: async () => {
-        throw new Error('unexpected List PATCH');
-      },
-      changeBehaviour,
+      patch: patchSettings,
       remove: async () => {
         throw new Error('unexpected List DELETE');
       },
@@ -3886,9 +3879,9 @@ describe('serialized native convergence guard', () => {
     await sync.syncNow();
     sync.stop();
 
-    expect(changeBehaviour).toHaveBeenCalledWith(
+    expect(patchSettings).toHaveBeenCalledWith(
       list.listId,
-      { behaviour: 'watch' },
+      { itemStateMode: acknowledged.itemStateMode },
       list.updatedAt,
       'upgrade-intent',
     );
@@ -3905,15 +3898,16 @@ describe('serialized native convergence guard', () => {
     const archived: List = {
       listId: 'lst_01J0000000000000000000000B',
       ownerId: OWNER,
-      behaviour: 'collection',
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
       slot: null,
       itemCount: 3,
-      uncheckedCount: 2,
+      doneCount: 1,
       memberCount: 1,
       rankVersion: 0,
       archived: true,
@@ -3961,9 +3955,6 @@ describe('serialized native convergence guard', () => {
       patch: async () => {
         throw new Error('unexpected List PATCH');
       },
-      changeBehaviour: async () => {
-        throw new Error('unexpected List behaviour POST');
-      },
       remove: async () => {
         throw new Error('unexpected List DELETE');
       },
@@ -4002,8 +3993,15 @@ describe('serialized native convergence guard', () => {
   describe('the durable List create (§P3-26, §P3-05)', () => {
     const LIST_ID = 'lst_01J0000000000000000000000D';
     const SEED = {
-      behaviour: 'collection',
-      capabilities: { checkable: true, supportsLocation: false },
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {
+        subItems: {
+          enabled: true,
+          sectionLabel: 'Items',
+          singularLabel: 'Item',
+          integration: 'mealIngredients',
+        },
+      },
       slot: 'groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
@@ -4020,15 +4018,16 @@ describe('serialized native convergence guard', () => {
     const canonical = (): List => ({
       listId: LIST_ID,
       ownerId: OWNER,
-      behaviour: 'collection',
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: SEED.featureConfig,
       templateKey: 'groceries',
       title: 'Costco run',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
       slot: 'groceries',
       itemCount: 0,
-      uncheckedCount: 0,
+      doneCount: 0,
       memberCount: 1,
       rankVersion: 0,
       archived: false,
@@ -4071,9 +4070,6 @@ describe('serialized native convergence guard', () => {
         },
         patch: async () => {
           throw new Error('unexpected List PATCH');
-        },
-        changeBehaviour: async () => {
-          throw new Error('unexpected List behaviour POST');
         },
         remove: async () => {
           throw new Error('unexpected List DELETE');
@@ -4298,15 +4294,16 @@ describe('serialized native convergence guard', () => {
     const listRow = (overrides: Partial<List> = {}): List => ({
       listId: LIST_ID,
       ownerId: OWNER,
-      behaviour: 'collection',
+      schemaVersion: 2,
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
       slot: 'groceries',
       itemCount: 2,
-      uncheckedCount: 2,
+      doneCount: 0,
       memberCount: 1,
       rankVersion: 3,
       archived: false,
@@ -4320,7 +4317,7 @@ describe('serialized native convergence guard', () => {
       listId: LIST_ID,
       rank,
       title,
-      checked: false,
+      state: 'open' as const,
     });
 
     function itemHarness(currentDatabase: SqliteDatabase) {
@@ -4362,9 +4359,6 @@ describe('serialized native convergence guard', () => {
           },
           patch: async () => {
             throw new Error('unexpected List PATCH');
-          },
-          changeBehaviour: async () => {
-            throw new Error('unexpected List behaviour POST');
           },
           remove: async () => {
             throw new Error('unexpected List DELETE');
@@ -4793,11 +4787,11 @@ describe('serialized native convergence guard', () => {
             itemId: ITEM_ID,
             intentId: 'tick-milk',
             idempotencyKey: 'tick-milk',
-            input: { checked: true },
+            input: { state: 'done' },
           }),
         );
         // Accepted and visible before any connection existed.
-        expect((await built.items.read(LIST_ID))[0]?.checked).toBe(true);
+        expect((await built.items.read(LIST_ID))[0]?.state).toBe('done');
 
         const seen: unknown[] = [];
         let attempts = 0;
@@ -4805,18 +4799,18 @@ describe('serialized native convergence guard', () => {
           seen.push(input);
           attempts += 1;
           if (attempts === 1) throw new NetworkError('offline', undefined);
-          return { ...row(ITEM_ID, 'm', 'Milk'), checked: true };
+          return { ...row(ITEM_ID, 'm', 'Milk'), state: 'done' as const };
         });
         const sync = itemEngine(built.lists, built.items, {}, { patchItem });
 
         await expect(sync.syncNow()).rejects.toThrow();
-        expect((await built.items.read(LIST_ID))[0]?.checked).toBe(true);
+        expect((await built.items.read(LIST_ID))[0]?.state).toBe('done');
         await sync.syncNow();
         sync.stop();
 
         // One intent, replayed — not two writes, and never `!checked` recomputed anywhere.
-        expect(seen).toEqual([{ checked: true }, { checked: true }]);
-        expect((await built.items.read(LIST_ID))[0]?.checked).toBe(true);
+        expect(seen).toEqual([{ state: 'done' }, { state: 'done' }]);
+        expect((await built.items.read(LIST_ID))[0]?.state).toBe('done');
         expect(await outbox.all()).toEqual([]);
       });
 

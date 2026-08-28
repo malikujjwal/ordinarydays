@@ -68,20 +68,18 @@ function fromRow(row: SqliteRow): ListItemRow {
   const note = text(row, 'note');
   const sourceActivityId = text(row, 'source_activity_id');
   const sourceLabel = text(row, 'source_label');
-  const location = json(row, 'location_json');
-  const details = json(row, 'details_json');
+  const features = json(row, 'features_json');
 
   return listItemView.parse({
     itemId: text(row, 'item_id'),
     listId: text(row, 'list_id'),
     rank: text(row, 'rank'),
     title: text(row, 'title'),
-    checked: row.checked === 1,
+    state: text(row, 'state'),
     ...(note === undefined ? {} : { note }),
-    ...(location === undefined ? {} : { location }),
     ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
     ...(sourceLabel === undefined ? {} : { sourceLabel }),
-    ...(details === undefined ? {} : { details }),
+    ...(features === undefined ? {} : { features }),
   }) as ListItemRow;
 }
 
@@ -122,26 +120,25 @@ function assertBelongsToList(items: readonly ListItemRow[], listId: string): voi
 async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promise<void> {
   await database.run(
     `INSERT INTO list_items (
-      item_id, list_id, rank, title, note, checked, location_json,
-      source_activity_id, source_label, details_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      item_id, list_id, rank, title, note, state, features_json,
+      source_activity_id, source_label
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(item_id) DO UPDATE SET
       list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
-      note=excluded.note, checked=excluded.checked,
-      location_json=excluded.location_json,
+      note=excluded.note, state=excluded.state,
+      features_json=excluded.features_json,
       source_activity_id=excluded.source_activity_id,
-      source_label=excluded.source_label, details_json=excluded.details_json;`,
+      source_label=excluded.source_label;`,
     [
       item.itemId,
       item.listId,
       item.rank,
       item.title,
       item.note ?? null,
-      item.checked ? 1 : 0,
-      item.location === undefined ? null : JSON.stringify(item.location),
+      item.state,
+      item.features === undefined ? null : JSON.stringify(item.features),
       item.sourceActivityId ?? null,
       item.sourceLabel ?? null,
-      item.details === undefined ? null : JSON.stringify(item.details),
     ],
   );
 }
@@ -172,24 +169,24 @@ export function mergeListItemPatch(
    * spreading the field back would leave the old value in place, which is a clear that silently
    * does nothing.
    */
-  const {
-    note: currentNote,
-    location: currentPlace,
-    details: currentDetails,
-    ...rest
-  } = item;
+  const { note: currentNote, features: currentFeatures, ...rest } = item;
   const note = changes.note === undefined ? currentNote : (changes.note ?? undefined);
-  const location =
-    changes.location === undefined ? currentPlace : (changes.location ?? undefined);
-  const details =
-    changes.details === undefined ? currentDetails : (changes.details ?? undefined);
+  const features = (() => {
+    if (changes.features === undefined) return currentFeatures;
+    const next = { ...(currentFeatures ?? {}) };
+    for (const key of ['progress', 'place', 'subItems'] as const) {
+      const value = changes.features[key];
+      if (value === null) delete next[key];
+      else if (value !== undefined) Object.assign(next, { [key]: value });
+    }
+    return Object.keys(next).length === 0 ? undefined : next;
+  })();
   return listItemView.parse({
     ...rest,
     title: changes.title ?? rest.title,
-    checked: changes.checked ?? rest.checked,
+    state: changes.state ?? rest.state,
     ...(note === undefined ? {} : { note }),
-    ...(location === undefined ? {} : { location }),
-    ...(details === undefined ? {} : { details }),
+    ...(features === undefined ? {} : { features }),
   }) as ListItemRow;
 }
 

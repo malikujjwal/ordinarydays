@@ -59,13 +59,15 @@ export interface SettingRowProps {
    * row that participates in a choice, and only those carry state to assistive technology.
    */
   selected?: boolean;
+  /** Renders the shared token-owned switch and gives the row `switch` semantics. */
+  switchValue?: boolean;
   /**
    * `checkbox` when the row **toggles** — a reminder offset, which can be on or off
    * independently of its neighbours. `button` is right for navigating and for picking one of a
    * set, where `aria-selected` carries the state. The role is the difference between "this is
    * on" and "this is the one", and only the caller knows which it means.
    */
-  role?: 'button' | 'checkbox';
+  role?: 'button' | 'checkbox' | 'switch';
   /**
    * **The row opens something** — a sheet, a screen, or itself. Only then does it get a
    * chevron.
@@ -97,6 +99,7 @@ export function SettingRow({
   value,
   note,
   selected,
+  switchValue,
   role = 'button',
   opens = false,
   disabled = false,
@@ -108,7 +111,8 @@ export function SettingRow({
   const theme = useTheme();
   const interactive = onPress !== undefined;
   /** The chosen row of a set. Its ink answers to `accentSurface`, not to `surface`. */
-  const tinted = selected === true;
+  const tinted = selected === true && switchValue === undefined;
+  const effectiveRole = switchValue === undefined ? role : 'switch';
 
   const content = (
     <View
@@ -179,6 +183,8 @@ export function SettingRow({
         </Text>
       )}
 
+      {switchValue === undefined ? null : <SwitchIndicator checked={switchValue} />}
+
       {/**
        * **`accentControl`, and only on the symbol.** The frames colour their trailing actions
        * `#AD748C` — our dark `accentDeep`, 4.43:1 on `surfaceRaised` and under the 4.5 gate
@@ -191,7 +197,7 @@ export function SettingRow({
        * check → this is the selected/on one; chevron → this opens something; nothing → the
        * label already said it. An unchecked toggle and a committing choice both render nothing.
        */}
-      {selected === true ? (
+      {switchValue !== undefined ? null : selected === true ? (
         <View aria-hidden>
           <Check size={20} color={theme.colors.accentControl} />
         </View>
@@ -231,7 +237,7 @@ export function SettingRow({
   return (
     <Touchable
       square={false}
-      accessibilityRole={role}
+      accessibilityRole={effectiveRole}
       accessibilityLabel={accessibilityLabel ?? spoken(label, summary, value, note)}
       /**
        * `selected` is deliberately **not** put in `accessibilityState` for a button: React
@@ -240,7 +246,11 @@ export function SettingRow({
        * has a state slot here.
        */
       accessibilityState={{
-        ...(role === 'checkbox' && selected !== undefined ? { checked: selected } : {}),
+        ...(effectiveRole === 'switch'
+          ? { checked: switchValue }
+          : effectiveRole === 'checkbox' && selected !== undefined
+            ? { checked: selected }
+            : {}),
         disabled,
         ...(expanded === undefined ? {} : { expanded }),
       }}
@@ -251,9 +261,10 @@ export function SettingRow({
        * "this is the chosen one of the set". A checkbox reports `checked` through
        * `accessibilityState`, which React Native Web does map for that role.
        */
-      {...(role === 'checkbox' || selected === undefined
+      {...(effectiveRole !== 'button' || selected === undefined
         ? {}
         : { 'aria-pressed': selected })}
+      {...(effectiveRole === 'switch' ? { 'aria-checked': switchValue } : {})}
       {...(expanded === undefined ? {} : { 'aria-expanded': expanded })}
       disabled={disabled}
       onPress={onPress}
@@ -262,6 +273,35 @@ export function SettingRow({
     >
       {content}
     </Touchable>
+  );
+}
+
+function SwitchIndicator({ checked }: { checked: boolean }) {
+  const theme = useTheme();
+  return (
+    <View
+      aria-hidden
+      style={{
+        width: theme.layout.switchTrackWidth,
+        height: theme.layout.switchTrackHeight,
+        padding: theme.layout.switchInset,
+        borderRadius: theme.radius.pill,
+        backgroundColor: checked
+          ? theme.colors.switchTrackOn
+          : theme.colors.switchTrackOff,
+        alignItems: checked ? 'flex-end' : 'flex-start',
+        justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          width: theme.layout.switchThumbSize,
+          height: theme.layout.switchThumbSize,
+          borderRadius: theme.radius.pill,
+          backgroundColor: theme.colors.switchThumb,
+        }}
+      />
+    </View>
   );
 }
 

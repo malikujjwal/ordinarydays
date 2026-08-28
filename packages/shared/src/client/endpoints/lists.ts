@@ -1,7 +1,6 @@
 import type { z } from 'zod';
 import { envelope } from '../../schemas/envelope.js';
 import {
-  type ChangeListBehaviourInput,
   type CreateListInput,
   deletedList,
   listDetail,
@@ -10,7 +9,6 @@ import {
   listView,
   type PatchListInput,
 } from '../../schemas/list.js';
-import type { ListBehaviourConfirmation } from '../../types/list.js';
 import { ApiError, type HttpClient } from '../http.js';
 
 /**
@@ -110,7 +108,7 @@ export function getLists(
  * items are the whole list, and a function that dropped the cursor would make that assumption
  * unavoidable.
  *
- * A repair or behaviour-migration fence answers `503` with `Retry-After: 1`. That surfaces as
+ * A rank-repair or legacy schema-migration fence answers `503` with `Retry-After: 1`. That surfaces as
  * an ordinary retryable `ApiError` — the transport already retries it — and is deliberately not
  * special-cased here: the client's job is to carry it, not to interpret a server fence.
  */
@@ -132,13 +130,10 @@ export function getList(
 }
 
 /**
- * `PATCH /v1/lists/:id` — title, capabilities, slot and archived.
+ * `PATCH /v1/lists/:id` — title, item-state presentation, feature configuration, slot and archive.
  *
- * **`behaviour` is not among them, by type.** {@link PatchListInput} is strict and has no
- * `behaviour` key, so a caller cannot express the change here at all; it goes through
- * {@link changeListBehaviour}, which is replay-protected because it is a gated resumable item
- * migration rather than one conditional write. `templateKey` is absent for a different reason —
- * it is immutable provenance.
+ * Legacy `behaviour` and `capabilities` do not exist in the model. `templateKey` is absent
+ * because it is immutable creation provenance.
  *
  * `ifMatch` is **required** and carries the `updatedAt` the client read. An optional parameter
  * would mean a patch that silently wins every race, and the server answers `validation_failed`
@@ -146,9 +141,8 @@ export function getList(
  * `idempotencyKey` is equally required: archive can return an opaque server-authored Undo token,
  * and replaying a lost response must recover that exact token rather than infer an inverse.
  *
- * The `undoToken` is present only when the change recorded an inverse: a rename alone returns
- * none, because renaming a list has no undo row in `interaction-contract.md` §4.1. That is why
- * the result is a union rather than a shape with two optional fields.
+ * The `undoToken` is present whenever the patch changed a setting; a no-op has no inverse.
+ * That is why the result is a union rather than a shape with two optional fields.
  */
 export function patchList(
   client: HttpClient,
@@ -185,72 +179,6 @@ export async function patchListForReplay(
   signal?: AbortSignal,
 ): Promise<ListSettingsMutation> {
   return patchList(client, listId, patch, ifMatch, idempotencyKey, signal);
-}
-
-/**
- * `POST /v1/lists/:id/behaviour` — the replay-protected behaviour change.
- *
- * Both headers are required and neither is decoration. `If-Match` is the concurrency check
- * every settings write carries; `Idempotency-Key` **identifies the migration**, so a replay
- * resumes its own work rather than starting a second one over the same items.
- *
- * ## The 409 is a value, not a failure
- *
- * A destructive transition that would actually lose something answers `409` carrying
- * `{ confirmation: { fromBehaviour, toBehaviour, itemVersion, itemCount, fields } }`, having
- * started no migration and written no receipt. `interaction-contract.md` §5.3 renders that as
- * the §1a.1 dialog rather than an error toast, and the confirmed call **echoes the whole
- * object back** under a newly minted key.
- *
- * The echo is why the confirmation must be surfaced rather than re-derived: `itemVersion` is
- * the server's basis for the preview, and a client that rebuilt the object from a paginated
- * cache would be confirming a count it measured itself against a version it never saw.
- * `?confirmDataLoss` no longer exists — it was an ambient permission to destroy whatever
- * happened to be there when the request landed.
- *
- * The error is rethrown untouched; {@link behaviourConfirmationFrom} reads the typed value off
- * it. Swallowing the `ApiError` to return the confirmation would make a refusal look like a
- * success to every caller that did not check.
- */
-export function changeListBehaviour(
-  client: HttpClient,
-  listId: string,
-  input: ChangeListBehaviourInput,
-  ifMatch: string,
-  idempotencyKey: string,
-  signal?: AbortSignal,
-): Promise<ListSettingsMutation> {
-  return client
-    .request({
-      method: 'POST',
-      path: `/v1/lists/${listId}/behaviour`,
-      schema: listSettingsResponse,
-      body: input,
-      headers: { 'If-Match': ifMatch, 'Idempotency-Key': idempotencyKey },
-      replayProtected: true,
-      ...(signal === undefined ? {} : { signal }),
-    })
-    .then((response) => response.data);
-}
-
-/**
- * The typed confirmation a destructive behaviour `409` carries, or `undefined` for any other
- * error.
- *
- * A named reader rather than `error.confirmation` at every call site: the field is only
- * meaningful on a `409` from this one route, and the status check belongs with the field it
- * qualifies. A caller that read the property directly off an arbitrary `ApiError` would be
- * writing a check that compiles everywhere and is right in one place.
- *
- * The returned object is the server's, verbatim, and is what
- * {@link changeListBehaviour}'s next call must echo.
- */
-export function behaviourConfirmationFrom(
-  error: unknown,
-): ListBehaviourConfirmation | undefined {
-  if (!(error instanceof ApiError)) return undefined;
-  if (error.status !== 409) return undefined;
-  return error.confirmation;
 }
 
 /** `DELETE /v1/lists/:id`. Owner only; names what was removed, per §1's DELETE-answers-200 rule. */
@@ -320,4 +248,4 @@ export function undoListOperation(
   });
 }
 
-export type { ChangeListBehaviourInput, CreateListInput, PatchListInput };
+export type { CreateListInput, PatchListInput };

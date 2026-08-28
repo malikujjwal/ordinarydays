@@ -49,7 +49,7 @@ that choice.
 | Natural language | Choose Task or Plan and, for Plan, its kind → type text | Compatible fields from the reviewed parse; never object kind, Plan kind, or people ([`ai-capture.md`](ai-capture.md)) |
 | From a photo or screenshot | Choose Task or Plan and, for Plan, its kind → Camera / Photos | Compatible reviewed fields + the image as an attachment |
 | From a pasted link | Choose Task or Plan and, for Plan, its kind → Link | Compatible reviewed fields + `sourceUrl` |
-| **From a list item** | List item → `Plan this item` → explicit Plan kind and audience | Title plus Activity `listId` / `listItemId` provenance, established only by the list-scoped endpoint (§6). The list's name, template, behaviour, and item words never select or pre-select kind. |
+| **From a list item** | List item → `Plan this item` → explicit Plan kind and audience | Title plus Activity `listId` / `listItemId` provenance, established only by the list-scoped endpoint (§6). The list's name, creation preset, settings, and item words never select or pre-select kind. |
 | From a person | Person view → `Plan something with Alice` | Alice as a participant |
 | Duplicate | Plan overflow → Duplicate | `objectKind`, title, type, `details`, `location` and `notes` — and nothing else ([`activities.md`](activities.md#71-quick-add-behaviours) §7.1, which is authoritative). **Amended in P1-15:** this row read "everything except schedule, participants, expenses, attachments", which predates the 2026-08-07 decision adding reminders, prep children and lists to the drop list — so read alone it implied reminders survived. Stated as what *is* copied rather than what is not, since that list is short and closed and cannot go stale the same way. |
 | From an invitation | Accepting an in-app invite | Nothing is created; an `ActivityIndex` entry is added for the invitee |
@@ -106,8 +106,6 @@ Plans has three stages, in this fixed order, served by one `GET /v1/plans`
 > preserves the vocabulary the stacked layout was protecting. A selected stage with nothing
 > in it still renders its own empty line (§1.3.3), and when **all three** are empty the
 > switcher is replaced by the single `No plans` state rather than showing an empty control.
-
-| Stage | Contains | Order | Source |
 
 | Stage | Contains | Order | Source |
 | --- | --- | --- | --- |
@@ -669,14 +667,16 @@ it is not the important one.
 ### 4.1 The explicit style choice
 
 When a plan is created or opened, the LISTS section shows `Add list`. Tapping it opens the
-same full, fixed-order style catalogue as `New list` (§5.4), with nothing selected. Plan
-kind, title, participants, dates, and AI never rank, recommend, or hide a style. The user
-explicitly chooses Blank, Checklist, Packing, Groceries, or any other shipped style.
+same full, fixed-order preset catalogue as `New list` (§5.4), with nothing selected. Plan
+kind, title, participants, dates, and AI never rank, recommend, or hide a preset. The user
+explicitly chooses Blank, Checklist, Groceries, Watch Later, Books to Read, Places to Visit,
+or Meal Ideas.
 
-Selecting a template creates a local List draft with `sourceActivityId` set to the Plan.
-Behaviour, capabilities and icon are previewed from the selected template in the usual way
-(§5.3). The title is pre-filled as `<Template title> · <Plan title>` — `Packing · New York
-Trip` — and is editable. Only `Create list` writes the List and copies those fields.
+Selecting a preset creates a local List draft with `sourceActivityId` set to the Plan.
+Item state presentation, optional feature configuration, icon and slot are previewed from
+the selected preset in the usual way (§5.3). The title is pre-filled as
+`<Preset title> · <Plan title>` — `Checklist · New York Trip` — and is editable. Only
+`Create list` writes the List and copies those values.
 
 > **Decision:** a list created from a plan seeds `slot: null` whatever its template says.
 > `Groceries · Sunday dinner` is a per-occasion list, and promoting it to the household
@@ -709,7 +709,7 @@ Rules:
 - Declining is silent and final for this creation. The list can be shared later from its own
   share sheet (§5.11.1), and the plan never asks again.
 
-> **Decision — suggested, never automatic, and never pre-ticked.** For packing this is not a
+> **Decision — suggested, never automatic, and never pre-ticked.** For a packing checklist this is not a
 > nicety: each person packs their own bag, and a shared `Packing · New York Trip` where three
 > people tick one `Charger` row is actively wrong. Groceries and `Places to visit` for the
 > same trip usually should be shared. The app cannot tell which is which from the template,
@@ -757,93 +757,48 @@ Consequences a reviewer can check:
   the list screen, and never a list's empty-state call to action.
 - Nothing archives, hides or de-emphasises a list because it has produced no activities.
 
-### 5.2 The three behaviours
+### 5.2 One model: intrinsic state plus typed features
 
-**Behaviour** is what the *application* does differently: how items render, what typed
-fields they carry, what cross-entity flows exist. It is a closed set of three, owned by
-[`../02-architecture/data-model.md#46-list-and-listitem`](../02-architecture/data-model.md#46-list-and-listitem).
-Everything that used to look like a list type is now either a template (§5.3) or a
-capability flag.
+There is one `List` and one `ListItem`. A creation type is a preset copied once, not a
+runtime category. Every item owns its title, optional note, intrinsic `open | active | done`
+state and optional typed values. The List owns only how state is presented and which typed
+features are enabled.
 
-| Behaviour | Why it exists | What the user sees |
-| --- | --- | --- |
-| `collection` | An ordered list of items and nothing more. Every difference between one collection and another is a capability flag, not a code path. | A flat list of rows. Checkboxes when `checkable`; a place on each item when `supportsLocation`. |
-| `watch` | Its items **group under status headings** — the only behaviour whose item list is grouped rather than flat — and carry season and episode. | Three sections in this order: `Watching`, `Want to watch`, `Watched`. |
-| `meals` | Its items carry typed `ingredients`, which map onto `Activity.details` for `type: 'meal'` and feed the ingredients-to-list flow (§7.3). | An `Ingredients` section in item detail, and `Add ingredients to…`. |
-
-The test for whether something is a behaviour: **does the application actually behave
-differently, or does only the label differ?**
-
-**These are not behaviours.** Simple, Checklist, Groceries, Shopping, Packing, Restaurants
-and Places all fail that test. Every one of them is `collection` with different capability
-flags, a different icon and a different name. Reintroducing any of them as a behaviour, a
-`kind` field, an enum member or a `switch` case is precisely the failure this design exists
-to prevent.
-
-The eight kinds that used to exist map onto the new model like this. The mapping is here so
-that nobody re-derives it, and so that old copy and old tickets can be read:
-
-| Old `ListKind` | Now |
+| Configuration | Meaning |
 | --- | --- |
-| `general` | Template `simple-list` or `checklist`, behaviour `collection` |
-| `groceries` | Template `groceries`, `collection`, `checkable`, slot `groceries` |
-| `shopping` | Template `shopping`, `collection`, `checkable` |
-| `packing` | Template `packing`, `collection`, `checkable` |
-| `restaurants` | Template `restaurants-to-try`, `collection`, `supportsLocation` |
-| `places` | Template `places-to-visit`, `collection`, `supportsLocation` |
-| `watchlist` | Template `watchlist`, behaviour `watch`, slot `watch` |
-| `meals` | Template `meals-to-try`, behaviour `meals`, slot `meals` |
+| `itemStateMode: none` | State remains stored but has no row control. |
+| `itemStateMode: checkbox` | `done` is checked; checking writes `done`, unchecking writes `open`. `active` remains intrinsic and appears unchecked. |
+| `itemStateMode: stages` | The three configured labels expose `open`, `active` and `done`; only populated groups render when grouping is on. Drag stays inside a state and never changes it. |
+| Progress | Either uninterpreted text (`Page 143`) or structured episode data (`S2 E4`). The two variants are typed and never parsed from one another. |
+| Place | Typed label/address/coordinates and the Maps action. |
+| Sub-items | One bounded ranked child collection with configured vocabulary. Children have id, title, optional secondary text and rank—never state, notes, dates, Plans, features or children. |
+
+The effective feature set is the intersection of enabled List configuration and populated
+item values. Turning a feature off hides its values from rows, editors and adapters without
+rewriting them; turning it back on restores the exact stored bytes. Labels carry no semantics.
+Only explicit `integration: 'mealIngredients'` activates the Meal adapter.
 
 ### 5.3 The template catalogue
 
-A **template** is one catalogue record: chooser label, one-line summary, editable default
-title, icon, behaviour, capability defaults, slot and empty-state copy. Templates are **seeds,
-not live references** — the chosen structural and presentation values are copied onto the
-`List` at creation and never re-resolved, so editing or removing a template later can never
-change a list somebody already has. The same freezing principle as `sourceLabel` (§7.5).
+A **template** is one creation record: chooser label, summary, editable default title, icon,
+state presentation, typed-feature configuration, slot and empty copy. Its resolved values are
+copied onto the new List and never re-resolved. `templateKey` is immutable provenance only;
+legacy keys remain readable provenance but are not offered for new creation.
 
-Adding `Bars to try` is one entry in the catalogue. It is never a code branch, a schema
-change, or a migration.
+The fixed creation catalogue is deliberately small and ordered:
 
-The v1 catalogue, in the fixed order the explicit style chooser renders it:
+| Order | Type | State | Features | Slot |
+| --- | --- | --- | --- | --- |
+| 1 | Blank | none | none | — |
+| 2 | Checklist | checkbox | none | — |
+| 3 | Groceries | checkbox | none | `groceries` |
+| 4 | Watch Later | grouped `Want to watch / Watching / Watched` | episode Progress | `watch` |
+| 5 | Books to Read | grouped `Want to read / Reading / Read` | text Progress | — |
+| 6 | Places to Visit | checkbox | Place | — |
+| 7 | Meal Ideas | none | Sub-items named `Ingredients / Ingredient / Quantity`, with `mealIngredients` | `meals` |
 
-| Template key | Chooser label | Summary | Default title | Icon | Behaviour | `checkable` | `supportsLocation` | `slot` | Empty-state guidance |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `simple-list` | Blank | A plain list | Simple list | `list` | `collection` | no | no | — | `Add the first item.` |
-| `checklist` | Checklist | Items have checkboxes | Checklist | `check-square` | `collection` | yes | no | — | `Add something to check off.` |
-| `groceries` | Groceries | Checkboxes for shopping | Groceries | `cart` | `collection` | yes | no | `groceries` | `Add something to buy.` |
-| `shopping` | Shopping | Things to buy | Shopping | `bag` | `collection` | yes | no | — | `Add something to shop for.` |
-| `packing` | Packing | A checklist for a trip | Packing | `suitcase` | `collection` | yes | no | — | `Add something to pack.` |
-| `restaurants-to-try` | Restaurants to try | Places and checkboxes | Restaurants to try | `bowl` | `collection` | yes | yes | — | `Add a restaurant to try.` |
-| `bars-to-try` | Bars to try | Places and checkboxes | Bars to try | `glass` | `collection` | yes | yes | — | `Add a bar to try.` |
-| `coffee-shops` | Coffee shops | Places without checkboxes | Coffee shops | `cup` | `collection` | no | yes | — | `Add a coffee shop.` |
-| `places-to-visit` | Places to visit | Places and checkboxes | Places to visit | `map-pin` | `collection` | yes | yes | — | `Add a place to visit.` |
-| `date-ideas` | Date ideas | Places and ideas | Date ideas | `heart` | `collection` | no | yes | — | `Add a date idea.` |
-| `favourite-restaurants` | Favourite restaurants | Places without checkboxes | Favourite restaurants | `star` | `collection` | no | yes | — | `Add a restaurant you love.` |
-| `books-to-read` | Books to read | Books with checkboxes | Books to read | `book` | `collection` | yes | no | — | `Add a book to read.` |
-| `gift-ideas` | Gift ideas | Ideas without checkboxes | Gift ideas | `gift` | `collection` | no | no | — | `Add a gift idea.` |
-| `watchlist` | Watchlist | Status and progress | Watchlist | `play-rect` | `watch` | no | no | `watch` | `Add a movie or show.` |
-| `movies-to-watch` | Movies to watch | Status for movies | Movies to watch | `film` | `watch` | no | no | `watch` | `Add a movie.` |
-| `tv-shows` | TV shows | Episode progress | TV shows | `play-rect` | `watch` | no | no | `watch` | `Add a TV show.` |
-| `meals-to-try` | Meals to try | Ingredients on each item | Meals to try | `bowl` | `meals` | no | no | `meals` | `Add a meal to try.` |
-
-Reading the table:
-
-- **Thirteen of the seventeen are `collection`.** They share one behaviour and differ only
-  through declarative record fields—capabilities, presentation text/icon, and slot. That is
-  the point: naming a list is not classifying it.
-- `Simple list` and `Gift ideas` have **identical** behaviour and identical flags. They are
-  two names and two icons for the same thing, and both are correct.
-- `Restaurants to try` and `Favourite restaurants` differ by one flag: the aspirational one
-  is checkable so `visited` has somewhere to live, the reference one is not, because there
-  is nothing to tick off a list of places you already love.
-- `checkable` and `supportsLocation` apply to `collection` only. `watch` uses
-  `watchStatus` instead of a checkbox, so the two stored capability booleans are `false` for
-  `watch` and `meals`. No template carries a Plan-kind default: every
-  `Plan this item` flow asks General / Meal / Watch / Event in the fixed order.
-- `Watchlist`, `Movies to watch` and `TV shows` are three names for one behaviour, all
-  eligible for the `watch` slot. A user with two of them is the case the default-slot rule
-  exists for (§5.8).
+No preset selects a Plan kind. The public icon catalogue remains available, but these seven
+presets use only the icons they need.
 
 > **Decision — icons are the one part of a template that is not pure config.** A new
 > template must reuse an icon already in `packages/ui/src/icons/` unless the founder
@@ -853,34 +808,28 @@ Reading the table:
 ### 5.4 Creating a list: style first
 
 `New list` begins with an explicit catalogue. The app does not inspect a name, suggest a
-template, auto-select Blank, or infer list behaviour from words.
+template, auto-select Blank, or infer configuration from words.
 
 ```
 ┌──────────────────────────────────────────────┐
 │  Cancel                                      │
 │                                              │
-│  Choose a list style                         │
+│  Choose a list type                          │
 │                                              │
-│  Blank          A plain list               › │
+│  Blank          No category or details     › │
 │  Checklist      Items have checkboxes      › │
-│  Groceries      Checkboxes for shopping    › │
-│  Restaurants to try  Places and checkboxes › │
-│  Movies to watch Status for movies         › │
-│  Meals to try   Ingredients on each item   › │
-│  …                                           │
+│  Groceries      A shopping checklist       › │
+│  Watch Later    Track episode progress     › │
+│  Books to Read  Track reading progress     › │
+│  Places to Visit Save places and addresses › │
+│  Meal Ideas     Ingredients inside meals   › │
 └──────────────────────────────────────────────┘
 ```
 
-The catalogue uses the fixed order in §5.3. `Blank` is the user-facing name for
-`simple-list`; every other row uses its default title and one-line capability
-description. Nothing is selected, recommended, pinned, reordered from history, or hidden
-behind `Show other options`.
-
-That full catalogue is the rule for general `New list` and a Plan's `Add list`. One narrow
-eligibility filter exists after the user has explicitly chosen a typed destination: a Watch
-Plan's `Choose or create a Watch list` shows only `Watchlist`, `Movies to watch`, and
-`TV shows`, in their §5.3 relative order and with none selected. The explicit Watch control
-sets the constraint; no title, note, history, participant, model, or other words affect it.
+The catalogue uses the exact seven-row order in §5.3. Blank is the explicit escape hatch for
+somebody who wants no category or item details. Nothing is selected, recommended, pinned,
+history-ranked, filtered by Plan kind or hidden behind another control. Destination selection
+may route by a slot, but never changes which creation types exist or enables a feature.
 
 Tapping a row opens the title step:
 
@@ -888,24 +837,23 @@ Tapping a row opens the title step:
 ┌──────────────────────────────────────────────┐
 │  Back                             Create list │
 │                                              │
-│  Movies to watch                            │
-│  Status for movies                          │
+│  Watch Later                                │
+│  Track what to watch and episode progress   │
 │                                              │
 │  List name                                  │
 │  ┌────────────────────────────────────────┐ │
-│  │ Movies to watch                        │ │
+│  │ Watch Later                            │ │
 │  └────────────────────────────────────────┘ │
 └──────────────────────────────────────────────┘
 ```
 
 Rules:
 
-1. The selected style is visible by name and its exact catalogue `summary`. `Back` returns
-   to the applicable chooser—the full catalogue, or the three-style Watch-only chooser—
-   with no write and no pre-selection retained as a default.
+1. The selected type is visible by name and its exact catalogue `summary`. `Back` returns
+   to the full chooser with no write and no pre-selection retained as a default.
 2. The title starts with the selected template's `defaultTitle` and is fully editable.
-   It is data, not a classifier: editing `Movies to watch` to `Watch repairs` does not
-   change the explicitly selected style.
+   It is data, not a classifier: editing `Watch Later` to `Watch repairs` does not
+   change the explicitly selected preset.
 3. `Create list` is enabled when the trimmed title is non-empty. It writes one
    `POST /v1/lists` carrying the selected `templateKey` and visible title.
 4. There is no `/suggest-template` call, debounce, term catalogue, string matching, model
@@ -946,61 +894,26 @@ product-wide additive/destructive rule
 of the change rules in
 [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists).
 
-| Setting | Label the user sees | Direction | Behaviour |
+| Setting | Label the user sees | Rule |
 | --- | --- | --- | --- |
-| `capabilities.checkable` | `Show checkboxes` | either | Immediate, no confirmation, either way. Turning it off retains each item's `checked` value, so turning it back on restores exactly what was there. |
-| `capabilities.supportsLocation` | `Add a place to items` | either | Immediate, no confirmation. Turning it off hides the field and **retains** stored locations, so it is additive in both directions. |
-| `slot` | `Use as my default for` | any | Immediate. Moves no items and changes no existing content (§5.8). |
-| `behaviour` `collection` → `watch` or `meals` | `Turn this into a watchlist` / `…into a meals list` | upgrade | Immediate, no confirmation. Every item gains `details` with the default status (`want` for `watch`, empty ingredients for `meals`). Nothing is lost. |
-| `behaviour` `watch` or `meals` → `collection` | `Turn this into a plain list` | downgrade | **Destructive.** Confirmation first, naming the fields and the exact item count. |
+| `itemStateMode` | `None / Checkboxes / Stages` | Immediate. It changes presentation only and never rewrites intrinsic item state. `Group by stage` appears only for Stages. |
+| `featureConfig.progress.enabled` | `Progress` | Immediate. Off hides editors, summaries and adapters while retaining every text/episode value byte-identically. |
+| `featureConfig.place.enabled` | `Places` | Immediate. Off retains stored Place values. |
+| `featureConfig.subItems.enabled` | `Sub-items` | Immediate. First enable opens the focused naming sheet; the main sheet later shows configured vocabulary and `Edit`. Off retains children and ranks. |
+| `slot` | `Default destination` | Immediate. Moves no items, enables no feature and changes no existing content (§5.8). |
 
-Checkbox and location controls are visible only while the list is a `collection`. Changing
-to `watch` or `meals` retains the capability flags and hidden item values, but they drive no
-count, control or bulk operation until the list is a collection again.
-
-Every additive settings change applies with a 6-second Undo backed by the server's retained
-operation token. In particular, undoing `collection → watch|meals` uses the dedicated Undo
-compensation, not an ordinary destructive downgrade request. It restores the prior behaviour
-and removes only unchanged default fields that upgrade created; if those fields were edited,
-Undo is no longer applicable and current data is left intact. Slot Undo similarly restores a
-profile default removed by the forward change only when the user has not chosen a newer one.
-
-`Show checkboxes` is described to the user as a display setting, because that is what it is.
-It is never presented as changing the list's type, and the sheet contains no "type" control
-of any kind.
-
-The downgrade confirmation, in the shape §1a.1 requires:
-
-```
-Turn "Watchlist" into a plain list?
-
-This will remove:
-  Watch status, season and episode from 7 items
-
-Keeps: every item, its title, its note, and its order.
-
-                              [ Cancel ]  [ Turn into a plain list ]
-```
-
-The counting rule is §1a.1's, not a local one.
-
-> **Decision:** turning `supportsLocation` off **retains** the stored locations, exactly as
-> turning `checkable` off retains `checked`
-> ([`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists)
-> specifies the latter and is silent on the former). Both toggles then behave the same way
-> in both directions, which means neither needs a confirmation and neither can be described
-> as a type change. The alternative — deleting addresses on a display toggle — would put a
-> destructive confirmation behind a switch labelled `Add a place to items`, which no one
-> would expect.
+The main hierarchy is exactly `ITEM STATE`, the three-way segmented control, the conditional
+group switch, then `ITEM DETAILS` with Progress, Places and Sub-items switches. Destination
+settings are subordinate below. There is no destructive List-setting dialog. Every effective
+settings write—including rename—applies immediately with a six-second Undo backed by the
+server's retained operation token.
 
 Two more rules:
 
-- **Renaming a list changes nothing else.** Renaming `Restaurants to try` to
-  `Favourite restaurants` leaves behaviour, capabilities and slot exactly as they were. If
-  the user wants the checkboxes gone, they turn them off; the app does not infer intent from
-  a title.
+- **Renaming a list changes nothing else.** State mode, features and slot remain byte-for-byte
+  as they were; the app does not infer intent from a title.
 - `templateKey` is immutable after creation. It records provenance and analytics only.
-  The list renders its own stored `icon`, `emptyStateCopy`, behaviour and capabilities;
+  The list renders its own stored icon, empty copy, state mode and feature configuration;
   no read path resolves the template again.
 
 ### 5.6 Operations on a list
@@ -1008,16 +921,16 @@ Two more rules:
 | Operation | Rule |
 | --- | --- |
 | **Add item** | Persistent `+ Add an item` row at the foot. Return activates `Add to <list name>` and re-focuses so several items can be typed in sequence. Each commit is one `POST /v1/lists/:id/items`. |
-| **Check / uncheck** | Only when `behaviour === 'collection' && capabilities.checkable`. Tapping the checkbox toggles `checked` optimistically; tapping the row body opens item detail. |
+| **Check / uncheck** | Only in checkbox mode. Tapping writes intrinsic `done` or `open` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
-| **Reorder** | Long-press and drag, on every behaviour. Writes one `PATCH /v1/lists/:id/items/:itemId` with `afterItemId`, which the server converts to a `lexoRank`. Never renumbers the list. |
-| **Clear checked** | Header overflow → `Clear checked (7)`. One `POST /v1/lists/:id/clear-checked`. Deletes the checked items. **No confirmation dialog**: it is a reversible bulk action, so it applies immediately with the 10-second bulk undo toast, which names the count — `7 items cleared` with `Undo` ([`interaction-contract.md`](interaction-contract.md#4-undo-policy) §4). After the window it is permanent. Offered only when `behaviour === 'collection' && capabilities.checkable`. |
-| **Uncheck all** | Header overflow → `Uncheck all`. Offered only when `behaviour === 'collection' && capabilities.checkable`. |
+| **Reorder** | Long-press and drag on every List. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
+| **Clear checked** | In checkbox mode, deletes intrinsic `done` items immediately with no confirmation and offers the 10-second bulk Undo. |
+| **Uncheck all** | In checkbox mode, changes only `done → open`, records exactly those ids and offers bulk Undo. |
 | **Share** | Header `Share`, on every list. Opens the member sheet (§5.11.1). Owner only for adding and removing; a member sees the sheet read-only apart from `Leave list`. |
 | **Archive** | Header overflow → `Archive list`. Sends `PATCH /v1/lists/:id { archived: true }` and offers settings Undo. Archived lists leave the Lists index, keep their items, and are reachable through `Lists → ⋯ → Show archived`. Owner only on a shared list — archiving is a change to the object, not to your view of it. Restoring is one tap. |
 | **Delete** | Header overflow → `Delete list`, confirmed. **Owner only.** Deletes items and their per-viewer `LNK#` projections. Every Plan created through `Plan this item` survives; the confirmation says how many of the owner's linked Plans survive, plus the number of other members who lose the list (§1a.1). |
 | **Rename** | Inline on the header title. Available to members as well as the owner — it changes nothing but the title (§5.5). |
-| **Item detail** | Tapping an item row opens a sheet: title, note, the fields this list's capabilities and behaviour allow (§5.7), `Plan this item`, `Delete`. |
+| **Item detail** | Tapping opens one item shell: title, note, exposed state and enabled typed-feature editors from the registry, plus `Plan this item` and `Delete`. |
 | **Empty list** | The List's stored `emptyStateCopy`, seeded at creation, plus the add row (§5.9). No illustration, no encouragement. |
 | **Item cap** | 500 items per list. Beyond that, `POST` returns `validation_failed` with `List is full.` |
 
@@ -1030,36 +943,31 @@ the client keeps loading until it can fill the viewport or exhausts the cursor. 
 is shown only after that exhaustion. `Show archived` reuses already materialized pages and
 continues the same bounded drain when more archived rows are needed.
 
-> **Decision:** `Uncheck all` is offered on every checkable `collection`, not on a hand-picked pair
-> of templates. The old rule named `packing` and `groceries`, which only made sense while
-> those were kinds. Reuse across trips and shops is a property of having checkboxes.
+> **Decision:** bulk checkbox operations are presentation-mode operations, never template or
+> slot operations. Reuse across trips and shops is a property of choosing checkboxes.
 
-### 5.7 What an item has, per behaviour
+### 5.7 What an item has
 
 Field shapes are owned by
 [`../02-architecture/data-model.md#46-list-and-listitem`](../02-architecture/data-model.md#46-list-and-listitem).
 This is what the user sees.
 
-**Every item, on every behaviour**, has: a title, an optional note, and optional provenance
+**Every item** has a title, optional note, intrinsic state and optional provenance
 — `sourceActivityId` plus the frozen `sourceLabel` rendered after the title (§7.5). A
 Plan-state line is a caller-specific projection from `LNK#<viewer>#<item>`, not a field on
 the shared ListItem (§6.2).
 
-| Behaviour | Adds |
-| --- | --- |
-| `collection` | A checkbox, when `capabilities.checkable`. A place — label and optional address — when `capabilities.supportsLocation`, rendered under the title and tappable through to the platform maps app. Nothing else. |
-| `watch` | Status (`want` / `watching` / `watched`), which is what the list groups under; `mediaKind` (movie or show); season and episode, shown only for a show, rendered `S2 E4`. No checkbox — status replaces it. |
-| `meals` | Typed `ingredients`: rows of name plus optional quantity. These are the same shape as `Activity.details.ingredients` for `type: 'meal'`, which is why they are typed rather than free text, and they feed §7.3. |
-
-A `collection` item never carries season, episode, watch status or ingredients. That is the
-line between a capability and a behaviour: capabilities change what renders, behaviours
-change what is stored.
+One common row and item sheet ask a typed registry for enabled feature summaries, renderers and
+editors. Empty configured features add no row metadata and no blank controls. Populated summaries
+stay to one concise line: `S2 E4`, `Page 143`, `8 ingredients` or the Place label. Generic
+Sub-items use configured words inside the item; labels do not activate integrations.
 
 ### 5.8 Default destinations
 
 A **slot** is a semantic destination — `groceries`, `watch` or `meals`. It answers "which
 list did the user mean?" for flows that add items somewhere without opening a list first.
-Once `Groceries` and `Packing` are both `collection`, behaviour alone cannot answer that.
+It is independent of state presentation and optional features: two checkbox lists can serve
+entirely different flows.
 
 The user meets slots in two places.
 
@@ -1086,7 +994,7 @@ When the app asks and when it does not, following the four-step rule in
 | Exactly one list holds the slot | The destination row shows it. No question is asked. The dropdown still works. |
 | Several, and a default is set | The destination row shows the default. Changing it in the dropdown applies **to this operation only** and does not change the default. |
 | Several, no default set | A one-time sheet: `Which list should ingredients go to?` with the eligible lists and `Remember this`, checked by default. The answer is stored in `user.defaultLists`. |
-| None | The destination row reads `Choose or create a list`. General and ingredient flows open the full fixed-order catalogue with nothing selected. An explicitly chosen Watch destination shows exactly Watchlist / Movies to watch / TV shows in canonical relative order, also unselected. After `Create list`, the original flow returns with that list visibly named; adding the items still requires its own named confirmation. |
+| None | The destination row reads `Choose or create a list` and opens the seven-type catalogue with nothing selected. After `Create list`, the original flow returns with that List visibly named; adding still requires its own named confirmation. |
 
 **In settings.** Profile → Settings → **Default lists** shows three rows — Groceries,
 Watchlist, Meals — each naming the list currently in the slot, or `Ask each time`. The same
@@ -1097,8 +1005,8 @@ Two rules that hold everywhere:
 - **Opening a list never changes where future items go.** Most-recently-used is explicitly
   rejected: it makes the destination depend on browsing history, which the user cannot see
   and cannot reason about.
-- A list with no slot is never a candidate. `Packing` is `collection` and checkable like
-  `Groceries`, and it is never offered as a place to put ingredients.
+- A List with no matching slot is never an implicit destination. Slots route; they never
+  enable a feature or integration.
 - The zero-list case never supplies a `templateKey`, title, or style on the user's behalf.
   The slot explains why a destination is needed; it does not choose what new list to create.
 
@@ -1133,23 +1041,22 @@ is a **suggestion the user confirms** — this is the product-wide rule in
 
 Two worked cases.
 
-**Zahav.** `Restaurants to try` is a location-supporting collection and the user has enabled
-its checkboxes, so a checked item means *visited*. The user chooses `Plan this item` →
+**Zahav.** The List exposes Place and checkboxes, so `done` means *visited*. The user chooses `Plan this item` →
 **Event** → **Just me**, schedules Zahav for Saturday, and
-completes it with `Attended`. The item's state line becomes
-`Done Saturday`. It is **not** checked. One follow-up appears in the confirmation slot:
+completes it with `Attended`. The caller-specific Plan state line becomes
+`Done Saturday`. Intrinsic item state is unchanged. One follow-up appears in the confirmation slot:
 
 ```
 Zahav · Restaurants to try       Mark Zahav visited in Restaurants to try?   ✕
 ```
 
-Tapping it sets `checked: true`. Dismissing it leaves the item exactly as it was. Both are
+Tapping it sets intrinsic state to `done`. Dismissing it leaves the item exactly as it was. Both are
 correct outcomes: the user may have gone and still want it on the list.
 
-**Dune.** `Books to read` is checkable. The user explicitly uses `Plan this item` →
+**Dune.** `Books to read` exposes staged reading state. The user explicitly uses `Plan this item` →
 **General** → **Just me**, schedules `Read Dune` for Saturday, reads for two hours, and
 completes that Plan. The book is not
-finished. The item is **not** checked and no follow-up is offered at all, because finishing
+finished. The item remains `active` and no completion write happens automatically, because finishing
 a reading session says nothing about finishing the book. The item keeps its `Done Saturday`
 state line and stays where it is.
 
@@ -1159,14 +1066,13 @@ When it is not, say nothing.
 
 > **Decision — the implementable form of "evidence".** The
 > `Mark {item title} visited in {list name}?` follow-up is
-> offered only when the linked Activity has the explicitly chosen kind `event` **and** it was
-> created through the bridge from a `collection` list whose current capabilities include both
-> `checkable` and `supportsLocation`. A manually linked Event, an Event bridged from another
-> behaviour, and an Event from a list missing either capability are not evidence. Every other
-> Plan kind stays silent. Slot and template metadata are not inputs to this rule.
+> offered only when the linked Activity has the explicitly chosen kind `event`, the current
+> List exposes state and Place is enabled. A manually linked Event or disabled Place is not
+> evidence. Every other Plan kind stays silent. Slot, template, labels and text are never inputs.
 
-`watch` is the precedent, not the exception. Completing a session *offers* to move the
-item's progress on, and then, separately, *offers* to schedule the next episode. Neither
+Structured episode Progress is the precedent, not the exception. Completing a Watch session
+may *offer* to advance episode Progress and, separately, set intrinsic state to `done` when
+state is exposed. It may then offer to schedule the next episode. Neither
 writes without a tap (§8.4).
 
 ### 5.11 Shared lists
@@ -1182,12 +1088,12 @@ Two roles, and only two.
 
 | Role | Can | Cannot |
 | --- | --- | --- |
-| **Owner** | Everything: add, edit, check, reorder and delete items; rename; change `behaviour`, `capabilities` and `slot`; add and remove members; archive; delete the list | — |
-| **Member** | Full CRUD on **items** — add, edit, check, reorder, delete, use `Plan this item` — plus rename the list and leave it | Change behaviour, capabilities or the default slot; delete or archive the list; add or remove anyone but themselves |
+| **Owner** | Everything: item CRUD/reorder/state; rename; change state mode, feature configuration and slot; add/remove members; archive; delete | — |
+| **Member** | Full item CRUD/reorder/state, `Plan this item`, rename and leave | Change configuration or default slot; delete/archive; add/remove other people |
 
 > **Decision — a member can rename but cannot reshape.** Renaming changes nothing but the
-> title (§5.5), so it is additive and safe to give away. Behaviour and capability changes are
-> destructive under §1a.1 and would apply to items other people wrote, so they stay with the
+> title (§5.5), so it is safe to give away. Configuration changes affect how every member sees
+> items, so they stay with the
 > owner. This is the same line the plan authorisation table draws between posting an update
 > and rescheduling.
 
@@ -1317,7 +1223,7 @@ wrong.
 
 | What happens | What the user sees | What the client must do |
 | --- | --- | --- |
-| Two people tick `Milk` at the same moment, one of them offline in a shop | It is checked. Once. No flicker, no un-tick when the queue drains. | Send `checked: true`, never `checked: !checked`. Checking is a **set**, so it is idempotent and survives the offline queue with no merge logic. |
+| Two people tick `Milk` at the same moment, one of them offline in a shop | It is checked. Once. No flicker, no un-tick when the queue drains. | Send `state: 'done'`, never a toggle instruction. Setting intrinsic state is idempotent and survives the offline queue with no merge logic. |
 | Two people add an item at the same position | Both items are there, in the same order on both phones, and the order does not change on refresh. | Sort by `(rank, itemId)`. Identical ranks are expected, not exceptional; the tie-break is what makes the order stable. |
 | Two people both add `Bread` | Two rows saying `Bread`. | **Never auto-merge, never dedupe, never warn.** Silently swallowing someone's entry is worse than a duplicate they can see and delete in one swipe. |
 | Someone renames the list while you have the rename field open | Your save fails once with `This list changed while you were editing.` | List-**level** edits carry `If-Match`. Item writes do not. |
@@ -1325,7 +1231,7 @@ wrong.
 > **Decision — item writes carry no `If-Match` and last write wins per field.** Optimistic
 > concurrency on a checkbox in a grocery list produces constant spurious `409`s in exactly
 > the situation the feature exists for: two people in one shop with bad signal. The
-> protection is worth having on the title, the behaviour and the capabilities, and nowhere
+> protection is worth having on the title and list settings, and nowhere
 > else.
 
 The ingredients-to-list flow (§7.3), `Clear checked` and `Uncheck all` (§5.6) all work
@@ -1345,12 +1251,12 @@ The user-facing action is `Plan this item`, never a generic `Schedule`. Its flow
 
 1. The item detail or row action opens the Plan-kind chooser with **General**, **Meal**,
    **Watch**, **Event** in that order. None is selected, highlighted,
-   recommended, or moved first. The list's title, template, behaviour, and item text do not
+   recommended, or moved first. The list's title, creation preset, settings, and item text do not
    choose a kind. General is available only as an explicit tap.
 
 No template records a default bridge kind. `Event` exists here only after the user's explicit
-tap; the later visited-evidence rule reads the stored list behaviour and capabilities, never
-template metadata or a destination slot.
+tap; compatible pre-fills read only the stored feature configuration and populated item
+feature values, never the creation preset or a destination slot.
 2. On **every list, private or shared**, a required audience step follows the kind choice,
    asking exactly **Just me** or **Choose people**, with neither pre-selected. `Just me`
    makes the new Plan private and linked to the item. `Choose people` opens an empty People
@@ -1434,7 +1340,7 @@ Rules:
   global "someone planned this" badge and no participant leakage.
 - A planned item is visually distinguished by the state line alone. No colour change, no
   strike-through, no move.
-- An item on a checkable `collection` is still checkable after scheduling. Checking it does not
+- An item on a checkbox-mode list is still checkable after scheduling. Checking it does not
   complete the Activity, and completing the Activity does not check it (§5.10, §6.3).
 
 ### 6.3 What happens on completion, un-completion and deletion
@@ -1442,7 +1348,7 @@ Rules:
 | Event on the Activity | Effect on the viewer projection and ListItem |
 | --- | --- |
 | Completed (any outcome) | The projected state line becomes `Done Saturday`. The ListItem is byte-identical: not checked, deleted, moved, hidden, or otherwise altered. Where completion is evidence about the item, one dismissible suggestion is offered and writes only if tapped (§5.10, §8.4). |
-| Un-completed | The state line reverts. A follow-up the user **accepted** — a check, updated episode progress, a `watched` status — is their own edit and is not reverted with it. |
+| Un-completed | The state line reverts. A follow-up the user **accepted** — a `done` state or updated episode progress — is their own edit and is not reverted with it. |
 | Skipped / `didnt_happen` | The state line is removed and pointer(s) to that Plan are cleared. The ListItem is untouched. |
 | Rescheduled | The state line updates. |
 | Unscheduled (`date: null`) | The state line is removed. The `LNK#` pointer is **kept** — the Plan still exists in Needs a date. |
@@ -1455,7 +1361,7 @@ Neither side cascade-deletes the other. This is stated in the data model and rep
 because it is the most commonly mis-implemented rule in the product.
 
 > **Decision:** completing an activity leaves its source item in the list rather than
-> removing it, on every behaviour and every template. These lists are memories as much as
+> removing it, with every state presentation and every creation preset. These lists are memories as much as
 > queues, and "we went there in March" is worth keeping. Users who want it gone delete it,
 > check it, or archive the list.
 
@@ -1494,7 +1400,8 @@ scaling — see
 
 ### 7.1 Save
 
-A meal with no date is a `saved` Plan, or an item on a `meals`-behaviour list, depending on
+A meal with no date is a `saved` Plan, or an item on a list whose Sub-items feature is
+configured as Ingredients, depending on
 the explicit creation action:
 
 - **Global `+` → Plan → Meal → no date** creates an Activity with `status: 'saved'`. Because its type is
@@ -1567,7 +1474,7 @@ Completing a meal uses the verb `Had it` (`outcome: 'had_it'`) — see
 - If ingredients exist that were never added to Groceries and the meal is likely to recur,
   nothing is offered. The app does not ask about the past.
 - If the meal has participants and no expenses: `Add an expense?`
-- If the meal came from a `meals`-behaviour list item: the item's state line becomes
+- If the meal came from a Meal Ideas list item: the item's linked Plan state line becomes
   `Done Sunday`. The item is not checked, moved or removed (§5.10).
 
 ### 7.5 The provenance label
@@ -1615,16 +1522,16 @@ Not a catalogue, not ratings, not discovery. See
 
 ### 8.1 Watchlist entries
 
-A watchlist entry is a `ListItem` on any list whose behaviour is `watch` — the `watchlist`,
-`movies-to-watch` and `tv-shows` templates all produce one, and a `collection` upgraded to
-`watch` in list settings is no different (§5.5). Its `details`:
+A Watch Later entry is an ordinary `ListItem`. The preset configures stage presentation and
+the episode-shaped Progress feature:
 
 | Field | Values | Meaning |
 | --- | --- | --- |
-| `mediaKind` | `movie` \| `show` | Controls whether season/episode fields render |
-| `watchStatus` | `want` \| `watching` \| `watched` | The three headings the list groups under |
-| `season` | integer | Current progress, shows only |
-| `episode` | integer | Current progress, shows only |
+| `state` | `open` \| `active` \| `done` | Intrinsic state rendered with the configured labels Want to watch, Watching and Watched |
+| `features.progress.kind` | `episode` | Selects the episode editor and compact summary renderer |
+| `features.progress.mediaKind` | `movie` \| `show` | Optional user-entered context; controls whether season/episode fields render |
+| `features.progress.season` | integer | Current progress, shows only |
+| `features.progress.episode` | integer | Current progress, shows only |
 
 Entries are created by the list's `+ Add an item`, or by global `+` → **List item** followed
 by an explicit watch-list destination. A **Plan → Watch** creates only a Watch Plan,
@@ -1632,24 +1539,21 @@ including when it has no date. Its separate `Also add a list item to <list name>
 off by default and, if turned on, the final button names both writes. All fields are free
 text or numbers; the app never looks anything up.
 
-Progress is displayed as `S2 E4`. A movie shows no progress line. `watchStatus` transitions
-are:
+Progress is displayed as `S2 E4`. A movie or an item with empty progress shows no progress
+line. State transitions are explicit list-item edits:
 
-- `want` → `watching`: offered as a follow-up on the first completed watch session for that
-  item, together with the progress update (§8.4). One tap; never written without it.
-- `watching` → `watched`: manual only, from the item detail's `Mark as watched`, or from the
-  follow-up offered after a movie. The app never decides a show is finished, because it does
-  not know how many episodes there are.
-- Any → any: manual, from item detail.
+- `open` → `active`: offered with the first confirmed progress follow-up (§8.4), and can also
+  be chosen manually.
+- `active` → `done`: manual, or a confirmed follow-up after a movie. The app never decides a
+  show is finished, because it does not know how many episodes there are.
+- Any → any: manual from item detail. The labels are presentation; the stored values stay the
+  same on every List.
 
-> **Decision — reversed.** `want → watching` was previously specified as the one automatic
-> transition in the product. It is now a confirmed follow-up like every other cross-object
+> **Decision — confirmed, never automatic.** `open → active` is a confirmed follow-up like
+> every other cross-object
 > change, under
 > [`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants) §1a.2. One
-> rule with no exceptions is worth more than one saved tap, and
-> [`activities.md`](activities.md#53-follow-up-suggestions) §5.3 already specified the
-> progress update as a confirmed follow-up — the two documents disagreed and this is the
-> resolution.
+> rule with no exceptions is worth more than one saved tap.
 
 ### 8.2 Scheduling a watch session
 
@@ -1661,8 +1565,8 @@ infer or pre-select it. Confirming eventually calls
 The created Activity is pre-filled with:
 
 - `title` and `details.mediaTitle` = the item title,
-- `details.mediaKind`, `details.season`, `details.episode` copied from the item's current
-  progress, **incremented by one episode** for a `watching` show (S2 E4 → the session is
+- `details.mediaKind`, `details.season`, `details.episode` copied from the item's populated
+  episode Progress value, **incremented by one episode** for an `active` show (S2 E4 → the session is
   for S2 E5),
 - `details.service` = the last service used by this user.
 
@@ -1672,7 +1576,7 @@ private list; **Choose people** opens an empty picker. Participants are never co
 list membership, the previous Plan, or capture.
 
 > **Decision:** the pre-fill increments the episode. Scheduling the episode you have
-> already seen is never what is meant. The value is editable, and for a `want` item with no
+> already seen is never what is meant. The value is editable, and for an `open` item with no
 > progress the session defaults to S1 E1.
 
 ### 8.3 On Today
@@ -1694,8 +1598,8 @@ Completing the session (`Watched`, `outcome: 'watched'`) does exactly this:
    Movies and shows · currently S2 E4    Update to S2 E5?    ✕
    ```
 
-   Tapping it sets the item's `details.season` / `details.episode` to the session's values
-   and, if the item was `want`, sets `watchStatus: 'watching'`. One write, with its own undo
+   Tapping it sets the item's `features.progress` to the session's episode values and, if the
+   item was `open`, sets `state: 'active'`. One write, with its own undo
    toast. Dismissing it leaves the item untouched — which is the right outcome when the
    session covered a rewatch, or when the user watched something else instead.
 3. **Only once progress has been updated**, a second and separate follow-up appears:
@@ -1717,17 +1621,16 @@ step 4 is also the concept's explicit constraint: the app "may then suggest sche
 next episode, but should not automatically create it". A code path that writes the item in
 step 2, or an Activity in step 3, is a bug, not a shortcut.
 
-For a `movie`, step 2 offers `Update {list name} item to Watched?` instead, which sets the
-named item to `watched`, and there is no step 3.
+For a `movie`, step 2 offers `Mark {list name} item as Watched?` instead, which sets the
+named item to `state: 'done'`, and there is no step 3.
 
-> **Decision — an item that has never said which it is (added 2026-08-25, P3-16).** `mediaKind`
-> is optional (§8.1), and a `collection` upgraded to `watch` back-fills `watchStatus: 'want'`
-> and nothing else (§5.5), so a whole upgraded list can have no `mediaKind` at all. Those items
+> **Decision — an item that has never said which it is.** `mediaKind` is optional (§8.1), so
+> an item can have no media kind at all. Those items
 > get **step 2's progress question**, offering the season and episode the user typed on the
 > session — which is not the app deciding what kind of thing the item is, only copying this
 > session's own values onto the item it came from. When the session names neither a season nor
 > an episode there is nothing to copy and **nothing is offered**: `Update to ?` is not a
-> question, and `watched` is not an answer the app may reach for on something that might be a
+> question, and `done` is not an answer the app may reach for on something that might be a
 > show, whose ending it cannot know (§8.1). A `movie` item still gets the watched transition,
 > because that is what its own `mediaKind` says.
 >
@@ -1739,12 +1642,9 @@ named item to `watched`, and there is no step 3.
 > ([`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2.3,
 > `POST /v1/activities/:id/complete`). Confirming is the ordinary item `PATCH`.
 
-**Watch progress is per person, not per pair, and that is known.** A watchlist item is a
-`ListItem` in its owner's partition, so two people who watch a show together each keep their
-own `season`/`episode` and each is offered their own follow-up after the shared session.
-Neither sees the other's. This is not a bug and is deferred, not scheduled — see
-[`../00-open-decisions.md`](../00-open-decisions.md) #23 before building anything that
-reconciles the two.
+**Watch progress belongs to the ListItem.** Members of a shared list therefore see the same
+state and episode progress. The Activity link and completion follow-up are still viewer-local:
+the shared item changes only when that viewer accepts the offered edit.
 
 ---
 
@@ -1755,20 +1655,20 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 
 ### 9.1 Watchlist → Today
 
-**Goal:** Severance is on a `watch` list; the user watches S2 E5 with Alice on Friday.
+**Goal:** Severance is on a Watch Later list; the user watches S2 E5 with Alice on Friday.
 
 | Step | User action | Writes |
 | --- | --- | --- |
-| 0 | Lists → `New list` → explicitly chooses **TV shows** → changes the visible name to `Movies and shows` → `Create list` | `POST /v1/lists { title: 'Movies and shows', templateKey: 'tv-shows' }` → `behaviour: 'watch'`, `slot: 'watch'` copied from the selected template. No words selected the style. |
-| 1 | The list → `+ Add an item` → `Severance`, kind Show → `Add to Movies and shows` | `ListItem { itemId: itm_1, title: 'Severance', details: { behaviour: 'watch', mediaKind: 'show', watchStatus: 'want' } }` |
-| 2 | Item detail → sets progress S2 E4 (already watched up to there) | `PATCH /v1/lists/:id/items/itm_1` → `details.season: 2, episode: 4, watchStatus: 'watching'` |
+| 0 | Lists → `New list` → explicitly chooses **Watch Later** → changes the visible name to `Movies and shows` → `Create list` | `POST /v1/lists { title: 'Movies and shows', templateKey: 'watch-later' }` copies stage labels, episode Progress configuration and the `watch` slot from the preset. No words selected the preset. |
+| 1 | The list → `+ Add an item` → `Severance`, kind Show → `Add to Movies and shows` | `ListItem { itemId: itm_1, title: 'Severance', state: 'open', features: { progress: { kind: 'episode', mediaKind: 'show' } } }` |
+| 2 | Item detail → sets progress S2 E4 (already watched up to there) and Watching | `PATCH /v1/lists/:id/items/itm_1` → `state: 'active'`, `features.progress: { kind: 'episode', mediaKind: 'show', season: 2, episode: 4 }` |
 | 2a | List header → `Share` → explicitly adds Alice | Alice becomes a member of the list. This does not put her on any Plan. |
 | 3 | Item detail → `Plan this item` → explicitly chooses **Watch** → required audience step → **Choose people** → Alice | The Watch form opens with `Severance`, **S2 E5**, and service Apple TV+ as compatible pre-fills. User sets Friday at 8:00 PM. Neither the Watch kind nor Alice was pre-selected. |
 | 4 | `Save plan` | `POST /v1/lists/:id/items/itm_1/schedule` → one `TransactWriteItems`: `ACT#act_9/META` (`objectKind: 'plan'`, type `watch`, `schedule { date: '2026-08-07', time: '20:00' }`), `USER#<owner>/IDX#act_9`, and caller-specific `LNK#<owner>#itm_1 → act_9`. Because Alice was explicitly selected and can see the shared list, `LNK#<alice>#itm_1 → act_9` is also written with `ACT#act_9/PART#psn_alice`, `USER#<alice>/IDX#act_9`, and both `PLINK#` rows. `LIST#/ITEM#itm_1` is byte-identical before and after. |
 | 5 | The list now reads | `Severance` / `Watching · S2 E4` / `Next session Friday · 8 PM` — one row, not two (§6.2). |
 | 6 | Friday, Today | `8:00 PM ◇ Severance   Watch · S2 E5   (A)` in SCHEDULE. Alice sees the same row on her Today. |
 | 7 | 10 PM, EARLIER TODAY → `How did it go?` → `Watched` | `POST /v1/activities/act_9/complete { outcome: 'watched' }`. **One write, on the Activity only.** `itm_1` is untouched. |
-| 8 | Follow-up 1 | `Movies and shows · currently S2 E4 — Update to S2 E5?` Tapped → `PATCH .../items/itm_1` sets `episode: 5`. |
+| 8 | Follow-up 1 | `Movies and shows · currently S2 E4 — Update to S2 E5?` Tapped → `PATCH .../items/itm_1` replaces the episode Progress value with S2 E5. |
 | 9 | Follow-up 2 | `Movies and shows · now at S2 E5 — Create a Plan for S2 E6?` Dismissed. **Nothing is created.** |
 
 ### 9.2 Meal → Groceries
@@ -1783,10 +1683,10 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 | 4 | `Save plan and add 3 items to Groceries` | `POST /v1/activities` → `act_12` with `objectKind: 'plan'`, `type: 'meal'`, and `details.ingredients` = all four rows, each carrying its stable client-minted `ingredientId`. Then `POST /v1/activities/act_12/ingredients/add-to-list` with `listId: 'lst_g'` and the three checked source `ingredientId`s. |
 | 5 | Groceries list now reads | `Chicken — Sunday dinner` · `Tortillas (8) — Sunday dinner` · `Tomatoes — Sunday dinner` · `Milk` (added manually last week, no label) |
 | 6 | Meal detail | Chicken / Tortillas / Tomatoes render `Added`; Sour cream renders with `Add to Groceries`. |
-| 7 | Saturday: user shops, checks all three | `PATCH` on each item, `checked: true`. **The meal is untouched** — provenance is not linkage (§6.5). |
+| 7 | Saturday: user shops, checks all three | `PATCH` on each item, `state: 'done'`. **The meal is untouched** — provenance is not linkage (§6.5). |
 | 8 | Sunday 19:00, Today | `7:30 PM ◇ Chicken tacos   Meal · Dinner`. (Time as entered; the 19:00 default was overridden.) |
 | 9 | After dinner → `Had it` | `POST /v1/activities/act_12/complete { outcome: 'had_it' }`. Nothing on any list changes. |
-| 10 | Monday: Groceries → `Clear checked (3)` | No dialog. Three items deleted immediately, with a `3 items cleared` toast carrying `Undo` for 10 seconds. Milk remains. |
+| 10 | Monday: Groceries → `Clear checked (3)` | No dialog. Three items deleted immediately, with a `3 items cleared` toast carrying `Undo` for 6 seconds. Milk remains. |
 
 ### 9.3 Trip plan → Packing list
 
@@ -1797,12 +1697,12 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 | 1 | Global `+` → **Plan** → **Event** → `New York Trip`, **14 Aug**, location `Manhattan`; People picker → Alice + Ben; `Save plan` | `POST /v1/activities` → `act_20`, `objectKind: 'plan'`, `type: 'event'`, `visibility: 'shared'`, two `PART#` rows, two invitee `IDX#` rows. The trip runs to the 16th; the activity carries its start date only (§2.4), so it is on Today on the 14th and not on the 15th or 16th. |
 | 2 | Plan detail → PREP → `+ Add prep task` ×2: `Book hotel` (2 Aug), `Buy tickets` (8 Aug) | Two `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`, `parentActivityId: act_20`. `act_20.childCount` = 2. |
 | 3 | Plan detail → LISTS → `Add list` | The full fixed-order style catalogue opens with nothing selected (§4.1). |
-| 4 | Picks `Packing`, keeps the default title | `POST /v1/lists { title: 'Packing · New York Trip', templateKey: 'packing', sourceActivityId: 'act_20' }` → `behaviour: 'collection'`, `capabilities.checkable: true`, `slot: null` (forced for a plan-created list, §4.1) |
+| 4 | Picks **Checklist**, changes the title to `Packing · New York Trip` | `POST /v1/lists { title: 'Packing · New York Trip', templateKey: 'checklist', sourceActivityId: 'act_20' }` copies checkbox presentation and forces `slot: null` for a plan-created list (§4.1). |
 | 5 | Adds `Charger`, `Jacket`, `Passport` | Three `POST /v1/lists/lst_p/items` |
 | 6 | Back on the plan, LISTS reads | `Packing · New York Trip — 3 items` |
-| 7 | Picks `Places to visit` too, adds `Central Park`, `Museum` | A second list with the same `sourceActivityId`. It is `supportsLocation`, so each item can carry an address. |
+| 7 | Picks `Places to Visit` too, adds `Central Park`, `Museum` | A second list with the same `sourceActivityId`. Its Place feature is enabled, so each item can carry an address. |
 | 8 | 2 Aug, Today | `☐ Book hotel   New York Trip` in ANYTIME — a prep task on its own date with the plan as subtitle (§3) |
-| 9 | 13 Aug: packs, checks all three | `checked: true` ×3 |
+| 9 | 13 Aug: packs, checks all three | `state: 'done'` ×3 |
 | 9a | 15 and 16 Aug, Today | The trip is **not** on either day; it was on Today on the 14th (§2.4). The plan is one tap away in Plans → Upcoming, and anything dated on those days is an ordinary prep task or a separate activity. |
 | 10 | 16 Aug: opens the plan from Plans and taps `Done` | `act_20` completed, by the owner — a participant has no completion control (§2.1). **Both lists survive, unarchived, with their items, and nothing on them is checked or changed.** Alice and Ben see the completion in the updates feed. |
 | 11 | Next trip | The user opens `Packing · New York Trip` → overflow → `Uncheck all`, renames it `Packing`, and reuses it. Renaming changes nothing else (§5.5). Nothing was lost. |
@@ -1816,10 +1716,10 @@ successful use of the product.
 | Step | User action | Writes |
 | --- | --- | --- |
 | 1 | Lists → `New list` | The full style catalogue opens in its fixed order, with nothing selected. No title field or suggestion runs yet. |
-| 2 | Explicitly chooses **Favourite restaurants** → changes the visible name to `Places we love` | Local draft only; editing the title does not change the chosen style. |
-| 3 | `Create list` | `POST /v1/lists { title: 'Places we love', templateKey: 'favourite-restaurants' }` → `collection`, `checkable: false`, `supportsLocation: true`, `slot: null`. |
+| 2 | Explicitly chooses **Places to Visit** → changes the visible name to `Places we love` | Local draft only; editing the title does not change the chosen preset. |
+| 3 | `Create list` | `POST /v1/lists { title: 'Places we love', templateKey: 'places-to-visit' }` copies checkbox presentation and the Place feature, with `slot: null`. |
 | 4 | Adds `Zahav`, `Suraya`, `Kalaya`, each with an address and a note (`the lamb`) | Four `POST /v1/lists/lst_f/items` with `location` |
 | 5 | Six months of use | The list is opened 40 times, an item is tapped for its address, the maps app opens. **Zero activities exist.** |
 | 6 | What the app does about it | Nothing. No progress indicator, no "you haven't planned any of these", no archive prompt, no suggestion to schedule. The list is finished the day it is created. |
-| 7 | The user adds checkboxes later, to mark the ones they have been to this year | `⋯` → `List settings` → `Show checkboxes` on. Immediate, no confirmation, no type change, no data touched (§5.5). |
+| 7 | The user removes and later restores checkboxes | `⋯` → `List settings` → **Item state** → None, then Checkboxes. Each change is immediate, has no confirmation, and preserves every item's intrinsic state (§5.5). |
 | 8 | Later still, one item does become a Plan | Item → `Plan this item` → the user explicitly chooses **Event** → `Just me` → `Save plan`. The list is unchanged by this; it was never waiting for it. |

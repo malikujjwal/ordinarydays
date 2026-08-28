@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
 
-export const API = `http://127.0.0.1:${process.env.E2E_API_PORT ?? '3000'}`;
+export const API = `http://127.0.0.1:${process.env.E2E_API_PORT ?? '3100'}`;
 export const ZONE = 'America/New_York';
 
 export interface E2EActivity {

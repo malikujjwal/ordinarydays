@@ -389,14 +389,7 @@ describe('error mapping', () => {
     expect(error.details).toEqual(details);
   });
 
-  it('carries a destructive-list confirmation through as one typed object', async () => {
-    const confirmation = {
-      fromBehaviour: 'watch' as const,
-      toBehaviour: 'collection' as const,
-      itemVersion: 42,
-      itemCount: 7,
-      fields: ['Watch status', 'Season', 'Episode'],
-    };
+  it('does not promote unknown top-level error fields into the typed error', async () => {
     const { client } = makeClient([
       {
         status: 409,
@@ -406,14 +399,14 @@ describe('error mapping', () => {
             message: 'Confirm this change.',
             requestId: 'req_s',
           },
-          confirmation,
+          legacyExtra: { value: true },
         },
       },
     ]);
 
     const error = (await client.request(health()).catch((e: unknown) => e)) as ApiError;
 
-    expect(error.confirmation).toEqual(confirmation);
+    expect(error).not.toHaveProperty('legacyExtra');
   });
 
   it('reads Retry-After on a rate limit', async () => {

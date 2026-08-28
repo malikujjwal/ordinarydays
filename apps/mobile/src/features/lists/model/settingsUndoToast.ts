@@ -1,5 +1,5 @@
 import type { Clock, Instant } from '@od/shared/time';
-import type { DefaultSlot, ListBehaviour, ListCapabilities } from '@od/shared/types';
+import type { DefaultSlot } from '@od/shared/types';
 import type { UndoToastMessage } from '@/stores/toast';
 import { SLOT_LABELS } from './listSettings';
 import { remainingUndoOfferMs, UNDO_OFFER_DURATION_MS } from './undoOffer';
@@ -44,19 +44,9 @@ export function remainingSettingsUndoMs(
 
 /** Which additive settings change happened, in the words its toast reports it with. */
 export type SettingsChange =
-  | {
-      readonly kind: 'capability';
-      readonly capability: keyof ListCapabilities;
-      readonly next: boolean;
-    }
+  | { readonly kind: 'setting'; readonly label: string; readonly next: boolean }
   | { readonly kind: 'slot'; readonly slot: DefaultSlot | null }
-  | { readonly kind: 'behaviour'; readonly behaviour: ListBehaviour };
-
-const BEHAVIOUR_RESULTS: Record<ListBehaviour, string> = {
-  collection: 'Now a plain list',
-  watch: 'Now a watchlist',
-  meals: 'Now a meals list',
-};
+  | { readonly kind: 'state-mode'; readonly label: string };
 
 /**
  * What happened, in the past tense and in the words of the control that did it.
@@ -65,16 +55,15 @@ const BEHAVIOUR_RESULTS: Record<ListBehaviour, string> = {
  * all, so a toast that appears anyway has to earn it by saying what it will take back.
  */
 export function settingsChangeMessage(change: SettingsChange): string {
-  if (change.kind === 'capability') {
-    const noun = change.capability === 'checkable' ? 'Checkboxes' : 'Places';
-    return `${noun} ${change.next ? 'shown' : 'hidden'}`;
+  if (change.kind === 'setting') {
+    return `${change.label} ${change.next ? 'on' : 'off'}`;
   }
   if (change.kind === 'slot') {
     return change.slot === null
       ? 'No longer a default destination'
       : `Default for ${SLOT_LABELS[change.slot]}`;
   }
-  return BEHAVIOUR_RESULTS[change.behaviour];
+  return `Item state set to ${change.label}`;
 }
 
 export interface SettingsUndoToastInput {

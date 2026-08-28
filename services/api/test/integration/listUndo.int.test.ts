@@ -71,17 +71,18 @@ const request = async (
 
 async function seedList(overrides: Partial<List> = {}): Promise<List> {
   const list: List = {
+    schemaVersion: 2,
     listId: repository.newListId(),
     ownerId: DEV,
-    behaviour: 'collection',
     templateKey: 'groceries',
     title: 'Groceries',
     icon: 'cart',
     emptyStateCopy: 'Add something to buy.',
-    capabilities: { checkable: true, supportsLocation: false },
+    itemStateMode: { mode: 'checkbox' },
+    featureConfig: {},
     slot: null,
     itemCount: 0,
-    uncheckedCount: 0,
+    doneCount: 0,
     memberCount: 1,
     rankVersion: 0,
     archived: false,
@@ -117,7 +118,7 @@ async function partitionRows(listId: string): Promise<Record<string, unknown>[]>
   );
 }
 
-/** Seven checked and three unchecked, in the order the criterion names them. */
+/** Seven done and three open, in the order the criterion names them. */
 async function seedTen(listId: string): Promise<{ checked: string[]; open: string[] }> {
   const res = await request('POST', `/v1/lists/${listId}/items/bulk`, {
     items: Array.from({ length: 10 }, (_, index) => ({
@@ -130,7 +131,7 @@ async function seedTen(listId: string): Promise<{ checked: string[]; open: strin
   const open = created.slice(7).map((item) => item.itemId);
   for (const itemId of checked) {
     const patched = await request('PATCH', `/v1/lists/${listId}/items/${itemId}`, {
-      checked: true,
+      state: 'done',
     });
     expect(patched.status).toBe(200);
   }
@@ -194,7 +195,7 @@ describe('clear-checked', () => {
     expect(survivors.map((item) => item.itemId).sort()).toEqual([...open].sort());
     const meta = await storedMeta(list.listId);
     expect(meta.itemCount).toBe(3);
-    expect(meta.uncheckedCount).toBe(3);
+    expect(meta.doneCount).toBe(0);
     expect(checked).toHaveLength(7);
   });
 
@@ -256,7 +257,7 @@ describe('clear-checked', () => {
       const restored = after.find((item) => item.itemId === itemId);
       expect(restored?.rank).toBe(original?.rank);
       expect(restored?.title).toBe(original?.title);
-      expect(restored?.checked).toBe(true);
+      expect(restored?.state).toBe('done');
       const locator = await base.getItem<Record<string, unknown>>(
         keys.listItemLocator(list.listId, itemId),
         { consistentRead: true },
@@ -278,7 +279,7 @@ describe('clear-checked', () => {
 
     const meta = await storedMeta(list.listId);
     expect(meta.itemCount).toBe(10);
-    expect(meta.uncheckedCount).toBe(3);
+    expect(meta.doneCount).toBe(7);
     expect(
       (await partitionRows(list.listId)).filter(
         (row) => row.entity === 'ListItemTombstone',
@@ -453,7 +454,7 @@ describe('a bulk operation interrupted part-way', () => {
       );
     }
     for (const itemId of created) {
-      await request('PATCH', `/v1/lists/${listId}/items/${itemId}`, { checked: true });
+      await request('PATCH', `/v1/lists/${listId}/items/${itemId}`, { state: 'done' });
     }
     return created;
   }
@@ -589,8 +590,10 @@ describe('uncheck-all', () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affectedCount).toBe(7);
-    expect((await storedItems(list.listId)).every((item) => !item.checked)).toBe(true);
-    expect((await storedMeta(list.listId)).uncheckedCount).toBe(10);
+    expect((await storedItems(list.listId)).every((item) => item.state === 'open')).toBe(
+      true,
+    );
+    expect((await storedMeta(list.listId)).doneCount).toBe(0);
 
     // One of the affected items goes away before the inverse arrives; it is simply skipped.
     await request('DELETE', `/v1/lists/${list.listId}/items/${deletedDuringWindow}`);
@@ -601,22 +604,30 @@ describe('uncheck-all', () => {
 
     expect((await undone.json()).data).toEqual({ outcome: 'applied', affectedCount: 6 });
     const after = await storedItems(list.listId);
-    const rechecked = after.filter((item) => item.checked).map((item) => item.itemId);
+    const rechecked = after
+      .filter((item) => item.state === 'done')
+      .map((item) => item.itemId);
     expect(rechecked.sort()).toEqual(checked.slice(1).sort());
     // The three that were never checked are untouched.
     expect(
-      after.filter((item) => open.includes(item.itemId)).every((i) => !i.checked),
+      after.filter((item) => open.includes(item.itemId)).every((i) => i.state === 'open'),
     ).toBe(true);
-    expect((await storedMeta(list.listId)).uncheckedCount).toBe(3);
+    expect((await storedMeta(list.listId)).doneCount).toBe(6);
   });
 });
 
-describe('the two-part gate', () => {
+describe('the checkbox presentation gate', () => {
   it.each([
-    ['a watch list', { behaviour: 'watch' as const }],
+    ['a list with no state control', { itemStateMode: { mode: 'none' as const } }],
     [
-      'a collection with checkboxes off',
-      { capabilities: { checkable: false, supportsLocation: false } },
+      'a staged list',
+      {
+        itemStateMode: {
+          mode: 'stages' as const,
+          labels: { open: 'To do', active: 'Doing', done: 'Done' },
+          groupByState: true,
+        },
+      },
     ],
   ])('400s both bulk endpoints on %s, writing nothing', async (_case, overrides) => {
     const list = await seedList(overrides);
@@ -632,7 +643,7 @@ describe('the two-part gate', () => {
   });
 });
 
-describe('the settings inverses P3-09 records', () => {
+describe('settings inverses', () => {
   it('undoes an archive, restoring archived: false', async () => {
     const list = await seedList();
 
@@ -653,33 +664,23 @@ describe('the settings inverses P3-09 records', () => {
     expect((await storedMeta(list.listId)).archived).toBe(false);
   });
 
-  it('undoes one capability flag while the other has moved since', async () => {
+  it('undoes an unchanged feature toggle', async () => {
     const list = await seedList();
     const first = await (
       await request(
         'PATCH',
         `/v1/lists/${list.listId}`,
-        { capabilities: { checkable: false } },
+        { featureConfig: { place: { enabled: true } } },
         { 'If-Match': list.updatedAt },
       )
     ).json();
-    await request(
-      'PATCH',
-      `/v1/lists/${list.listId}`,
-      { capabilities: { supportsLocation: true } },
-      { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
-    );
 
     const undone = await request('POST', `/v1/lists/${list.listId}/undo`, {
       undoToken: first.data.undoToken,
     });
 
     expect((await undone.json()).data.outcome).toBe('applied');
-    // The flag it recorded goes back; the one it never touched keeps the newer choice.
-    expect((await storedMeta(list.listId)).capabilities).toEqual({
-      checkable: true,
-      supportsLocation: true,
-    });
+    expect((await storedMeta(list.listId)).featureConfig).toEqual({});
   });
 
   /**
@@ -756,105 +757,5 @@ describe('the settings inverses P3-09 records', () => {
     });
 
     expect((await undone.json()).data).toEqual({ outcome: 'no_longer_applicable' });
-  });
-
-  /**
-   * §P3-09's behaviour-upgrade inverse: it restores `collection` **without**
-   * `confirmDataLoss`, because it is taking back defaults nobody has touched rather than
-   * asking the user to agree to a loss.
-   */
-  /**
-   * The review's missing test for finding 2. The compensation spends its operation in the
-   * migration's **own** final transaction, so a token cannot survive a crash between the two
-   * writes and then apply to a *second* upgrade whose preconditions happen to match.
-   */
-  it('spends the upgrade token atomically, so a later upgrade is untouchable by it', async () => {
-    const list = await seedList();
-    await request('POST', `/v1/lists/${list.listId}/items/bulk`, {
-      items: [{ title: 'Severance' }],
-    });
-
-    const first = await (
-      await request(
-        'POST',
-        `/v1/lists/${list.listId}/behaviour`,
-        { behaviour: 'watch' },
-        { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
-      )
-    ).json();
-    const operationId = String(first.data.undoToken).split('.')[0] as string;
-
-    await request('POST', `/v1/lists/${list.listId}/undo`, {
-      undoToken: first.data.undoToken,
-    });
-    expect((await storedMeta(list.listId)).behaviour).toBe('collection');
-
-    // Spent by the migration that used it, not by a write after it.
-    const spent = await base.getItem<Record<string, unknown>>(
-      keys.listUndo(list.listId, operationId),
-      { consistentRead: true },
-    );
-    expect(spent?.consumed).toBe(true);
-
-    // Upgrade again: the old token's preconditions are true once more, and it is still spent.
-    await request(
-      'POST',
-      `/v1/lists/${list.listId}/behaviour`,
-      { behaviour: 'watch' },
-      { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
-    );
-    const reused = await request('POST', `/v1/lists/${list.listId}/undo`, {
-      undoToken: first.data.undoToken,
-    });
-
-    expect((await reused.json()).data).toEqual({ outcome: 'no_longer_applicable' });
-    expect((await storedMeta(list.listId)).behaviour).toBe('watch');
-  });
-
-  it('undoes a behaviour upgrade, and refuses once a default has been edited', async () => {
-    const list = await seedList();
-    const [first] = (
-      await (
-        await request('POST', `/v1/lists/${list.listId}/items/bulk`, {
-          items: [{ title: 'Severance' }, { title: 'Andor' }],
-        })
-      ).json()
-    ).data as { itemId: string }[];
-
-    const upgraded = await (
-      await request(
-        'POST',
-        `/v1/lists/${list.listId}/behaviour`,
-        { behaviour: 'watch' },
-        { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
-      )
-    ).json();
-    expect(upgraded.data.undoToken).toEqual(expect.any(String));
-
-    // Somebody sets a season on one of the items the upgrade created defaults on.
-    await request('PATCH', `/v1/lists/${list.listId}/items/${first?.itemId ?? ''}`, {
-      details: { behaviour: 'watch', watchStatus: 'watching', season: 2 },
-    });
-
-    const refused = await request('POST', `/v1/lists/${list.listId}/undo`, {
-      undoToken: upgraded.data.undoToken,
-    });
-    expect((await refused.json()).data).toEqual({ outcome: 'no_longer_applicable' });
-    expect((await storedMeta(list.listId)).behaviour).toBe('watch');
-
-    // Put it back the way the upgrade left it, and the same inverse applies.
-    await request('PATCH', `/v1/lists/${list.listId}/items/${first?.itemId ?? ''}`, {
-      details: { behaviour: 'watch', watchStatus: 'want' },
-    });
-    const applied = await request('POST', `/v1/lists/${list.listId}/undo`, {
-      undoToken: upgraded.data.undoToken,
-    });
-
-    expect((await applied.json()).data).toEqual({ outcome: 'applied', affectedCount: 2 });
-    expect((await storedMeta(list.listId)).behaviour).toBe('collection');
-    expect((await storedItems(list.listId)).map((item) => item.details)).toEqual([
-      undefined,
-      undefined,
-    ]);
   });
 });

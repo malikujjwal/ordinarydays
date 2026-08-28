@@ -689,7 +689,7 @@ export class OutboxRepository {
     if (
       intent?.status !== 'queued' ||
       intent.mutationKey[0] !== 'list' ||
-      (intent.mutationKey[1] !== 'patch' && intent.mutationKey[1] !== 'behaviour')
+      intent.mutationKey[1] !== 'patch'
     ) {
       throw new OutboxInvariantError(intentId);
     }
@@ -967,7 +967,7 @@ export class OutboxRepository {
       `SELECT * FROM outbox_intents
        WHERE ordering_key = ? AND seq > ? AND status = 'queued'
          AND json_extract(mutation_key_json, '$[0]') = 'list'
-         AND json_extract(mutation_key_json, '$[1]') IN ('patch', 'behaviour')
+         AND json_extract(mutation_key_json, '$[1]') = 'patch'
        ORDER BY seq LIMIT 1;`,
       [orderingKey, seq],
     );

@@ -117,7 +117,7 @@ test('renaming a linked item leaves its Plan title alone', async ({ page, reques
   const listId = await createList(
     request,
     `Restaurants to try ${stamp}`,
-    'restaurants-to-try',
+    'places-to-visit',
   );
   const original = `Zahav ${stamp}`;
   const renamed = `Zahav (Old City) ${stamp}`;

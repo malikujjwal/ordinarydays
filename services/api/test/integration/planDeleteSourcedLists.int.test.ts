@@ -89,7 +89,7 @@ const createSourcedList = async (
 ): Promise<List> => {
   const res = await post('/v1/lists', {
     title,
-    templateKey: 'packing',
+    templateKey: 'checklist',
     sourceActivityId,
   });
   expect(res.status).toBe(201);

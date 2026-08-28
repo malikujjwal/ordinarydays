@@ -19,15 +19,16 @@ const NOW = instant.parse('2026-08-26T12:00:00.000Z');
 const list = (overrides: Partial<List> = {}): List => ({
   listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
   ownerId: 'usr_local_dev',
-  behaviour: 'collection',
+  schemaVersion: 2,
   templateKey: 'groceries',
   title: 'Groceries',
   icon: 'cart',
   emptyStateCopy: 'Add something to buy.',
-  capabilities: { checkable: true, supportsLocation: false },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: {},
   slot: 'groceries',
   itemCount: 12,
-  uncheckedCount: 7,
+  doneCount: 5,
   memberCount: 1,
   rankVersion: 0,
   archived: false,
@@ -86,11 +87,14 @@ describe('the count line and the progress bar', () => {
    * change renders **no checked count and no bar**. Both halves of the gate, because the
    * capability alone survives a change that removed the checkbox.
    */
-  it('shows neither on a watch list that kept checkable: true', () => {
+  it('shows neither on a staged list that retains the same intrinsic done count', () => {
     mount(
       list({
-        behaviour: 'watch',
-        capabilities: { checkable: true, supportsLocation: false },
+        itemStateMode: {
+          mode: 'stages',
+          labels: { open: 'Saved', active: 'Watching', done: 'Watched' },
+          groupByState: true,
+        },
       }),
     );
 

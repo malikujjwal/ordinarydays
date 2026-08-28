@@ -1,7 +1,6 @@
 import type { z } from 'zod';
 import type { ErrorCode, ErrorDetail } from '../errors.js';
 import { isAppErrorBody } from '../errors.js';
-import type { ListBehaviourConfirmation } from '../types/list.js';
 
 /**
  * The typed API client.
@@ -112,7 +111,6 @@ export class ApiError extends Error {
     readonly requestId: string,
     readonly details?: ErrorDetail[],
     readonly retryAfterSeconds?: number,
-    readonly confirmation?: ListBehaviourConfirmation,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -262,15 +260,7 @@ function toApiError(
 ) {
   if (isAppErrorBody(body)) {
     const { code, message, details, requestId: serverRequestId } = body.error;
-    return new ApiError(
-      code,
-      message,
-      status,
-      serverRequestId,
-      details,
-      retryAfter,
-      body.confirmation,
-    );
+    return new ApiError(code, message, status, serverRequestId, details, retryAfter);
   }
   return new ApiError(
     status === 429 ? 'rate_limited' : 'internal',

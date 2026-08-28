@@ -37,9 +37,9 @@ describe('exports map', () => {
     expect(schemas.listItem).toBeDefined();
     expect(schemas.createListInput).toBeDefined();
     expect(schemas.createListItemInput).toBeDefined();
-    expect(schemas.listItemDetailsInput).toBeDefined();
+    expect(schemas.listItemFeatures).toBeDefined();
     expect(schemas.bulkCreateListItemsInput).toBeDefined();
-    expect(schemas.checkDetailsMatchBehaviour).toBeDefined();
+    expect(schemas.itemStateMode).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
     expect(time.fixedClock).toBeDefined();
     expect(time.toWallTime).toBeDefined();
@@ -73,7 +73,7 @@ describe('exports map', () => {
     expect(activity.changeActivityKind).toBeDefined();
     expect(testFixtures.workedExampleDayResponse).toBeDefined();
     expect(types.assertNever).toBeDefined();
-    expect(lists.LIST_TEMPLATES).toHaveLength(17);
+    expect(lists.LIST_TEMPLATES).toHaveLength(7);
     expect(rank.lexoRankBetween).toBeDefined();
     expect(rank.compareListItems).toBeDefined();
     expect(rank.FIRST_RANK).toBe('V');

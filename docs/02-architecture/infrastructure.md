@@ -1193,14 +1193,15 @@ The corresponding EAS build profiles:
 
 ## 7. CI/CD
 
-Five workflows in `.github/workflows/`. Each does one thing.
+Six workflows in `.github/workflows/`. Each does one thing.
 
 They do not all arrive at once. `ci.yml` (§7.1) is Phase 0 (P0-29) and is the only one that
-runs for the first four phases, alongside a `workflow_dispatch`-only `deploy-smoke.yml` that
+runs for the first four phases, alongside the P3-33 List visual-contract workflow. A
+`workflow_dispatch`-only `deploy-smoke.yml` that
 exists solely to prove the deploy path once (P0-31). `deploy-dev.yml` arrives in Phase 4
 (P4-14); `deploy-prod.yml` and `mobile.yml` in Phase 5 (P5-08, P5-11). `nightly.yml`'s audit
 and dependency checks can run from Phase 0; its cost query only becomes meaningful once
-something is deployed in Phase 4.
+something is deployed in Phase 4. `lists-visual.yml` (§7.6) arrives in Phase 3.
 
 ### 7.1 `ci.yml` — validation on every PR
 
@@ -1380,7 +1381,18 @@ builds sit in a low-priority queue; see `cost-model.md` §3.
 posted to a GitHub issue if it exceeds $1. Failures open an issue rather than failing
 loudly, so a transient advisory does not block a morning's work.
 
-### 7.6 Branch protection on `main`
+### 7.6 `lists-visual.yml` — production-component List contracts
+
+Triggered when List UI, shared List contracts, or the visual harness changes, and manually.
+The Windows job builds the production web gallery and compares six deterministic Chromium
+frames with checked-in baselines. The macOS job builds that same production-component gallery
+for a pinned iPhone 16 Pro simulator, then `scripts/run-lists-ios-visuals.mjs` normalises the
+status bar, captures five frames, and compares every available human-approved baseline. A
+failure uploads actuals and diffs; missing native baselines deliberately fail after capture so
+the first CI run produces the images a human must review. The Node runner contains the
+simulator logic so the exact CI operation can be run locally on macOS.
+
+### 7.7 Branch protection on `main`
 
 | Setting | Value |
 | --- | --- |
@@ -1396,7 +1408,7 @@ loudly, so a transient advisory does not block a morning's work.
 Zero required approvals is a concession to being one person; the gate that matters is that
 CI must pass and the branch must be current. When a second engineer joins, set this to 1.
 
-### 7.7 What gates a production deploy
+### 7.8 What gates a production deploy
 
 All of these, in order. Any one failing stops the deploy.
 

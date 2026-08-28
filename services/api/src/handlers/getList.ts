@@ -19,11 +19,13 @@ export const GET_LIST_PATH = '/:id';
 export async function getListHandler(
   c: Context<AppEnv, typeof GET_LIST_PATH>,
   query: { includeItems?: 'true' | 'false' | undefined },
+  now: string,
 ): Promise<Response> {
   const detail = await getListDetail(
     requireUserId(c),
     c.req.param('id'),
     query.includeItems === 'true',
+    now,
   );
 
   return c.json({

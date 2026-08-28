@@ -57,17 +57,18 @@ const request = (method: string, path: string, body?: unknown) =>
 
 async function seedList(): Promise<List> {
   const list: List = {
+    schemaVersion: 2,
     listId: repository.newListId(),
     ownerId: DEV,
-    behaviour: 'collection',
     templateKey: 'checklist',
     title: 'Errands',
     icon: 'check-square',
     emptyStateCopy: 'Add something to check off.',
-    capabilities: { checkable: true, supportsLocation: false },
+    itemStateMode: { mode: 'checkbox' },
+    featureConfig: {},
     slot: null,
     itemCount: 0,
-    uncheckedCount: 0,
+    doneCount: 0,
     memberCount: 1,
     rankVersion: 0,
     archived: false,

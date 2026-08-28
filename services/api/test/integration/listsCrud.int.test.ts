@@ -105,14 +105,15 @@ describe('template resolution at creation', () => {
   it('copies every seeded field as a value — mutating the template later changes nothing', async () => {
     const created = await createListVia(app(), { title: 'Trader Joe’s' });
     expect(created).toMatchObject({
-      behaviour: 'collection',
+      schemaVersion: 2,
       templateKey: 'groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       slot: 'groceries',
       itemCount: 0,
-      uncheckedCount: 0,
+      doneCount: 0,
       memberCount: 1,
       archived: false,
     });
@@ -121,38 +122,37 @@ describe('template resolution at creation', () => {
     const template = LIST_TEMPLATES.find((entry) => entry.templateKey === 'groceries');
     if (template === undefined) throw new Error('groceries template missing');
     const original = {
-      behaviour: template.behaviour,
-      checkable: template.capabilities.checkable,
-      supportsLocation: template.capabilities.supportsLocation,
+      itemStateMode: template.itemStateMode,
+      featureConfig: template.featureConfig,
       slot: template.slot,
       icon: template.icon,
       emptyStateCopy: template.emptyStateCopy,
     };
-    const capabilities = template.capabilities as {
-      checkable: boolean;
-      supportsLocation: boolean;
-    };
     try {
-      (template as { behaviour: string }).behaviour = 'watch';
-      capabilities.checkable = false;
-      capabilities.supportsLocation = true;
+      (template as { itemStateMode: List['itemStateMode'] }).itemStateMode = {
+        mode: 'none',
+      };
+      (template as { featureConfig: List['featureConfig'] }).featureConfig = {
+        place: { enabled: true },
+      };
       (template as { slot: string | null }).slot = null;
       (template as { icon: string }).icon = 'mutated';
       (template as { emptyStateCopy: string }).emptyStateCopy = 'Mutated.';
 
       const reread = await (await get(app(), `/v1/lists/${created.listId}`)).json();
       expect(reread.data.list).toMatchObject({
-        behaviour: 'collection',
-        capabilities: { checkable: true, supportsLocation: false },
+        itemStateMode: { mode: 'checkbox' },
+        featureConfig: {},
         slot: 'groceries',
         icon: 'cart',
         emptyStateCopy: 'Add something to buy.',
         templateKey: 'groceries',
       });
     } finally {
-      (template as { behaviour: string }).behaviour = original.behaviour;
-      capabilities.checkable = original.checkable;
-      capabilities.supportsLocation = original.supportsLocation;
+      (template as { itemStateMode: List['itemStateMode'] }).itemStateMode =
+        original.itemStateMode;
+      (template as { featureConfig: List['featureConfig'] }).featureConfig =
+        original.featureConfig;
       (template as { slot: string | null }).slot = original.slot;
       (template as { icon: string }).icon = original.icon;
       (template as { emptyStateCopy: string }).emptyStateCopy = original.emptyStateCopy;
@@ -200,17 +200,18 @@ describe('template resolution at creation', () => {
   it('refuses the 101st owned list with 400', async () => {
     for (let index = 0; index < 100; index += 1) {
       const list: List = {
+        schemaVersion: 2,
         listId: repository.newListId(),
         ownerId: DEV,
-        behaviour: 'collection',
         templateKey: 'simple-list',
         title: `List ${index}`,
         icon: 'list',
         emptyStateCopy: 'Add the first item.',
-        capabilities: { checkable: false, supportsLocation: false },
+        itemStateMode: { mode: 'none' },
+        featureConfig: {},
         slot: null,
         itemCount: 0,
-        uncheckedCount: 0,
+        doneCount: 0,
         memberCount: 1,
         rankVersion: 0,
         archived: false,
@@ -279,18 +280,19 @@ describe('a list created from a Plan', () => {
     const taskId = (await task.json()).data.activityId as string;
 
     const withConvertedSource: List = {
+      schemaVersion: 2,
       listId: repository.newListId(),
       ownerId: DEV,
-      behaviour: 'collection',
       templateKey: 'groceries',
       title: 'Groceries',
       icon: 'cart',
       emptyStateCopy: 'Add something to buy.',
-      capabilities: { checkable: true, supportsLocation: false },
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       slot: null,
       sourceActivityId: taskId,
       itemCount: 0,
-      uncheckedCount: 0,
+      doneCount: 0,
       memberCount: 1,
       rankVersion: 0,
       archived: false,

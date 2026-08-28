@@ -123,8 +123,9 @@ export async function deleteListItemHandler(
 export async function listListItemsHandler(
   c: Context<AppEnv, typeof LIST_ITEMS_PATH>,
   query: { cursor?: string | undefined },
+  now: string,
 ): Promise<Response> {
-  const page = await listItemsFor(requireUserId(c), c.req.param('id'), query.cursor);
+  const page = await listItemsFor(requireUserId(c), c.req.param('id'), query.cursor, now);
 
   return c.json({
     data: page.items.map((row) => ({
@@ -156,11 +157,13 @@ export async function listListItemsHandler(
  */
 export async function getListItemHandler(
   c: Context<AppEnv, typeof LIST_ITEM_PATH>,
+  now: string,
 ): Promise<Response> {
   const item = await getItemById(
     requireUserId(c),
     c.req.param('id'),
     c.req.param('itemId'),
+    now,
   );
 
   return c.json({

@@ -514,6 +514,28 @@ CI: `mobile.yml` on `workflow_dispatch` and on tags. iOS E2E does **not** gate a
 build queues are slow and would block every merge (`infrastructure.md` §7.4). It gates a
 TestFlight submission.
 
+### 6.3 Lists visual regression
+
+`e2e/visual-specs/lists-contract.spec.ts` renders the development-only contract gallery from
+the exported production app. Its fixtures pin data, fonts, locale, timezone, reduced motion
+and viewport. The suite covers 390 × 844 compact light/dark plus the expanded layout and uses
+only production List components; gallery markup may not duplicate a screen.
+
+First baselines require human side-by-side review against
+`docs/04-conventions/visual-references/p3-33-list-settings.png`. A baseline may not be approved
+merely because it matches the implementation that generated it. Approval explicitly inspects
+spacing, section gaps, row height, segmented-control geometry, switch alignment, selected state
+and sheet sizing. `pnpm e2e:lists-visual:update` is the deliberate local review command; CI
+never updates images. Later exact pixel comparisons protect the approved result and failure
+artifacts contain expected, actual and diff.
+
+`.github/workflows/lists-visual.yml` is path-filtered for List/shared-UI changes. Its Windows
+job runs the exported-app Playwright comparison; its macOS job pins an iPhone simulator,
+captures the same production gallery states and compares platform-specific PNGs. Native safe
+area, host text and sheet geometry cannot be approved from a web screenshot. Accessibility,
+dynamic type, keyboard, reduced motion, focus restoration, contrast and hit-target gates remain
+independent requirements; a pixel match cannot waive them.
+
 ---
 
 ## 7. Property-based tests

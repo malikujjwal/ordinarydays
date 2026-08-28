@@ -78,12 +78,12 @@ import { repairListRanks } from './listRankRepairService.js';
  * ## Read, classify, build, commit — and retry the whole cycle
  *
  * Classification depends on what is on the list *now*: whether a matching row exists, and
- * whether it is checked. Between reading that and committing, the list may move. Every
+ * whether its state is `done`. Between reading that and committing, the list may move. Every
  * condition in the transaction is therefore tied to something the read observed —
  * `rankVersion` for the list's shape, each extended row's `itemRevision`, each selected
  * ingredient's position, and the meal's `updatedAt` — and a condition failure re-runs the
  * **entire** cycle rather than retrying a stale plan. Reclassifying is the point: a row that
- * was checked in the meantime must become a new item, not an extended label.
+ * became `done` in the meantime must become a new item, not an extended label.
  */
 
 const NOT_A_MEAL = 'Only a meal has ingredients to add.';
@@ -207,7 +207,7 @@ async function attemptAdd(
   const { activity } = await assertActivityAccess(userId, activityId, 'owner');
   if (activity.type !== 'meal') refuse('activityId', NOT_A_MEAL);
 
-  await mapped(() => loadCollection(userId, input.listId, access, now));
+  await mapped(() => loadCheckboxDestination(userId, input.listId, access, now));
   const selected = resolveSelected(activity, input);
   /**
    * The snapshot everything below is decided from — and the version it was taken under, which
@@ -264,7 +264,7 @@ async function attemptAdd(
     rank: basis.ranks[index] as string,
     itemRevision: 0,
     title: row.title,
-    checked: false,
+    state: 'open',
     sourceActivityId: activityId,
     sourceLabel,
     sourceProvenance: [{ activityId, label: sourceLabel }],
@@ -426,7 +426,7 @@ async function commit(builder: TransactionBuilder, spans: CommitSpans): Promise<
      * A stored receipt under this key is what tells the two apart. Found: this is that race,
      * so hand it back as one and let the middleware answer from the winner's receipt.
      * Absent: something else holds the id — a replay after the receipt expired onto a row
-     * the user has since checked — which is a genuine conflict no retry would resolve.
+     * the user has since marked done — which is a genuine conflict no retry would resolve.
      */
     if (error instanceof TakenItemIdError) {
       const winner =
@@ -563,16 +563,16 @@ interface Plan {
 /**
  * §7.3 step 6's duplicate rule, in its three states.
  *
- * Absent → create. Present and **unchecked** → extend that row's label and create nothing; it
- * is still on the shopping list, so a second line is noise. Present and **checked** → create,
- * because a checked row means it was already bought and the user needs it again.
+ * Absent → create. Present and not `done` → extend that row's label and create nothing; it
+ * is still on the shopping list, so a second line is noise. Present and `done` → create,
+ * because a done row means it was already bought and the user needs it again.
  *
  * A fourth case falls out of replay: a target that already carries provenance owned by this
  * Activity needs no write at all. Ownership is read from `sourceProvenance`, never recovered
  * by splitting the rendered label; a valid label may itself contain ` · `.
  *
  * Classification is by normalized-title **group**. Every selection in a group resolves to
- * the same existing unchecked row, or to the one row this operation creates. That is the
+ * the same existing non-done row, or to the one row this operation creates. That is the
  * result the same selections would get if the first committed before the second classified.
  * Supplied ids occupy the same authoritative identity namespace whether they create or are
  * absorbed by grouping, so receipt expiry cannot turn them into new rows later. Replay is
@@ -590,7 +590,7 @@ function classify(
   const byId = new Map(existing.map((item) => [item.itemId, item] as const));
   const uncheckedByTitle = new Map<string, ListItem>();
   for (const item of existing) {
-    if (item.checked) continue;
+    if (item.state === 'done') continue;
     const key = normalise(item.title);
     if (!uncheckedByTitle.has(key)) uncheckedByTitle.set(key, item);
   }
@@ -642,7 +642,7 @@ function classify(
         requestedItemId === undefined ? undefined : byId.get(requestedItemId);
       if (
         direct !== undefined &&
-        (direct.checked || normalise(direct.title) !== titleKey)
+        (direct.state === 'done' || normalise(direct.title) !== titleKey)
       ) {
         destinationUnavailable();
       }
@@ -661,7 +661,7 @@ function classify(
 
     const eligibleReplayTarget =
       replayTarget !== undefined &&
-      !replayTarget.checked &&
+      replayTarget.state !== 'done' &&
       normalise(replayTarget.title) === titleKey
         ? replayTarget
         : undefined;
@@ -867,14 +867,13 @@ function assemble(
 }
 
 /**
- * The destination, and the one thing that disqualifies it.
+ * The destination, and the one presentation rule that qualifies it.
  *
- * `collection` only. A `watch` or `meals` list has typed `details` every item must carry
- * (`plans-and-lists.md` §5.7), and an ingredient has none to give — writing a bare title into
- * a watch list would produce a row its own renderer rejects. §7.3 resolves the `groceries`
- * slot, which only a `collection` ever holds.
+ * Checkbox presentation only. The integration creates ordinary `open` rows and treats `done`
+ * matches as already bought. The destination is explicit; a `groceries` slot helps the caller
+ * present it but never changes the List schema or enables a feature.
  */
-async function loadCollection(
+async function loadCheckboxDestination(
   userId: string,
   listId: string,
   access: ListAccessGrant,
@@ -896,7 +895,7 @@ async function loadCollection(
 }
 
 function assertCollection(list: List): void {
-  if (list.behaviour !== 'collection') refuse('listId', NOT_A_COLLECTION);
+  if (list.itemStateMode.mode !== 'checkbox') refuse('listId', NOT_A_COLLECTION);
 }
 
 /**

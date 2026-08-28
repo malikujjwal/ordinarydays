@@ -2,12 +2,9 @@ import { createHash } from 'node:crypto';
 import { BULK_UNDO_OFFER_SECONDS, MAX_LIST_ITEMS, UNDO_OFFER_SECONDS } from '@od/shared';
 import {
   type BulkCreateListItemsInput,
-  bulkCreateListItemsInputFor,
   type CreateListItemInput,
-  createListItemInputFor,
   instant,
   type PatchListItemInput,
-  patchListItemInputFor,
 } from '@od/shared/schemas';
 import type {
   Activity,
@@ -139,7 +136,7 @@ async function loadList(
 ): Promise<List> {
   const list = await getListMeta(userId, listId, access);
   if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
-  if (list.rankRepairId === undefined && list.behaviourMigrationId === undefined) {
+  if (list.rankRepairId === undefined && list.schemaMigrationId === undefined) {
     return list;
   }
   // The same retryable `503` a fenced read gives: the marker is still standing, and
@@ -152,38 +149,6 @@ async function loadList(
 
 function refuse(path: string, message: string): never {
   throw new AppError('validation_failed', message, [{ path, message }]);
-}
-
-/** `collection` **and** the flag. Both halves, on every write path. */
-function assertCheckedAllowed(list: List): void {
-  if (list.behaviour !== 'collection' || !list.capabilities.checkable) {
-    refuse('checked', 'This list does not have checkboxes.');
-  }
-}
-
-function assertLocationAllowed(list: List): void {
-  if (list.behaviour !== 'collection' || !list.capabilities.supportsLocation) {
-    refuse('location', 'This list does not have places on its items.');
-  }
-}
-
-/**
- * `details` is accepted only when the behaviour has a details shape and the discriminant
- * matches it. The discriminant half is the shared `checkDetailsMatchBehaviour` rule applied
- * by the route's `*For(behaviour)` schema; this is the half that schema cannot express,
- * because a `collection` has no arm to match against at all.
- *
- * A `null` is refused on every behaviour: a `collection` has nothing to clear, and on
- * `watch` or `meals` removing the typed fields is a **destructive behaviour change** that
- * only P3-09's confirmed, gated migration may make — not a field clear on one item.
- */
-function assertDetailsAllowed(list: List, details: unknown): void {
-  if (list.behaviour === 'collection') {
-    refuse('details', 'Items on this list do not carry those fields.');
-  }
-  if (details === null) {
-    refuse('details', 'Those fields are removed by changing the list, not one item.');
-  }
 }
 
 /**
@@ -201,31 +166,28 @@ function assertDetailsAllowed(list: List, details: unknown): void {
 function assertWritableFields(
   list: List,
   fields: {
-    readonly checked?: boolean | undefined;
-    readonly location?: unknown;
-    readonly details?: unknown;
+    readonly features?: CreateListItemInput['features'] | PatchListItemInput['features'];
   },
 ): void {
-  if (fields.checked !== undefined) assertCheckedAllowed(list);
-  if ('location' in fields && fields.location !== undefined) assertLocationAllowed(list);
-  if ('details' in fields && fields.details !== undefined) {
-    assertDetailsAllowed(list, fields.details);
+  const features = fields.features;
+  if (features === undefined || features === null) return;
+  const writes = (feature: keyof NonNullable<typeof features>) =>
+    Object.hasOwn(features, feature);
+  if (writes('progress') && list.featureConfig.progress?.enabled !== true) {
+    refuse('features.progress', 'Progress is not enabled for this list.');
   }
-}
-
-/**
- * Applies the shared `details.behaviour === list.behaviour` rule with the loaded List.
- *
- * The route's `zValidator` cannot: an item body does not carry its list's behaviour, and the
- * route has no database. So the strict shape is settled at the edge and this re-parses the
- * same body against the behaviour-bound schema, which raises the issue at the exact
- * `details.behaviour` path both the single and bulk forms use (P3-01).
- */
-function assertMatchesBehaviour<T>(
-  schema: { parse: (value: unknown) => T },
-  body: unknown,
-) {
-  schema.parse(body);
+  if (
+    features.progress != null &&
+    features.progress.kind !== list.featureConfig.progress?.kind
+  ) {
+    refuse('features.progress.kind', 'Progress must match this list’s configured kind.');
+  }
+  if (writes('place') && list.featureConfig.place?.enabled !== true) {
+    refuse('features.place', 'Places are not enabled for this list.');
+  }
+  if (writes('subItems') && list.featureConfig.subItems?.enabled !== true) {
+    refuse('features.subItems', 'Sub-items are not enabled for this list.');
+  }
 }
 
 /** The one place the product's `List is full.` copy lives. */
@@ -257,10 +219,9 @@ function toNewItem(input: CreateListItemInput): NewListItem {
   return {
     itemId: input.itemId ?? newItemId(),
     title: input.title,
-    checked: false,
+    state: 'open',
     ...(input.note === undefined ? {} : { note: input.note }),
-    ...(input.location === undefined ? {} : { location: input.location }),
-    ...(input.details === undefined ? {} : { details: input.details }),
+    ...(input.features === undefined ? {} : { features: input.features }),
   } as NewListItem;
 }
 
@@ -307,7 +268,6 @@ export async function createItem(
 ): Promise<ListItem> {
   const access = await assertListAccess(userId, listId, 'write');
   const list = await loadList(userId, listId, access.index, now);
-  assertMatchesBehaviour(createListItemInputFor(list.behaviour), input);
   assertWritableFields(list, input);
   assertCapacity(list, 1);
 
@@ -362,7 +322,6 @@ export async function createItemsBulk(
 ): Promise<ListItem[]> {
   const access = await assertListAccess(userId, listId, 'write');
   const list = await loadList(userId, listId, access.index, now);
-  assertMatchesBehaviour(bulkCreateListItemsInputFor(list.behaviour), input);
   for (const member of input.items) assertWritableFields(list, member);
 
   /**
@@ -464,11 +423,10 @@ export async function patchItem(
 ): Promise<ListItem> {
   const access = await assertListAccess(userId, listId, 'write');
   const list = await loadList(userId, listId, access.index, now);
-  assertMatchesBehaviour(patchListItemInputFor(list.behaviour), input);
   assertWritableFields(list, input);
 
   const reordering = 'afterItemId' in input && input.afterItemId !== undefined;
-  const fields = (['title', 'checked', 'note', 'location', 'details'] as const).filter(
+  const fields = (['title', 'state', 'note', 'features'] as const).filter(
     (field) => field in input,
   );
   if (!reordering && fields.length === 0) {
@@ -479,10 +437,9 @@ export async function patchItem(
   // carried through deliberately, so it must survive rather than be spread away.
   const patch = {
     ...(input.title === undefined ? {} : { title: input.title }),
-    ...(input.checked === undefined ? {} : { checked: input.checked }),
+    ...(input.state === undefined ? {} : { state: input.state }),
     ...('note' in input ? { note: input.note ?? null } : {}),
-    ...('location' in input ? { location: input.location ?? null } : {}),
-    ...('details' in input ? { details: input.details ?? null } : {}),
+    ...('features' in input ? { features: input.features ?? null } : {}),
   } as ListItemFieldPatch;
 
   /**
@@ -594,8 +551,8 @@ const NOT_CHECKABLE =
  * hidden retained state is exactly what these endpoints must not reach.
  */
 function assertBulkCheckedAllowed(list: List): void {
-  if (list.behaviour !== 'collection' || !list.capabilities.checkable) {
-    refuse('checked', NOT_CHECKABLE);
+  if (list.itemStateMode.mode !== 'checkbox') {
+    refuse('state', NOT_CHECKABLE);
   }
 }
 
@@ -626,7 +583,7 @@ function bulkOperationId(userId: string, idempotencyKey: string): string {
 async function runBulkChecked(
   userId: string,
   listId: string,
-  kind: 'clear_checked' | 'uncheck_all',
+  kind: 'clear_done' | 'reopen_done',
   idempotencyKey: string,
   now: string,
   receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
@@ -687,7 +644,7 @@ export async function clearCheckedItems(
   now: string,
   receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
 ): Promise<ReversibleItemMutation> {
-  return runBulkChecked(userId, listId, 'clear_checked', idempotencyKey, now, receiptFor);
+  return runBulkChecked(userId, listId, 'clear_done', idempotencyKey, now, receiptFor);
 }
 
 /**
@@ -705,7 +662,7 @@ export async function uncheckAllItems(
   now: string,
   receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
 ): Promise<ReversibleItemMutation> {
-  return runBulkChecked(userId, listId, 'uncheck_all', idempotencyKey, now, receiptFor);
+  return runBulkChecked(userId, listId, 'reopen_done', idempotencyKey, now, receiptFor);
 }
 
 /**
@@ -908,17 +865,24 @@ export async function listItemsFor(
   userId: string,
   listId: string,
   cursor: string | undefined,
+  now: string,
 ): Promise<ListItemsProjection> {
   const access = await assertListAccess(userId, listId, 'read');
 
-  return withListWorkDrain(userId, listId, access.index, async () => {
-    const page = await listItemsPage(userId, listId, access.index, cursor);
-    if (page === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
-    return {
-      items: await hydrateViewerLinks(userId, listId, access.index, page.items),
-      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-    };
-  });
+  return withListWorkDrain(
+    userId,
+    listId,
+    access.index,
+    async () => {
+      const page = await listItemsPage(userId, listId, access.index, cursor);
+      if (page === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+      return {
+        items: await hydrateViewerLinks(userId, listId, access.index, page.items),
+        ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+      };
+    },
+    now,
+  );
 }
 
 /**
@@ -934,12 +898,19 @@ export async function getItemById(
   userId: string,
   listId: string,
   itemId: string,
+  now: string,
 ): Promise<ListItem> {
   const access = await assertListAccess(userId, listId, 'read');
 
-  return withListWorkDrain(userId, listId, access.index, async () => {
-    const item = await getListItem(userId, listId, access.index, itemId);
-    if (item === undefined) throw itemNotFound();
-    return item;
-  });
+  return withListWorkDrain(
+    userId,
+    listId,
+    access.index,
+    async () => {
+      const item = await getListItem(userId, listId, access.index, itemId);
+      if (item === undefined) throw itemNotFound();
+      return item;
+    },
+    now,
+  );
 }

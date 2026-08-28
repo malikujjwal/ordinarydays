@@ -32,14 +32,15 @@ export function pendingListFromInput(
   mintedAt: Instant,
 ): List {
   return {
+    schemaVersion: 2,
     listId,
     ownerId,
-    behaviour: seed.behaviour,
     templateKey: input.templateKey,
     title: input.title,
     icon: seed.icon,
     emptyStateCopy: seed.emptyStateCopy,
-    capabilities: { ...seed.capabilities },
+    itemStateMode: structuredClone(seed.itemStateMode),
+    featureConfig: structuredClone(seed.featureConfig),
     /*
      * A list made for one Plan is forced to `slot: null` by the server, so the optimistic row
      * says the same thing rather than briefly claiming to be a standing destination (§P3-05
@@ -50,7 +51,7 @@ export function pendingListFromInput(
       ? {}
       : { sourceActivityId: input.sourceActivityId }),
     itemCount: 0,
-    uncheckedCount: 0,
+    doneCount: 0,
     memberCount: 1,
     rankVersion: 0,
     archived: false,

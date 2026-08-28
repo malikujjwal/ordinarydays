@@ -5,7 +5,7 @@ import type {
   List,
   ListItem,
   ListItemActivityLink,
-  ListItemDetails,
+  ProgressValue,
 } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../../lib/errors.js';
@@ -119,17 +119,22 @@ const session = (overrides: Partial<Activity> = {}): Activity =>
   }) as Activity;
 
 const list = (): List => ({
+  schemaVersion: 2,
   listId: LIST,
   ownerId: USER,
-  behaviour: 'watch',
-  templateKey: 'tv-shows',
+  templateKey: 'watch-later',
   title: 'Movies and shows',
   icon: 'play-rect',
   emptyStateCopy: 'Add a TV show.',
-  capabilities: { checkable: false, supportsLocation: false },
+  itemStateMode: {
+    mode: 'stages',
+    labels: { open: 'Want', active: 'Watching', done: 'Watched' },
+    groupByState: true,
+  },
+  featureConfig: { progress: { enabled: true, kind: 'episode' } },
   slot: 'watch',
   itemCount: 1,
-  uncheckedCount: 0,
+  doneCount: 0,
   memberCount: 1,
   rankVersion: 1,
   archived: false,
@@ -137,22 +142,21 @@ const list = (): List => ({
   lastItemActivityAt: NOW,
 });
 
-const item = (details?: ListItemDetails): ListItem => ({
+const item = (progress?: ProgressValue): ListItem => ({
   itemId: ITEM,
   listId: LIST,
   rank: 'a0',
   itemRevision: 0,
   title: 'Severance',
-  checked: false,
-  ...(details === undefined ? {} : { details }),
+  state: 'open',
+  ...(progress === undefined ? {} : { features: { progress } }),
 });
 
 const progress = (
-  overrides: Partial<Extract<ListItemDetails, { behaviour: 'watch' }>> = {},
-): ListItemDetails => ({
-  behaviour: 'watch',
+  overrides: Partial<Extract<ProgressValue, { kind: 'episode' }>> = {},
+): ProgressValue => ({
+  kind: 'episode',
   mediaKind: 'show',
-  watchStatus: 'want',
   season: 2,
   episode: 4,
   ...overrides,
@@ -169,9 +173,11 @@ const link = (activityId = ACT): ListItemActivityLink => ({
 const receiptFor = vi.fn(() => ({ key: 'k' }) as never);
 
 /** The whole picture `readWatchFollowUpSource` would have returned, minus the storage. */
-const source = (options: { item?: ListItem; link?: ListItemActivityLink } = {}) => {
+const source = (
+  options: { list?: List; item?: ListItem; link?: ListItemActivityLink } = {},
+) => {
   mocks.readWatchFollowUpSource.mockResolvedValue({
-    list: list(),
+    list: options.list ?? list(),
     link: options.link ?? link(),
     item: options.item ?? item(progress()),
   } as never);
@@ -198,6 +204,25 @@ const complete = (activity: Activity, input: Record<string, unknown> = {}) => {
 };
 
 describe('what the follow-up says', () => {
+  it('offers done when exposed state is the compatible fallback', async () => {
+    source({ item: item() });
+
+    const result = await complete(
+      session({
+        details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'movie' },
+      }),
+    );
+
+    expect(result.followUp).toEqual({
+      kind: 'list_item_state',
+      listId: LIST,
+      listTitle: 'Movies and shows',
+      itemId: ITEM,
+      current: { state: 'open' },
+      target: { state: 'done' },
+    });
+  });
+
   it('offers the session’s season and episode against the item’s current pair', async () => {
     source();
 
@@ -209,24 +234,24 @@ describe('what the follow-up says', () => {
       listTitle: 'Movies and shows',
       itemId: ITEM,
       mediaKind: 'show',
-      current: { watchStatus: 'want', season: 2, episode: 4 },
+      current: { season: 2, episode: 4 },
       target: { season: 2, episode: 5 },
     });
   });
 
-  it('offers a movie the watched transition instead, whatever the session carries', async () => {
+  it('carries movie provenance without inferring a watched transition', async () => {
     source({ item: item(progress({ mediaKind: 'movie' })) });
 
     const result = await complete(session());
 
     expect(result.followUp).toEqual({
-      kind: 'watch_watched',
+      kind: 'watch_progress',
       listId: LIST,
       listTitle: 'Movies and shows',
       itemId: ITEM,
       mediaKind: 'movie',
-      current: { watchStatus: 'want', season: 2, episode: 4 },
-      target: { watchStatus: 'watched' },
+      current: { season: 2, episode: 4 },
+      target: { season: 2, episode: 5 },
     });
   });
 
@@ -237,7 +262,7 @@ describe('what the follow-up says', () => {
    */
   it('takes the progress branch for an item that has never named a media kind', async () => {
     source({
-      item: item({ behaviour: 'watch', watchStatus: 'want', season: 2, episode: 4 }),
+      item: item({ kind: 'episode', season: 2, episode: 4 }),
     });
 
     const result = await complete(session());
@@ -250,7 +275,7 @@ describe('what the follow-up says', () => {
   });
 
   it('carries only the fields the item actually has', async () => {
-    source({ item: item({ behaviour: 'watch', watchStatus: 'want' }) });
+    source({ item: item({ kind: 'episode' }) });
 
     const result = await complete(session({ details: watchSession({ season: 1 }) }));
 
@@ -259,7 +284,7 @@ describe('what the follow-up says', () => {
       listId: LIST,
       listTitle: 'Movies and shows',
       itemId: ITEM,
-      current: { watchStatus: 'want' },
+      current: {},
       target: { season: 1, episode: 5 },
     });
   });
@@ -288,11 +313,7 @@ describe('what the follow-up says', () => {
   it.each([
     ['a show', progress(), watchSession()],
     ['a movie', progress({ mediaKind: 'movie' }), watchSession()],
-    [
-      'an item with no media kind',
-      { behaviour: 'watch', watchStatus: 'want' } as ListItemDetails,
-      watchSession(),
-    ],
+    ['an item with no media kind', { kind: 'episode' } as ProgressValue, watchSession()],
     [
       'a season with no episode',
       progress(),
@@ -423,26 +444,46 @@ describe('what offers nothing after looking', () => {
     expect((await complete(session())).followUp).toBeUndefined();
   });
 
-  it('an item whose typed details a behaviour change already removed', async () => {
+  it('an item with no episode progress falls back to exposed state', async () => {
     source({ item: item() });
 
-    expect((await complete(session())).followUp).toBeUndefined();
+    expect((await complete(session())).followUp).toMatchObject({
+      kind: 'list_item_state',
+      target: { state: 'done' },
+    });
   });
 
-  it('a meals item somehow reached through a watch list', async () => {
-    source({ item: item({ behaviour: 'meals' }) });
+  it('an item with a different progress kind falls back without parsing it', async () => {
+    source({ item: item({ kind: 'text', value: 'Chapter 4' }) });
 
-    expect((await complete(session())).followUp).toBeUndefined();
+    expect((await complete(session())).followUp).toMatchObject({
+      kind: 'list_item_state',
+    });
   });
 
-  it('a show whose session names neither a season nor an episode', async () => {
+  it('a show whose session has no progress falls back to exposed state', async () => {
     source();
 
     const result = await complete(
       session({ details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show' } }),
     );
 
-    expect(result.followUp).toBeUndefined();
+    expect(result.followUp).toMatchObject({ kind: 'list_item_state' });
+  });
+
+  it('state mode none offers nothing when there is no structured progress question', async () => {
+    source({
+      list: { ...list(), itemStateMode: { mode: 'none' } },
+      item: item(),
+    });
+
+    expect((await complete(session())).followUp).toBeUndefined();
+  });
+
+  it('an item already done offers no state fallback', async () => {
+    source({ item: { ...item(), state: 'done' } });
+
+    expect((await complete(session())).followUp).toBeUndefined();
   });
 });
 

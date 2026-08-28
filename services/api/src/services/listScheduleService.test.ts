@@ -53,7 +53,7 @@ const item: ListItem = {
   rank: 'n',
   itemRevision: 3,
   title: 'Zahav',
-  checked: false,
+  state: 'open',
 };
 
 const input = {

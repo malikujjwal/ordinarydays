@@ -11,7 +11,7 @@ import {
 } from './archiveUndoToast';
 import { deleteListConfirmation } from './deleteConfirmation';
 import { mayShowEmptyState, partitionByArchived, shouldDrainMore } from './indexDrain';
-import { behaviourTint, checkedProgress, countLine, showsCheckedCount } from './listCard';
+import { checkedProgress, countLine, listTint, showsCheckedCount } from './listCard';
 import { listSwipeActions, roleFor } from './listSwipeActions';
 import { updatedLine } from './updatedLine';
 
@@ -22,15 +22,16 @@ const UTC = 'UTC' as TimeZone;
 const list = (overrides: Partial<List> = {}): List => ({
   listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
   ownerId: 'usr_local_dev',
-  behaviour: 'collection',
+  schemaVersion: 2,
   templateKey: 'groceries',
   title: 'Groceries',
   icon: 'cart',
   emptyStateCopy: 'Add something to buy.',
-  capabilities: { checkable: true, supportsLocation: false },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: {},
   slot: 'groceries',
   itemCount: 12,
-  uncheckedCount: 7,
+  doneCount: 5,
   memberCount: 1,
   rankVersion: 0,
   archived: false,
@@ -44,10 +45,8 @@ describe('the count line', () => {
     expect(countLine(list())).toBe('12 items · 5 checked');
   });
 
-  it('says items alone on a collection that is not checkable', () => {
-    expect(
-      countLine(list({ capabilities: { checkable: false, supportsLocation: false } })),
-    ).toBe('12 items');
+  it('says items alone when state is hidden', () => {
+    expect(countLine(list({ itemStateMode: { mode: 'none' } }))).toBe('12 items');
   });
 
   /**
@@ -55,12 +54,18 @@ describe('the count line', () => {
    * `collection` to `watch` leaves `checkable: true` and its `checked` values in place; reading
    * only the capability would draw a count for state the list detail shows no checkbox for.
    */
-  it('says items alone on a watch list that kept checkable: true', () => {
-    const watch = list({ behaviour: 'watch' });
+  it('says items alone on a staged list while retaining intrinsic done state', () => {
+    const staged = list({
+      itemStateMode: {
+        mode: 'stages',
+        labels: { open: 'Saved', active: 'Reading', done: 'Read' },
+        groupByState: true,
+      },
+    });
 
-    expect(showsCheckedCount(watch)).toBe(false);
-    expect(countLine(watch)).toBe('12 items');
-    expect(checkedProgress(watch)).toBeUndefined();
+    expect(showsCheckedCount(staged)).toBe(false);
+    expect(countLine(staged)).toBe('12 items');
+    expect(checkedProgress(staged)).toBeUndefined();
   });
 
   it('is singular for one item', () => {
@@ -68,18 +73,16 @@ describe('the count line', () => {
       countLine(
         list({
           itemCount: 1,
-          uncheckedCount: 1,
-          capabilities: { checkable: false, supportsLocation: false },
+          doneCount: 0,
+          itemStateMode: { mode: 'none' },
         }),
       ),
     ).toBe('1 item');
   });
 
-  /** The two counts converge independently; a card is not the place to surface that. */
-  it('clamps a checked count the two counters disagree about', () => {
-    expect(countLine(list({ itemCount: 3, uncheckedCount: 9 }))).toBe(
-      '3 items · 0 checked',
-    );
+  /** A defensive clamp keeps corrupt aggregate counts from drawing impossible copy. */
+  it('clamps a done count above the item total', () => {
+    expect(countLine(list({ itemCount: 3, doneCount: 9 }))).toBe('3 items · 3 checked');
   });
 });
 
@@ -90,15 +93,13 @@ describe('the progress bar', () => {
 
   /** No bar at all, rather than a bar at zero: an empty track reads as unstarted progress. */
   it('is absent on an empty list', () => {
-    expect(checkedProgress(list({ itemCount: 0, uncheckedCount: 0 }))).toBeUndefined();
+    expect(checkedProgress(list({ itemCount: 0, doneCount: 0 }))).toBeUndefined();
   });
 });
 
 describe('the icon tint', () => {
-  it('comes from behaviour, never from the template', () => {
-    expect(behaviourTint('collection')).toBe('task');
-    expect(behaviourTint('watch')).toBe('watch');
-    expect(behaviourTint('meals')).toBe('meal');
+  it('is presentation-only and independent of creation provenance', () => {
+    expect(listTint()).toBe('task');
   });
 });
 

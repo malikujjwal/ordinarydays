@@ -37,10 +37,9 @@ export function pendingListItemFromInput(
     listId,
     rank,
     title: input.title,
-    checked: false,
+    state: 'open',
     ...(input.note === undefined ? {} : { note: input.note }),
-    ...(input.location === undefined ? {} : { location: input.location }),
-    ...(input.details === undefined ? {} : { details: input.details }),
+    ...(input.features === undefined ? {} : { features: input.features }),
   }) as ListItemRow;
 }
 

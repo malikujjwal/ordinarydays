@@ -2,8 +2,7 @@ import type { Instant } from '../time/types.js';
 import type { ListView } from './listView.js';
 
 /**
- * What an additive list-settings mutation returns — `PATCH /v1/lists/:id` and the upgrade
- * direction of `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7, P3-09).
+ * What an immediate list-settings mutation returns from `PATCH /v1/lists/:id`.
  *
  * The list is the **whole new row**, not a diff: a settings change is a single conditional
  * write and the client replaces what it holds rather than merging two representations. It is
@@ -15,11 +14,9 @@ import type { ListView } from './listView.js';
  * one is meaningful alone, and a type that admitted one would invite a caller to read a token
  * it cannot time.
  *
- * The offer's absence carries meaning. A rename has no undo row in
- * `interaction-contract.md` §4.1, a patch that changes nothing has nothing to take back, and
- * a behaviour change that **lost** data was confirmed rather than offered — returning needs
- * another preview-and-confirm action. A change that lost nothing, in either direction, is an
- * ordinary additive settings change and does carry an offer.
+ * The offer's absence means the patch changed nothing. Every effective setting — including
+ * a rename, state presentation, feature configuration, slot and archive — applies immediately
+ * and carries the same six-second Undo offer.
  *
  * `undoExpiresAt` is the presentation deadline on the same terms as
  * {@link ReversibleItemMutation}: stop offering at that instant, while an inverse the user

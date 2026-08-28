@@ -62,7 +62,7 @@ const request = (
     }),
   );
 
-const createList = async (title = 'Restaurants', templateKey = 'restaurants-to-try') => {
+const createList = async (title = 'Restaurants', templateKey = 'blank') => {
   const res = await request(app(), 'POST', '/v1/lists', { title, templateKey });
   expect(res.status).toBe(201);
   return (await res.json()).data as List;
@@ -170,7 +170,7 @@ describe('the bridge links rather than duplicates', () => {
     expect(body.item).toMatchObject({
       itemId: item.itemId,
       title: 'Zahav',
-      checked: false,
+      state: 'open',
     });
     expect(body.item).not.toHaveProperty('itemRevision');
     expect(body.viewerLink).toMatchObject({
@@ -252,7 +252,7 @@ describe('the Plan kind follows the request, never the list', () => {
   it.each(['meal', 'watch', 'event', 'custom'])(
     'stores %s when the request asks for it, against a watch list',
     async (type) => {
-      const list = await createList('Watchlist', 'watchlist');
+      const list = await createList('Watchlist', 'watch-later');
       const item = await addItem(list.listId, 'Severance');
 
       const res = await schedule(

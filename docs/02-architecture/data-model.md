@@ -178,7 +178,7 @@ exactly as `IDX#` works for activities. An invited person has no pointer and no 
 | List Undo operation | `LIST#<listId>` | `UNDO#<operationId>` | Operation kind, affected item ids or settings inverse/preconditions, token hash, UI offer deadline, replay-retention TTL, consumed state and, once a bulk inverse is accepted, its write-once `acceptedAt` plus cumulative `completedCount`; internal and never serialised. Every compensation chunk advances `completedCount` in the transaction that applies that chunk, and a resumed request adds its remaining work to that durable progress when it builds the logical `affectedCount`. The persisted acceptance timestamp is likewise reused by every resumed compensation chunk so one logical operation cannot expose several `lastItemActivityAt` values. The opaque token the client holds is `<operationId>.<secret>` — the first half addresses this row with one `GetItem`, the second is what authorises, and this retained authority stores only the hash of the whole. A user-scoped exact-response receipt is the bounded exception: it can carry the token through `MAX_AUTOMATIC_INTENT_AGE_DAYS` so a lost success remains replayable. That is what lets `POST /v1/lists/:id/undo` resolve a token without a second index or a query across a month of retained operations (P3-10) |
 | List rank repair | `LIST#<listId>` | `RANK_REPAIR#<operationId>` | Stable `(rank,itemId)` snapshot progress/cursor for exceptional equal-rank or length repair; while referenced by META it gates every item-page read, and is internal and never serialised |
 | List bulk operation | `LIST#<listId>` | `BULK_OP#<operationId>` | The answer a `clear-checked` or `uncheck-all` committed to before it finished committing it: the prepared Undo token and its deadline, the stable id snapshot, the progress cursor, a write-once `acceptedAt`, and the response receipt the last chunk stores. Every resumed chunk reuses `acceptedAt` for `lastItemActivityAt`. The operation id is derived from the caller's `Idempotency-Key`, so a retry **resumes** rather than minting a second operation and stranding the first chunks' rows behind a token nobody received. Internal, never serialised, and deleted by the transaction that finishes the operation — which bounds the work row's plaintext-token copy to the run. The exact-response receipt retains its bounded replay copy (P3-10) |
-| List behaviour migration | `LIST#<listId>` | `BEHAVIOUR_MIGRATION#<operationId>` | From/to behaviours, the exact target `details` value, the stable item id/rank/revision snapshot, the gated count of items whose data the change removes, the progress cursor, the `updatedAt` the operation was accepted under, its prepared response receipt and — when the change loses nothing — its prepared Undo offer; while referenced by META it gates every item read and mutation, and is internal and never serialised. **It carries no `ttl`**, unlike every other internal row here: its `META` marker has no expiry, so a work record that aged out would leave a gate nothing can drain, finish or roll back. It is removed by the final transaction, by the rollback of an untouched install, or by the delete cascade |
+| List schema migration | `LIST#<listId>` | `SCHEMA_MIGRATION#<operationId>` | Source schema version, deterministic target List values, the stable item id/rank/revision snapshot and progress cursor for converting a legacy aggregate to schema v2. While referenced by META it gates every item read and mutation, is resumable after interruption, and is internal and never serialised. **It carries no `ttl`**: its META marker has no expiry, so the work row must remain available to drain or finish. The final transaction records schema v2, clears the marker and removes the work row; delete cascade also removes it. Ordinary settings changes never use this worker. |
 
 `lexoRank` is a fractional-index string (see `04-conventions/coding-standards.md`) so
 reordering changes one logical item, never renumbers the whole list. The transaction
@@ -190,11 +190,11 @@ so new writes do not intentionally publish duplicate ranks. Items still sort by
 duplicates within one committed generation.
 
 Exceptional repair never turns that defensive comparator into a mixed-generation read.
-Pattern 8 strongly reads META, rejects `rankRepairId` or `behaviourMigrationId`, performs its
+Pattern 8 strongly reads META, rejects `rankRepairId` or `schemaMigrationId`, performs its
 item Query with `ConsistentRead: true`, then strongly reads META again before serialisation.
 The two reads must carry the same `rankVersion` and no marker; otherwise the whole page is a
 `503 internal` response with `Retry-After: 1` and no items. Every item cursor encodes that
-fenced version. The final repair or behaviour-migration transaction clears its marker and
+fenced version. The final repair or schema-migration transaction clears its marker and
 advances the version,
 so a pre-operation cursor receives the same `503` and restarts at page one instead of resuming through
 changed rows. A reorder that races between either META read is detected by the same post-fence.
@@ -212,11 +212,11 @@ opaque retained, unused token must resolve to the matching `UNDO#` operation and
 tombstone must name it before the same item id, ranked row and locator can be restored and the
 tombstone removed. Delete snapshots include the current viewer links and corresponding Activity
 provenance so compensation is an inverse rather than a fresh item create. A full-list
-projection ignores identity, Undo, tombstone, repair and behaviour-migration rows.
+projection ignores identity, Undo, tombstone, repair and schema-migration rows.
 
 `List.itemVersion` is the storage-only generation of the complete item set. Every public
 transaction that creates, patches, checks, reorders, deletes or restores items advances it once
-(per bounded chunk). A gated rank repair or behaviour migration advances it in the final
+(per bounded chunk). A gated rank repair or schema migration advances it in the final
 transaction that removes its marker, because public deciding reads cannot observe its partial
 chunks. Unlike `rankVersion`, it is not a page-cursor fence: checkbox taps
 must not invalidate an unrelated reader's pagination. It exists for operations such as P3-17
@@ -253,7 +253,7 @@ pattern 8b and `security-privacy.md` §1 row 15a).
 | Guest email → person refs | `GUESTEMAIL#<lowercased-email>` | `OWNER#<ownerId>#PERSON#<personId>` | reverse index so guest→account linking is a `Query`, never a `Scan` |
 | Expense id → activity | `EXPENSE#<expenseId>` | `META` | thin `ExpenseLocator`; resolves a globally unique expense id to `activityId`, then the service authorises the caller against that Activity |
 | Settlement id → history row | `SETTLEMENT#<settlementId>` | `META` | thin `SettlementLocator`; resolves to `ownerId` + the exact `SETTLE#…` sort key for guarded undo |
-| Idempotency record | `IDEM#<userId>#<key>` | `META` | Stored successful response status + body and optional cleanup reference; ordinary `ttl` = now + 24 h. A List settings response from either `PATCH /v1/lists/:id` or a lossless `POST /v1/lists/:id/behaviour` that carries the opaque Undo token/deadline pair instead uses `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching the durable outbox; tokenless settings responses keep the ordinary window. Because exact replay cannot reconstruct an opaque token, that response body is a capability-bearing plaintext copy for the same bounded period. Conditionally written in the main domain transaction |
+| Idempotency record | `IDEM#<userId>#<key>` | `META` | Stored successful response status + body and optional cleanup reference; ordinary `ttl` = now + 24 h. A List settings response from `PATCH /v1/lists/:id` that carries an opaque Undo token/deadline pair instead uses `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching the durable outbox; tokenless settings responses keep the ordinary window. Because exact replay cannot reconstruct an opaque token, that response body is a capability-bearing plaintext copy for the same bounded period. Conditionally written in the main domain transaction |
 | Deletion tombstone (Phase 2.6) | `ACT#<activityId>` | `TOMBSTONE` | Written in the delete transaction; carries `ownerId`, `deletedAt`; `ttl = deletedAt + MAX_AUTOMATIC_INTENT_AGE_DAYS` (`packages/shared`) — the same constant that bounds client auto-replay, imported by both, so the two windows cannot be tuned apart. A client-minted create is a `TransactWriteItems`: `ConditionCheck` on this item's absence + conditional `Put` on `META`. `GET` for a tombstoned id stays `404`. Removed at account purge. DynamoDB's lazy TTL deletion is slack, never the margin |
 | Rate-limit counter | `RATE#<scope>#<subject>` | `<windowStart>` | `ttl` = window end |
 
@@ -979,45 +979,58 @@ complete, finished thing — "Favourite restaurants" is not an unfinished "Resta
 try". The connection to Activities is optional in both directions. Do not model lists as a
 staging area.
 
-#### Behaviour versus template
+#### One List model, composed features
 
-Two separate concepts, and conflating them is the most likely modelling error here.
-
-| | What it is | How many | Who decides |
-| --- | --- | --- | --- |
-| **Behaviour** | What the *application* does differently: how items render, what typed fields they carry, what cross-entity flows exist | **Exactly three.** Adding a fourth requires a product decision and new UI code | engineering |
-| **Template** | A declarative chooser label and summary plus an editable default title, icon, behaviour, capability defaults, slot, and empty-state copy | Unbounded. Adding one is a config entry, never a code branch | product |
+There is no List type or behaviour discriminator. Every List has one intrinsic item-state
+model and one keyed optional-feature configuration. `itemStateMode` selects only how the
+three stable states are presented; `featureConfig` selects which typed editors and summaries
+are available. Changing either setting never rewrites item data.
 
 ```ts
-type ListBehaviour = 'collection' | 'watch' | 'meals';
+type ListItemState = 'open' | 'active' | 'done';
+
+type ItemStateMode =
+  | { mode: 'none' }
+  | { mode: 'checkbox' }
+  | {
+      mode: 'stages';
+      labels: { open: string; active: string; done: string };
+      groupByState: boolean;
+    };
+
+interface ListFeatureConfig {
+  progress?: { enabled: boolean; kind: 'text' | 'episode' };
+  place?: { enabled: boolean };
+  subItems?: {
+    enabled: boolean;
+    sectionLabel: string;
+    singularLabel: string;
+    secondaryLabel?: string;
+    integration?: 'mealIngredients';
+  };
+}
 ```
 
-| Behaviour | Why it exists |
-| --- | --- |
-| `collection` | An ordered list of items. Capabilities are configuration, not code. Covers groceries, shopping, packing, places, restaurants, reference lists, anything. |
-| `watch` | Items **group under status headings** (`Watching` / `Want to watch` / `Watched`) and carry season and episode. The only behaviour whose item list is grouped rather than flat. |
-| `meals` | Items carry structured `ingredients` that feed the ingredients-to-list flow. Justified because `Activity.details` for `type: 'meal'` already types `ingredients`; a generic Collection field meaningful for exactly one scheduling target would be worse. |
+Feature configuration is keyed so each feature occurs at most once and each PATCH path is
+stable. Display labels such as Ingredients or Stops configure generic Sub-items; only the
+explicit `mealIngredients` integration enables the meal adapter. Labels never activate an
+integration.
 
-> The test for whether something is a behaviour: **does the application actually behave
-> differently, or does only the label differ?** `Simple` and `Checklist` fail this test —
-> they are `collection` with `checkable` false and true. So do `groceries`, `packing`,
-> `shopping`, `restaurants` and `places`. Do not reintroduce them as behaviours.
-
-#### Templates
+#### Creation presets
 
 Templates live in `packages/shared/src/lists/templates.ts` as a plain data array. They are
 **seeds, not live references.** Structural and presentation fields are resolved from the
-template at creation and copied onto the `List`. Changing or removing a template later must
+preset at creation and copied onto the `List`. Changing or removing a preset later must
 never retroactively alter an existing list — the same freezing principle as `sourceLabel`.
-The exact seventeen v1 records and every visible string are canonical in
+The exact seven records and their fixed order are canonical in
 [`../01-product/plans-and-lists.md#53-the-template-catalogue`](../01-product/plans-and-lists.md#53-the-template-catalogue);
 clients and services consume that shared array rather than recreate labels or defaults.
 
 Creation is selection-first: the client presents the catalogue, the user chooses a
 `templateKey`, then confirms an editable `defaultTitle`. `POST /v1/lists` requires both the
 visible title and that key. The server resolves
-only the selected entry; it never ranks templates from the title, and there is no implicit
-`simple-list` fallback.
+only the selected entry; it never ranks presets from the title, and there is no implicit
+fallback.
 
 If creation carries an explicit `sourceActivityId`, it must name an owned Plan and the new
 list stores `slot: null` even when the selected template normally seeds a standing slot. The
@@ -1034,51 +1047,47 @@ ids, clears matching List back-links in bounded idempotent chunks, and never del
 
 ```ts
 interface ListTemplate {
-  templateKey: string;             // 'groceries', 'restaurants-to-try', 'bars-to-try', …
-  chooserLabel: string;            // visible style name; simple-list uses 'Blank'
-  summary: string;                 // one-line capability description in the chooser
-  defaultTitle: string;            // editable prefill after explicit template selection
+  templateKey: string;             // exact catalogue key; immutable creation provenance
+  chooserLabel: string;            // visible preset name
+  summary: string;                 // one-line state/feature description in the chooser
+  defaultTitle: string;            // editable prefill after explicit preset selection
   icon: string;
-  behaviour: ListBehaviour;
-  capabilities: ListCapabilities;  // copied onto the List at creation
+  itemStateMode: ItemStateMode;
+  featureConfig: ListFeatureConfig;
   slot: DefaultSlot | null;        // seeds List.slot
   emptyStateCopy: string;
 }
 ```
 
-Adding "Bars to try" is one entry in that array: `behaviour: 'collection'`,
-`capabilities: { checkable: true, supportsLocation: true }`, `slot: null`. No schema
-change, no branch, no migration. A later scheduling action supplies its Activity type
-explicitly; the template does not decide it.
+The shipped keys, in order, are `blank`, `checklist`, `groceries`, `watch-later`,
+`books-to-read`, `places-to-visit` and `meal-ideas`. Adding another preset is a product
+catalogue change but needs no schema discriminator or item migration. A later scheduling
+action supplies its Activity type explicitly; the preset does not decide it.
 
 #### The entities
 
 ```ts
 type DefaultSlot = 'groceries' | 'watch' | 'meals';
 
-interface ListCapabilities {
-  checkable: boolean;              // collection only; watch uses watchStatus instead
-  supportsLocation: boolean;       // collection only
-}
-
 interface List {
+  schemaVersion: 2;
   listId: string;
   ownerId: string;
-  behaviour: ListBehaviour;
   templateKey: string;             // immutable provenance + analytics only; never read to render
   title: string;
-  icon: string;                    // frozen presentation copy from the selected template
-  emptyStateCopy: string;          // frozen presentation copy from the selected template
-  capabilities: ListCapabilities;  // frozen copy from the template, user-editable
+  icon: string;                    // frozen presentation copy from the selected preset
+  emptyStateCopy: string;          // frozen presentation copy from the selected preset
+  itemStateMode: ItemStateMode;    // user-editable presentation of intrinsic item state
+  featureConfig: ListFeatureConfig;// user-editable; disabling preserves feature values
   slot: DefaultSlot | null;        // eligibility for a default destination
-  sourceActivityId?: string;       // "this Packing list came from the New York Trip plan"
+  sourceActivityId?: string;       // "this Checklist came from the New York Trip plan"
   itemCount: number;
-  uncheckedCount: number;
+  doneCount: number;
   memberCount: number;             // owner + non-owner MEMBER# rows; 1 when private
   rankVersion: number;             // serialises server rank allocation; never client-authored
   itemVersion?: number;            // complete-item-set generation; absent means legacy zero; never serialised
   rankRepairId?: string;           // blocks rank mutations and item-page reads until repair completes; never serialised
-  behaviourMigrationId?: string;   // blocks item reads/mutations until behaviour migration commits; never serialised
+  schemaMigrationId?: string;      // blocks item reads/mutations during a resumable legacy aggregate conversion; never serialised
   archived: boolean;
   updatedAt: string;               // backs If-Match on list-level edits
   lastItemActivityAt: string;      // last write to any item in this list; never backs If-Match
@@ -1112,25 +1121,26 @@ interface ListItem {
   itemRevision: number;            // storage-only mutation fence mirrored by ITEMID; never client-authored
   title: string;
   note?: string;
-  checked: boolean;                // meaningful only for collection + capabilities.checkable
-  location?: { label: string; address?: string; lat?: number; lng?: number };
+  state: ListItemState;             // always intrinsic; presentation is selected by the List
+  features?: {
+    progress?:
+      | { kind: 'text'; value: string }
+      | { kind: 'episode'; mediaKind?: 'movie' | 'show'; season?: number; episode?: number };
+    place?: { label: string; address?: string; lat?: number; lng?: number };
+    subItems?: { entries: {
+      id: string;
+      title: string;
+      secondary?: string;
+      rank: string;
+    }[] };
+  };
   sourceActivityId?: string;       // "Chicken — Sunday dinner"
   sourceLabel?: string;            // joined display, max 4,000; segments never recomputed/truncated
   sourceProvenance?: {             // storage-only ordered ownership; never serialised
     activityId: string;
     label: string;
   }[];
-  details?: ListItemDetails;       // present only for watch and meals behaviours
 }
-
-type ListItemDetails =
-  | { behaviour: 'watch';
-      mediaKind?: 'movie' | 'show';
-      watchStatus: 'want' | 'watching' | 'watched';
-      season?: number;
-      episode?: number; }
-  | { behaviour: 'meals';
-      ingredients?: { ingredientId: string; name: string; quantity?: string; addedToListId?: string }[]; };
 
 interface ListItemActivityLink {   // LIST#<listId> / LNK#<viewerUserId>#<itemId>
   listId: string;
@@ -1142,8 +1152,9 @@ interface ListItemActivityLink {   // LIST#<listId> / LNK#<viewerUserId>#<itemId
 ```
 
 **Two timestamps on a List, two jobs.** `updatedAt` backs `If-Match` on list-level edits and
-moves only when the List row itself changes — a rename, a capability toggle, a slot change.
-`lastItemActivityAt` moves when any **item** is created, edited, checked, deleted, reordered
+moves only when the List row itself changes — a rename, a state-presentation change, a
+feature-setting change or a slot change. `lastItemActivityAt` moves when any **item** is
+created, edited, changes state, is deleted, reordered
 or touched by a bulk operation, and backs nothing. The Lists index renders the second
 (`design-system.md` §7.2): a card that still said `Updated 3 days ago` immediately after the
 user checked three things off, while moving the moment they renamed the list, would be
@@ -1157,9 +1168,9 @@ row the Lists index already batch-reads, so it costs no extra read, no index and
 
 #### Default slots
 
-A slot is a **semantic destination**, not a behaviour. Once `groceries` and `packing` are
-both `collection`, behaviour alone cannot say which one "add these ingredients" should
-target.
+A slot is a **semantic destination**, independent of state presentation and feature
+configuration. Two checkbox lists can serve different flows; the slot says which destination
+an integration should offer.
 
 ```ts
 // on User — declared with the rest of the profile in §4.0
@@ -1250,8 +1261,8 @@ shareable objects.
 
 | Role | Can |
 | --- | --- |
-| `owner` | Everything: delete the list, add and remove members, change `behaviour`, `capabilities` and `slot` |
-| `member` | Add, edit, check, reorder and delete **items**; rename the list; leave it. Cannot change behaviour or capabilities — those are destructive under the interaction contract — and cannot delete the list or remove anyone. |
+| `owner` | Everything: delete the list, add and remove members, change state presentation, feature configuration and `slot` |
+| `member` | Add, edit, change state, reorder and delete **items**; rename the list; leave it. Cannot change state/feature configuration or slot, and cannot delete the list or remove anyone. |
 
 Constraints:
 
@@ -1289,7 +1300,7 @@ at the same time, often offline, often in different shops. Three rules, all requ
 
 | Situation | Rule |
 | --- | --- |
-| Two members check the same item | Not a conflict. `checked` is set, not toggled, so the operation is idempotent and commutative and survives the offline queue without merge logic. Never write `SET checked = NOT checked`. |
+| Two members check the same item | Not a conflict. `state: 'done'` is set, not toggled, so the operation is idempotent and survives the offline queue without merge logic. Never send a toggle instruction. |
 | Two members insert at the same position | Rank allocation is serialised by conditional `List.rankVersion`; one caller retries with fresh neighbours and receives a distinct rank. Sort by `(rank, itemId)` defensively so Undo-restored, legacy or seeded duplicates within one committed generation still render identically. Strong pre/post META fences and a repair marker gate item reads, so mixed generations never render. |
 | One member reorders while another edits a field | The ranked row and locator share `itemRevision`. Reorder conditionally moves the freshly read revision; a field PATCH conditionally advances the same revision while updating only supplied fields. The loser re-resolves and reapplies its operation, so rank movement cannot overwrite a concurrent title, note, check or typed-detail edit. |
 | Two members add the same title | Two rows. **Never auto-merge.** Silently swallowing someone's entry is worse than a visible duplicate they can delete. |
@@ -1297,7 +1308,7 @@ at the same time, often offline, often in different shops. Three rules, all requ
 Item writes carry **no `If-Match`**. Optimistic concurrency on every checkbox in a grocery
 list would produce constant spurious `409`s for no benefit; last write wins on a field is
 the correct behaviour here. The internal `itemRevision` is a retry fence, not a client-visible
-conflict: the service retries the supplied field assignment against the current row. List-*level* edits — title, capabilities, behaviour — do use
+conflict: the service retries the supplied field assignment against the current row. List-*level* edits — title, state presentation and feature configuration — do use
 `If-Match`, because those are the changes worth protecting.
 
 ### 4.7 Person and Participant
@@ -1515,11 +1526,11 @@ before writing the code.
 | 7 | Lists for a user | Paged `Query` `pk = USER#<u>`, `sk begins_with LIST#` (50 pointers per API page), then one `BatchGetItem` for that page's `LIST#<l>` / `META` rows. The 100 cap is on owned-list creation, not incoming memberships. |
 | 7b | Members of a list | `GetItem` `LIST#<l>` / `META`, get the owner's `USER#<ownerId>` / `LIST#<l>` pointer and profile, then `Query` `pk = LIST#<l>`, `sk begins_with MEMBER#`. Prepend the synthesised owner DTO; the query itself returns non-owners only. |
 | 8 | Items in a list | Strongly read exact META first, reject either repair/migration marker and validate the cursor version; then page `Query pk = LIST#<l>, sk begins_with ITEM#`, `Limit: 50`, `ConsistentRead: true`, sorted by `(rank, itemId)`. Strongly reread META before serialisation and require the same `rankVersion` with no marker. A failed pre/post fence drains bounded work when applicable, then returns `503 internal` with `Retry-After: 1` and no item rows; the client restarts at page one. The opaque cursor binds the fenced version. |
-| 8b | List detail (META + first item page + caller-visible Activity state) | Pattern 8's fenced first page plus META. For only those item ids, one bounded `BatchGetItem` reads `LNK#<callerUserId>#<itemId>` keys, followed by one bounded Activity hydration and ordinary Activity authorisation. A surviving row projects the caller's `viewerLink` and trimmed `viewerPlan` together; a missing or unreadable link projects neither. Members use 7b and later items use 8. Never query the whole List partition, expose a mixed rank/behaviour generation, load or serialise another viewer's Activity, or read one Activity per link. An unscheduled Activity may remain linked but is not state-line eligible. |
+| 8b | List detail (META + first item page + caller-visible Activity state) | Pattern 8's fenced first page plus META. For only those item ids, one bounded `BatchGetItem` reads `LNK#<callerUserId>#<itemId>` keys, followed by one bounded Activity hydration and ordinary Activity authorisation. A surviving row projects the caller's `viewerLink` and trimmed `viewerPlan` together; a missing or unreadable link projects neither. Members use 7b and later items use 8. Never query the whole List partition, expose a mixed rank/schema generation, load or serialise another viewer's Activity, or read one Activity per link. An unscheduled Activity may remain linked but is not state-line eligible. |
 | 8c | Remove every Activity pointer for one list member | `Query` `pk = LIST#<l>`, `sk begins_with LNK#<viewerUserId>#`, then batch delete. Used on leave/removal. |
 | 8d | Exact ListItem by stable id | After the exact `USER#<u>` / `LIST#<l>` access check, use pattern 8's strong META pre/post fence around strongly consistent reads of `ITEMID#<itemId>` and its current `ITEM#<rank>#<itemId>` key; require matching locator/item revisions. A changed version, marker or revision mismatch returns `503 internal` with `Retry-After: 1`; missing locator/item or a tombstoned list is `404`. |
-| 8e | Every item on one list, for a bounded worker or a destructive-change preview | After the exact `USER#<u>` / `LIST#<l>` access check, `Query pk = LIST#<l>`, `sk begins_with ITEM#`, `ConsistentRead: true`, unpaged and bounded by the 500-item cap. Internal to rank repair, behaviour migration and the `409` data-loss count; never a response projection. A caller that **decides a write** from these rows rather than merely reporting them takes the stricter form instead: strong META pre/post fence around the query, returning both `rankVersion` and storage-only `itemVersion`, which its transaction must then commit under. P3-17 also strongly BatchGets the at-most-30 requested `ITEMID#` identity records inside that same fence and recognizes replay only when the stored Activity and ingredient both match. The first generation catches structural creates/reorders, while the second catches field patches, checks, deletes, restores and identity writes without invalidating ordinary page cursors on every checkbox tap. A worker reads it **under its own marker**, where the rows may be a mix of source- and target-shaped; the preview form requires both fences absent, because a count taken across a running migration would describe a list in two shapes at once. |
-| 8f | One completed watch session's follow-up source (P3-16) | After the exact `USER#<u>` / `LIST#<l>` access check, one strong META pre/post fence around three keyed strongly consistent reads issued together: `LNK#<callerUserId>#<itemId>`, and pattern 8d's `ITEMID#<itemId>` locator plus its current `ITEM#<rank>#<itemId>` row. META that is not `behaviour: 'watch'` answers before either the pointer or the item is read. **One fence, not three**: composing patterns 7, 8b and 8d would read the pointer under one `rankVersion` and the item under the next, which is the mixed generation the fence exists to refuse, and would cost roughly thirteen round trips on a completion that is already several reads deep. A missing list, a non-`watch` one, a missing pointer and a missing item are all the same empty answer; a fence failure raises as it does everywhere else and the caller turns it into no follow-up. Read-only, and never on the write path. |
+| 8e | Every item on one list, for a bounded worker or aggregate decision | After the exact `USER#<u>` / `LIST#<l>` access check, `Query pk = LIST#<l>`, `sk begins_with ITEM#`, `ConsistentRead: true`, unpaged and bounded by the 500-item cap. Internal to rank repair, schema migration and ingredient grouping; never a response projection. A caller that **decides a write** from these rows takes the stricter form: strong META pre/post fence around the query, returning both `rankVersion` and storage-only `itemVersion`, which its transaction must then commit under. P3-17 also strongly BatchGets the at-most-30 requested `ITEMID#` identity records inside that same fence and recognizes replay only when the stored Activity and ingredient both match. The first generation catches structural creates/reorders, while the second catches field patches, state changes, deletes, restores and identity writes without invalidating ordinary page cursors on every checkbox tap. A migration worker reads under its own marker, where rows may be a mix of source and target shapes. |
+| 8f | One completed watch session's follow-up source (P3-16) | After the exact `USER#<u>` / `LIST#<l>` access check, one strong META pre/post fence around three keyed strongly consistent reads issued together: `LNK#<callerUserId>#<itemId>`, and pattern 8d's `ITEMID#<itemId>` locator plus its current `ITEM#<rank>#<itemId>` row. META must have enabled episode Progress; otherwise the read returns no follow-up. **One fence, not three**: composing patterns 7, 8b and 8d could mix generations and would cost roughly thirteen round trips. A missing list, disabled/incompatible Progress, missing pointer or missing item is the same empty answer; a fence failure raises as it does everywhere else and the caller turns it into no follow-up. Read-only, and never on the write path. |
 | 9 | All people for a user | `Query` `pk = USER#<u>`, `sk begins_with PERSON#`, plus a paged `LLINK#` Query grouped by Person to compute active `sharedListCount`; do not assume the owned-list creation cap bounds memberships from other owners. The four-key People sort still ignores list membership. |
 | 9a | Lists shared or pending with one Person | `Query` `pk = USER#<u>`, `sk begins_with LLINK#<personId>#`; retain only `status = 'active'` and re-check exact `USER#/LIST#` access for the Person view, but retain both statuses for signup, delete guards and lifecycle work |
 | 10 | Activities shared with one person, newest first | `Query` `pk = USER#<u>`, `sk begins_with PLINK#<p>#`, `ScanIndexForward=false`, retaining only `scope = 'shared_activity'` for the product history |
@@ -1659,11 +1670,12 @@ status/body.
 | Patch list item fields | Resolve the locator/ranked row, update only supplied fields while conditionally advancing the row and locator's matching `itemRevision`, atomically advance `META.itemVersion`, and require both migration/repair gates absent. A condition conflict is retried internally against current truth; no client `If-Match` and no unrelated field replacement. |
 | Reorder list item | Delete the old ranked row only at the revision read, put that freshly read row at the new rank with the next revision, conditionally move the locator from the same rank/revision, and conditionally advance `META.rankVersion` plus `META.itemVersion` with both gates absent. On any conflict re-read the row/neighbours and retry. No other ListItem changes during normal reorder. |
 | Repair list ranks | Conditionally install `META.rankRepairId` plus a `RANK_REPAIR#<operationId>` snapshot, then rewrite only bounded chunks while the marker gates item reads/mutations. Every item page uses strong pre/post META fences around a strongly consistent Query. The final transaction clears the marker and advances `rankVersion` plus `itemVersion`, invalidating pre-repair cursors and whole-list snapshots. |
-| Change List behaviour | Replay-protected `POST /v1/lists/:id/behaviour`, under `If-Match` and its idempotency receipt, leaves public behaviour unchanged while conditionally installing `META.behaviourMigrationId` plus `BEHAVIOUR_MIGRATION#<operationId>`, which carries the receipt every finisher must write and no `ttl` of its own. Snapshot the stable at-most-500 item ids/ranks/revisions and transform bounded chunks, conditionally advancing each ranked row and locator revision, while all public item reads/mutations are gated. The final transaction changes behaviour, clears the marker, advances `rankVersion` plus `itemVersion`, records Undo and deletes the work row. An install whose gated loss count disagrees with the count its caller previewed is instead rolled back at `cursor = 0`, leaving the list untouched. Confirmed downgrade and Undo use the same path. |
+| Change List settings | Replay-protected `PATCH /v1/lists/:id`, under `If-Match`, atomically replaces only the supplied title, state-presentation, feature-configuration, slot or archive fields. Item values are untouched when a feature is disabled or state presentation changes. Lossless settings changes may return a single-use Undo offer; there is no data-loss confirmation endpoint or aggregate worker. |
+| Upgrade a legacy List aggregate | Repository access deterministically derives schema-v2 List and item values. For an aggregate too large for one transaction, install `META.schemaMigrationId` plus `SCHEMA_MIGRATION#<operationId>`, snapshot the stable at-most-500 item ids/ranks/revisions, transform bounded chunks while public item reads/mutations are gated, then record schema v2, clear the marker, advance the generations and delete the work row. Retries resume the same operation. Pending SQLite rows and outbox intents use the same pure translation before sync. |
 | Delete list item / clear checked | Delete ranked rows and locators, write `ITEM_TOMBSTONE#<itemId>` snapshots through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, write a single-use `UNDO#<operationId>` with the same replay retention, advance `itemVersion`, update List counters, remove current viewer links and clear linked Activity provenance while advancing those Activities' `updatedAt`; bounded receipt-aware chunks preserve one logical Undo operation and never delete an Activity |
-| Uncheck all | Change only currently checked items to unchecked, advance `itemVersion` once per applied chunk, and write one single-use, replay-retained `UNDO#<operationId>` containing exactly those item ids; bounded receipt-aware chunks preserve one logical operation |
-| Meal ingredients to a list | **One transaction** (P3-17). Selections are classified by normalized-title group. Per matching **unchecked** row, update the rendered `sourceLabel` plus storage-only activity-keyed `sourceProvenance` under that row's `itemRevision`; per created group, use the ordinary conditional item/identity puts and tombstone check; and per supplied id absorbed by a labelled/grouped outcome, conditionally put a permanent alias in the same authoritative `ITEMID#` namespace. A created identity and every alias store the exact source Activity, ingredient and original outcome; only that exact tuple is a replay. The META `rankVersion`, `itemVersion` and counters advance; one conditional `ACT#/META` `SET details.ingredients[i].addedToListId` per selected row is conditioned on its resolved `ingredientId` still occupying that index and on the meal's read `updatedAt`, which it also advances; the idempotency receipt joins the same write. For `n <= 30` selections and `g` destination groups, creates cost `3g` while aliases/extensions replace rather than add another three actions per grouped selection; the worst case remains `3n + 4 = 94`. The META condition names both **snapshot generations** and the service validates `behaviour = collection` plus capacity from that exact basis, so a create, rename, check, delete or completed behaviour migration landing after preflight cancels or refuses the operation instead of laundering a stale decision into a commit. A condition failure re-runs the entire read/classify/build cycle. A bound replay target answers its own ingredient even after rename/check, but it may absorb fresh same-title selections only while it is still unchecked and its normalized title still matches. Every supplied id remains occupied by its no-TTL `ITEMID#` record even after the receipt expires or an alias target is deleted. |
-| Undo List operation | Resolve a retained, unused opaque token to `UNDO#<operationId>`; a compensation records each committed bulk chunk's cumulative affected count on that row, then spends it in the **same transaction** that applies the final inverse chunk — including the behaviour-upgrade migration's final transaction — so no crash can leave a spent inverse looking unspent or make a resumed response report only its tail. `undoExpiresAt` governs only whether the client may offer a new Undo, not whether an already accepted durable inverse may replay. For delete, conditionally recreate the same ranked rows and locators, advance `rankVersion` and `itemVersion`, restore still-live viewer links and Activity provenance while advancing those Activities' `updatedAt`, delete matching item tombstones and update counters; for `uncheck-all`, recheck only affected ids that still exist and advance `itemVersion`; for an additive settings/archive change, apply its recorded inverse only while the exact preconditions still hold. Behaviour-upgrade compensation removes only defaults that operation created and bypasses the ordinary destructive-downgrade confirmation. Retention-expired, mismatched, edited or reused operations write nothing. |
+| Uncheck all | Change only currently `done` items to `open`, advance `itemVersion` once per applied chunk, and write one single-use, replay-retained `UNDO#<operationId>` containing exactly those item ids; bounded receipt-aware chunks preserve one logical operation |
+| Meal ingredients to a list | **One transaction** (P3-17). The destination must use checkbox presentation. Selections are classified by normalized-title group. Per matching non-`done` row, update the rendered `sourceLabel` plus storage-only activity-keyed `sourceProvenance` under that row's `itemRevision`; per created group, use the ordinary conditional item/identity puts and tombstone check; and per supplied id absorbed by a labelled/grouped outcome, conditionally put a permanent alias in the same authoritative `ITEMID#` namespace. A created identity and every alias store the exact source Activity, ingredient and original outcome; only that exact tuple is a replay. The META `rankVersion`, `itemVersion` and counters advance; one conditional `ACT#/META` `SET details.ingredients[i].addedToListId` per selected row is conditioned on its resolved `ingredientId` still occupying that index and on the meal's read `updatedAt`, which it also advances; the idempotency receipt joins the same write. For `n <= 30` selections and `g` destination groups, creates cost `3g` while aliases/extensions replace rather than add another three actions per grouped selection; the worst case remains `3n + 4 = 94`. The META condition names both **snapshot generations**, so a create, rename, state change, delete or completed schema migration landing after preflight cancels or refuses the operation instead of laundering a stale decision into a commit. A condition failure re-runs the entire read/classify/build cycle. A bound replay target answers its own ingredient after rename/state changes, but it may absorb fresh same-title selections only while it is not `done` and its normalized title still matches. Every supplied id remains occupied by its no-TTL `ITEMID#` record even after the receipt expires or an alias target is deleted. |
+| Undo List operation | Resolve a retained, unused opaque token to `UNDO#<operationId>`; a compensation records each committed bulk chunk's cumulative affected count on that row, then spends it in the **same transaction** that applies the final inverse chunk, so no crash can leave a spent inverse looking unspent or make a resumed response report only its tail. `undoExpiresAt` governs only whether the client may offer a new Undo, not whether an already accepted durable inverse may replay. For delete, conditionally recreate the same ranked rows and locators, advance `rankVersion` and `itemVersion`, restore still-live viewer links and Activity provenance while advancing those Activities' `updatedAt`, delete matching item tombstones and update counters; for `uncheck-all`, return only affected ids that still exist to `done` and advance `itemVersion`; for an additive settings/archive change, apply its recorded inverse only while the exact preconditions still hold. Retention-expired, mismatched, edited or reused operations write nothing. |
 | Request attachment upload | Drain the caller's bounded pending set, then transactionally put `USER#<u>/UPLOAD#<attachmentId>` with declared temporary/final keys, type, size, `awaiting_upload` state and one-day `cleanupAfter` plus one conditional `UPLOAD_SLOT#<00..19>` claim before returning the presigned URL. No preflight race can admit more than 20 unresolved rows. |
 | Confirm attachment | Record the target Activity and mark the pending upload `confirming`, copy and verify the final object, then transactionally put `ACT#<a>/ATT#<attachmentId>` plus a conditional `ATT_SLOT#<00..19>` claim and delete the pending row plus its upload slot. A retry that finds the exact already-linked attachment transactionally stores this request's receipt against that immutable row, so concurrent adoption cannot return success without a replay record. Retry or the caller's next bounded drain resumes. Expired cleanup deletes both object keys before deleting a row. |
 | Delete attachment | One transaction deletes `ACT#<a>/ATT#<attachmentId>` and its `ATT_SLOT#` claim, writes durable `USER#<u>/MEDIA_DELETE#<activityId>#<attachmentId>` work, and — **only when that attachment is the activity’s `primaryAttachmentId`** — removes that field from `ACT#<a>/META` in the same write, conditioned on it still naming this attachment. The service deletes the permanent object and only then removes the work row; retries and Activity deletion drain the same work. The hero can therefore never point at a deleted row, and a crash cannot make confirmed media cleanup undiscoverable. Neither `lastActivityAt` nor `icsSequence` moves; `updatedAt` moves only on the write that clears the cover, because that is an edit to a field on the Activity itself. |
@@ -1674,7 +1686,7 @@ status/body.
 | Invite list member (no account) | `LIST#/MEMBER#`, owner `USER#/PERSON#`, owner invited `USER#/LLINK#`, `GUESTEMAIL#` Person locator, and `LIST#/META` member counter — at most 5 items and no recipient pointer |
 | Activate invited list member | Update `LIST#/MEMBER#`, write invitee `USER#/LIST#`, create/reuse reciprocal `USER#/PERSON#`, change owner `LLINK#` to active and write invitee active `LLINK#` |
 | Remove or leave shared list | Delete `LIST#/MEMBER#`, invitee `USER#/LIST#` when active, owner `LLINK#`, invitee reciprocal `LLINK#` when active, and decrement `LIST#/META`; then asynchronously remove that viewer's `LNK#` rows. The Person-level `GUESTEMAIL#` locator remains until link, email removal or Person deletion. |
-| Delete shared list | Write `LIST#/TOMBSTONE` through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, remove its `ACT#/SOURCE_LIST#` projection when present, then cascade every List-partition row (`META`, members, items, locators, links, Undo, repair and behaviour-migration work), every member pointer and every owner/member `LLINK#`; owner-scoped `PERSON#` rows survive and the tombstone is removed only by TTL or account purge |
+| Delete shared list | Write `LIST#/TOMBSTONE` through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, remove its `ACT#/SOURCE_LIST#` projection when present, then cascade every List-partition row (`META`, members, items, locators, links, Undo, repair and schema-migration work), every member pointer and every owner/member `LLINK#`; owner-scoped `PERSON#` rows survive and the tombstone is removed only by TTL or account purge |
 | Schedule a list item | Extend the durable Activity-create transaction: condition-check its tombstone; conditionally create the required client-minted `ACT#<activityId>/META`, owner/selected-participant `USER#/IDX#` and `ACT#/PART#` rows, one caller `ACT#/REM#<caller>#<reminderId>` per supplied stable reminder id, the receipt and rows required by other accepted create fields; plus `LIST#/LNK#<viewer>#<item>` for the caller and selected registered participants who are active list members. The `LIST#/ITEM#` row is unchanged. Replay after receipt expiry adopts a matching existing Activity and never rolls a newer current pointer back. |
 | Add expense | `ACT#/EXP#`, `ACT#/META` (total), `EXPENSE#<expenseId>/META` locator, any missing `USER#/PERSON#` rows for pairs in the payer + split set who do not yet hold each other as People — the same `personId` mirrored into each affected registered user's partition, `displayName` copied, `linkedUserId` carried when set, no email or phone copied; a guest's mirrored side waits for account linking — and required directional `PLINK#` rows marked `shared_activity` or retained for finance, then **async** balance recalc via stream for both sides of each pair ([`../01-product/expenses.md`](../01-product/expenses.md) §5.1). Edit updates the affected relationship set, creating Person rows for newly paired participants the same way; delete removes the locator and any `finance_only` link no remaining Expense needs. |
 | Mark obligations settled | Update each covered `ACT#/EXP#` (`settledPersonIds`, `settlementIdByPersonId`, derived `settled`) + write one `USER#/SETTLE#` audit row and one `SETTLEMENT#<settlementId>/META` locator. Server derives amount/currency/direction and exact per-Expense coverage before the transaction; balance recompute reads Expenses only. |
@@ -1689,7 +1701,7 @@ status/body.
 | Complete / skip an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
 | Cross-day occurrence reschedule / snooze / unsnooze | Nominal `ACT#/OCC#<date>` plus the destination `ACT#/MOVE#<date>` marker in one transaction; replacing a destination also removes the prior marker reference. Never the series. Same-day snooze remains one `OCC#` write. |
 | Snooze / unsnooze a non-recurring one-off | Update or delete `ACT#/META.snoozedUntil`; never create an `OCC#` row |
-| Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, the cascade marks META with `deletingAt`; every prep-child create, reminder create and sourced-list create condition-checks that marker absent, so no new subordinate write can enter behind the cascade. When the activity is itself a prep task, remove the parent's `ACT#<parent>/SUB#<child>` pointer and decrement `childCount` in one conditional transaction — the half of the cascade that lives in the *parent's* partition, idempotent so an interrupted delete resumes without double-counting (P3-18) — then use `SOURCE_LIST#` rows to clear matching `List.sourceActivityId` values without deleting Lists — one conditional `UpdateItem` per List, conditional on that List still naming **this** Plan, run **before** the projections are deleted so an interrupted delete can re-read the ids and resume; the clear removes the attribute without advancing `List.updatedAt`, because the behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and a bumped version would fail that condition permanently, stranding the marker and gating the list into `503` (P3-50). Attachment rows are staged into durable `MEDIA_DELETE#` work, each permanent object is deleted, and that work is drained before META can disappear. Then delete the remaining child rows and external pointers (`EXPENSE#` locators, every `USER#/IDX#` + `PLINK#`, and matching `LNK#` pointers) first, and delete `ACT#/META` **last**. Until that final delete a retry can re-authorise and resume the bounded idempotent cascade; after it, a replayed `404` is success. |
+| Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, the cascade marks META with `deletingAt`; every prep-child create, reminder create and sourced-list create condition-checks that marker absent, so no new subordinate write can enter behind the cascade. When the activity is itself a prep task, remove the parent's `ACT#<parent>/SUB#<child>` pointer and decrement `childCount` in one conditional transaction — the half of the cascade that lives in the *parent's* partition, idempotent so an interrupted delete resumes without double-counting (P3-18) — then use `SOURCE_LIST#` rows to clear matching `List.sourceActivityId` values without deleting Lists — one conditional `UpdateItem` per List, conditional on that List still naming **this** Plan, run **before** the projections are deleted so an interrupted delete can re-read the ids and resume. The clear removes the attribute without advancing `List.updatedAt`, so a concurrent aggregate worker's accepted version remains valid. Attachment rows are staged into durable `MEDIA_DELETE#` work, each permanent object is deleted, and that work is drained before META can disappear. Then delete the remaining child rows and external pointers (`EXPENSE#` locators, every `USER#/IDX#` + `PLINK#`, and matching `LNK#` pointers) first, and delete `ACT#/META` **last**. Until that final delete a retry can re-authorise and resume the bounded idempotent cascade; after it, a replayed `404` is success. |
 
 Participant fan-out is bounded: **cap participants at 50 per activity** in v1. Enforce it
 in validation. The cap alone does **not** keep every write under DynamoDB's 100-item
@@ -1802,7 +1814,8 @@ Do not add these without a product decision:
   a prep task may be acted on by its owner, parent owner or parent participant, but still
   writes one shared occurrence with no participant identity.
 - Sub-lists, tags, labels, projects, priorities, custom fields.
-- A fourth list behaviour. Templates are unbounded and free to add; behaviours are not.
+- A second List type or behaviour discriminator. Extend the keyed feature registry or the
+  explicit preset catalogue without forking the List entity.
 - User-authored list templates. The catalogue ships with the app.
 - Full link history between a list item and every Activity derived from it. The current
   pointer is singular **per viewer and item** in v1 — see §4.6.

@@ -95,8 +95,9 @@ review reminders; a PR marks an unrelated row `n/a` and names why.
 
 | Surface | Required gates |
 | --- | --- |
-| Task / Plan / ListItem creation | The client supplies a `CreationTarget` before entry; Plan includes a user-selected `PlanType`, ListItem includes a selected `listId`, and omission or an incompatible combination is `400`. Run the same ambiguous title through at least two explicit targets and assert the selected target wins. No title, date, participant, list behavior, or server/model output chooses object kind, type, or destination. |
-| New list | The style catalogue starts with nothing selected. `POST /v1/lists` requires the exact user-selected `templateKey`; omission is `400` and writes nothing. A title change does not change the key. There is no title matcher, recommended template, or implicit simple-list fallback. The server copies behaviour, capabilities, slot, icon and empty-state copy from that exact record, rejects client overrides, and a catalogue mutation cannot change any of those stored values on an existing List. |
+| Task / Plan / ListItem creation | The client supplies a `CreationTarget` before entry; Plan includes a user-selected `PlanType`, ListItem includes a selected `listId`, and omission or an incompatible combination is `400`. Run the same ambiguous title through at least two explicit targets and assert the selected target wins. No title, date, participant, List preset/configuration, or server/model output chooses object kind, type, feature, integration or destination. |
+| New list | `Choose a list type` shows exactly the seven fixed presets in canonical order, with Blank first, no title field and nothing selected. `POST /v1/lists` requires the exact user-selected `templateKey`; omission is `400` and writes nothing. A later title change does not change the key. There is no title matcher, recommendation or fallback. The server copies state presentation, feature configuration, slot, icon and empty-state copy from that exact record, rejects client overrides, and catalogue changes cannot change an existing List. |
+| List settings and items | One List/ListItem schema only. Mode changes preserve intrinsic state; disabling/re-enabling a feature round-trips values byte-identically. Typed feature gates, Sub-item bounds/reorder, state counts, six-second Undo, checkbox bulk semantics and the four explicit Plan adapters have cross-layer tests. Current schemas, intents, generated contracts and future tasks contain no List behaviour dependency. |
 | `Plan this item` | The request requires `{ objectKind: 'plan', type: PlanType }` plus exactly one audience, `just_me` or non-empty `selected_people`. A shared list never pre-selects its members. Test private Plans from the same item under two users and a selectively shared Plan: only explicit participants get Activity access, and only those who are also active list members get viewer pointers. |
 | Shared List → People relationship | Only a confirmed member selection creates the relationship; titles and item words never do. A registered add creates/reuses reciprocal owner-scoped People and two active `LLINK#` rows; an accountless invite creates only an owner invited link until verified signup. Active links power `sharedListCount`/`listsTogether` but never authorise a List or affect Plan counters/relevance. Removal and list deletion remove links but retain People; Person delete names invited/active List blockers; merge migrates and deduplicates membership and links. Test all paths, including two non-owner co-members receiving no implicit relationship. |
 | List / Activity linkage | `ListItem` has no `linkedActivityId`. Links are `LIST#<listId>` / `LNK#<viewerUserId>#<itemId>` rows; list detail removes other viewers' rows **before** Activity lookup and authorisation. Renaming either object never mirrors to the other. Deleting or replacing one viewer's pointer leaves the ListItem, every Activity, and other viewers' pointers intact. |
@@ -147,6 +148,7 @@ the specification; this is the checklist.
 | 10 | Focus order equals visual order; no positive `tabIndex`; focus is trapped in a sheet and returns on close (web) | Yes — Playwright |
 | 11 | `axe-core` reports zero `serious` or `critical` violations on every web route | Yes — Playwright |
 | 12 | Any new aggregate number is tappable and reaches the records behind it | Review + the `<Balance>` lint rule |
+| 13 | A changed visual contract has deterministic compact/expanded and light/dark baselines; first approval is a side-by-side canonical-reference review, not self-comparison | Playwright/native pixel gate + recorded human review |
 
 Items 3, 8 and 12 are review judgements. They are on the PR checklist so they are answered
 rather than assumed.
@@ -416,6 +418,9 @@ a line does not apply.
 - [ ] `pnpm run gen:openapi` produces no diff
 - [ ] `api-contract.md` / `data-model.md` updated if endpoints, entities or keys changed
 - [ ] Product docs updated if user-visible behaviour changed
+- [ ] If a visual contract changed: deterministic web/native baselines are included; first
+      baselines were reviewed side-by-side with the canonical reference for spacing, section
+      gaps, row height, segmented geometry, switch alignment, selected state and sheet sizing
 - [ ] If creation, new-list, `Plan this item`, settlement or capture changed: the applicable
       explicit-intent contract gates in §3.1 pass; no type, destination, template, audience,
       participant, reminder/notification action or external payment detail is inferred

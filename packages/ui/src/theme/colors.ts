@@ -66,6 +66,11 @@ export interface SemanticColors {
    */
   accentControl: string;
 
+  /** Shared switch treatment; never chosen by a screen. */
+  switchTrackOff: string;
+  switchTrackOn: string;
+  switchThumb: string;
+
   success: string;
   successSurface: string;
   warning: string;
@@ -103,6 +108,9 @@ const light: SemanticColors = {
   upNextSurface: '#FBF7F9',
   accentBorder: '#C7AAB6',
   accentControl: '#8B6374',
+  switchTrackOff: '#6E675F',
+  switchTrackOn: '#616F45',
+  switchThumb: '#FFFDF9',
 
   /**
    * Darkened from the founder's `#667747` on the founder's decision (2026-08-12).
@@ -172,6 +180,9 @@ const dark: SemanticColors = {
   upNextSurface: '#292620',
   accentBorder: '#5A3A49',
   accentControl: '#AD748C',
+  switchTrackOff: '#6E6C63',
+  switchTrackOn: '#8DB9A2',
+  switchThumb: '#F4F0E8',
 
   success: '#A7B690',
   successSurface: '#252A20',

@@ -98,7 +98,7 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
     <Sheet
       open={open}
       onClose={close}
-      title={style === undefined ? 'Choose a list style' : style.chooserLabel}
+      title={style === undefined ? 'Choose a list type' : style.chooserLabel}
       detent={style === undefined ? 'large' : 'fit'}
       testID="new-list-sheet"
       actions={
@@ -136,6 +136,9 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
 
       {style === undefined ? (
         <View testID="list-style-chooser">
+          <Text variant="subhead" color="textSecondary">
+            Choose Blank when you want a list without a category or item details.
+          </Text>
           {listTemplateChoices().map((choice) => (
             <Row
               key={choice.templateKey}

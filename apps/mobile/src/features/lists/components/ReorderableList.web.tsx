@@ -24,11 +24,11 @@ import type { ReorderableListProps } from './ReorderableList';
  * override applies only while a row is grabbed, which is a mode the user entered deliberately
  * and can leave with `Escape`.
  *
- * ## The clamp is the watch guard
+ * ## The clamp is the grouped-stage guard
  *
- * `rangeOf` bounds every target, pointer and keyboard alike, so a `watch` row cannot be carried
- * past its own status heading. Dragging across one would change `watchStatus` by gesture, which
- * no spec grants (§8.1, and §P3-30 records the decision).
+ * `rangeOf` bounds every target, pointer and keyboard alike, so a grouped-stage row cannot be
+ * carried past its own state heading. Dragging across one would change intrinsic state by
+ * gesture, which no spec grants.
  */
 
 interface RowState {

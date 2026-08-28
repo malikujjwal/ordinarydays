@@ -1,4 +1,4 @@
-import type { ListBehaviour, ListCapabilities } from '@od/shared/types';
+import type { ItemStateMode } from '@od/shared/types';
 
 /**
  * What a Lists-index card says about a list, computed from the list's **own stored fields**
@@ -22,38 +22,29 @@ import type { ListBehaviour, ListCapabilities } from '@od/shared/types';
 
 /** The fields a card reads. A structural subset, so a test fixture need not be a whole `List`. */
 export interface ListCardSource {
-  readonly behaviour: ListBehaviour;
-  readonly capabilities: ListCapabilities;
+  readonly itemStateMode: ItemStateMode;
   readonly itemCount: number;
-  readonly uncheckedCount: number;
+  readonly doneCount: number;
 }
 
 /**
- * **`behaviour === 'collection' && capabilities.checkable`** — both halves, exactly as the
- * endpoints check it.
- *
- * A `watch` list can carry a stored `checkable: true` that a behaviour change left behind,
- * along with `checked` values the change retained. Reading only the capability would draw a
- * checked count for rows the list detail draws no checkbox for, from state the user cannot
- * reach — a number describing something invisible.
+ * Checkbox vocabulary belongs only to checkbox mode. Staged lists expose the same intrinsic
+ * `done` state using their configured label, and lists in `none` mode hide it.
  */
 export function showsCheckedCount(list: ListCardSource): boolean {
-  return list.behaviour === 'collection' && list.capabilities.checkable;
+  return list.itemStateMode.mode === 'checkbox';
 }
 
 /**
  * `12 items`, or `12 items · 5 checked` on a checkable collection.
  *
- * `checked` is derived as `itemCount - uncheckedCount` rather than stored: the `META` row
- * carries the two counts the server maintains, and a third would be a third thing to keep in
- * step. Clamped at zero because the two counts converge independently under concurrent writes,
- * and a card is not the place to surface that.
+ * `doneCount` is the exact state-derived aggregate maintained by every item writer.
  */
 export function countLine(list: ListCardSource): string {
   const items = `${String(list.itemCount)} ${list.itemCount === 1 ? 'item' : 'items'}`;
   if (!showsCheckedCount(list)) return items;
 
-  const checked = Math.max(0, list.itemCount - list.uncheckedCount);
+  const checked = Math.max(0, Math.min(list.itemCount, list.doneCount));
   return `${items} · ${String(checked)} checked`;
 }
 
@@ -66,7 +57,7 @@ export function countLine(list: ListCardSource): string {
  */
 export function checkedProgress(list: ListCardSource): number | undefined {
   if (!showsCheckedCount(list) || list.itemCount <= 0) return undefined;
-  const checked = Math.max(0, list.itemCount - list.uncheckedCount);
+  const checked = Math.max(0, Math.min(list.itemCount, list.doneCount));
   return Math.min(1, checked / list.itemCount);
 }
 
@@ -79,8 +70,6 @@ export function checkedProgress(list: ListCardSource): number | undefined {
  * `templateKey` would be the catalogue lookup this file exists to avoid, and it would give
  * seventeen tints where the design system has five.
  */
-export function behaviourTint(behaviour: ListBehaviour): 'task' | 'watch' | 'meal' {
-  if (behaviour === 'watch') return 'watch';
-  if (behaviour === 'meals') return 'meal';
+export function listTint(): 'task' {
   return 'task';
 }

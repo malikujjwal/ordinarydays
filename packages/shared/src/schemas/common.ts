@@ -116,7 +116,6 @@ export const cursor = z
 export const watchMediaKind = z.enum(['movie', 'show']);
 
 /** The three headings a `watch` list groups under (`plans-and-lists.md` §8.1). */
-export const watchStatus = z.enum(['want', 'watching', 'watched']);
 
 /** Free integers, not a catalogue lookup: the app never looks anything up (§8.1). */
 export const watchSeason = z.number().int().min(0).max(1000);
@@ -129,4 +128,3 @@ export type Cents = z.infer<typeof cents>;
 export type UserId = z.infer<typeof userId>;
 export type Cursor = z.infer<typeof cursor>;
 export type WatchMediaKind = z.infer<typeof watchMediaKind>;
-export type WatchStatus = z.infer<typeof watchStatus>;

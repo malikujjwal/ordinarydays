@@ -43,7 +43,7 @@ const ITEM: ListItemRow = {
   listId: LIST_ID,
   rank: 'm',
   title: 'Chicken',
-  checked: false,
+  state: 'open',
 };
 
 function wrapper({ children }: { children: ReactNode }) {

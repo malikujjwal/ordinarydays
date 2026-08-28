@@ -1,4 +1,4 @@
-import type { ListItemView } from '@od/shared/types';
+import type { ListPlace } from '@od/shared/types';
 import { Linking, Platform } from 'react-native';
 
 /**
@@ -20,7 +20,7 @@ import { Linking, Platform } from 'react-native';
  * a browser tab with the scheme blocked, and a toast saying so is noise about the device
  * rather than about anything the user did.
  */
-export function openInMaps(location: ListItemView['location']): Promise<void> {
+export function openInMaps(location: ListPlace | undefined): Promise<void> {
   if (location === undefined) return Promise.resolve();
   const query = encodeURIComponent(location.address ?? location.label);
   const url =

@@ -69,26 +69,14 @@ describe('ActivityPushAdapter', () => {
         idempotencyKey: 'create-list',
         input: { listId: LIST, title: 'Costco run', templateKey: 'groceries' },
         seed: {
-          behaviour: 'collection',
-          capabilities: { checkable: true, supportsLocation: false },
+          itemStateMode: { mode: 'checkbox' },
+          featureConfig: {},
           slot: 'groceries',
           icon: 'cart',
           emptyStateCopy: 'Add something to buy.',
         },
       },
       'create',
-    ],
-    [
-      // The P3-32 inventory extension: its own route, its own body, its own key (§P3-09).
-      'behaviour',
-      {
-        listId: LIST,
-        intentId: 'behaviour-list',
-        idempotencyKey: 'behaviour-list',
-        input: { behaviour: 'watch' },
-        ifMatch: 'v1',
-      },
-      'changeBehaviour',
     ],
     ['delete', { listId: LIST, intentId: 'delete-list' }, 'remove'],
     [
@@ -107,7 +95,6 @@ describe('ActivityPushAdapter', () => {
       createItem: vi.fn(async () => ({})),
       patchItem: vi.fn(async () => ({})),
       patch: vi.fn(async () => ({})),
-      changeBehaviour: vi.fn(async () => ({})),
       remove: vi.fn(async () => ({})),
       undo: vi.fn(async () => ({})),
     };
@@ -125,53 +112,6 @@ describe('ActivityPushAdapter', () => {
   });
 
   /**
-   * §P3-09: the confirmed downgrade replays the server's **complete** preview. A replay that
-   * trimmed or re-derived it would be confirming a different item generation, so the whole
-   * object is asserted, not the fact that one was sent.
-   */
-  it('replays a confirmed downgrade with its confirmation whole', async () => {
-    const listTransport: ListPushTransport = {
-      create: vi.fn(async () => ({})),
-      createItem: vi.fn(async () => ({})),
-      patchItem: vi.fn(async () => ({})),
-      patch: vi.fn(async () => ({})),
-      changeBehaviour: vi.fn(async () => ({})),
-      remove: vi.fn(async () => ({})),
-      undo: vi.fn(async () => ({})),
-    };
-    const confirmation = {
-      fromBehaviour: 'watch',
-      toBehaviour: 'collection',
-      itemVersion: 12,
-      itemCount: 7,
-      fields: ['Watch status', 'Season', 'Episode'],
-    };
-    const adapter = new ActivityPushAdapter(
-      transport(() => undefined),
-      listTransport,
-    );
-    await adapter.execute({
-      ...intent('behaviour', {
-        listId: LIST,
-        intentId: 'confirmed-downgrade',
-        idempotencyKey: 'confirmed-downgrade',
-        input: { behaviour: 'collection', confirmation },
-        ifMatch: 'v1',
-      }),
-      mutationKey: ['list', 'behaviour'],
-      entityId: LIST,
-      orderingKey: `list:${LIST}`,
-    });
-
-    expect(listTransport.changeBehaviour).toHaveBeenCalledWith(
-      LIST,
-      { behaviour: 'collection', confirmation },
-      'v1',
-      'confirmed-downgrade',
-    );
-  });
-
-  /**
    * An **item** intent's entity is the item, and its route takes no `Idempotency-Key`
    * (§P3-29, §5.11.5). Both are asserted at the call rather than described in a comment.
    */
@@ -184,7 +124,6 @@ describe('ActivityPushAdapter', () => {
         createItem: vi.fn(async () => ({})),
         patchItem: vi.fn(async () => ({})),
         patch: vi.fn(async () => ({})),
-        changeBehaviour: vi.fn(async () => ({})),
         remove: vi.fn(async () => ({})),
         undo: vi.fn(async () => ({})),
       };

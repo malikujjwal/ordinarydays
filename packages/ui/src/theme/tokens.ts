@@ -131,7 +131,7 @@ export type RadiusToken = keyof typeof radius;
 
 /** Nothing exceeds 300 ms (`interaction-contract.md` §6.5). */
 export const motion = {
-  duration: { instant: 0, fast: 120, base: 180, slow: 260, max: 300 },
+  duration: { instant: 0, fast: 120, base: 180, switch: 180, slow: 260, max: 300 },
   easing: {
     standard: 'cubic-bezier(0.2, 0, 0, 1)',
     decelerate: 'cubic-bezier(0, 0, 0, 1)',
@@ -167,6 +167,10 @@ export const layout = {
    * text, make the row taller.
    */
   settingRowMinHeight: 72,
+  switchTrackWidth: 48,
+  switchTrackHeight: 28,
+  switchThumbSize: 24,
+  switchInset: 2,
   /** Minimum gap between adjacent interactive elements. */
   minTargetGap: space[3],
 } as const;

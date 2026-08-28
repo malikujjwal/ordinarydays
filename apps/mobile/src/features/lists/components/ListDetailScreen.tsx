@@ -1,5 +1,6 @@
+import type { List } from '@od/shared/types';
 import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
@@ -7,25 +8,14 @@ import { useListDetail } from '../hooks/useListDetail';
 import { useListItemActions } from '../hooks/useListItemActions';
 import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
-import { useWatchActions } from '../hooks/useWatchActions';
 import {
-  type CheckedOverrides,
-  isChecked,
-  NO_OVERRIDES,
-  settleOverrides,
-  withOverride,
-  withoutOverride,
-} from '../model/checkedOverride';
-import {
-  checkedCount,
+  doneCount,
   ITEM_SCROLL_FETCH_RATIO,
   mayActOnWholeList,
   mayShowEmptyState,
 } from '../model/listDetail';
-import { watchItemSwipeActions } from '../model/listSwipeActions';
 import { openInMaps } from '../model/openInMaps';
 import { orderedItems, reorderRange } from '../model/reorder';
-import { groupDropIndex } from '../model/watchSections';
 import { AddItemRow } from './AddItemRow';
 import { ItemSheet } from './ItemSheet';
 import { ListHeader } from './ListHeader';
@@ -33,7 +23,7 @@ import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
 import { ListSettingsSheet } from './ListSettingsSheet';
 import { ReorderableList } from './ReorderableList';
-import { WatchSections } from './WatchSections';
+import { StateSections } from './StateSections';
 
 /**
  * One list, its items and its inline add row
@@ -57,31 +47,23 @@ import { WatchSections } from './WatchSections';
  *
  * ## What this screen deliberately does not do
  *
- * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
- * list's own `behaviour` and `capabilities` and nothing else. A body tap opens P3-29's
+ * Rows are `ListItemRow`, the one configuration-driven renderer — this screen hands it the
+ * List's state mode and typed-feature configuration. A body tap opens P3-29's
  * `ItemSheet`, and its checkbox writes through the same item PATCH path the sheet uses.
  *
  * ## Settings arrive through one overlay, not through five call sites
  *
- * `useListSettings` owns the rename, the two capability toggles, the slot and the behaviour
+ * `useListSettings` owns rename, state exposure, typed features and the slot
  * change (P3-32), and this screen reads `settings.view` — the committed row with the user's
  * un-acknowledged change drawn over it — as **the** list. Everything below renders from that one
  * value, so a toggle cannot show as on in the sheet while the rows below it still draw no
  * checkbox. Rename is inline on `ListHeader`'s title and appears in no menu (§5.6).
  *
- * ## The tick is a set, and it is drawn before the server agrees
+ * ## State writes are explicit
  *
- * `onToggleChecked` receives the **next** value and sends it as `checked: next` — never
- * `!checked` recomputed anywhere (§5.11.5). Until the projection carries that value the row
- * draws it from `checkedOverride.ts`, so two people ticking `Milk` at once end with it checked
- * once, and neither of them watches it flicker.
- *
- * ## One behaviour renders grouped, and it is chosen off the stored field
- *
- * `behaviour === 'watch'` renders `WatchSections`; everything else renders flat. The choice is
- * the **row's own stored value** and nothing else (ADR-032), so a list changed away from
- * `watch` renders flat the moment its committed projection says so — no template key, no
- * capability, no second condition (§P3-31's edge case).
+ * A checkbox writes `done` or `open`; it never inverts server state. Grouped stage rendering
+ * is selected only by the stored `itemStateMode`, and each populated state owns its drag
+ * surface so reordering cannot change state.
  *
  * ## The drag
  *
@@ -122,10 +104,8 @@ export function ListDetailScreen({
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
-  const [checks, setChecks] = useState<CheckedOverrides>(NO_OVERRIDES);
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({ onSaved: view.refresh, onRemoved: view.refetch });
-  const watch = useWatchActions(view.refresh);
   /*
    * `refresh` for a change this device accepted — native re-reads SQLite, web asks the server —
    * and `refetch` for the online downgrade preview that turned out to lose nothing and was
@@ -139,21 +119,16 @@ export function ListDetailScreen({
   const reorder = useReorderItems({
     listId,
     /*
-     * The behaviour only. A reorder reads no capability — `checkable` does not make a row
-     * un-draggable and `supportsLocation` has nothing to say about position — so handing the
-     * whole list row would be handing over fields nothing here may branch on.
+     * Reorder reads only state presentation. In grouped stages it constrains movement to the
+     * current group; in every other mode the whole ordered list is one drag surface.
      */
-    list: { behaviour: settings.view?.behaviour ?? 'collection' },
+    list: { itemStateMode: settings.view?.itemStateMode ?? { mode: 'none' } },
     items: view.items,
     applyRank: view.applyRank,
     onMoved: view.refresh,
   });
 
   // Retire each pending tick as the projection catches up with it, and never before.
-  useEffect(() => {
-    setChecks((current) => settleOverrides(current, view.items));
-  }, [view.items]);
-
   const progress = {
     itemCount: view.itemCount,
     loadedCount: view.items.length,
@@ -248,35 +223,20 @@ export function ListDetailScreen({
             body={list.emptyStateCopy}
             testID="list-detail-empty"
           />
-        ) : list === undefined ? null : list.behaviour === 'watch' ? (
-          /*
-           * §5.2's one grouped list. The rows are the same `ListItemRow`; only the headings and
-           * the per-section drag surface are new, and the drop index each section reports is
-           * translated back into the flat position `afterItemId` speaks.
-           */
-          <WatchSections
-            list={list}
+        ) : list === undefined ? null : list.itemStateMode.mode === 'stages' &&
+          list.itemStateMode.groupByState ? (
+          <StateSections
+            list={
+              list as List & {
+                itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
+              }
+            }
             items={view.items}
-            /* §3.2's pair for this row, both of them now that P3-29 owns the delete. */
-            actions={watchItemSwipeActions()}
-            onAction={(item, action) => {
-              if (action.name === 'mark-watched') watch.markWatched(item);
-              if (action.name === 'delete') items.remove(item);
-            }}
             onOpen={(item) => setOpenItemId(item.itemId)}
-            onReorder={(itemId, withinGroup) => {
-              const flat = groupDropIndex(view.items, itemId, withinGroup);
-              if (flat !== undefined) reorder.drop(itemId, flat);
-            }}
-            testID="list-detail-items"
+            onDrop={reorder.drop}
           />
         ) : (
-          /*
-           * §5.6: reorder is offered on **every** behaviour, and a checked row reorders like
-           * any other and stays where it is put. The only thing a behaviour changes is how far
-           * a row may travel, which `reorderRange` decides and neither this screen nor the
-           * gesture second-guesses.
-           */
+          /* Reorder is offered in every mode and never mutates item state. */
           <ReorderableList
             /*
              * Sorted here as well as by the projection, and deliberately: `(rank, itemId)` is
@@ -291,25 +251,19 @@ export function ListDetailScreen({
             onDrop={reorder.drop}
             testID="list-detail-items"
             renderItem={(item) => (
-              /*
-               * The row is handed the list's own `behaviour` and `capabilities` and nothing
-               * else — not the title, not the template key. That narrowing is the whole of
-               * ADR-032 at the call site (P3-28).
-               */
+              /* The renderer reads stored configuration, never creation provenance. */
               <ListItemRow
                 list={list}
-                item={{ ...item, checked: isChecked(item, checks) }}
+                item={item}
                 onOpen={() => setOpenItemId(item.itemId)}
                 onToggleChecked={(next) => {
-                  setChecks((current) => withOverride(current, item.itemId, next));
-                  void items.save(item, { checked: next }).then((saved) => {
-                    // A refused tick goes back to committed truth; §5.3's toast is the hook's.
-                    if (!saved) {
-                      setChecks((current) => withoutOverride(current, item.itemId));
-                    }
+                  void items.save(item, {
+                    state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
                   });
                 }}
-                onOpenLocation={() => void openInMaps(item.location)}
+                {...(item.features?.place === undefined
+                  ? {}
+                  : { onOpenLocation: () => void openInMaps(item.features?.place) })}
                 testID={`list-item-${item.itemId}`}
               />
             )}
@@ -358,14 +312,14 @@ export function ListDetailScreen({
           onClose={() => setMenuOpen(false)}
           list={list}
           /*
-           * Zero until every page has landed, which makes `Clear checked` absent rather than
+           * Zero until every page has landed, which makes `Uncheck all` absent rather than
            * wrong: it is offered only when its count is the whole list's, and that count is
            * what pays for there being no confirmation dialog (§P3-10).
            */
-          checkedCount={mayActOnWholeList(progress) ? checkedCount(view.items) : 0}
-          onClearChecked={() => {
+          checkedCount={mayActOnWholeList(progress) ? doneCount(view.items) : 0}
+          onClearDone={() => {
             setMenuOpen(false);
-            bulk.clearChecked(listId);
+            bulk.clearDone(listId);
           }}
           onUncheckAll={() => {
             setMenuOpen(false);

@@ -144,13 +144,13 @@ const createList = async (title = 'Groceries', templateKey = 'groceries') => {
   return (await res.json()).data as List;
 };
 
-const addItem = async (listId: string, title: string, checked?: boolean) => {
+const addItem = async (listId: string, title: string, done?: boolean) => {
   const res = await request('POST', `/v1/lists/${listId}/items`, { title });
   expect(res.status).toBe(201);
   const item = (await res.json()).data as ListItem;
-  if (checked === true) {
+  if (done === true) {
     const patched = await request('PATCH', `/v1/lists/${listId}/items/${item.itemId}`, {
-      checked: true,
+      state: 'done',
     });
     expect(patched.status).toBe(200);
   }
@@ -427,7 +427,7 @@ describe('the duplicate rule, in all three states', () => {
 
     const rows = await itemRows(list.listId);
     expect(rows).toHaveLength(2);
-    expect(rows.filter((row) => row.checked === false)).toHaveLength(1);
+    expect(rows.filter((row) => row.state === 'open')).toHaveLength(1);
   });
 });
 
@@ -640,7 +640,7 @@ describe('replay adds nothing twice', () => {
     const changed = await request(
       'PATCH',
       `/v1/lists/${list.listId}/items/${target.itemId}`,
-      { title: 'Bought chicken', checked: true },
+      { title: 'Bought chicken', state: 'done' },
     );
     expect(changed.status).toBe(200);
 
@@ -737,7 +737,7 @@ describe('replay adds nothing twice', () => {
     expect(
       (
         await request('PATCH', `/v1/lists/${list.listId}/items/${destination}`, {
-          checked: true,
+          state: 'done',
         })
       ).status,
     ).toBe(200);
@@ -799,7 +799,7 @@ describe('replay adds nothing twice', () => {
       (
         await request('PATCH', `/v1/lists/${list.listId}/items/${targetId}`, {
           title: 'Bought chicken',
-          checked: true,
+          state: 'done',
         })
       ).status,
     ).toBe(200);
@@ -810,16 +810,16 @@ describe('replay adds nothing twice', () => {
     const outcomes = ((await replayAndFresh.json()).data as { ingredients: Json[] })
       .ingredients;
     expect(outcomes).toMatchObject([
-      { ingredientId: CHICKEN, item: { itemId: targetId, checked: true } },
+      { ingredientId: CHICKEN, item: { itemId: targetId, state: 'done' } },
       {
         ingredientId: TORTILLAS,
         outcome: 'created',
-        item: { itemId: destinationItemId(TORTILLAS), checked: false },
+        item: { itemId: destinationItemId(TORTILLAS), state: 'open' },
       },
     ]);
     const rows = await itemRows(list.listId);
     expect(rows).toHaveLength(2);
-    expect(rows.filter((row) => row.checked === false)).toHaveLength(1);
+    expect(rows.filter((row) => row.state === 'open')).toHaveLength(1);
   });
 });
 
@@ -842,8 +842,8 @@ describe('what it refuses, and writes nothing for', () => {
   });
 
   it.each([
-    ['watch', 'watchlist'],
-    ['meals', 'meals-to-try'],
+    ['watch', 'watch-later'],
+    ['meals', 'meal-ideas'],
   ])('400s a %s list, which has no room for a bare title', async (_why, templateKey) => {
     await createMeal();
     const list = await createList('Elsewhere', templateKey);
@@ -1199,15 +1199,21 @@ describe('a change landing between the read and the commit', () => {
     vi.restoreAllMocks();
   });
 
-  it('refuses a collection that becomes watch before the fenced snapshot', async () => {
+  it('refuses a destination that stops using checkbox presentation before the fenced snapshot', async () => {
     const { list } = await setUp();
     const spy = await injectBeforeSnapshot(async () => {
       const meta = (await rawItem(`LIST#${list.listId}`, 'META')) as Json;
       const changed = await request(
-        'POST',
-        `/v1/lists/${list.listId}/behaviour`,
-        { behaviour: 'watch' },
-        { 'If-Match': String(meta.updatedAt) },
+        'PATCH',
+        `/v1/lists/${list.listId}`,
+        {
+          itemStateMode: {
+            mode: 'stages',
+            labels: { open: 'Saved', active: 'In progress', done: 'Done' },
+            groupByState: false,
+          },
+        },
+        { 'If-Match': String(meta.updatedAt), 'Idempotency-Key': crypto.randomUUID() },
       );
       expect(changed.status).toBe(200);
     });
@@ -1217,7 +1223,9 @@ describe('a change landing between the read and the commit', () => {
     expect(spy).toHaveBeenCalled();
     expect(res.status).toBe(400);
     expect(await itemRows(list.listId)).toHaveLength(0);
-    expect((await rawItem(`LIST#${list.listId}`, 'META'))?.behaviour).toBe('watch');
+    expect((await rawItem(`LIST#${list.listId}`, 'META'))?.itemStateMode).toMatchObject({
+      mode: 'stages',
+    });
   });
 
   /**

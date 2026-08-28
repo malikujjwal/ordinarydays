@@ -34,7 +34,7 @@ import { clearedItemsToast, uncheckedItemsToast } from '../model/bulkUndoToast';
  * purpose and one screen owning both numbers is how they drift.
  */
 export interface ListBulkActions {
-  clearChecked: (listId: string) => void;
+  clearDone: (listId: string) => void;
   uncheckAll: (listId: string) => void;
   archive: (list: List) => void;
 }
@@ -46,19 +46,16 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
   const { onArchive } = useListIndexMutations();
 
   const run = useCallback(
-    (listId: string, action: 'clear-checked' | 'uncheck-all', idempotencyKey: string) => {
+    (listId: string, action: 'clear-done' | 'uncheck-all', idempotencyKey: string) => {
       // The accepted action owns the singleton toast slot before this request can settle.
       dismiss();
-      const call =
-        action === 'clear-checked' ? clearCheckedListItems : uncheckAllListItems;
+      const call = action === 'clear-done' ? clearCheckedListItems : uncheckAllListItems;
       void call(apiClient, listId, idempotencyKey)
         .then((result) => {
           onChanged();
           if (result.affectedCount === 0) return;
-          const toast =
-            action === 'clear-checked' ? clearedItemsToast : uncheckedItemsToast;
           showUndo(
-            toast({
+            (action === 'clear-done' ? clearedItemsToast : uncheckedItemsToast)({
               affectedCount: result.affectedCount,
               onUndo: () => {
                 dismiss();
@@ -85,7 +82,7 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
   );
 
   return {
-    clearChecked: (listId) => run(listId, 'clear-checked', randomUUID()),
+    clearDone: (listId) => run(listId, 'clear-done', randomUUID()),
     uncheckAll: (listId) => run(listId, 'uncheck-all', randomUUID()),
     archive: onArchive,
   };

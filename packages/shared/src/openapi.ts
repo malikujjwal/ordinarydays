@@ -50,8 +50,6 @@ import {
   addIngredientsToListInput,
   addIngredientsToListResult,
   bulkCreateListItemsInput,
-  changeListBehaviourInput,
-  changeListBehaviourQuery,
   createListInput,
   createListItemInput,
   deletedList,
@@ -685,7 +683,7 @@ registry.registerPath({
   summary: 'Send selected meal ingredients to a list the caller has chosen',
   description:
     'Requires an `Idempotency-Key`. Owner-only, and only on a `meal`. `listId` is required ' +
-    'and must be a `collection` the caller may write: the destination is resolved on the ' +
+    'and must be a writable list: the destination is resolved on the ' +
     'client, from the `groceries` slot, and shown to the user before this is called — the ' +
     'server never resolves a slot and never falls back to one. Each selected ingredient is ' +
     'named by its stable `ing_` id and resolved against the current ingredient array, so a ' +
@@ -693,7 +691,7 @@ registry.registerPath({
     'whole request without writing anything. Titles, `sourceActivityId` and `sourceLabel` ' +
     'are derived server-side and are not accepted on input here or on the ordinary bulk ' +
     'route. Selections are grouped by normalized title: each group extends one matching ' +
-    '**unchecked** row or creates one row, while a **checked** match was already bought. ' +
+    '**open** row or creates one row, while a **done** match was already bought. ' +
     'Provenance ownership is retained as storage-only Activity-keyed segments rather than ' +
     'inferred by splitting the rendered label. `itemId` is optional; a supplied id remains ' +
     'durably bound to its outcome after the receipt expires, including when deduplication ' +
@@ -712,7 +710,7 @@ registry.registerPath({
     400: {
       description:
         'Missing idempotency key, a non-meal activity, a destination that is not a ' +
-        'writable collection, or an ingredient id the meal no longer has.',
+        'writable list, or an ingredient id the meal no longer has.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
@@ -1015,11 +1013,11 @@ registry.registerPath({
   summary: 'Create a list from an explicitly selected template',
   description:
     'Requires the visible `title` and the `templateKey` the user tapped. The server copies ' +
-    'behaviour, capabilities, slot, icon and empty-state copy from that exact catalogue ' +
+    'item-state mode, feature configuration, slot, icon and empty-state copy from that exact catalogue ' +
     'entry onto the new row — values, never a live reference — and stores `templateKey` as ' +
     'provenance only. A missing or unknown key is `400`; there is no `simple-list` ' +
-    'fallback and no title matching. The body is strict, so a client-supplied `behaviour`, ' +
-    '`capabilities`, `slot`, `icon` or `emptyStateCopy` is a `400` naming it. ' +
+    'fallback and no title matching. The body is strict, so a client-supplied `itemStateMode`, ' +
+    '`featureConfig`, `slot`, `icon` or `emptyStateCopy` is a `400` naming it. ' +
     '`sourceActivityId` must name an owned Plan and forces the copied slot to `null`, ' +
     'writing the id-only reverse projection in the same transaction. Optional `listId` is ' +
     'the permanent client-minted `lst_` ULID for durable offline creation; a collision ' +
@@ -1065,7 +1063,8 @@ registry.registerPath({
     'hydration. The pair is present only when the pointer resolves to a readable **Plan**: an ' +
     'unlinked row, one whose Activity the caller may not read, and one whose Plan has since ' +
     'been converted to a Task all carry neither field. A repair or ' +
-    'behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also ' +
+    'rank-repair fence returns `503` with `Retry-After: 1` and no item rows. Legacy ' +
+    'aggregates are converted by the resumable schema migration before they are returned. Also ' +
     'the authoritative read durable creation reconciles a lost response against: `200` ' +
     'adopts the server row, `404` parks the intent.',
   tags: ['lists'],
@@ -1088,34 +1087,31 @@ registry.registerPath({
 });
 
 /**
- * `/v1/lists/{id}` settings and `/v1/lists/{id}/behaviour` (P3-09). The registrations that
- * bring `PatchListInput`, `ChangeListBehaviourInput` and `ListSettingsMutation` into
- * `components/schemas`.
+ * `/v1/lists/{id}` settings. The registration brings `PatchListInput` and
+ * `ListSettingsMutation` into `components/schemas`.
  */
 registry.registerPath({
   method: 'patch',
   path: '/v1/lists/{id}',
-  summary: 'Change a list’s title, capabilities, default slot or archived state',
+  summary: 'Change a list’s title, item states, features, default slot or archived state',
   description:
     'Requires `If-Match` carrying the `updatedAt` the client read and an ' +
     '`Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque ' +
     'Undo token if a successful response is lost. A response carrying that token is retained ' +
     'through `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching durable client replay; ' +
-    'a tokenless ' +
-    'response keeps the ordinary 24-hour receipt window. `If-Match` omission is `400`, ' +
-    'not `428`, because the error union is closed. Everything this route changes is ' +
-    '**additive in both directions** and applies immediately with no confirmation: ' +
-    'turning `checkable` off retains every item\u2019s `checked` value and turning ' +
-    '`supportsLocation` off retains every stored location, so re-enabling either ' +
-    'restores exactly what was there. `capabilities` is a partial patch of the two ' +
-    'flags. `slot` is nullable \u2014 `null` clears it \u2014 and changing or clearing ' +
+    'a tokenless response keeps the ordinary 24-hour receipt window. `If-Match` omission ' +
+    'is `400`, not `428`, because the error union is closed. Everything this route changes ' +
+    'applies immediately with no confirmation: changing `itemStateMode` retains every ' +
+    'item\u2019s state, and disabling a `featureConfig` key retains that feature\u2019s stored ' +
+    'value byte-for-byte, so re-enabling it restores exactly what was there. ' +
+    '`featureConfig` is a keyed partial patch, preserving omitted siblings. `slot` is ' +
+    'nullable \u2014 `null` clears it \u2014 and changing or clearing ' +
     'it removes the caller\u2019s `defaultLists[oldSlot]` in the same transaction, but ' +
     'only while that slot still names this list, so a newer destination chosen on ' +
-    'another device survives. The body is strict: `behaviour` belongs to the ' +
-    'replay-protected action below and `templateKey` is immutable provenance, so ' +
-    'either one is a `400` naming it. A change that actually moves something answers ' +
-    'with a settings Undo token; a rename alone does not, because renaming a list has ' +
-    'no undo offer. A member may rename; only the owner may change capabilities, slot ' +
+    'another device survives. The body is strict: legacy `behaviour` and `capabilities` ' +
+    'do not exist, and `templateKey` is immutable provenance, so any is a `400` naming it. ' +
+    'Every effective settings change answers with a 6-second Undo offer. A member may ' +
+    'rename; only the owner may change item states, features, slot ' +
     'or archived state.',
   tags: ['lists'],
   request: {
@@ -1131,11 +1127,11 @@ registry.registerPath({
     400: {
       description:
         'A missing `If-Match` or `Idempotency-Key`, an empty body, or a field this route does not accept — ' +
-        '`behaviour` and `templateKey` among them.',
+        '`behaviour`, `capabilities` and `templateKey` among them.',
       content: { 'application/json': { schema: errorResponse } },
     },
     403: {
-      description: 'A member reaching for capabilities, slot or archived state.',
+      description: 'A member reaching for item states, features, slot or archived state.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
@@ -1146,73 +1142,6 @@ registry.registerPath({
       description:
         'The `If-Match` version has moved on. `details[0]` carries the current ' +
         '`updatedAt` so the client can refetch and re-apply rather than guess.',
-      content: { 'application/json': { schema: errorResponse } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'post',
-  path: '/v1/lists/{id}/behaviour',
-  summary: 'Change a list’s behaviour, through its gated migration',
-  description:
-    'Owner only, and the only route that changes `behaviour`. Requires both `If-Match` ' +
-    'and an `Idempotency-Key`: it starts a bounded, resumable item migration that a ' +
-    'retried request must join rather than duplicate, and the operation is identified ' +
-    'by that key. The first transaction leaves public behaviour, `updatedAt` and every ' +
-    'item unchanged and only installs the migration marker; while it stands, every ' +
-    'item read and mutation attempts a bounded drain and otherwise answers ' +
-    '`503 internal` with `Retry-After: 1`. The final transaction alone flips the ' +
-    'behaviour, advances `rankVersion` \u2014 so item cursors issued before the ' +
-    'migration are rejected rather than resumed \u2014 records the Undo inverse and the ' +
-    'receipt, and clears the marker. A lossless response carrying an Undo token is retained ' +
-    'through `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching durable client replay; a ' +
-    'tokenless no-op or confirmed destructive response keeps the ordinary 24-hour receipt ' +
-    'window. `collection` to `watch` gives every item ' +
-    '`watchStatus: "want"` and `collection` to `meals` an empty ingredient list; both ' +
-    'are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` ' +
-    'for anything else \u2014 `watch` to `meals` included \u2014 is destructive. The first ' +
-    'call answers `409` with a typed `confirmation` containing source/target behaviours, ' +
-    '`itemVersion`, item count and field labels, and writes nothing. The confirmed action ' +
-    'echoes that complete object under a new key; migration installation and its gated ' +
-    'snapshot reject any intervening item mutation or changed loss summary with a fresh ' +
-    '`409`. A list carrying none of the data being removed loses nothing, so it needs no ' +
-    'confirmation and changes immediately.',
-  tags: ['lists'],
-  request: {
-    params: z.object({ id: listId }),
-    query: changeListBehaviourQuery,
-    body: { content: { 'application/json': { schema: changeListBehaviourInput } } },
-  },
-  responses: {
-    200: {
-      description:
-        'The migrated list. An upgrade also carries its Undo token; a confirmed downgrade ' +
-        'does not, because its only path back is another confirmed call.',
-      content: { 'application/json': { schema: listSettingsMutationResponse } },
-    },
-    400: {
-      description: 'A missing `If-Match` or `Idempotency-Key`, or an unknown behaviour.',
-      content: { 'application/json': { schema: errorResponse } },
-    },
-    403: {
-      description: 'A member. Changing behaviour is the owner’s.',
-      content: { 'application/json': { schema: errorResponse } },
-    },
-    404: {
-      description: 'No such list, or none this caller has a pointer to.',
-      content: { 'application/json': { schema: errorResponse } },
-    },
-    409: {
-      description:
-        'Either a stale `If-Match`, or the data-loss preview. The preview carries the typed ' +
-        'top-level `confirmation` object that a confirmed request must echo unchanged.',
-      content: { 'application/json': { schema: errorResponse } },
-    },
-    503: {
-      description:
-        'The migration is still running after this request’s bounded drain. Retry after ' +
-        '`Retry-After`; the same key resumes the same operation.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },
@@ -1266,7 +1195,7 @@ registry.registerPath({
     'whose Plan has since been converted to a Task all carry neither. The caller ' +
     'filter precedes one bounded Activity hydration. Strong META reads before and ' +
     'after the query must agree on `rankVersion` and find neither a rank-repair nor a ' +
-    'behaviour-migration marker; a failed fence returns `503 internal` with ' +
+    'schema-migration marker; a failed fence returns `503 internal` with ' +
     '`Retry-After: 1` and no rows, and the client restarts at page one. `meta.nextCursor` ' +
     'is bound to the rank generation that issued it, so a cursor minted before a repair is ' +
     'rejected rather than resumed across changed sort keys.',
@@ -1296,11 +1225,11 @@ registry.registerPath({
   summary: 'Add one item to a list',
   description:
     '`afterItemId` places the item — the server converts it to a rank and the client never ' +
-    'sends one. The body is strict, so `checked`, `rank`, `itemRevision`, `sourceActivityId` ' +
-    'and `sourceLabel` are rejected rather than dropped: the first is server-gated and the ' +
-    'rest are server-derived. `location` is accepted only on a `collection` whose ' +
-    '`supportsLocation` capability is on, and `details` only when the behaviour has that ' +
-    'shape and the discriminant matches. Beyond 500 items the answer is `400` with ' +
+    'sends one. The body is strict, so `state`, `rank`, `itemRevision`, `sourceActivityId` ' +
+    'and `sourceLabel` are rejected rather than dropped: state starts as `open` and the rest ' +
+    'are server-derived. Keys inside `features` are accepted only when the matching ' +
+    '`featureConfig` entry is enabled, and progress must use its configured kind. Beyond ' +
+    '500 items the answer is `400` with ' +
     '`List is full.` Optional `itemId` is the permanent client-minted `itm_` ULID, ' +
     'condition-checked against the item tombstone. Creating, so an `Idempotency-Key` is ' +
     'required.',
@@ -1316,8 +1245,7 @@ registry.registerPath({
     },
     400: {
       description:
-        'A full list, a field this list’s behaviour or capabilities do not allow, a ' +
-        'mismatched `details.behaviour`, a malformed client id, or a missing ' +
+        'A full list, a disabled or mismatched feature, a malformed client id, or a missing ' +
         '`Idempotency-Key`.',
       content: { 'application/json': { schema: errorResponse } },
     },
@@ -1401,13 +1329,13 @@ registry.registerPath({
     '**No `If-Match`.** Item writes are per-field last-write-wins — optimistic concurrency ' +
     'on every checkbox in a grocery list would produce constant spurious `409`s — and the ' +
     'internal item revision is a retry fence rather than a client-visible conflict. ' +
-    '`note` and `location` accept `null` to clear the field, which is a different ' +
-    'intention from omitting it — and clearing is gated exactly as setting is, so a value ' +
-    'retained behind a switched-off capability cannot be removed. `afterItemId` requests a ' +
+    '`note` and keys inside `features` accept `null` to clear a value, which is a different ' +
+    'intention from omitting it. Feature writes are gated by their matching enabled ' +
+    '`featureConfig` key; disabling one preserves its stored values but hides its editor. ' +
+    '`afterItemId` requests a ' +
     'reorder (`null` moves the item to the front) and **may arrive alongside ordinary ' +
     'fields**: they land in one transaction, because the reorder already re-puts the whole ' +
-    'row at its new key. `checked` and `location` are subject to the same two-part ' +
-    'behaviour and capability gates as creation.',
+    'row at its new key. `state` is always intrinsic, independent of how this list presents it.',
   tags: ['lists'],
   request: {
     params: z.object({ id: listId, itemId }),
@@ -1419,9 +1347,7 @@ registry.registerPath({
       content: { 'application/json': { schema: listItemResponse } },
     },
     400: {
-      description:
-        'A field this list’s behaviour or capabilities do not allow, a mismatched ' +
-        '`details.behaviour`, an empty patch, or a reorder mixed with a field edit.',
+      description: 'A disabled or mismatched feature, or an empty patch.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
@@ -1468,11 +1394,11 @@ registry.registerPath({
   summary: 'Plan this item — the optional bridge to Activities',
   description:
     'Creates a Plan from a list item and links it for the caller. **The item is not ' +
-    'touched**: it is not copied, moved, checked, hidden or given an Activity id, and it ' +
+    'touched**: it is not copied, moved, completed, hidden or given an Activity id, and it ' +
     'comes back in the response unchanged so a client can see the bridge linked rather ' +
     'than duplicated. `creationTarget` and `audience` are both **required** and neither is ' +
-    'ever inferred — the server does not read the list’s `behaviour`, `templateKey` or ' +
-    'capabilities to choose a Plan kind, so a `watch` list does not make a `watch` Plan. ' +
+    'ever inferred — the server does not read the list’s `templateKey`, state mode or ' +
+    'feature configuration to choose a Plan kind, so a Watch Later preset does not imply a watch Plan. ' +
     'In this phase only `just_me` is accepted; `selected_people` is `400` with ' +
     '`Sharing is coming soon.` until Phase 6, and a non-empty `attachmentIds` is `400` ' +
     'until the confirm-and-link path lands. `activityId` and every `reminderId` are ' +
@@ -1526,9 +1452,8 @@ registry.registerPath({
     'leaves a replay-window tombstone holding its exact snapshot — the row, its rank, its ' +
     'current viewer links and the matching Activity provenance — under **one** single-use ' +
     'operation, however many transactions the delete needed. ' +
-    'Valid only on a `collection` whose `checkable` capability is on — on any other list, ' +
-    'including one whose stored flag a behaviour change left behind, it is `400`. The ' +
-    'hidden retained checks such a list carries are exactly what these must not reach.' +
+    'Valid only when `itemStateMode` is `checkbox`; it deletes items whose intrinsic state ' +
+    'is `done` and leaves open or active items untouched.' +
     ' Both answer `{ affectedCount, undoToken, undoExpiresAt }` with a **10-second** ' +
     'window, and `undoExpiresAt` is the client\u2019s presentation deadline: stop offering a ' +
     'new Undo at that instant, while an inverse the user already accepted stays valid ' +
@@ -1544,8 +1469,7 @@ registry.registerPath({
     },
     400: {
       description:
-        'Not a collection, or a collection whose checkboxes are off — or a missing ' +
-        '`Idempotency-Key`.',
+        'A list not presenting checkboxes, or a missing ' + '`Idempotency-Key`.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
@@ -1562,12 +1486,10 @@ registry.registerPath({
   description:
     'The start of the next trip. Not destructive, so no dialog is in question — it still ' +
     'gets the canonical 10-second toast, because every bulk reversible action does. The ' +
-    'operation records **exactly the ids it changed**, so compensation re-checks those and ' +
-    'not whatever happens to be unchecked when it arrives; an item deleted during the ' +
+    'operation records **exactly the ids it changed**, so compensation restores those to ' +
+    '`done` and not whatever happens to be open when it arrives; an item deleted during the ' +
     'window is simply skipped. ' +
-    'Valid only on a `collection` whose `checkable` capability is on — on any other list, ' +
-    'including one whose stored flag a behaviour change left behind, it is `400`. The ' +
-    'hidden retained checks such a list carries are exactly what these must not reach.' +
+    'Valid only when `itemStateMode` is `checkbox`; it moves each `done` item to `open`.' +
     ' Both answer `{ affectedCount, undoToken, undoExpiresAt }` with a **10-second** ' +
     'window, and `undoExpiresAt` is the client\u2019s presentation deadline: stop offering a ' +
     'new Undo at that instant, while an inverse the user already accepted stays valid ' +
@@ -1578,13 +1500,12 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: 'How many were unchecked, and the token that re-checks them.',
+      description: 'How many moved to open, and the token that restores them to done.',
       content: { 'application/json': { schema: reversibleItemMutationResponse } },
     },
     400: {
       description:
-        'Not a collection, or a collection whose checkboxes are off — or a missing ' +
-        '`Idempotency-Key`.',
+        'A list not presenting checkboxes, or a missing ' + '`Idempotency-Key`.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {

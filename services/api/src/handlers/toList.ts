@@ -5,7 +5,7 @@ import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
  * `toUser`'s reason: a stored row carries storage attributes, and a projection that leaks
  * by default is corrected by remembering (`agent-playbook.md` §6.11).
  *
- * `itemVersion`, `rankRepairId` and `behaviourMigrationId` are deliberately absent: they are
+ * `itemVersion`, `rankRepairId` and `schemaMigrationId` are deliberately absent: they are
  * storage-level concurrency state and never serialised (`data-model.md` §4.6).
  * `rankVersion` stays — item-page cursors are bound to it.
  */
@@ -13,21 +13,19 @@ export function toList(list: List): Record<string, unknown> {
   return {
     listId: list.listId,
     ownerId: list.ownerId,
-    behaviour: list.behaviour,
+    schemaVersion: list.schemaVersion,
     templateKey: list.templateKey,
     title: list.title,
     icon: list.icon,
     emptyStateCopy: list.emptyStateCopy,
-    capabilities: {
-      checkable: list.capabilities.checkable,
-      supportsLocation: list.capabilities.supportsLocation,
-    },
+    itemStateMode: list.itemStateMode,
+    featureConfig: list.featureConfig,
     slot: list.slot,
     ...(list.sourceActivityId === undefined
       ? {}
       : { sourceActivityId: list.sourceActivityId }),
     itemCount: list.itemCount,
-    uncheckedCount: list.uncheckedCount,
+    doneCount: list.doneCount,
     memberCount: list.memberCount,
     rankVersion: list.rankVersion,
     archived: list.archived,
@@ -73,13 +71,12 @@ export function toListItem(item: ListItem): Record<string, unknown> {
     rank: item.rank,
     title: item.title,
     ...(item.note === undefined ? {} : { note: item.note }),
-    checked: item.checked,
-    ...(item.location === undefined ? {} : { location: item.location }),
+    state: item.state,
     ...(item.sourceActivityId === undefined
       ? {}
       : { sourceActivityId: item.sourceActivityId }),
     ...(item.sourceLabel === undefined ? {} : { sourceLabel: item.sourceLabel }),
-    ...(item.details === undefined ? {} : { details: item.details }),
+    ...(item.features === undefined ? {} : { features: item.features }),
   };
 }
 

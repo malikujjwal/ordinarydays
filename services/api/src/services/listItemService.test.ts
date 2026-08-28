@@ -100,17 +100,18 @@ const ITEM = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X3';
 const NOW = instant.parse('2026-08-24T09:00:00.000Z');
 
 const aList = (overrides: Partial<List> = {}): List => ({
+  schemaVersion: 2,
   listId: LIST,
   ownerId: USER,
-  behaviour: 'collection',
   templateKey: 'checklist',
   title: 'Errands',
   icon: 'check-square',
   emptyStateCopy: 'Add something.',
-  capabilities: { checkable: true, supportsLocation: true },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: { place: { enabled: true } },
   slot: null,
   itemCount: 0,
-  uncheckedCount: 0,
+  doneCount: 0,
   memberCount: 1,
   rankVersion: 0,
   archived: false,
@@ -125,7 +126,7 @@ const anItem = (overrides: Partial<ListItem> = {}): ListItem => ({
   rank: 'V',
   itemRevision: 0,
   title: 'Eggs',
-  checked: false,
+  state: 'open',
   ...overrides,
 });
 
@@ -191,80 +192,78 @@ describe('the item cap', () => {
   });
 });
 
-describe('the two-part gates', () => {
-  it.each([
-    [
-      'a collection with the flag off',
-      aList({ capabilities: { checkable: false, supportsLocation: true } }),
-    ],
-    ['a watch list whose stored flag is true', aList({ behaviour: 'watch' })],
-    ['a meals list whose stored flag is true', aList({ behaviour: 'meals' })],
-  ])('refuses checked on %s', async (_case, list) => {
-    useList(list);
-
+describe('feature gates', () => {
+  it('refuses progress while that feature is disabled', async () => {
+    useList(aList({ featureConfig: {} }));
     await expect(
-      service.patchItem(USER, LIST, ITEM, { checked: true }, NOW),
+      service.createItem(
+        USER,
+        LIST,
+        { title: 'Severance', features: { progress: { kind: 'episode', episode: 4 } } },
+        NOW,
+      ),
     ).rejects.toMatchObject({ code: 'validation_failed' });
-    expect(repository.patchListItemFields).not.toHaveBeenCalled();
+    expect(repository.createListItems).not.toHaveBeenCalled();
   });
 
-  it('accepts checked on a collection whose flag is on', async () => {
-    useList(aList({ capabilities: { checkable: true, supportsLocation: false } }));
-
+  it('requires progress values to match the configured kind', async () => {
+    useList(aList({ featureConfig: { progress: { enabled: true, kind: 'text' } } }));
     await expect(
-      service.patchItem(USER, LIST, ITEM, { checked: true }, NOW),
+      service.createItem(
+        USER,
+        LIST,
+        { title: 'Severance', features: { progress: { kind: 'episode', episode: 4 } } },
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('accepts an enabled typed feature', async () => {
+    useList(aList({ featureConfig: { progress: { enabled: true, kind: 'episode' } } }));
+    await expect(
+      service.createItem(
+        USER,
+        LIST,
+        { title: 'Severance', features: { progress: { kind: 'episode', episode: 4 } } },
+        NOW,
+      ),
     ).resolves.toBeDefined();
   });
 
   it.each([
-    [
-      'a collection with the flag off',
-      aList({ capabilities: { checkable: true, supportsLocation: false } }),
-    ],
-    ['a watch list whose stored flag is true', aList({ behaviour: 'watch' })],
-  ])('refuses a location on %s', async (_case, list) => {
-    useList(list);
-
+    ['place', { place: { label: 'Zahav' } }],
+    ['sub-items', { subItems: { entries: [] } }],
+  ])('gates %s independently', async (_name, features) => {
+    useList(aList({ featureConfig: {} }));
     await expect(
-      service.createItem(
-        USER,
-        LIST,
-        { title: 'Zahav', location: { label: 'Zahav' } },
-        NOW,
-      ),
+      service.createItem(USER, LIST, { title: 'Item', features } as never, NOW),
     ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 
-  /**
-   * A `collection` has no `details` arm, so the shared discriminant rule catches this first
-   * and names `details.behaviour` — a better error than the service's own fallback, which
-   * exists for the case the schema cannot see. Either way nothing is written.
-   */
-  it('refuses details on a collection, which has no details shape at all', async () => {
-    useList();
+  it.each(['progress', 'place', 'subItems'] as const)(
+    'refuses clearing hidden %s values',
+    async (feature) => {
+      useList(aList({ featureConfig: {} }));
+      await expect(
+        service.patchItem(USER, LIST, ITEM, { features: { [feature]: null } }, NOW),
+      ).rejects.toMatchObject({ code: 'validation_failed' });
+      expect(repository.patchListItemFields).not.toHaveBeenCalled();
+    },
+  );
 
-    await expect(
-      service.createItem(
-        USER,
-        LIST,
-        { title: 'Severance', details: { behaviour: 'watch', watchStatus: 'want' } },
-        NOW,
-      ),
-    ).rejects.toBeDefined();
-    expect(repository.createListItems).not.toHaveBeenCalled();
-  });
+  it('allows clearing an enabled feature', async () => {
+    useList(aList({ featureConfig: { place: { enabled: true } } }));
 
-  it('refuses details whose discriminant does not match the behaviour', async () => {
-    useList(aList({ behaviour: 'watch' }));
+    await service.patchItem(USER, LIST, ITEM, { features: { place: null } }, NOW);
 
-    await expect(
-      service.createItem(
-        USER,
-        LIST,
-        { title: 'Tacos', details: { behaviour: 'meals' } },
-        NOW,
-      ),
-    ).rejects.toBeDefined();
+    expect(repository.patchListItemFields).toHaveBeenCalledWith(
+      USER,
+      LIST,
+      expect.anything(),
+      ITEM,
+      { features: { place: null } },
+      NOW,
+    );
   });
 });
 
@@ -563,7 +562,7 @@ describe('reads', () => {
       ]),
     );
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(linkedRow(page.items[0])?.viewerLink).toBeDefined();
     expect(linkedRow(page.items[1])?.viewerLink).toBeUndefined();
@@ -572,7 +571,7 @@ describe('reads', () => {
   it('404s the exact read for a missing or tombstoned id alike', async () => {
     vi.mocked(repository.getListItem).mockResolvedValue(undefined);
 
-    await expect(service.getItemById(USER, LIST, ITEM)).rejects.toMatchObject({
+    await expect(service.getItemById(USER, LIST, ITEM, NOW)).rejects.toMatchObject({
       code: 'not_found',
     });
   });
@@ -616,7 +615,7 @@ describe('cleaning up a stale viewer pointer', () => {
     withStaleLink();
     vi.mocked(authz.assertActivityReadAccessFromPartition).mockResolvedValue({} as never);
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
     expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
@@ -628,7 +627,7 @@ describe('cleaning up a stale viewer pointer', () => {
       new AppError('not_found', 'Activity not found.'),
     );
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(vi.mocked(activityRepository.getActivityPartitionStrong)).toHaveBeenCalledWith(
       LINK.activityId,
@@ -647,7 +646,7 @@ describe('cleaning up a stale viewer pointer', () => {
       new AppError('not_found', 'Activity not found.'),
     );
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(vi.mocked(repository.deleteStaleViewerLink)).toHaveBeenCalledWith(
       LIST,
@@ -670,7 +669,7 @@ describe('cleaning up a stale viewer pointer', () => {
       new Error('ConditionalCheckFailedException'),
     );
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(page.items[0]?.item.itemId).toBe(ITEM);
   });
@@ -687,7 +686,7 @@ describe('cleaning up a stale viewer pointer', () => {
       new Map([[LINK.activityId, {} as never]]),
     );
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(
       vi.mocked(activityRepository.getActivityPartitionStrong),
@@ -738,7 +737,7 @@ describe('a full page of linked items reads in bounded batches', () => {
   it('authorises the whole page in one call, not one per link', async () => {
     const { links } = linkedPage();
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(page.items).toHaveLength(PAGE);
     expect(vi.mocked(authz.readableActivities)).toHaveBeenCalledTimes(1);
@@ -754,7 +753,7 @@ describe('a full page of linked items reads in bounded batches', () => {
   it('performs no per-link authorisation read', async () => {
     linkedPage();
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(vi.mocked(authz.assertActivityAccess)).not.toHaveBeenCalled();
   });
@@ -763,7 +762,7 @@ describe('a full page of linked items reads in bounded batches', () => {
   it('reads the caller’s links in one batch', async () => {
     linkedPage();
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(vi.mocked(repository.batchGetViewerLinks)).toHaveBeenCalledTimes(1);
   });
@@ -772,7 +771,7 @@ describe('a full page of linked items reads in bounded batches', () => {
   it('reads nothing strongly when the whole page is readable', async () => {
     linkedPage();
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(
       vi.mocked(activityRepository.getActivityPartitionStrong),
@@ -813,7 +812,8 @@ describe('the caller’s Plan state reaches the row', () => {
   };
 
   const planOf = async () =>
-    linkedRow((await service.listItemsFor(USER, LIST, undefined)).items[0])?.viewerPlan;
+    linkedRow((await service.listItemsFor(USER, LIST, undefined, NOW)).items[0])
+      ?.viewerPlan;
 
   /** Scheduled: a date is present, which is what makes the line displayable at all. */
   it('carries the schedule of a scheduled Plan', async () => {
@@ -837,7 +837,7 @@ describe('the caller’s Plan state reaches the row', () => {
   it('omits the schedule of an unscheduled Plan, keeping the link', async () => {
     withPlan({ type: 'event', status: 'saved' });
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(linkedRow(page.items[0])?.viewerLink?.activityId).toBe(LINKED);
     expect(linkedRow(page.items[0])?.viewerPlan?.schedule).toBeUndefined();
@@ -932,7 +932,7 @@ describe('the caller’s Plan state reaches the row', () => {
   it('omits the pair when the linked Activity is no longer a Plan', async () => {
     withPlan({ objectKind: 'task', type: 'task', status: 'scheduled' });
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(linkedRow(page.items[0])?.viewerPlan).toBeUndefined();
     expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
@@ -942,7 +942,7 @@ describe('the caller’s Plan state reaches the row', () => {
   it('does not treat a converted Task’s pointer as stale', async () => {
     withPlan({ objectKind: 'task', type: 'task', status: 'scheduled' });
 
-    await service.listItemsFor(USER, LIST, undefined);
+    await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
     expect(
@@ -960,7 +960,7 @@ describe('the caller’s Plan state reaches the row', () => {
     } as never);
     vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([] as never);
 
-    const page = await service.listItemsFor(USER, LIST, undefined);
+    const page = await service.listItemsFor(USER, LIST, undefined, NOW);
 
     expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
     expect(linkedRow(page.items[0])?.viewerPlan).toBeUndefined();

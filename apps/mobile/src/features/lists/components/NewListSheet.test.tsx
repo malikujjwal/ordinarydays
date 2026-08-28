@@ -54,7 +54,12 @@ describe('the style chooser comes first', () => {
   it('opens on the whole catalogue with nothing selected and no title field', () => {
     mount();
 
-    expect(screen.getByRole('heading', { name: 'Choose a list style' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Choose a list type' })).toBeDefined();
+    expect(
+      screen.getByText(
+        'Choose Blank when you want a list without a category or item details.',
+      ),
+    ).toBeDefined();
     expect(screen.getByTestId('list-style-chooser')).toBeDefined();
     // There is no text on the screen for anything to classify, and no write to enable.
     expect(screen.queryByTestId('new-list-title')).toBeNull();
@@ -72,18 +77,18 @@ describe('the style chooser comes first', () => {
     expect(rendered.map((choice) => choice.templateKey)).toEqual(
       choices.map((choice) => choice.templateKey),
     );
-    expect(screen.getByTestId('list-style-simple-list')).toBeDefined();
+    expect(screen.getByTestId('list-style-blank')).toBeDefined();
   });
 
   /** §5.4 rule 6, exactly: `<style>. <description>`. */
   it('announces each row as its style and its description', () => {
     mount();
 
-    expect(screen.getByTestId('list-style-simple-list').getAttribute('aria-label')).toBe(
-      'Blank. A plain list',
+    expect(screen.getByTestId('list-style-blank').getAttribute('aria-label')).toBe(
+      'Blank. Start without a category or item details',
     );
     expect(screen.getByTestId('list-style-groceries').getAttribute('aria-label')).toBe(
-      'Groceries. Checkboxes for shopping',
+      'Groceries. A shopping checklist',
     );
   });
 
@@ -104,16 +109,16 @@ describe('the title step', () => {
   it('shows the chosen style, its exact summary and its editable default title', () => {
     mount();
 
-    choose('tv-shows');
+    choose('watch-later');
 
-    expect(screen.getByRole('heading', { name: 'TV shows' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Watch Later' })).toBeDefined();
     expect(screen.getByTestId('new-list-style-summary').textContent).toBe(
-      'Episode progress',
+      'Track what to watch and episode progress',
     );
-    expect(titleField().getAttribute('value')).toBe('TV shows');
+    expect(titleField().getAttribute('value')).toBe('Watch Later');
     // §5.4 rule 6's second announcement.
     expect(titleField().getAttribute('aria-label')).toBe(
-      'List name, pre-filled with TV shows',
+      'List name, pre-filled with Watch Later',
     );
     expect(screen.queryByTestId('list-style-chooser')).toBeNull();
   });
@@ -122,16 +127,16 @@ describe('the title step', () => {
    * `Blank` is a tap like every other style, and the label and the prefilled title are two
    * different catalogue fields (§P3-07).
    */
-  it('creates simple-list from Blank, prefilled Simple list', async () => {
+  it('creates Blank explicitly, prefilled Untitled list', async () => {
     const { create } = setHook();
     mount();
 
-    choose('simple-list');
-    expect(titleField().getAttribute('value')).toBe('Simple list');
+    choose('blank');
+    expect(titleField().getAttribute('value')).toBe('Untitled list');
     fireEvent.click(createButton());
     await vi.waitFor(() => expect(create).toHaveBeenCalled());
 
-    expect(create).toHaveBeenCalledWith('simple-list', 'Simple list');
+    expect(create).toHaveBeenCalledWith('blank', 'Untitled list');
   });
 
   /**
@@ -156,12 +161,12 @@ describe('the title step', () => {
     const { create } = setHook();
     mount();
 
-    choose('packing');
+    choose('checklist');
     fireEvent.change(titleField(), { target: { value: '  Lisbon  ' } });
     fireEvent.click(createButton());
     await vi.waitFor(() => expect(create).toHaveBeenCalled());
 
-    expect(create).toHaveBeenCalledWith('packing', 'Lisbon');
+    expect(create).toHaveBeenCalledWith('checklist', 'Lisbon');
   });
 
   /** §5.4 rule 3: the trimmed title, and nothing else, gates the write. */

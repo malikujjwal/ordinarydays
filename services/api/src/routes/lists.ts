@@ -1,8 +1,6 @@
 import { zValidator } from '@hono/zod-validator';
 import {
   bulkCreateListItemsInput,
-  changeListBehaviourInput,
-  changeListBehaviourQuery,
   createListInput,
   createListItemInput,
   listDetailQuery,
@@ -15,10 +13,6 @@ import {
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
-import {
-  changeListBehaviourHandler,
-  LIST_BEHAVIOUR_PATH,
-} from '../handlers/changeListBehaviour.js';
 import { createListHandler } from '../handlers/createList.js';
 import { DELETE_LIST_PATH, deleteListHandler } from '../handlers/deleteList.js';
 import { GET_LIST_PATH, getListHandler } from '../handlers/getList.js';
@@ -53,12 +47,11 @@ import {
  *
  * Create with template resolution, the Lists-tab page, list detail with its optional fenced
  * item page and the owner-only delete (P3-05); the six item routes (P3-08); and the two
- * settings routes (P3-09); and the two bulk actions with their compensation endpoint
+ * settings route (P3-33); and the two bulk actions with their compensation endpoint
  * (P3-10); and the optional bridge to Activities (P3-13).
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Only the
- * mutating `POST`s take an `Idempotency-Key`, and only the two conditional routes — the
- * settings `PATCH` and the behaviour `POST` — take an `If-Match`.
+ * mutating `POST`s take an `Idempotency-Key`; the settings `PATCH` takes an `If-Match`.
  */
 
 /**
@@ -68,7 +61,7 @@ import {
  * `requestId`.
  *
  * The create schema is **strict**, and that is the template boundary on the wire: a body
- * carrying `behaviour`, `capabilities`, `slot`, `icon` or `emptyStateCopy` is a `400`
+ * carrying `itemStateMode`, `featureConfig`, `slot`, `icon` or `emptyStateCopy` is a `400`
  * naming the field, never a save that quietly ignores a seed the catalogue owns.
  */
 const validateCreate = zValidator('json', createListInput, (result) => {
@@ -85,14 +78,13 @@ const validateDetailQuery = zValidator('query', listDetailQuery, (result) => {
 });
 
 /**
- * The item bodies, validated against the **behaviour-free** shape here and against the
- * loaded list's behaviour in the service.
+ * Item bodies are validated structurally here and against the loaded List's enabled
+ * feature configuration in the service.
  *
  * The split is not a choice: an item body does not carry its list's behaviour, and a
  * validator has no database. So the strict shape — unknown keys, types, bounds, and the
- * server-owned fields `checked`, `rank`, `itemRevision` and the provenance pair — is settled
- * at the edge, and `details.behaviour` matching plus the two-part capability gates are
- * applied once the row is loaded (`schemas/list.ts`, P3-01).
+ * server-owned fields `state`, `rank`, `itemRevision` and the provenance pair — is settled
+ * at the edge, and feature-kind gates are applied once the row is loaded.
  */
 const validateCreateItem = zValidator('json', createListItemInput, (result) => {
   if (!result.success) throw result.error;
@@ -123,18 +115,10 @@ const validateItemPageQuery = zValidator('query', listItemPageQuery, (result) =>
 /**
  * The settings body, strict — which is where the change-rules table is enforced on the wire.
  * A `PATCH` carrying `templateKey` is immutable provenance and a `PATCH` carrying
- * `behaviour` belongs on the replay-protected action below; both are a `400` naming the
- * field rather than a save that quietly drops half of what was sent.
+ * legacy `behaviour` is not a writable field; both are a `400` naming the field rather than
+ * a save that quietly drops half of what was sent.
  */
 const validatePatchList = zValidator('json', patchListInput, (result) => {
-  if (!result.success) throw result.error;
-});
-
-const validateBehaviour = zValidator('json', changeListBehaviourInput, (result) => {
-  if (!result.success) throw result.error;
-});
-
-const validateBehaviourQuery = zValidator('query', changeListBehaviourQuery, (result) => {
   if (!result.success) throw result.error;
 });
 
@@ -160,7 +144,9 @@ export const lists = new Hono<AppEnv>()
      */
     createListHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
-  .get(GET_LIST_PATH, validateDetailQuery, (c) => getListHandler(c, c.req.valid('query')))
+  .get(GET_LIST_PATH, validateDetailQuery, (c) =>
+    getListHandler(c, c.req.valid('query'), new Date().toISOString()),
+  )
   .patch(PATCH_LIST_PATH, validatePatchList, (c) =>
     patchListHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
@@ -169,9 +155,6 @@ export const lists = new Hono<AppEnv>()
    * segment that a parameter could swallow is worth stating first, even where Hono's router
    * already prefers the static one.
    */
-  .post(LIST_BEHAVIOUR_PATH, validateBehaviour, validateBehaviourQuery, (c) =>
-    changeListBehaviourHandler(c, c.req.valid('json'), new Date().toISOString()),
-  )
   .post(CLEAR_CHECKED_PATH, (c) => clearCheckedHandler(c, new Date().toISOString()))
   .post(UNCHECK_ALL_PATH, (c) => uncheckAllHandler(c, new Date().toISOString()))
   .post(UNDO_PATH, validateUndo, (c) =>
@@ -188,12 +171,12 @@ export const lists = new Hono<AppEnv>()
     bulkCreateListItemsHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .get(LIST_ITEMS_PATH, validateItemPageQuery, (c) =>
-    listListItemsHandler(c, c.req.valid('query')),
+    listListItemsHandler(c, c.req.valid('query'), new Date().toISOString()),
   )
   .post(LIST_ITEMS_PATH, validateCreateItem, (c) =>
     createListItemHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
-  .get(LIST_ITEM_PATH, getListItemHandler)
+  .get(LIST_ITEM_PATH, (c) => getListItemHandler(c, new Date().toISOString()))
   .patch(LIST_ITEM_PATH, validatePatchItem, (c) =>
     patchListItemHandler(c, c.req.valid('json'), new Date().toISOString()),
   )

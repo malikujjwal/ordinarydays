@@ -24,7 +24,11 @@
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "seed:local": "pnpm --filter @od/api run seed:local",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
-    "e2e:web": "pnpm --filter @od/mobile build && playwright test --config e2e/playwright.config.ts",
+    "e2e:web": "node e2e/run-web.mjs",
+    "e2e:lists-visual:build": "node e2e/build-lists-visual-app.mjs",
+    "e2e:lists-visual": "pnpm e2e:lists-visual:build && playwright test --config e2e/playwright.lists-visual.config.ts",
+    "e2e:lists-visual:update": "pnpm e2e:lists-visual:build && playwright test --config e2e/playwright.lists-visual.config.ts --update-snapshots",
+    "playwright:install:chromium": "playwright install chromium",
     "verify": "pnpm lint && pnpm typecheck && pnpm typecheck:e2e && pnpm test:coverage && pnpm depcruise && pnpm check:forbidden && pnpm check:versions"
   },
   "devDependencies": {

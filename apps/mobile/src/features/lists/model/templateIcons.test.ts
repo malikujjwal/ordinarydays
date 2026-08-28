@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
  *
  * This is the assertion that would have caught the gap at P3-02, which shipped a catalogue
  * naming fifteen icons when four existed. Nothing failed for three phases because no screen
- * rendered a list card; P3-25 is the first, and it would have failed on eleven of the
- * seventeen entries — as eleven blank squares in the style chooser, which is the shape of bug
+ * rendered a list card; P3-25 is the first, and it would have failed as blank squares in the
+ * style chooser, which is the shape of bug
  * that gets shrugged at rather than diagnosed.
  *
  * ## Why it lives here
@@ -32,7 +32,7 @@ const choices = listTemplateChoices();
 
 describe('the template catalogue and the icon registry agree', () => {
   it('projects every catalogue entry, so this assertion covers all of them', () => {
-    expect(choices).toHaveLength(17);
+    expect(choices).toHaveLength(7);
     expect(new Set(choices.map((choice) => choice.templateKey)).size).toBe(
       choices.length,
     );
@@ -47,16 +47,22 @@ describe('the template catalogue and the icon registry agree', () => {
     },
   );
 
-  /**
-   * The other direction, and the reason it is worth asserting: a glyph in the map that no
-   * template names is a shape nobody agreed on — the registry's own header calls that out —
-   * and it is how the map slowly becomes a second, wrong catalogue.
-   */
-  it('exports no template glyph that no template uses', () => {
+  it('retains every glyph that a migrated stored List may still name', () => {
     const used = new Set(choices.map((choice) => choice.icon));
-    const unused = Object.keys(templateIcons).filter((icon) => !used.has(icon));
+    const legacy = Object.keys(templateIcons)
+      .filter((icon) => !used.has(icon))
+      .sort();
 
-    expect(unused).toEqual([]);
+    expect(legacy).toEqual([
+      'bag',
+      'cup',
+      'film',
+      'gift',
+      'glass',
+      'heart',
+      'star',
+      'suitcase',
+    ]);
   });
 
   /**

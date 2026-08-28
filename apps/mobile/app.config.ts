@@ -27,7 +27,9 @@ type Profile = 'local' | 'dev' | 'prod';
  * and uses this only when there is none.
  */
 const API: Record<Profile, string> = {
-  local: 'http://localhost:3000',
+  // The override is deliberately local-only. The browser E2E harness uses its own port so
+  // it cannot adopt (or collide with) a developer API on :3000; dev and prod remain fixed.
+  local: process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:3000',
   dev: 'https://api.dev.ordinarydays.app',
   prod: 'https://api.ordinarydays.app',
 };

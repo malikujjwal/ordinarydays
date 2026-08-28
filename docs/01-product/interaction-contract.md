@@ -14,7 +14,7 @@ Six rules. Everything in §3 is a consequence of them.
 | # | Rule | Consequence |
 | --- | --- | --- |
 | U1 | **Tap the body of a row → open its detail.** | A row tap never mutates. Not a toggle, not a completion, not a reschedule. See [`overview.md`](overview.md#43-tap-a-row-opens-detail-never-mutates). |
-| U2 | **Tap a checkbox → complete.** | Only `task` rows and checkable `collection` list items have one. The checkbox is a separate accessibility element with its own 44×44 hit target. |
+| U2 | **Tap a checkbox → complete.** | Only `task` rows and List items whose state mode is `checkbox` have one. A List checkbox sets intrinsic `state` (`done`, or `open` when unchecking); it is a separate accessibility element with its own 44×44 hit target. |
 | U3 | **Swipe → contextual actions.** | Right reveals the row's single positive action; left reveals up to three secondary actions. Full-swipe commits only the *first* action on that side, and never a destructive one. |
 | U4 | **Tap a date or time → reschedule.** | Anywhere it is rendered: the row's time column, the plan detail's when/where block, a list item's state line. It opens the reschedule sheet; it never edits in place. |
 | U5 | **Share → add people.** | One affordance and one sheet on every Plan and List. Tasks have no Share control and no direct participant roster; a prep Task is accessible only through its explicit parent Plan. On a Plan, Share also copies an invite link; a List has no link ([`sharing-and-people.md`](sharing-and-people.md#4a3-inviting-someone-who-does-not-have-an-account)). |
@@ -55,22 +55,23 @@ choice: the user cannot weigh a decision they have not been told the size of.
 The required shape:
 
 ```
-Turn "Watchlist" into a plain list?          ← names the object and the change
+Turn "Sunday dinner" into a General plan?    ← names the object and the change
 
 This will remove:                            ← the fields, by their user-facing labels
-  Watch status, season and episode from 7 items
+  Meal slot: Dinner
+  Ingredients: 7
                                              ← the exact count of affected records
-Keeps: every item, its title, its note, and its order.
+Keeps: title, notes, date, people and attachments.
                                              ← what survives, whenever anything does
 
-                              [ Cancel ]  [ Turn into a plain list ]
+                              [ Cancel ]  [ Change to General ]
 ```
 
 1. `Cancel` sits first and is the default focus. The destructive button repeats the verb —
    never `OK`, never `Continue` — and carries the `danger` styling.
 2. The count is the number of records that **actually carry the data being removed**, not
    the collection's size. A 20-item list where 7 items have progress says 7.
-3. For a change that is destructive only *conditionally* — a type change, a behaviour
+3. For a change that is destructive only *conditionally* — a type change,
    change, a move — no confirmation is shown when nothing would be lost. A conditional
    confirmation that can appear with a count of 0 is a bug. Deletions always confirm, even
    when the thing being deleted is empty.
@@ -87,12 +88,10 @@ line added to it in the same pull request.
 | Task → Plan | additive explicit conversion | No confirmation; requires an unselected General / Meal / Watch / Event choice and review before `Save changes` |
 | Plan → Task with participants, expenses, or prep children | blocked | No confirmation or write; name each blocking section and count so the user can remove them explicitly first |
 | Plan → Task after blockers are removed, with Plan-specific details | destructive | Every dropped field and value, plus the common fields that remain |
-| A list's `checkable` capability, on or off | additive both ways | — (`checked` is retained when off) |
-| A list's `supportsLocation` capability, on or off | additive both ways | — (locations are retained when off) |
+| A list's item-state presentation | additive both ways | — (intrinsic state is retained when hidden or represented differently) |
+| A list's Progress, Place or Sub-items feature, on or off | additive both ways | — (typed values are retained when off) |
 | A list's default `slot` | additive | — (moves no items) |
-| List behaviour `collection` → `watch` or `meals` | additive | — (every item gains the new fields at their defaults) |
-| List behaviour `watch` or `meals` → `collection` | destructive **when any item carries the typed fields**; additive otherwise, per rule 3 | The typed fields, and the exact number of items carrying them. With a count of zero it is an ordinary additive change: no confirmation, and §4's standard undo |
-| `Clear checked` on a list | destructive but reversible | **No confirmation dialog.** It applies immediately and the 10-second bulk undo toast states the count — `7 items cleared` (§4). A reversible bulk action gets an undo, not a dialog, and having both would be two interruptions for one decision |
+| `Clear checked` on a list | destructive but reversible | **No confirmation dialog.** It applies immediately and the six-second bulk undo toast states the count — `7 items cleared` (§4). A reversible bulk action gets an undo, not a dialog, and having both would be two interruptions for one decision |
 | Deleting a list | destructive | The item count, how many of those items have a linked activity — those activities survive — and, on a shared list, the number of other members who lose it |
 | Leaving a shared list, or removing someone from one | destructive | That the items they added stay on the list, with counts, and who keeps it ([`plans-and-lists.md`](plans-and-lists.md) §5.11.4) |
 | Deleting a Plan reached from a ListItem | destructive | That the ListItem survives byte-identical and caller-specific `LNK#` pointers are removed |
@@ -126,15 +125,15 @@ This is one rule, not six special cases. Everywhere it already applies:
 
 | Trigger | What the app must not do | What it offers instead |
 | --- | --- | --- |
-| Completing an `event` created through `Plan this item` from a `collection` list with both `checkable` and `supportsLocation` | Check, uncheck, move, hide or delete the item | `Mark {item title} visited in {list name}?`; completion itself leaves the item unchanged ([`plans-and-lists.md`](plans-and-lists.md) §5.10) |
-| Completing a watch session | Write season or episode onto the named source-list item, or move it from `want` to `watching` | `{list name} · currently S2 E4 — Update to S2 E5?` |
+| Completing an `event` created through `Plan this item` from an item with enabled Place and exposed state | Change state, move, hide or delete the item | `Mark {item title} visited in {list name}?`; completion itself leaves the item unchanged ([`plans-and-lists.md`](plans-and-lists.md) §5.10) |
+| Completing a watch session | Write season or episode onto the named source-list item, or change intrinsic state | `{list name} · currently S2 E4 — Update to S2 E5?`, or an explicit `Mark done?` suggestion when state is exposed |
 | Progress having just been updated | Create the next episode's session | `Create a Plan for S2 E6?`, which opens an unselected Plan-kind chooser; only after Watch is explicitly chosen may compatible fields pre-fill, and nothing is created until `Save plan` |
 | Completing a meal | Add its ingredients to a user-chosen list | `Add ingredients to a list?`, which opens the ingredient picker and then visibly names the destination before any write |
 | Completing a plan with open prep tasks | Complete, delete, reschedule or otherwise touch the prep tasks | When at least one is incomplete and non-recurring: `2 one-off prep tasks are still open — keep them?` — Keep / Complete all / Delete. Keeping or dismissing changes nothing; the other two write only when tapped and affect only that named non-recurring set. Recurring prep tasks are kept because no occurrence was selected ([`plans-and-lists.md`](plans-and-lists.md) §3) |
 | Creating or opening a plan | Create a packing, shopping or grocery list for it | The `Add list` affordance in the LISTS section |
 | Completing one occurrence of a recurring series | Alter the recurrence rule, or mutate the series row | Nothing. The next occurrence already exists by definition |
 | Capture extracting compatible fields from a photo, link or text | Persist, route, classify, share, attach anything, or set a reminder on its own | A reviewable draft inside the already selected form, committed only by its named write button; Reminder remains a separate visible control or an explicitly saved default |
-| Renaming a list | Change its behaviour or capabilities to match the new name | Nothing. The user changes those in list settings if they want to |
+| Renaming a list | Change its state presentation, features, integration or slot to match the new name | Nothing. The user changes those in list settings if they want to |
 | A list or plan going quiet | Archive it, hide it, or prompt about it | Nothing |
 
 Rules for the follow-up itself:
@@ -257,18 +256,17 @@ rule applies to the tab bar, so this pushed screen does not add a tab.
 
 ### 3.2 List rows
 
-Rows are keyed on the list's **behaviour** and its **capabilities**
-([`plans-and-lists.md`](plans-and-lists.md) §5.2, §5.3), never on a list type. `Groceries`
-and `Packing` are the same row because they are the same thing with the same flags.
+Rows use one common item shell. The List's state presentation controls only the state affordance;
+the typed feature registry adds populated one-line summaries and actions. `templateKey` never
+selects a row implementation.
 
 | Row type | Tap body | Tap checkbox | Swipe right | Swipe right (full) | Swipe left | Swipe left (full) | Long press |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | List (on the Lists index), you own it | Open the list | — | — | — | `Archive` · `Delete` | — | — |
 | List (on the Lists index), you are a member | Open the list | — | — | — | `Leave` | — | — |
-| `collection` item, `checkable` | Open item sheet | Toggle `checked` | `Check` / `Uncheck` | Toggle | `Plan this item` · `Delete` | Plan-kind chooser | Drag to reorder |
-| `collection` item, not `checkable` | Open item sheet | — (no checkbox) | `Plan this item` | Plan-kind chooser | `Delete` | — | Drag to reorder |
-| `watch` item | Open item sheet | — (status replaces the checkbox) | `Plan this item` | Plan-kind chooser | `Mark watched` · `Delete` | Mark-watched confirm | Drag to reorder |
-| `meals` item | Open item sheet | — | `Plan this item` | Plan-kind chooser | `Delete` | — | Drag to reorder |
+| Item, checkbox mode | Open item sheet | `done → open`; `open/active → done` | `Check` / `Uncheck` | Set the same explicit state | `Plan this item` · `Delete` | Plan-kind chooser | Drag to reorder within its list |
+| Item, no state presentation | Open item sheet | — | `Plan this item` | Plan-kind chooser | `Delete` | — | Drag to reorder |
+| Item, stages | Open item sheet | — | `Plan this item` | Plan-kind chooser | `Delete` | — | Drag within its current stage; changing stage is an explicit item-sheet action |
 | Item with a state line (`Planned Saturday · 7 PM`) | Title area → item sheet; **state line → the linked Activity** | As above | As above | As above | As above | As above | Drag to reorder |
 
 The Lists **index** is not reorderable: `ListIndex` stores no rank, and the index renders in
@@ -328,8 +326,8 @@ Two notes on the rows above:
 
 > **Decision — the undo model.** Reversible actions are performed immediately with a
 > **6-second** undo toast and no confirmation dialog. Irreversible actions are performed
-> only after a confirmation dialog and have **no** undo. Bulk reversible actions get a
-> **10-second** window because there is more to notice.
+> only after a confirmation dialog and have **no** undo. A longer window exists only when a
+> row below names it explicitly; List settings and List bulk actions use six seconds.
 
 This section decides which of the two an action gets. What a confirmation must *say* when
 there is one is §1a.1.
@@ -351,14 +349,11 @@ there is one is §1a.1.
 | Suggest a date, or withdraw your own suggestion | No | Yes | 6 s | `DELETE` the suggestion, or re-create it |
 | Mark a suggestion as `Works for me`, or unmark it | No | Yes | 6 s | Toggle back |
 | Delete somebody else's suggestion, as the owner | **Yes**, naming whose it is | No | — | Removing something another person wrote is confirmed, never undone quietly |
-| Clear checked (bulk) | No | Yes | **10 s** | Re-create the deleted items with their previous ranks |
-| Uncheck all (bulk) | No | Yes | **10 s** | `PATCH` back |
+| Clear checked (bulk) | No | Yes | **6 s** | Re-create the deleted items with their previous ranks and states |
+| Uncheck all (bulk) | No | Yes | **6 s** | Return the affected surviving items to `done` |
 | Archive a list | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token returned by `PATCH { archived: true }` |
-| Toggle a list capability (`Show checkboxes`, `Add a place to items`) | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Additive both ways (§1a.1) |
+| Change a list's item-state presentation or feature configuration | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Values are retained in both directions (§1a.1) |
 | Change a list's default-destination slot | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Restore a removed profile default only when no newer choice occupies that slot |
-| Upgrade a list's behaviour to `watch` or `meals` | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the upgrade-operation token. The compensation restores the previous behaviour and removes only unchanged defaults created by that operation; an intervening edit makes it no longer applicable |
-| Downgrade a list's behaviour to `collection`, where items carry the typed fields | **Yes**, naming the fields and the item count (§1a.1) | No | — | Repeat `POST /v1/lists/:id/behaviour` with the complete server-authored confirmation object echoed in the body |
-| Downgrade a list's behaviour where **no** item carries them | No | Yes | 6 s | Additive by §1a.1 rule 3, so it takes the row above it: `POST /v1/lists/:id/undo` with the settings-operation token |
 | Accept a follow-up suggestion (§1a.2) | No | Yes | 6 s | `PATCH` back. Independent of the action that offered it |
 | Remove a participant | **Yes** | No | — | Revokes their token; re-adding sends a new invitation |
 | Delete an activity | **Yes** | No | — | Cascades per [`../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items) |
@@ -461,7 +456,6 @@ Section-level empty states on Today are specified in
 | Screen-level refresh failure (cached data present) | Cached content stays. A dismissible banner: `Couldn't refresh.` | `Try again` |
 | Mutation failure | The optimistic change reverts; error toast naming what failed: `Couldn't complete "Gym."` | `Retry` |
 | `409 conflict` on a shared plan | `This plan changed while you were editing.` Client refetches; non-overlapping edits are re-applied, overlapping ones are dropped and named. | `Review` |
-| `409 conflict` on a list behaviour change | Not an error toast: the §1a.1 confirmation dialog, composed from the response's typed `confirmation`. The server sends the source/target behaviours, `itemVersion`, labels and count; the surface supplies the list's own title | `Turn into a plain list` re-sends the change under a new key and echoes the complete `confirmation` object |
 | Adding ingredients whose source rows have changed | Toast: `Some of those ingredients have changed. Reopen the meal and try again.` The whole action is refused rather than partly applied, so the list is exactly as it was ([`plans-and-lists.md`](plans-and-lists.md) §7.3) | `Reopen` returns to the meal |
 | `403 forbidden` | `Only the person who made this plan can change that.` | — |
 | `404 not_found` | `This isn't here any more.` Navigate back. | — |
@@ -598,10 +592,10 @@ not obvious from the label.
 | Date suggestion row | 1. Row body<br>2. `Works for me` toggle<br>3. `Use this date` (owner only) | 1. `Saturday 9 August, 7:00 PM, suggested by Alice, before the show. Works for you and Ben.`<br>2. `Works for me, on`<br>3. `Use this date` | `text`, `switch`, `button` | `Delete` on your own |
 | List member row | 1. Row body<br>2. Trailing control | 1. `Alice, member` / `Ben, invited, we emailed them`<br>2. `Remove Alice from this list` / `Leave this list` | `text`, `button` | — |
 | UP NEXT card | 1. Card body | `Up next. Pick up groceries, in 2 hours, 5:30 PM` | `button` | Same as the row |
-| List item, list is `checkable` | 1. Checkbox<br>2. Row body | 1. `Chicken, not checked`<br>2. `Chicken, from Sunday dinner` | `checkbox`, `button` | `Plan this item`, `Delete` |
-| List item, list is not `checkable` | 1. Row body<br>2. State line | 1. `Zahav`<br>2. `Planned Saturday 7:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
-| List item with a place (`supportsLocation`) | 1. Row body<br>2. Address line | 1. `Zahav, 237 St James Place`<br>2. `237 St James Place, open in Maps` | `button`, `button` | `Plan this item`, `Delete` |
-| `watch` list item | 1. Row body<br>2. State line | 1. `Severance, watching, season 2 episode 4`<br>2. `Next session Friday 8:00 PM, open plan` | `button`, `button` | `Plan this item`, `Mark watched`, `Delete` |
+| List item, checkbox mode | 1. Checkbox<br>2. Row body | 1. `Chicken, not checked`<br>2. `Chicken, from Sunday dinner` | `checkbox`, `button` | `Plan this item`, `Delete` |
+| List item, state hidden | 1. Row body<br>2. linked Plan state line when present | 1. `Zahav`<br>2. `Planned Saturday 7:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
+| List item with enabled, populated Place | 1. Row body<br>2. Address line | 1. `Zahav, 237 St James Place`<br>2. `237 St James Place, open in Maps` | `button`, `button` | `Plan this item`, `Delete` |
+| List item in configured Watching stage with episode Progress | 1. Row body<br>2. linked Plan state line | 1. `Severance, watching, season 2 episode 4`<br>2. `Next session Friday 8:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
 | Person row | 1. Row body<br>2. Balance chip | 1. `Alice, 3 upcoming together` or `Priya, in 2 lists with you`<br>2. `Alice owes you 42 dollars 50, see the expenses` | `button`, `button` | `Plan something`, `Delete` |
 | Balance line | 1. Line | `Alice owes you 42 dollars 50. See the expenses behind this.` | `button` | — |
 | Expense row | 1. Row body | `Hotel, 340 dollars, you paid, split 3 ways` | `button` | `Edit`, `Delete` |
@@ -609,13 +603,13 @@ not obvious from the label.
 | Notification row | 1. Row body | `Alice invited you. Dinner at Zahav, Saturday 9 August 7:00 PM. Unread.` | `button` | `Mark read`, `Delete` |
 | Section header | 1. Header | `Up next`, `Schedule`, `Anytime`, `Earlier today` | `header` | — |
 
-> **The `watch` row's state line is its own element** — corrected 2026-08-28 (founder), on the
+> **The linked Plan state line is its own element** — corrected 2026-08-28 (founder), on the
 > discrepancy raised in P3-28's PR. That row used to fold `next session Friday 8:00 PM` into the
 > body label while the two rows above it made the state line a separate element, and P3-35
 > requires "two separate accessibility elements" because the two targets go to two different
 > screens: the body opens the item, the state line opens the Activity. One label carrying both
 > would announce the session twice and offer only one destination. The split above is the rule
-> for **every** list-item row, whatever its behaviour.
+> for **every** list-item row, whatever its state presentation or enabled features.
 
 Rules:
 

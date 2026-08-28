@@ -15,19 +15,17 @@ import { View } from 'react-native';
  * dialog**: §P3-10's recorded decision (`00-open-decisions.md` item 33) is that clearing
  * checked items is the *end* of a shopping trip, done one-handed, on rows the user has already
  * ticked one at a time — "a dialog asks them to re-confirm a decision they have already made
- * seven times". The 10-second undo toast is the safety net instead. So the number has to be
+ * seven times". The six-second undo toast is the safety net instead. So the number has to be
  * visible before the tap, and this component is where it is.
  *
  * At zero the row is **absent, not disabled** (§P3-10's edge cases). A greyed-out row teaches
  * nothing; a row that is not there says the same thing by saying nothing.
  *
- * ## Both bulk rows require the two-part gate
+ * ## Both bulk rows require checkbox presentation
  *
- * `behaviour === 'collection' && capabilities.checkable`, exactly as the endpoints do
- * (criterion 18). Both halves: a `watch` list can carry a stored `checkable: true` a behaviour
- * change left behind, along with `checked` values that change retained, and offering to clear
- * them would act on state the renderer draws no checkbox for. The gate is read from the row's
- * own fields — nothing here compares a `templateKey`.
+ * Intrinsic `done` is rendered as checked only while `itemStateMode.mode === 'checkbox'`.
+ * A different mode retains the state but removes checkbox-derived actions. Nothing here
+ * compares a `templateKey`.
  */
 export interface ListHeaderMenuProps {
   open: boolean;
@@ -35,14 +33,14 @@ export interface ListHeaderMenuProps {
   list: List;
   /** Checked items right now. The count the button states, and the reason it is offered. */
   checkedCount: number;
-  /** Deletes them immediately; the caller shows the 10-second undo toast. */
-  onClearChecked: () => void;
+  /** Deletes the current done set immediately under the bulk Undo token. */
+  onClearDone: () => void;
   /** Unchecks them immediately; same window, on a change that loses nothing. */
   onUncheckAll: () => void;
   /** `PATCH { archived: true }`; the caller shows the 6-second settings undo. */
   onArchive: () => void;
   /**
-   * Opens `List settings` — the capabilities, the default slot and the behaviour (§5.5, §P3-32).
+   * Opens `List settings` — state presentation, features and the default slot (§5.5, §P3-33).
    *
    * **Not rename.** §5.6 puts renaming inline on the header title and §P3-32 forbids a second
    * home for it, so neither this menu nor the sheet it opens has a Rename row.
@@ -50,9 +48,9 @@ export interface ListHeaderMenuProps {
   onOpenSettings: () => void;
 }
 
-/** The two-part gate, read from the row and not from its template (ADR-031). */
+/** The presentation gate, read from the List and not its creation preset (ADR-058). */
 export function supportsCheckedActions(list: List): boolean {
-  return list.behaviour === 'collection' && list.capabilities.checkable;
+  return list.itemStateMode.mode === 'checkbox';
 }
 
 export function ListHeaderMenu({
@@ -60,7 +58,7 @@ export function ListHeaderMenu({
   onClose,
   list,
   checkedCount,
-  onClearChecked,
+  onClearDone,
   onUncheckAll,
   onArchive,
   onOpenSettings,
@@ -72,26 +70,22 @@ export function ListHeaderMenu({
     <Sheet open={open} onClose={onClose} title="More" testID="list-header-menu">
       <View style={{ gap: theme.space[4], alignItems: 'stretch' }}>
         {checkable && checkedCount > 0 ? (
-          <Button
-            variant="secondary"
-            label={`Clear checked (${String(checkedCount)})`}
-            onPress={onClearChecked}
-            testID="list-clear-checked"
-          />
+          <>
+            <Button
+              variant="secondary"
+              label={`Clear checked (${String(checkedCount)})`}
+              onPress={onClearDone}
+              testID="list-clear-checked"
+            />
+            <Button
+              variant="secondary"
+              label={`Uncheck all (${String(checkedCount)})`}
+              onPress={onUncheckAll}
+              testID="list-uncheck-all"
+            />
+          </>
         ) : null}
-        {checkable ? (
-          <Button
-            variant="secondary"
-            label="Uncheck all"
-            onPress={onUncheckAll}
-            testID="list-uncheck-all"
-          />
-        ) : null}
-        {/*
-         * Offered on every behaviour, unlike the two bulk rows above it: the slot and the
-         * behaviour are settings a `watch` or `meals` list has as much as a collection, and
-         * the sheet is what decides which of its own controls apply (§5.5).
-         */}
+        {/* Settings exist for every List; only the checkbox-derived bulk actions are gated. */}
         <Button
           variant="secondary"
           label="List settings"

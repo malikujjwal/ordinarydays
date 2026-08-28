@@ -504,10 +504,10 @@ export const listBulkOperation = (listId: string, operationId: string) => ({
   sk: `BULK_OP#${operationId}`,
 });
 
-/** Resumable behaviour-migration work for one operation. */
-export const listBehaviourMigration = (listId: string, operationId: string) => ({
+/** Resumable conversion of one pre-P3-33 aggregate to the canonical List schema. */
+export const listSchemaMigration = (listId: string, operationId: string) => ({
   pk: listPk(listId),
-  sk: `BEHAVIOUR_MIGRATION#${operationId}`,
+  sk: `SCHEMA_MIGRATION#${operationId}`,
 });
 
 /** The replay-window guard left after a List is deleted. */

@@ -35,19 +35,14 @@ vi.mock('../repositories/listRepository.js', async () => {
     applyListSettingsInverse: vi.fn(() => Promise.resolve()),
     consumeListUndoOperation: vi.fn(() => Promise.resolve()),
     readAllListItems: vi.fn(() => Promise.resolve([])),
-    recheckListItems: vi.fn(() => Promise.resolve(0)),
+    restoreDoneStates: vi.fn(() => Promise.resolve(0)),
     restoreListItems: vi.fn(() => Promise.resolve([])),
   };
 });
 
 vi.mock('./authz.js', () => ({ assertListAccess: vi.fn() }));
-vi.mock('./listMutationService.js', () => ({
-  undoBehaviourUpgrade: vi.fn(() => Promise.resolve(0)),
-}));
-
 const repository = await import('../repositories/listRepository.js');
 const authz = await import('./authz.js');
-const migration = await import('./listMutationService.js');
 const { undoListOperation } = await import('./listUndoService.js');
 
 const USER = 'usr_local_dev';
@@ -71,7 +66,7 @@ const receiptFor = vi.fn(() => RECEIPT);
 const operation = (overrides: Partial<ListUndoOperation> = {}): ListUndoOperation => ({
   listId: LIST,
   operationId: 'op_live',
-  kind: 'clear_checked',
+  kind: 'clear_done',
   tokenHash: 'unset',
   // Deliberately in the past: the UI window is over, and it must change nothing here.
   undoExpiresAt: '2026-08-24T08:00:00.000Z',
@@ -90,15 +85,12 @@ function live(overrides: Partial<ListUndoOperation> = {}) {
   return token;
 }
 
-const listRow = { listId: LIST, behaviour: 'watch', updatedAt: NOW } as never;
-
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authz.assertListAccess).mockResolvedValue({ index: GRANT, isOwner: true });
-  vi.mocked(repository.getListMeta).mockResolvedValue(listRow);
   vi.mocked(repository.readAllListItems).mockResolvedValue([]);
   vi.mocked(repository.restoreListItems).mockResolvedValue([]);
-  vi.mocked(repository.recheckListItems).mockResolvedValue(0);
+  vi.mocked(repository.restoreDoneStates).mockResolvedValue(0);
   vi.mocked(repository.acceptListUndoOperation).mockResolvedValue({
     acceptedAt: NOW,
     completedCount: 0,
@@ -195,18 +187,18 @@ describe('dispatching on the recorded kind', () => {
   });
 
   it('re-checks exactly the recorded set, and reports the survivors', async () => {
-    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a', 'itm_b'] });
-    vi.mocked(repository.recheckListItems).mockResolvedValue(1);
+    const token = live({ kind: 'reopen_done', affectedItemIds: ['itm_a', 'itm_b'] });
+    vi.mocked(repository.restoreDoneStates).mockResolvedValue(1);
 
     await expect(undo(token)).resolves.toEqual({ outcome: 'applied', affectedCount: 1 });
-    expect(vi.mocked(repository.recheckListItems).mock.calls[0]?.[3]).toEqual([
+    expect(vi.mocked(repository.restoreDoneStates).mock.calls[0]?.[3]).toEqual([
       'itm_a',
       'itm_b',
     ]);
   });
 
   it('includes already committed restore chunks in the logical Undo count', async () => {
-    const token = live({ kind: 'clear_checked', affectedItemIds: ['itm_a', 'itm_b'] });
+    const token = live({ kind: 'clear_done', affectedItemIds: ['itm_a', 'itm_b'] });
     vi.mocked(repository.acceptListUndoOperation).mockResolvedValue({
       acceptedAt: NOW,
       completedCount: 1,
@@ -218,7 +210,7 @@ describe('dispatching on the recorded kind', () => {
         rank: 'V',
         itemRevision: 0,
         title: 'B',
-        checked: true,
+        state: 'done',
       },
     ]);
 
@@ -232,7 +224,7 @@ describe('dispatching on the recorded kind', () => {
   });
 
   it('reuses the first accepted instant when a bulk Undo resumes', async () => {
-    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
+    const token = live({ kind: 'reopen_done', affectedItemIds: ['itm_a'] });
     const acceptedAt = instant.parse('2026-08-24T08:59:30.000Z');
     vi.mocked(repository.acceptListUndoOperation).mockResolvedValue({
       acceptedAt,
@@ -241,20 +233,20 @@ describe('dispatching on the recorded kind', () => {
 
     await undo(token);
 
-    expect(vi.mocked(repository.recheckListItems).mock.calls[0]?.[4]).toMatchObject({
+    expect(vi.mocked(repository.restoreDoneStates).mock.calls[0]?.[4]).toMatchObject({
       now: acceptedAt,
     });
   });
 
   it('keeps that instant after a compensation chunk crashes and a later request resumes', async () => {
-    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a', 'itm_b'] });
+    const token = live({ kind: 'reopen_done', affectedItemIds: ['itm_a', 'itm_b'] });
     const acceptedAt = instant.parse('2026-08-24T08:59:30.000Z');
     vi.mocked(repository.acceptListUndoOperation)
       .mockResolvedValueOnce({ acceptedAt, completedCount: 0 })
       .mockResolvedValueOnce({ acceptedAt, completedCount: 1 });
     // The first rejection represents a later repository chunk failing after an earlier one
     // committed; the next service invocation is the post-restart request with a changed clock.
-    vi.mocked(repository.recheckListItems)
+    vi.mocked(repository.restoreDoneStates)
       .mockRejectedValueOnce(new Error('process stopped after a committed chunk'))
       .mockResolvedValueOnce(2);
 
@@ -268,23 +260,23 @@ describe('dispatching on the recorded kind', () => {
       vi.mocked(repository.acceptListUndoOperation).mock.calls.map((call) => call[4]),
     ).toEqual([NOW, RETRY_AT]);
     expect(
-      vi.mocked(repository.recheckListItems).mock.calls.map((call) => call[4].now),
+      vi.mocked(repository.restoreDoneStates).mock.calls.map((call) => call[4].now),
     ).toEqual([acceptedAt, acceptedAt]);
     expect(
       vi
-        .mocked(repository.recheckListItems)
+        .mocked(repository.restoreDoneStates)
         .mock.calls.map((call) => call[4].previouslyAffectedCount),
     ).toEqual([0, 1]);
   });
 
   it('answers no_longer_applicable when a concurrent replay spends the bulk Undo', async () => {
-    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
+    const token = live({ kind: 'reopen_done', affectedItemIds: ['itm_a'] });
     vi.mocked(repository.acceptListUndoOperation).mockRejectedValue(
       new repository.ListUndoNotApplicableError(),
     );
 
     await expect(undo(token)).resolves.toEqual({ outcome: 'no_longer_applicable' });
-    expect(repository.recheckListItems).not.toHaveBeenCalled();
+    expect(repository.restoreDoneStates).not.toHaveBeenCalled();
   });
 
   it('applies a settings inverse and reports one list changed', async () => {
@@ -336,82 +328,6 @@ describe('dispatching on the recorded kind', () => {
     vi.mocked(repository.restoreListItems).mockRejectedValue(
       new repository.ListNotFoundError(),
     );
-
-    await expect(undo(token)).rejects.toMatchObject({ code: 'not_found' });
-  });
-});
-
-describe('the behaviour-upgrade inverse', () => {
-  const upgrade = (overrides: Partial<ListUndoOperation> = {}) =>
-    live({
-      kind: 'behaviour_upgrade',
-      inverse: {
-        behaviour: 'collection',
-        affectedItemIds: ['itm_a', 'itm_b'],
-      },
-      preconditions: {
-        behaviour: 'watch',
-        itemDetails: { behaviour: 'watch', watchStatus: 'want' },
-      },
-      ...overrides,
-    });
-
-  const items = (details: unknown) =>
-    [
-      { itemId: 'itm_a', details },
-      { itemId: 'itm_b', details },
-    ] as never;
-
-  /**
-   * §P3-09's dedicated compensation: it restores `collection` **without** destructive confirmation,
-   * because it is taking back defaults nobody has touched rather than asking the user to agree
-   * to a loss. The precondition check above is what earns that exemption.
-   */
-  it('runs the migration and spends the operation', async () => {
-    const token = upgrade();
-    vi.mocked(repository.readAllListItems).mockResolvedValue(
-      items({ behaviour: 'watch', watchStatus: 'want' }),
-    );
-
-    await expect(undo(token)).resolves.toEqual({ outcome: 'applied', affectedCount: 2 });
-    expect(vi.mocked(migration.undoBehaviourUpgrade).mock.calls[0]?.[3]).toMatchObject({
-      toBehaviour: 'collection',
-    });
-    expect(repository.consumeListUndoOperation).toHaveBeenCalled();
-  });
-
-  it('refuses once one of the created defaults has been edited', async () => {
-    const token = upgrade();
-    vi.mocked(repository.readAllListItems).mockResolvedValue(
-      items({ behaviour: 'watch', watchStatus: 'watching', season: 2 }),
-    );
-
-    await expect(undo(token)).resolves.toEqual({ outcome: 'no_longer_applicable' });
-    expect(migration.undoBehaviourUpgrade).not.toHaveBeenCalled();
-    expect(repository.consumeListUndoOperation).not.toHaveBeenCalled();
-  });
-
-  it('refuses once the behaviour itself has moved on', async () => {
-    const token = upgrade();
-    vi.mocked(repository.getListMeta).mockResolvedValue({
-      listId: LIST,
-      behaviour: 'meals',
-      updatedAt: NOW,
-    } as never);
-
-    await expect(undo(token)).resolves.toEqual({ outcome: 'no_longer_applicable' });
-    expect(migration.undoBehaviourUpgrade).not.toHaveBeenCalled();
-  });
-
-  it('refuses an inverse that names no behaviour to restore', async () => {
-    const token = upgrade({ inverse: { affectedItemIds: [] } });
-
-    await expect(undo(token)).resolves.toEqual({ outcome: 'no_longer_applicable' });
-  });
-
-  it('404s when the list has gone', async () => {
-    const token = upgrade();
-    vi.mocked(repository.getListMeta).mockResolvedValue(undefined);
 
     await expect(undo(token)).rejects.toMatchObject({ code: 'not_found' });
   });

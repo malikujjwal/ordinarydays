@@ -38,11 +38,11 @@ describe('the projection', () => {
   });
 
   /**
-   * Behaviour, capabilities and slot are structural: the chooser shows what a style looks
+   * Item state, features and slot are structural: the chooser shows what a preset looks
    * like, and the server copies what it does. A renderer that received them here would be
-   * one step from branching on them.
+   * one step from replacing stored List state with catalogue state.
    */
-  it.each(['behaviour', 'capabilities', 'slot', 'emptyStateCopy'])(
+  it.each(['itemStateMode', 'featureConfig', 'slot', 'emptyStateCopy'])(
     'does not carry the structural field %s',
     (field) => {
       for (const choice of listTemplateChoices()) {
@@ -106,14 +106,14 @@ describe('the order the sheet renders', () => {
   });
 
   /** The label and the prefilled title are two different fields, deliberately (§5.4). */
-  it('projects Blank as simple-list with the editable default title Simple list', () => {
+  it('projects Blank with the editable default title Untitled list', () => {
     const blank = listTemplateChoices()[0];
 
     expect(blank).toEqual({
-      templateKey: 'simple-list',
+      templateKey: 'blank',
       chooserLabel: 'Blank',
-      summary: 'A plain list',
-      defaultTitle: 'Simple list',
+      summary: 'Start without a category or item details',
+      defaultTitle: 'Untitled list',
       icon: 'list',
     });
   });
@@ -179,11 +179,13 @@ describe('nothing but a tap may choose a style', () => {
     const barrel = await import('../index.js');
     expect(Object.keys(barrel).sort()).toEqual([
       'LIST_TEMPLATES',
+      'adaptListItemToPlan',
       'formatIngredientTitle',
       'listTemplateChoices',
       // P3-26's creation seed: the other half of what a create resolves, and narrowed to the
       // durable-create path by `check-forbidden.mjs`'s `template-seed-is-creation-only`.
       'listTemplateSeed',
+      'migrateLegacyListAggregate',
       'provenanceLabel',
       'resolveSlot',
     ]);

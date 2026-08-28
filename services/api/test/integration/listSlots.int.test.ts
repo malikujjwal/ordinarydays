@@ -363,7 +363,7 @@ describe('slot resolution over real lists', () => {
 
   it('returns exactly none, with no template or title, when no list holds the slot', async () => {
     await seedProfile();
-    await createList('Packing', 'packing');
+    await createList('Packing', 'blank');
 
     const result = await resolveListSlot(DEV, 'groceries');
 
@@ -380,7 +380,7 @@ describe('slot resolution over real lists', () => {
 
   it('ignores a list holding a different slot', async () => {
     await seedProfile();
-    const watchlist = await createList('Watchlist', 'watchlist');
+    const watchlist = await createList('Watchlist', 'watch-later');
     await createList('Trader Joe’s');
 
     expect(await resolveListSlot(DEV, 'watch')).toEqual({

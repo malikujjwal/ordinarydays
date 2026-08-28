@@ -25,7 +25,7 @@ const item = (itemId: string, rank: string, overrides: Partial<ListItemRow> = {}
     listId: LIST,
     rank,
     title: `Item ${itemId.slice(-2)}`,
-    checked: false,
+    state: 'open',
     ...overrides,
   }) satisfies ListItemRow;
 
@@ -85,8 +85,8 @@ describe('the SQLite item slice', () => {
     const stored = item('itm_01J000000000000000000000AA', 'a', {
       title: 'Zahav',
       note: 'book ahead',
-      checked: true,
-      location: { label: 'Philadelphia' },
+      state: 'done',
+      features: { place: { label: 'Philadelphia' } },
       sourceActivityId: 'act_01J0000000000000000000000A',
       sourceLabel: 'Sunday dinner',
     });

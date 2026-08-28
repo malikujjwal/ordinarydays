@@ -14,7 +14,7 @@ import type { RowList } from './listItemRow';
  *
  * Pure, and separate from the gesture for the reason `listItemRow.ts` is: a drag cannot be
  * simulated in a unit test, and the decisions that must not be got wrong here — the no-op, the
- * watch-group guard, the `afterItemId` — are arithmetic over an ordered array. Expressed inside
+ * stage-group guard, the `afterItemId` — are arithmetic over an ordered array. Expressed inside
  * a gesture handler they could only be checked by dragging a real finger across a real device.
  *
  * ## `(rank, itemId)`, in and out, and no second comparator
@@ -41,7 +41,7 @@ import type { RowList } from './listItemRow';
  */
 
 /** The list fields a reorder may read. Narrowed to one, because one is all it needs. */
-export type ReorderList = Pick<RowList, 'behaviour'>;
+export type ReorderList = Pick<RowList, 'itemStateMode'>;
 
 /** What one drag asks for. */
 export interface ReorderPlan {
@@ -88,26 +88,13 @@ export function orderedItems<T extends { rank: string; itemId: string }>(
   return [...items].sort(compareListItems);
 }
 
-/** The item's `watchStatus`, or `undefined` where it has none to read. */
-function watchGroupOf(item: ListItemView): string | undefined {
-  return item.details?.behaviour === 'watch' ? item.details.watchStatus : undefined;
-}
-
 /**
  * Which insertion indices this drag may land on.
  *
- * On every behaviour but `watch`, the whole list: `0` through `length - 1` of the array with
- * the dragged row removed, plus its end.
- *
- * On a `watch` list the range is the item's **own status group** — the span from the first to
- * the last item that shares its `watchStatus`, in the same order. Dragging across a heading
- * would change `watchStatus` by gesture, which no spec grants: status changes are the item
- * sheet's explicit controls (§8.1, and §P3-30 records the decision). Clamping here rather than
- * in the sections means P3-31 inherits the guard instead of restating it.
- *
- * `undefined` when the item is not in the list, or when a `watch` item carries no typed
- * details — invalid data, and a range invented over it would be a guess about which group it
- * belongs to.
+ * A flat list uses the whole range. Grouped stages restrict the range to the dragged item's
+ * own intrinsic state group. Dragging across a heading would change state by gesture, which
+ * no spec grants: state changes are explicit item actions. Clamping here keeps pointer,
+ * keyboard and native drag behavior identical.
  */
 export function reorderRange(
   list: ReorderList,
@@ -119,12 +106,11 @@ export function reorderRange(
   if (dragged === undefined) return undefined;
   const from = sorted.indexOf(dragged);
   const remaining = sorted.filter((candidate) => candidate.itemId !== itemId);
-  if (list.behaviour !== 'watch') return { first: 0, last: remaining.length };
+  if (list.itemStateMode.mode !== 'stages' || !list.itemStateMode.groupByState)
+    return { first: 0, last: remaining.length };
 
-  const group = watchGroupOf(dragged);
-  if (group === undefined) return undefined;
   const positions = remaining.flatMap((candidate, at) =>
-    watchGroupOf(candidate) === group ? [at] : [],
+    candidate.state === dragged.state ? [at] : [],
   );
   const head = positions[0];
   const tail = positions.at(-1);
@@ -145,8 +131,8 @@ export function reorderRange(
  * makes the no-op check exact: putting the row back at its own index is the position it came
  * from, and §P3-30 says a drop back where it started issues no write.
  *
- * `undefined` also covers an unknown item and, on a `watch` list, a target outside the item's
- * status group — {@link reorderRange}'s refusal, applied.
+ * `undefined` also covers an unknown item and, in grouped stages, a target outside the item's
+ * state group — {@link reorderRange}'s refusal, applied.
  */
 export function planReorder(
   list: ReorderList,

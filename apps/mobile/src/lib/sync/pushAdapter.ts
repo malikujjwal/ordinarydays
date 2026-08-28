@@ -1,5 +1,4 @@
 import {
-  changeListBehaviour,
   completeActivity,
   convertRecurrence,
   createActivity,
@@ -21,12 +20,10 @@ import {
   unsnoozeActivity,
 } from '@od/shared/client';
 import {
-  type ChangeListBehaviourInput,
   type CompleteActivityInput,
   type CreateActivityInput,
   type CreateListInput,
   type CreateListItemInput,
-  changeListBehaviourInput,
   completeActivityInput,
   createActivityInput,
   createListInput,
@@ -117,19 +114,6 @@ export interface ListPushTransport {
     ifMatch: string,
     idempotencyKey: string,
   ): Promise<unknown>;
-  /**
-   * `POST /v1/lists/:id/behaviour` — the P3-32 inventory extension (§P3-09).
-   *
-   * Separate from {@link ListPushTransport.patch} because it is a separate route with a separate
-   * body type: `PatchListInput` has no `behaviour` field, and the key here identifies a resumable
-   * item **migration** rather than deduplicating one conditional write.
-   */
-  changeBehaviour(
-    listId: string,
-    input: ChangeListBehaviourInput,
-    ifMatch: string,
-    idempotencyKey: string,
-  ): Promise<unknown>;
   remove(listId: string): Promise<unknown>;
   undo(listId: string, undoToken: string, idempotencyKey: string): Promise<unknown>;
 }
@@ -198,8 +182,6 @@ export const sharedListPushTransport: ListPushTransport = {
   patchItem: (listId, itemId, input) => patchListItem(apiClient, listId, itemId, input),
   patch: (listId, input, ifMatch, idempotencyKey) =>
     patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
-  changeBehaviour: (listId, input, ifMatch, idempotencyKey) =>
-    changeListBehaviour(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
   undo: (listId, undoToken, idempotencyKey) =>
     undoListOperation(apiClient, listId, undoToken, idempotencyKey).then(
@@ -401,22 +383,6 @@ export class ActivityPushAdapter {
       return this.listTransport.patch(
         listId,
         parsePersisted(patchListInput, field(value, 'input')),
-        requiredString(field(value, 'ifMatch'), 'ifMatch'),
-        requiredString(
-          field(value, 'idempotencyKey') ?? field(value, 'intentId'),
-          'idempotencyKey',
-        ),
-      );
-    }
-    if (name === 'behaviour') {
-      /*
-       * The confirmation travels inside the persisted body and is replayed **whole**: it binds
-       * the user's decision to the item generation the server previewed, so a replay that
-       * trimmed or re-derived it would be confirming something else (§P3-09).
-       */
-      return this.listTransport.changeBehaviour(
-        listId,
-        parsePersisted(changeListBehaviourInput, field(value, 'input')),
         requiredString(field(value, 'ifMatch'), 'ifMatch'),
         requiredString(
           field(value, 'idempotencyKey') ?? field(value, 'intentId'),

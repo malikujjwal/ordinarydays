@@ -1,0 +1,81 @@
+name: lists-visual
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/mobile/app/(app)/gallery.tsx'
+      - 'apps/mobile/app/(app)/lists-contract-gallery.tsx'
+      - 'apps/mobile/src/features/lists/**'
+      - 'packages/shared/src/lists/**'
+      - 'packages/shared/src/schemas/list.ts'
+      - 'packages/shared/src/types/list.ts'
+      - 'packages/ui/src/**'
+      - 'e2e/visual-specs/**'
+      - 'e2e/playwright.lists-visual.config.ts'
+      - 'e2e/build-lists-visual-app.mjs'
+      - 'e2e/compare-png.swift'
+      - 'scripts/run-lists-ios-visuals.mjs'
+      - 'apps/mobile/e2e/visual-baselines/**'
+      - '.github/workflows/lists-visual.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web List visual contracts
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm playwright:install:chromium
+      - run: pnpm e2e:lists-visual
+      - name: Upload visual diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lists-web-visual-diffs
+          path: test-results/lists-visual/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ios:
+    name: iOS List visual contracts
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      EXPO_PUBLIC_PROFILE: local
+      EXPO_PUBLIC_CONTRACT_GALLERY: '1'
+      ACTUAL_DIR: ${{ runner.temp }}/lists-ios-actual
+      DIFF_DIR: ${{ runner.temp }}/lists-ios-diff
+      EXPECTED_DIR: apps/mobile/e2e/visual-baselines/ios
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and install the production-component gallery
+        run: pnpm --filter @od/mobile exec expo run:ios --device "iPhone 16 Pro" --configuration Release --no-bundler
+      - name: Capture and compare the pinned native frames
+        run: node scripts/run-lists-ios-visuals.mjs
+      - name: Upload native actuals and diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lists-ios-visual-diagnostics
+          path: |
+            apps/mobile/e2e/visual-baselines/ios/**
+            ${{ runner.temp }}/lists-ios-actual/**
+            ${{ runner.temp }}/lists-ios-diff/**
+          if-no-files-found: ignore
+          retention-days: 7

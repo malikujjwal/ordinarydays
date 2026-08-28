@@ -31,108 +31,135 @@ import {
   watchEpisode,
   watchMediaKind,
   watchSeason,
-  watchStatus,
 } from './common.js';
 import { createRecurrence } from './recurrence.js';
 import { reminderInputsForSchedule, reminderOffsetMinutes } from './reminder.js';
 import { defaultSlot } from './user.js';
 
-/**
- * Lists, items, the template shape and the create inputs
- * (`data-model.md` §4.6, `api-contract.md` §2.7, `plans-and-lists.md` §5).
- *
- * The interfaces are in `../types/list.ts`; `list.test.ts` pins the two together.
- *
- * ## The two rules this file exists to enforce
- *
- * **Behaviour is a closed enum of three and template keys are open strings.** The stored
- * List accepts any non-empty `templateKey`, because the catalogue is data and an old client
- * must not break when it grows; whether a key exists in the *current* catalogue is the
- * create service's question (P3-05), and it never substitutes another style. Nothing here
- * compares a template key to anything (ADR-031, ADR-032).
- *
- * **`details.behaviour` must equal the owning `List.behaviour`** — the same rule
- * `details.kind === type` follows for Activities. An item body does not carry its list's
- * behaviour, so the check is exported for the service to apply with the loaded List rather
- * than baked into a schema that cannot see it.
- */
-
-const freeText = z.string().trim().max(MAX_FREE_TEXT_LEN);
-export const listItemSourceLabel = z.string().trim().max(MAX_SOURCE_LABEL_LEN);
-const listItemSourceProvenance = z
-  .array(
-    z.strictObject({
-      activityId: ulidId('act'),
-      label: z.string().trim().min(1).max(MAX_SOURCE_LABEL_LEN),
-    }),
-  )
-  .max(MAX_SOURCE_PROVENANCE_SEGMENTS);
+const freeText = z.string().max(MAX_FREE_TEXT_LEN);
+const nonBlankText = freeText.refine(
+  (value) => value.trim().length > 0,
+  'A value is required',
+);
 const title = z
   .string()
   .trim()
   .min(1, 'A title is required')
   .max(MAX_TITLE_LEN, `A title is at most ${MAX_TITLE_LEN} characters`);
-
-/**
- * Open, not an enum: the catalogue (P3-02) is data. Bounded so a key cannot smuggle a
- * paragraph through a field that only ever holds a short identifier.
- */
 const templateKey = z
   .string()
   .trim()
   .min(1, 'A template is required')
   .max(MAX_FREE_TEXT_LEN);
 
-/** Exactly three. Adding a fourth is a product decision — see `types/list.ts` and ADR-031. */
-export const listBehaviour = z.enum(['collection', 'watch', 'meals']);
+export const listItemSourceLabel = z.string().max(MAX_SOURCE_LABEL_LEN);
+const listItemSourceProvenance = z
+  .array(
+    z.strictObject({
+      activityId: ulidId('act'),
+      label: z.string().min(1).max(MAX_SOURCE_LABEL_LEN),
+    }),
+  )
+  .max(MAX_SOURCE_PROVENANCE_SEGMENTS);
 
-export const listCapabilities = z.object({
-  checkable: z.boolean(),
-  supportsLocation: z.boolean(),
+export const listItemState = z.enum(['open', 'active', 'done']);
+
+export const stageLabels = z.strictObject({
+  open: nonBlankText,
+  active: nonBlankText,
+  done: nonBlankText,
 });
 
-/**
- * The stored List — the `META` row of its own partition (`data-model.md` §3.3).
- *
- * **Not strict, deliberately**, like `activity`: a row read back from DynamoDB carries
- * `pk`, `sk` and `entity` alongside these fields. `rankVersion`, `itemVersion`,
- * `rankRepairId` and `behaviourMigrationId` are storage-level state that the route tasks
- * project away before a response (except `rankVersion`, which binds page cursors); they are
- * here because this describes what storage holds.
- */
+export const itemStateMode = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('none') }),
+  z.strictObject({ mode: z.literal('checkbox') }),
+  z.strictObject({
+    mode: z.literal('stages'),
+    labels: stageLabels,
+    groupByState: z.boolean(),
+  }),
+]);
+
+const textProgress = z.strictObject({ kind: z.literal('text'), value: nonBlankText });
+const episodeProgress = z.strictObject({
+  kind: z.literal('episode'),
+  mediaKind: watchMediaKind.optional(),
+  season: watchSeason.optional(),
+  episode: watchEpisode.optional(),
+});
+export const progressValue = z.discriminatedUnion('kind', [
+  textProgress,
+  episodeProgress,
+]);
+
+export const listPlace = z.strictObject({
+  label: nonBlankText,
+  address: z.string().max(MAX_ADDRESS_LEN).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+});
+
+export const listSubItem = z.strictObject({
+  id: z.string().min(1).max(MAX_FREE_TEXT_LEN),
+  title: nonBlankText,
+  secondary: freeText.optional(),
+  rank: z.string().min(1),
+});
+
+const subItemCollection = z.strictObject({
+  entries: z.array(listSubItem).max(MAX_INGREDIENTS),
+});
+
+export const listItemFeatures = z.strictObject({
+  progress: progressValue.optional(),
+  place: listPlace.optional(),
+  subItems: subItemCollection.optional(),
+});
+
+export const progressFeatureConfig = z.strictObject({
+  enabled: z.boolean(),
+  kind: z.enum(['text', 'episode']),
+});
+export const placeFeatureConfig = z.strictObject({ enabled: z.boolean() });
+export const subItemsFeatureConfig = z.strictObject({
+  enabled: z.boolean(),
+  sectionLabel: nonBlankText,
+  singularLabel: nonBlankText,
+  secondaryLabel: nonBlankText.optional(),
+  integration: z.literal('mealIngredients').optional(),
+});
+export const listFeatureConfig = z.strictObject({
+  progress: progressFeatureConfig.optional(),
+  place: placeFeatureConfig.optional(),
+  subItems: subItemsFeatureConfig.optional(),
+});
+
 export const list = z
   .object({
+    schemaVersion: z.literal(2),
     listId: ulidId('lst'),
     ownerId: userId,
-    behaviour: listBehaviour,
     templateKey,
     title,
     icon: freeText,
     emptyStateCopy: freeText,
-    capabilities: listCapabilities,
+    itemStateMode,
+    featureConfig: listFeatureConfig,
     slot: defaultSlot.nullable(),
     sourceActivityId: ulidId('act').optional(),
     itemCount: z.number().int().nonnegative(),
-    uncheckedCount: z.number().int().nonnegative(),
+    doneCount: z.number().int().nonnegative(),
     memberCount: z.number().int().positive(),
     rankVersion: z.number().int().nonnegative(),
-    /** Legacy META rows predate this counter; repositories treat absence as version zero. */
     itemVersion: z.number().int().nonnegative().optional(),
     rankRepairId: z.string().min(1).optional(),
-    behaviourMigrationId: z.string().min(1).optional(),
+    schemaMigrationId: z.string().min(1).optional(),
     archived: z.boolean(),
     updatedAt: instant,
-    /**
-     * Required, and deliberately not `.optional()` (P3-47). Nothing is deployed, so there is
-     * no row without it — and an optional branch here would be a permanent `?? updatedAt`
-     * fallback in every reader, which is exactly the display/precondition confusion the two
-     * fields exist to end.
-     */
     lastItemActivityAt: instant,
   })
   .meta({ id: 'List' });
 
-/** The near-pure pointer: `role` and `addedAt` and nothing else (ADR-042). */
 export const listIndex = z.object({
   listId: ulidId('lst'),
   userId,
@@ -140,13 +167,12 @@ export const listIndex = z.object({
   addedAt: z.string().min(1),
 });
 
-/** A non-owner member row. The owner has none. */
 export const listMember = z.object({
   listId: ulidId('lst'),
   personId: ulidId('psn'),
   userId: userId.optional(),
   reciprocalPersonId: ulidId('psn').optional(),
-  displayName: freeText.min(1),
+  displayName: nonBlankText,
   email: z.email().optional(),
   role: z.literal('member'),
   status: z.enum(['invited', 'active']),
@@ -155,66 +181,6 @@ export const listMember = z.object({
   joinedAt: z.string().min(1).optional(),
 });
 
-/**
- * Typed fields per behaviour, discriminated on `behaviour` (`data-model.md` §4.6).
- *
- * Arms for `watch` and `meals` only: a `collection` item has no `details`, so any `details`
- * on one is a mismatch by construction. **Every arm is strict**, stored and input alike: a
- * nested object carries no `pk`/`sk`, so there is nothing legitimate to strip, and a watch
- * body carrying `ingredients` — or a meals body carrying `watchStatus` — must fail rather
- * than be silently emptied of the fields it was actually trying to send.
- */
-const watchDetails = z.strictObject({
-  behaviour: z.literal('watch'),
-  mediaKind: watchMediaKind.optional(),
-  watchStatus,
-  season: watchSeason.optional(),
-  episode: watchEpisode.optional(),
-});
-
-/** What a client may say about an ingredient. `addedToListId` is deliberately not here. */
-const ingredientInputShape = {
-  ingredientId: ulidId('ing'),
-  name: freeText.min(1),
-  quantity: freeText.optional(),
-} as const;
-
-function mealsDetails<T extends z.ZodRawShape>(ingredient: T) {
-  return z.strictObject({
-    behaviour: z.literal('meals'),
-    ingredients: z.array(z.strictObject(ingredient)).max(MAX_INGREDIENTS).optional(),
-  });
-}
-
-export const listItemDetails = z.discriminatedUnion('behaviour', [
-  watchDetails,
-  mealsDetails({
-    ...ingredientInputShape,
-    /** Server-owned "Added" state, written only by the add-to-list action (P3-17). */
-    addedToListId: ulidId('lst').optional(),
-  }),
-]);
-
-/**
- * The `details` a create may carry. Identical to the stored union except that the meals
- * arm's ingredients **omit and reject `addedToListId`**: it records that the authorised
- * `POST /v1/activities/:id/ingredients/add-to-list` action ran, and a client that could set
- * it on an ordinary create would be fabricating that for any well-formed `lst_` id.
- */
-export const listItemDetailsInput = z.discriminatedUnion('behaviour', [
-  watchDetails,
-  mealsDetails(ingredientInputShape),
-]);
-
-/** A place on a `collection` item. No `mapUrl`, unlike `activityLocation` — §4.6 has none. */
-export const listItemLocation = z.object({
-  label: freeText,
-  address: z.string().trim().max(MAX_ADDRESS_LEN).optional(),
-  lat: z.number().min(-90).max(90).optional(),
-  lng: z.number().min(-180).max(180).optional(),
-});
-
-/** The stored item. Non-strict for the same reason as `list`. */
 export const listItem = z
   .object({
     itemId: ulidId('itm'),
@@ -223,16 +189,14 @@ export const listItem = z
     itemRevision: z.number().int().nonnegative(),
     title,
     note: z.string().max(MAX_NOTES_LEN).optional(),
-    checked: z.boolean(),
-    location: listItemLocation.optional(),
+    state: listItemState,
+    features: listItemFeatures.optional(),
     sourceActivityId: ulidId('act').optional(),
     sourceLabel: listItemSourceLabel.optional(),
     sourceProvenance: listItemSourceProvenance.optional(),
-    details: listItemDetails.optional(),
   })
   .meta({ id: 'ListItem' });
 
-/** The viewer-local pointer from an item to this viewer's Plan (ADR-034). */
 export const listItemActivityLink = z.object({
   listId: ulidId('lst'),
   itemId: ulidId('itm'),
@@ -241,257 +205,79 @@ export const listItemActivityLink = z.object({
   linkedAt: z.string().min(1),
 });
 
-/** One catalogue record (ADR-032). The records are P3-02's; this is their shape. */
 export const listTemplate = z
-  .object({
+  .strictObject({
     templateKey,
-    chooserLabel: freeText.min(1),
-    summary: freeText.min(1),
+    chooserLabel: nonBlankText,
+    summary: nonBlankText,
     defaultTitle: title,
-    icon: freeText.min(1),
-    behaviour: listBehaviour,
-    capabilities: listCapabilities,
+    icon: nonBlankText,
+    itemStateMode,
+    featureConfig: listFeatureConfig,
     slot: defaultSlot.nullable(),
-    emptyStateCopy: freeText.min(1),
+    emptyStateCopy: nonBlankText,
   })
   .meta({ id: 'ListTemplate' });
 
-/**
- * `details.behaviour` must equal the list's `behaviour`. Exported, unlike the Activity
- * twin, because an item body does not carry its list's behaviour: the service loads the
- * List and applies this with it, at every public read and write boundary. Absent `details`
- * is accepted here — whether a behaviour *requires* them is the write path's rule (P3-08).
- */
-export function checkDetailsMatchBehaviour(
-  value: { behaviour: string; details?: { behaviour: string } | undefined },
-  ctx: z.RefinementCtx,
-  /** Where `details` sits in the body being refined — `['items', 3]` for a bulk member. */
-  pathPrefix: readonly (string | number)[] = [],
-): void {
-  if (value.details !== undefined && value.details.behaviour !== value.behaviour) {
-    ctx.addIssue({
-      code: 'custom',
-      message: `details.behaviour must be "${value.behaviour}" to match the list`,
-      path: [...pathPrefix, 'details', 'behaviour'],
-    });
-  }
-}
-
-/**
- * `POST /v1/lists` (`api-contract.md` §2.7).
- *
- * **Strict.** `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy` are not
- * fields a client may send — they are copied from the selected template — so a body carrying
- * one is a `400` naming it, not a save that quietly ignores it. No owner, timestamp or
- * counter either: authority fields are server-set (`data-model.md` §8).
- *
- * `listId` is the client's own `lst_` ULID, minted before the request leaves the device
- * (ADR-055). Identity only, and optional so omitting it keeps server minting byte-identical.
- */
 export const createListInput = z
   .strictObject({
     listId: ulidId('lst').optional(),
     title,
-    /** The template/style the user explicitly selected. Never matched from the title. */
     templateKey,
-    /** Must name an owned Plan; forces the copied `slot` to `null`. */
     sourceActivityId: ulidId('act').optional(),
   })
   .meta({ id: 'CreateListInput' });
-
 export type CreateListInput = z.infer<typeof createListInput>;
 
-/**
- * `PATCH /v1/lists/:id` (`api-contract.md` §2.7, P3-09).
- *
- * **Strict**, and that strictness is the change-rules table on the wire. `behaviour` is not
- * a field this route accepts — it goes through the replay-protected
- * `POST /v1/lists/:id/behaviour`, because a behaviour change is a gated, resumable item
- * migration rather than one conditional `META` write — and `templateKey` is immutable
- * provenance. A body carrying either is a `400` naming it, exactly as `createListInput`
- * refuses the fields the catalogue owns, never a save that quietly ignores half of what was
- * sent.
- *
- * `slot` is **nullable**: absent leaves the current slot alone and `null` clears it, which
- * are different intentions and must stay distinguishable — the same distinction
- * `defaultReminderOffset` makes on the profile. Clearing or changing a slot also removes the
- * caller's matching profile default, in the same transaction (P3-12).
- *
- * `capabilities` is a **partial** patch of the two flags rather than the whole object, so
- * one switch in List settings can be flipped without the request restating the other. The
- * service merges it onto the stored pair and records the whole prior pair as the Undo
- * inverse.
- */
-export const listCapabilitiesPatch = z
+const partialFeatureConfig = z
   .strictObject({
-    checkable: z.boolean().optional(),
-    supportsLocation: z.boolean().optional(),
+    progress: progressFeatureConfig.optional(),
+    place: placeFeatureConfig.optional(),
+    subItems: subItemsFeatureConfig.optional(),
   })
-  .refine((value) => Object.keys(value).length > 0, {
-    message: 'Name at least one capability to change',
-  });
+  .refine(
+    (value) => Object.keys(value).length > 0,
+    'Name at least one feature to change',
+  );
 
 export const patchListInput = z
   .strictObject({
     title: title.optional(),
-    capabilities: listCapabilitiesPatch.optional(),
+    itemStateMode: itemStateMode.optional(),
+    featureConfig: partialFeatureConfig.optional(),
     slot: defaultSlot.nullable().optional(),
     archived: z.boolean().optional(),
   })
   .meta({ id: 'PatchListInput' });
-
 export type PatchListInput = z.infer<typeof patchListInput>;
 
-/**
- * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7, P3-09).
- *
- * One target behaviour plus, for a destructive transition, the exact server-authored
- * preview the user confirmed. Strict, so a body that also tries to carry `capabilities` or
- * the removed `confirmDataLoss` boolean is a named `400` rather than an ambient permission
- * to destroy whatever happens to exist when the request arrives.
- */
-export const listBehaviourConfirmation = z
-  .strictObject({
-    fromBehaviour: listBehaviour,
-    toBehaviour: listBehaviour,
-    itemVersion: z.number().int().nonnegative(),
-    itemCount: z.number().int().nonnegative(),
-    fields: z.array(freeText.min(1)),
-  })
-  .meta({ id: 'ListBehaviourConfirmation' });
-
-export const changeListBehaviourInput = z
-  .strictObject({
-    behaviour: listBehaviour,
-    confirmation: listBehaviourConfirmation.optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (
-      value.confirmation !== undefined &&
-      value.confirmation.toBehaviour !== value.behaviour
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['confirmation', 'toBehaviour'],
-        message: 'confirmation.toBehaviour must match behaviour',
-      });
-    }
-  })
-  .meta({ id: 'ChangeListBehaviourInput' });
-
-export type ChangeListBehaviourInput = z.infer<typeof changeListBehaviourInput>;
-
-/**
- * The route has no query contract. Keeping a strict empty schema makes the removed
- * `?confirmDataLoss=true` flag a named `400` instead of silently treating it as confirmation.
- */
-export const changeListBehaviourQuery = z
-  .strictObject({})
-  .meta({ id: 'ChangeListBehaviourQuery' });
-
-/**
- * One item of `POST /v1/lists/:id/items`, and one member of `bulk`.
- *
- * Strict, so `checked`, `rank`, `itemRevision`, `sourceActivityId` and `sourceLabel` — all
- * server-derived — are rejected rather than dropped. `itemId` is the client-minted `itm_`
- * ULID, optional for the same reason as `listId` above.
- */
 const createListItemFields = {
   itemId: ulidId('itm').optional(),
   title,
   note: z.string().max(MAX_NOTES_LEN).optional(),
-  location: listItemLocation.optional(),
-  details: listItemDetailsInput.optional(),
-  /** Drives the lexo rank. Absent means the end of the list. */
+  features: listItemFeatures.optional(),
   afterItemId: ulidId('itm').optional(),
 } as const;
 
 export const createListItemInput = z
   .strictObject(createListItemFields)
   .meta({ id: 'CreateListItemInput' });
-
 export type CreateListItemInput = z.infer<typeof createListItemInput>;
 
-/** `POST /v1/lists/:id/items/bulk`. Ordinary item creation only; every member its own id. */
 export const bulkCreateListItemsInput = z
   .strictObject({
     items: z.array(z.strictObject(createListItemFields)).min(1).max(MAX_LIST_ITEMS),
   })
   .meta({ id: 'BulkCreateListItemsInput' });
-
 export type BulkCreateListItemsInput = z.infer<typeof bulkCreateListItemsInput>;
 
-/**
- * The item inputs, bound to a loaded List's behaviour.
- *
- * What the service actually validates a body against: the strict shape above plus
- * `checkDetailsMatchBehaviour`. Building the refined schema here rather than in a handler
- * keeps the rule in one place and the issue path (`details.behaviour`) identical on both
- * routes.
- */
-export function createListItemInputFor(behaviour: z.infer<typeof listBehaviour>) {
-  return createListItemInput.superRefine((value, ctx) => {
-    checkDetailsMatchBehaviour({ behaviour, details: value.details }, ctx);
-  });
-}
-
-export function bulkCreateListItemsInputFor(behaviour: z.infer<typeof listBehaviour>) {
-  return bulkCreateListItemsInput.superRefine((value, ctx) => {
-    value.items.forEach((item, index) => {
-      checkDetailsMatchBehaviour({ behaviour, details: item.details }, ctx, [
-        'items',
-        index,
-      ]);
-    });
-  });
-}
-
-/**
- * The List an API response carries (`api-contract.md` §2.7, P3-05).
- *
- * The stored shape minus storage-only `itemVersion` and the two work markers. `rankVersion`
- * stays — item-page cursors are bound to it, and the client hands it back opaquely inside
- * them.
- */
 export const listView = list
-  .omit({ itemVersion: true, rankRepairId: true, behaviourMigrationId: true })
+  .omit({ itemVersion: true, rankRepairId: true, schemaMigrationId: true })
   .meta({ id: 'ListView' });
-
-/** The ListItem a response carries: the stored shape minus its storage-only revision fence. */
 export const listItemView = listItem
   .omit({ itemRevision: true, sourceProvenance: true })
   .meta({ id: 'ListItemView' });
 
-/**
- * The caller's linked Plan, trimmed to what a list row can say about it (P3-15, P3-35).
- *
- * **Deliberately not the Activity.** A list row renders one line — `Planned Saturday · 7 PM`,
- * `Next session Friday · 8 PM`, `Done Saturday` — and shipping the whole Activity to draw it
- * would make the list projection a second Activity-detail contract, with two shapes to keep
- * in step and a private Plan's every field travelling into a list response.
- *
- * **Strict**, unlike the stored shapes around it. This is built by the service rather than
- * read back from a row, so there is nothing legitimate to strip — and an `activityId` that
- * slipped in here would be a second copy of one the link already carries.
- *
- * Three fields, each earning its place. The Activity's id is **not** among them: it is already
- * on the `viewerLink` this always travels with, and one id in two places is one id that can
- * disagree with itself. The state line's tap target reads it from the link.
- *
- * - `type` — the verb differs by kind: an event is `Planned`, a watch session is
- *   `Next session`. Inferring it from the list's behaviour would be wrong for a `custom` Plan
- *   made from a `watch` list, which the bridge explicitly allows.
- * - `status` — `Done Saturday` versus `Planned Saturday`, the un-complete that reverts it,
- *   and the date-independent `Cancelled` line.
- * - `schedule` — the date and time a scheduled/completed line renders. Its absence hides a
- *   saved Plan but not a cancelled one, whose status is useful context on its own
- *   (`plans-and-lists.md` §6.2).
- *
- * What is absent is as deliberate. No `title`: the row shows the **item's** title, and the two
- * are independent after the one-time seed (P3-14). No watch progress: `Watching · S2 E4` comes
- * from the item's own `details`, not from the Plan. No `outcome`: every completion renders
- * `Done`, and a skip removes the pointer entirely, so no line survives to vary.
- */
 export const listItemPlanState = z
   .strictObject({
     type: planType,
@@ -500,22 +286,6 @@ export const listItemPlanState = z
   })
   .meta({ id: 'ListItemPlanState' });
 
-/**
- * One row of a list detail's item page (`api-contract.md` §3, ADR-034).
- *
- * **Two shapes, not one with two optional fields** — the same choice, for the same reason, as
- * {@link listSettingsMutation}. The link is the pointer and the plan is what it resolved to,
- * so a row has both or neither: a link without state cannot render a state line, and state
- * without a link names a Plan the row cannot navigate to. Modelling them as independent
- * optionals is what would let a server emit half a pair and a client believe it.
- *
- * **Both arms are strict, and the linked arm is first.** A non-strict union would match a
- * linked row against the unlinked arm and *strip* the link on the way through, which is a
- * silent data loss no test would notice.
- *
- * Present only when this viewer has planned the item and may still read that Activity;
- * another member's pointer is never response data.
- */
 export const listDetailItem = z
   .union([
     z.strictObject({
@@ -527,11 +297,6 @@ export const listDetailItem = z
   ])
   .meta({ id: 'ListDetailItem' });
 
-/**
- * `GET /v1/lists/:id` (`api-contract.md` §2.7): META always; the fenced first item page and
- * its rank-version-bound cursor only when `includeItems=true` asked for them. Later item
- * pages go through `GET /v1/lists/:id/items?cursor=` (P3-08).
- */
 export const listDetail = z
   .object({
     list: listView,
@@ -540,101 +305,41 @@ export const listDetail = z
   })
   .meta({ id: 'ListDetail' });
 
-/** `DELETE /v1/lists/:id` names what was removed, per §1's DELETE-answers-200 rule. */
 export const deletedList = z
   .object({ listId: ulidId('lst') })
   .meta({ id: 'DeletedList' });
-
-/** `GET /v1/lists` query. Strict, so a misspelled parameter is a `400` naming it. */
 export const listListQuery = z
   .strictObject({ cursor: cursor.optional() })
   .meta({ id: 'ListListQuery' });
-
-/** `GET /v1/lists/:id` query. `includeItems=true` asks for the fenced first item page. */
 export const listDetailQuery = z
   .strictObject({ includeItems: z.enum(['true', 'false']).optional() })
   .meta({ id: 'ListDetailQuery' });
-
-/** `GET /v1/lists/:id/items` query. Strict, so a misspelled parameter is a named `400`. */
 export const listItemPageQuery = z
   .strictObject({ cursor: cursor.optional() })
   .meta({ id: 'ListItemPageQuery' });
 
-/**
- * `PATCH /v1/lists/:id/items/:itemId` (`api-contract.md` §2.7, P3-08).
- *
- * **Strict**, so `rank`, `itemRevision`, `listId` and the provenance fields — all
- * server-owned — are a `400` naming them rather than a save that quietly ignores them.
- * There is no client `If-Match`: item writes are per-field last-write-wins, and optimistic
- * concurrency on every checkbox in a grocery list would produce constant spurious `409`s
- * for no benefit (`data-model.md` §4.6 "Concurrency").
- *
- * `note`, `location` and `details` accept `null` to **clear** the field, the same way
- * `defaultReminderOffset` does on the profile: absent means "leave it alone" and `null`
- * means "remove it", which are different intentions and must stay distinguishable.
- *
- * `afterItemId` requests a reorder — `null` moves the item to the front, an id moves it
- * after that item. Absent means no reorder at all, which is why it is nullable rather than
- * merely optional.
- */
+const listItemFeaturePatch = z.strictObject({
+  progress: progressValue.nullable().optional(),
+  place: listPlace.nullable().optional(),
+  subItems: subItemCollection.nullable().optional(),
+});
+
 export const patchListItemInput = z
   .strictObject({
     title: title.optional(),
-    checked: z.boolean().optional(),
+    state: listItemState.optional(),
     note: z.string().max(MAX_NOTES_LEN).nullable().optional(),
-    location: listItemLocation.nullable().optional(),
-    details: listItemDetailsInput.nullable().optional(),
+    features: listItemFeaturePatch.optional(),
     afterItemId: ulidId('itm').nullable().optional(),
   })
   .meta({ id: 'PatchListItemInput' });
-
 export type PatchListItemInput = z.infer<typeof patchListItemInput>;
 
-/** The patch input bound to a loaded List's behaviour, like the create helpers above. */
-export function patchListItemInputFor(behaviour: z.infer<typeof listBehaviour>) {
-  return patchListItemInput.superRefine((value, ctx) => {
-    checkDetailsMatchBehaviour(
-      { behaviour, ...(value.details == null ? {} : { details: value.details }) },
-      ctx,
-    );
-  });
-}
-
-/**
- * `POST /v1/lists/:id/undo` (`api-contract.md` §2.7, P3-10).
- *
- * The opaque token and nothing else. Strict, and deliberately so: a client must never send
- * the deleted rows back as authority, and a body that tried to would be a `400` naming the
- * field rather than a restore from data the server did not record.
- */
 export const undoListOperationInput = z
   .strictObject({ undoToken: z.string().min(1) })
   .meta({ id: 'UndoListOperationInput' });
-
 export type UndoListOperationInput = z.infer<typeof undoListOperationInput>;
 
-/**
- * What `POST /v1/lists/:id/undo` answers with — a **discriminated union**, not a count with
- * exceptions (P3-10; `api-contract.md` §2.7 amended in the same pull request).
- *
- * §2.7 said two things that did not fit together: the route "returns `{ affectedCount }`",
- * and a mismatched, consumed or retention-expired token "returns the typed
- * expired/no-longer-applicable result and writes nothing". A count cannot express the second,
- * and a new `ErrorCode` would be wrong for both — none of these is a failed request. The
- * server was asked to apply a compensation, and it answers with what happened to it:
- *
- * - `applied` — the inverse ran; `affectedCount` is what it touched.
- * - `expired` — the token is past `MAX_AUTOMATIC_INTENT_AGE_DAYS`, or names no operation, or
- *   its hash does not match. The three are **deliberately indistinguishable**: telling a
- *   caller that a token is well-formed but expired, rather than simply unknown, tells them
- *   something about an operation they may not own.
- * - `no_longer_applicable` — the operation is retained and the token is right, but the world
- *   has moved: it was already used, or a settings inverse's recorded preconditions no longer
- *   hold because someone edited what it would restore.
- *
- * All three are `200`, because all three are true answers to the question asked. Nothing is
- * written for the last two.
- */
 export const listUndoResult = z
   .discriminatedUnion('outcome', [
     z.strictObject({
@@ -646,42 +351,14 @@ export const listUndoResult = z
   ])
   .meta({ id: 'ListUndoResult' });
 
-/**
- * What a reversible item mutation answers with (`api-contract.md` §2.7).
- *
- * `undoExpiresAt` is the **UI offer deadline**, not the server's replay deadline: the client
- * must stop offering Undo at that instant, while an inverse the user already accepted stays
- * valid until the shared retention window expires. Conflating the two is what would make an
- * accepted offline Undo expire in transit.
- */
 export const reversibleItemMutation = z
-  .object({
+  .strictObject({
     affectedCount: z.number().int().nonnegative(),
     undoToken: z.string().min(1),
     undoExpiresAt: instant,
   })
   .meta({ id: 'ReversibleItemMutation' });
 
-/**
- * What a list-settings mutation answers with — `PATCH /v1/lists/:id` and
- * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7).
- *
- * **A union of two shapes, not one shape with two optional fields.** An Undo offer is a token
- * *and* the deadline it is offered until; a payload carrying one without the other is an
- * offer no client can act on, and modelling them as independent optionals is what would let a
- * server emit half of one and a client believe it. Both arms are strict, so a half payload
- * matches neither and fails.
- *
- * The offer's absence is meaningful rather than incidental: a rename records no inverse
- * (`interaction-contract.md` §4.1 has no undo row for it), a patch that changes nothing has
- * nothing to take back, and a behaviour change that **lost** data was confirmed rather than
- * offered — returning requires another preview-and-confirm action, so a token there would
- * promise a restore the server cannot make.
- *
- * `undoExpiresAt` is the UI offer deadline on the same terms as {@link reversibleItemMutation}:
- * stop offering at that instant, while an inverse the user already accepted stays valid
- * until the shared retention window expires.
- */
 export const listSettingsMutation = z
   .union([
     z.strictObject({
@@ -693,58 +370,14 @@ export const listSettingsMutation = z
   ])
   .meta({ id: 'ListSettingsMutation' });
 
-/**
- * `POST /v1/lists/:id/items/:itemId/schedule` — the optional bridge to Activities
- * (`api-contract.md` §2.7, `phase-03` §P3-13, ADR-034, ADR-046, ADR-055).
- *
- * ## Why this is its own schema and not `CreateActivityInput` with fields removed
- *
- * The contract says it outright: "deliberately not `CreateActivityInput` with fields removed
- * by convention. It is a separate schema so neither audience nor type can be inferred."
- * Removing fields by convention is a rule that lives in prose; a separate strict schema is a
- * rule the compiler and the validator both hold. Both halves of the user's choice —
- * `creationTarget` and `audience` — are **required**, so a request that has not been through
- * the Plan-kind and audience steps cannot be constructed at all (`CLAUDE.md` rule 2).
- *
- * Nothing here is derived from the item, the list, or the title. The server never reads
- * `behaviour`, `templateKey` or any capability to choose or pre-select the type.
- *
- * ## Why the two ids are required here and optional on `POST /v1/activities`
- *
- * This route is offline-capable. The native client mints `activityId` and every
- * `reminderId` before the intent enters SQLite, so a replay after the 24-hour idempotency
- * receipt expires is still duplicate-safe, and a reminder can be armed locally under the
- * identity it will keep forever (ADR-055, P2-57). A server-minted id would arrive too late
- * to be either of those things, so omitting one is a `400` rather than a fallback.
- */
 const scheduleReminderInput = z.strictObject({
-  /** Required here, unlike the create path: the device armed this id before it was sent. */
   reminderId: ulidId('rem'),
   offsetMinutes: reminderOffsetMinutes,
 });
-
-/**
- * The Plan kind the user chose, and nothing else.
- *
- * `objectKind` is pinned to `plan` because a list item cannot bridge to a Task: a Task is
- * something you do, and `Plan this item` is the action that turns a possibility into a
- * commitment (`plans-and-lists.md` §6). Strict, so a `listId` or a stray `objectKind: 'task'`
- * is a `400` naming it.
- */
 export const scheduleCreationTarget = z.strictObject({
   objectKind: z.literal('plan'),
   type: planType,
 });
-
-/**
- * **Just me** or **Choose people** — the second explicit choice, never a default.
- *
- * A discriminated union rather than an optional participant array, so "the user has not
- * chosen yet" is unrepresentable. `selected_people` is in the schema from this phase so the
- * contract and the client are stable, and the service refuses it with `Sharing is coming
- * soon.` until Phase 6; at least one participant, because choosing people and naming none is
- * a half-made choice.
- */
 export const scheduleAudience = z.discriminatedUnion('mode', [
   z.strictObject({ mode: z.literal('just_me') }),
   z.strictObject({
@@ -752,22 +385,14 @@ export const scheduleAudience = z.discriminatedUnion('mode', [
     participants: z.array(participantInput).min(1).max(MAX_PARTICIPANTS),
   }),
 ]);
-
 export const scheduleListItemInput = z
   .strictObject({
     activityId: ulidId('act'),
     creationTarget: scheduleCreationTarget,
     audience: scheduleAudience,
-    /** Omitted copies the item title **once**; after that the two are independent (P3-14). */
-    title: z
-      .string()
-      .trim()
-      .min(1, 'A title is required')
-      .max(MAX_TITLE_LEN, `A title is at most ${MAX_TITLE_LEN} characters`)
-      .optional(),
+    title: title.optional(),
     notes: z.string().max(MAX_NOTES_LEN).optional(),
     schedule: activityScheduleInput.optional(),
-    /** Single-segment, like every other create path: `createRecurrence` is that rule. */
     recurrence: createRecurrence.optional(),
     reminders: z
       .array(scheduleReminderInput)
@@ -779,11 +404,6 @@ export const scheduleListItemInput = z
     sourceUrl: z.url().optional(),
   })
   .superRefine((value, ctx) => {
-    /**
-     * The same three rules the create path applies, from the same functions rather than a
-     * second copy — a copy that drifted would let one path accept a `meal` payload on a
-     * `watch` Plan while the other refused it.
-     */
     checkDetailsMatchType(
       {
         type: value.creationTarget.type,
@@ -813,98 +433,25 @@ export const scheduleListItemInput = z
     }
   })
   .meta({ id: 'ScheduleListItemInput' });
-
-/**
- * Inferred from the schema, not hand-written — the same choice `CreateActivityInput` makes,
- * for the same reason. Because it is inferred from a shape whose `creationTarget` and
- * `audience` are required, and whose `audience` is a discriminated union, there is no
- * assignable value that has skipped either explicit choice. A draft the user has not finished
- * making cannot be widened into a request (`CLAUDE.md` rule 2).
- */
 export type ScheduleListItemInput = z.infer<typeof scheduleListItemInput>;
 
-/**
- * `{ activity, item, viewerLink }` — the Plan that was created, the item **unchanged**, and
- * the caller's own pointer.
- *
- * `viewerLink` is singular and belongs to the caller: "no other viewer's pointer may be
- * serialised" (§P3-13). Returning the item alongside is what lets the client prove to itself
- * that the bridge linked rather than duplicated — the same `itemId`, the same title, the same
- * `checked`, byte for byte.
- */
 export const scheduledListItem = z
-  .object({
-    activity,
-    item: listItemView,
-    viewerLink: listItemActivityLink,
-  })
+  .object({ activity, item: listItemView, viewerLink: listItemActivityLink })
   .meta({ id: 'ScheduledListItem' });
 
-/**
- * `POST /v1/activities/:id/ingredients/add-to-list` (P3-17, `plans-and-lists.md` §7.3).
- *
- * ## What the client may say, and what it may not
- *
- * Two things: **which list**, and **which source rows**. Everything a created item carries —
- * its title, `sourceActivityId`, `sourceLabel` — is derived server-side from the meal that
- * request names, and none of it appears here. That is the same rule
- * {@link createListItemInput} enforces by being strict, stated once more where it matters
- * most: a client able to author `sourceLabel` could write `Sunday dinner` onto an item that
- * came from nowhere, and provenance that can be fabricated records nothing.
- *
- * `listId` is required and is never inferred. §P3-17: "There is no 'the Groceries list' —
- * there is whichever `collection` the user's `groceries` slot resolves to under P3-12."
- * Resolution is a **client-side read** over the Lists projection, and the destination is
- * visible before the write (P3-43). By the time this request exists the user has seen the
- * name of the list they are writing to, so the server takes it verbatim and checks they may
- * write it; it does not resolve a slot, and it does not fall back to one if the id is bad.
- *
- * ## Why the ingredients are ids rather than an array of rows
- *
- * `ingredientId` is the stable `ing_` identity of a row in the meal's own
- * `details.ingredients` (`data-model.md` §8). The server resolves each one against the
- * **current** array, so an action composed offline before the user reordered their
- * ingredients still adds what they picked. A missing id — the row was deleted or replaced —
- * rejects the whole request rather than resolving to whatever now sits at that position.
- *
- * `itemId` is an optional client-minted `itm_` for the destination. When it is supplied, its
- * authoritative `ITEMID#` identity (a locator for a create, an alias for a deduplicated
- * outcome) keeps a replay from becoming a different row after the receipt expires and binds
- * the id to this exact Activity/ingredient outcome. When it is omitted and a
- * row must be created, the server mints the id; that convenience cannot promise durable
- * replay under a new idempotency key. It is per ingredient because selections may resolve
- * to different destination rows.
- *
- * Capped at {@link MAX_INGREDIENTS_PER_ADD}, not {@link MAX_INGREDIENTS}: the whole action is
- * one DynamoDB transaction, and that is what fits. See the constant for the arithmetic.
- */
 export const addIngredientsToListInput = z
   .strictObject({
     listId: ulidId('lst'),
     ingredients: z
       .array(
-        z.strictObject({
-          ingredientId: ulidId('ing'),
-          itemId: ulidId('itm').optional(),
-        }),
+        z.strictObject({ ingredientId: ulidId('ing'), itemId: ulidId('itm').optional() }),
       )
       .min(1)
       .max(MAX_INGREDIENTS_PER_ADD),
   })
   .meta({ id: 'AddIngredientsToListInput' });
-
 export type AddIngredientsToListInput = z.infer<typeof addIngredientsToListInput>;
 
-/**
- * What the action did, per selected ingredient, so the client can render the result without
- * re-reading either object.
- *
- * `outcome` exists because §7.3 step 6's duplicate rule means "add three ingredients" is not
- * three creates: an unchecked row with the same title is **extended** rather than duplicated,
- * and the user should be able to see which of their three taps produced a new line and which
- * joined one that was already there. A response that returned only `items` would say three
- * things landed without saying that one of them was already on the list.
- */
 export const addedIngredient = z
   .strictObject({
     ingredientId: ulidId('ing'),
@@ -913,27 +460,12 @@ export const addedIngredient = z
   })
   .meta({ id: 'AddedIngredient' });
 
-/**
- * The whole result: the destination, what happened to each ingredient, and the one label.
- *
- * `sourceLabel` is returned as its own field as well as on each item because it is computed
- * **once for the operation** (§7.5 rule 5 asks a question about the list, not about a row),
- * and a client rendering "added to Groceries as Sunday dinner" should not have to pick one
- * item and hope the rest agree.
- */
 export const addIngredientsToListResult = z
   .object({
     listId: ulidId('lst'),
     sourceLabel: listItemSourceLabel,
     ingredients: z.array(addedIngredient),
-    /**
-     * The meal's new version, because the action advances it (raised in review): the markers
-     * it wrote are rendered on the meal, so a client holding the previous `updatedAt` would
-     * both draw stale rows and pass its next `If-Match`. Returning it lets the caller keep
-     * editing without a refetch.
-     */
     activityUpdatedAt: z.iso.datetime(),
   })
   .meta({ id: 'AddIngredientsToListResult' });
-
 export type AddIngredientsToListResult = z.infer<typeof addIngredientsToListResult>;

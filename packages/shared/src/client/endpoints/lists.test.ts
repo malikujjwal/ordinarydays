@@ -14,8 +14,6 @@ import {
   uncheckAllListItems,
 } from './listItems.js';
 import {
-  behaviourConfirmationFrom,
-  changeListBehaviour,
   createList,
   deleteList,
   getList,
@@ -91,17 +89,18 @@ const LIST_ID = 'lst_01J0000000000000000000000A';
 const ITEM_ID = 'itm_01J0000000000000000000000C';
 
 const LIST = {
+  schemaVersion: 2,
   listId: LIST_ID,
   ownerId: 'usr_01J0000000000000000000000B',
-  behaviour: 'collection',
   templateKey: 'groceries',
   title: 'Costco run',
   icon: 'cart',
   emptyStateCopy: 'Nothing here yet',
-  capabilities: { checkable: true, supportsLocation: false },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: {},
   slot: null,
   itemCount: 2,
-  uncheckedCount: 1,
+  doneCount: 1,
   memberCount: 1,
   rankVersion: 3,
   archived: false,
@@ -114,7 +113,7 @@ const ITEM = {
   listId: LIST_ID,
   rank: 'n',
   title: 'Milk',
-  checked: false,
+  state: 'open',
 };
 
 const ok = (data: unknown) => ({
@@ -224,7 +223,7 @@ describe('patchList', () => {
     const result = await patchList(
       client,
       LIST_ID,
-      { capabilities: { checkable: false } },
+      { itemStateMode: { mode: 'none' } },
       '2026-08-26T10:00:00.000Z',
       'patch-key-1',
     );
@@ -233,7 +232,7 @@ describe('patchList', () => {
     expect(calls[0]?.headers['If-Match']).toBe('2026-08-26T10:00:00.000Z');
     expect(calls[0]?.headers['Idempotency-Key']).toBe('patch-key-1');
     expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
-      capabilities: { checkable: false },
+      itemStateMode: { mode: 'none' },
     });
     // An additive change carries the Undo offer; the pair is present or absent together.
     expect(result).toMatchObject({ undoToken: 'undo-1' });
@@ -251,88 +250,6 @@ describe('patchList', () => {
     );
 
     expect('undoToken' in result).toBe(false);
-  });
-});
-
-describe('changeListBehaviour', () => {
-  it('carries both If-Match and Idempotency-Key', async () => {
-    const { client, calls } = makeClient([ok({ list: LIST })]);
-
-    await changeListBehaviour(client, LIST_ID, { behaviour: 'watch' }, 'v1', 'key-1');
-
-    expect(calls[0]?.url).toBe(`https://api.test/v1/lists/${LIST_ID}/behaviour`);
-    expect(calls[0]?.headers['If-Match']).toBe('v1');
-    // Identifies the migration, so a replay resumes its own work instead of starting a second.
-    expect(calls[0]?.headers['Idempotency-Key']).toBe('key-1');
-  });
-
-  /**
-   * The contract point the whole 409 exists for: the server's typed preview reaches the
-   * surface intact, and the confirmed call echoes **that object**, not one the client rebuilt.
-   * `itemVersion` is the basis of the preview — a client that re-derived the count from a
-   * paginated cache would be confirming its own measurement against a version it never saw.
-   */
-  it('surfaces the typed confirmation and echoes it back on the confirmed call', async () => {
-    const confirmation = {
-      fromBehaviour: 'collection' as const,
-      toBehaviour: 'watch' as const,
-      itemVersion: 12,
-      itemCount: 4,
-      fields: ['checked', 'note'],
-    };
-
-    const { client, calls } = makeClient([
-      {
-        status: 409,
-        body: {
-          error: {
-            code: 'conflict',
-            message: 'This will remove some fields.',
-            requestId: REQUEST_ID,
-          },
-          confirmation,
-        },
-      },
-      ok({ list: { ...LIST, behaviour: 'watch' } }),
-    ]);
-
-    const refused = await changeListBehaviour(
-      client,
-      LIST_ID,
-      { behaviour: 'watch' },
-      'v1',
-      'key-1',
-    ).catch((error: unknown) => error);
-
-    expect(refused).toBeInstanceOf(ApiError);
-    const surfaced = behaviourConfirmationFrom(refused);
-    expect(surfaced).toEqual(confirmation);
-
-    // The user confirmed. A NEW key, and the whole object echoed.
-    await changeListBehaviour(
-      client,
-      LIST_ID,
-      { behaviour: 'watch', confirmation: surfaced },
-      'v1',
-      'key-2',
-    );
-
-    expect(calls[1]?.headers['Idempotency-Key']).toBe('key-2');
-    expect(JSON.parse(calls[1]?.body ?? '{}')).toEqual({
-      behaviour: 'watch',
-      confirmation,
-    });
-    // The removed flag is not resurrected as a query parameter.
-    expect(calls[1]?.url).not.toContain('confirmDataLoss');
-  });
-
-  it('reads no confirmation off an unrelated error', () => {
-    // The field is only meaningful on a 409 from this route; a reader that ignored the status
-    // would compile everywhere and be right in one place.
-    expect(
-      behaviourConfirmationFrom(new ApiError('conflict', 'stale', 412, REQUEST_ID)),
-    ).toBeUndefined();
-    expect(behaviourConfirmationFrom(new Error('boom'))).toBeUndefined();
   });
 });
 
@@ -411,17 +328,17 @@ describe('list items', () => {
   });
 
   it('reorders with afterItemId, folding fields into the same write', async () => {
-    const { client, calls } = makeClient([ok({ ...ITEM, checked: true })]);
+    const { client, calls } = makeClient([ok({ ...ITEM, state: 'done' })]);
 
     await patchListItem(client, LIST_ID, ITEM_ID, {
-      checked: true,
+      state: 'done',
       afterItemId: null,
     });
 
     expect(calls[0]?.method).toBe('PATCH');
     // `null` moves the item to the front; no rank is involved on the wire.
     expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
-      checked: true,
+      state: 'done',
       afterItemId: null,
     });
     expect(calls[0]?.headers['If-Match']).toBeUndefined();

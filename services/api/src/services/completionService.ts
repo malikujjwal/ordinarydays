@@ -19,8 +19,8 @@ import {
   type List,
   type ListItem,
   type ListItemActivityLink,
-  type ListItemDetails,
   type Occurrence,
+  type ProgressValue,
   scopeFromWire,
   targetsWholeSeries,
 } from '@od/shared/types';
@@ -328,7 +328,7 @@ export async function skipActivity(
   return result;
 }
 
-type WatchProgress = Extract<ListItemDetails, { behaviour: 'watch' }>;
+type WatchProgress = Extract<ProgressValue, { kind: 'episode' }>;
 type WatchSession = Extract<ActivityDetails, { kind: 'watch' }>;
 
 /**
@@ -338,7 +338,7 @@ type WatchSession = Extract<ActivityDetails, { kind: 'watch' }>;
  *
  * Everything below produces a value the response carries and the client renders. Confirming
  * is a separate user action: an ordinary `PATCH /v1/lists/:id/items/:itemId` the client
- * issues, through the route that already enforces the behaviour and field gates. There is no
+ * issues, through the route that already enforces the state and feature gates. There is no
  * confirm endpoint, and a write reachable from here would be exactly the auto-create
  * `CLAUDE.md` rule 5 and `agent-playbook.md` §6.9 forbid — the tell being a mutation inside
  * a handler for a different operation.
@@ -346,8 +346,8 @@ type WatchSession = Extract<ActivityDetails, { kind: 'watch' }>;
  * ## The five things that must all hold
  *
  * A `watch` Activity; both halves of its list provenance; the caller's **own** pointer
- * resolving to **this** Activity; a list still on `behaviour: 'watch'`; and an item that
- * still exists with typed watch `details`. A miss on any one of them is silence, not an
+ * resolving to **this** Activity; and an item that still has compatible exposed state or
+ * enabled episode Progress. A miss on any one of them is silence, not an
  * error — the caller completed something, and there is nothing to tell them about it.
  *
  * The pointer identity is the one worth spelling out. `listItemId` on the Activity says which
@@ -393,9 +393,22 @@ async function watchFollowUp(
     );
     if (source === undefined) return undefined;
     if (source.link.activityId !== activity.activityId) return undefined;
-    const progress = source.item.details;
-    if (progress?.behaviour !== 'watch') return undefined;
-    return suggestionFor(source.list, source.item, progress, activity.details);
+    const progress = source.item.features?.progress;
+    const progressConfig = source.list.featureConfig.progress;
+    if (
+      progressConfig?.enabled === true &&
+      progressConfig.kind === 'episode' &&
+      progress?.kind === 'episode'
+    ) {
+      const progressSuggestion = suggestionFor(
+        source.list,
+        source.item,
+        progress,
+        activity.details,
+      );
+      if (progressSuggestion !== undefined) return progressSuggestion;
+    }
+    return stateSuggestionFor(source.list, source.item);
   } catch (error) {
     logger.info(
       { userId, activityId: activity.activityId, listId, listItemId, err: error },
@@ -406,19 +419,9 @@ async function watchFollowUp(
 }
 
 /**
- * Which of `activities.md` §5.3's two watch rows this is, and what it would set.
- *
- * Pure, and the only place the choice is made. `mediaKind` selects: a movie's follow-up is
- * the `watched` transition and a movie has no episode to advance to, while everything else
- * offers the session's own season and episode. Each arm carries the `mediaKind` that chose
- * it, so the schema refuses a row whose kind and media disagree rather than trusting this
- * function to be the only producer.
- *
- * **An item with no `mediaKind` takes the progress branch, and is not guessed at.** P3-09's
- * back-fill writes `watchStatus: 'want'` and nothing else, so a `collection` upgraded to
- * `watch` has a whole list of them, and refusing those items a follow-up would quietly make
- * the feature depend on how the list was created. What the progress branch offers is not an
- * opinion about the media: it is the season and episode **the user typed on this session**,
+ * The structured Progress question. `mediaKind` is retained as item context, but never
+ * selects a List model branch. An item with no media kind is not guessed at: the target is
+ * the season and episode **the user typed on this session**,
  * copied onto the item they said it came from. When the session names neither there is
  * nothing to copy and nothing is offered — `Update to ?` is not a question, and `watched` is
  * not an answer the app is allowed to reach for on a show, whose ending it cannot know
@@ -440,22 +443,12 @@ function suggestionFor(
     listTitle: list.title,
     itemId: item.itemId,
     current: {
-      watchStatus: progress.watchStatus,
       ...(progress.season === undefined ? {} : { season: progress.season }),
       ...(progress.episode === undefined ? {} : { episode: progress.episode }),
     },
   };
 
   const mediaKind = progress.mediaKind;
-  if (mediaKind === 'movie') {
-    return {
-      kind: 'watch_watched',
-      ...shared,
-      mediaKind,
-      target: { watchStatus: 'watched' },
-    };
-  }
-
   /**
    * Two returns rather than one built by spreading, because the target is a union of
    * "season, optionally with an episode" and "episode alone" — and writing it as two
@@ -476,6 +469,19 @@ function suggestionFor(
   }
   if (episode !== undefined) return { ...named, target: { episode } };
   return undefined;
+}
+
+/** Fallback when no structured Progress question exists: explicit Watch intent may offer done. */
+function stateSuggestionFor(list: List, item: ListItem): CompletionFollowUp | undefined {
+  if (list.itemStateMode.mode === 'none' || item.state === 'done') return undefined;
+  return {
+    kind: 'list_item_state',
+    listId: list.listId,
+    listTitle: list.title,
+    itemId: item.itemId,
+    current: { state: item.state },
+    target: { state: 'done' },
+  };
 }
 
 /**

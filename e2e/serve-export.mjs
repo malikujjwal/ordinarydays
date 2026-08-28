@@ -87,7 +87,7 @@ function resolve(urlPath) {
   return undefined;
 }
 
-const server = createServer((request, response) => {
+export const server = createServer((request, response) => {
   const path = new URL(request.url ?? '/', `http://localhost:${PORT}`).pathname;
   const file = resolve(path);
 

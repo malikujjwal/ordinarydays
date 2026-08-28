@@ -65,6 +65,6 @@ export function mergeItemPages(
 }
 
 /** Checked rows among those loaded. Only meaningful once {@link mayActOnWholeList} holds. */
-export function checkedCount(items: readonly ListItemRow[]): number {
-  return items.reduce((count, item) => count + (item.checked ? 1 : 0), 0);
+export function doneCount(items: readonly ListItemRow[]): number {
+  return items.reduce((count, item) => count + (item.state === 'done' ? 1 : 0), 0);
 }

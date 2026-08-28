@@ -617,7 +617,7 @@ describe('the completion follow-up', () => {
     listId: LIST,
     listTitle: 'Movies and shows',
     itemId: ITEM,
-    current: { watchStatus: 'watching', season: 2, episode: 4 },
+    current: { season: 2, episode: 4 },
   } as const;
 
   it('accepts the show row: current progress and the session as the target', () => {
@@ -630,28 +630,25 @@ describe('the completion follow-up', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('accepts the movie row, whose only target is the watched transition', () => {
+  it('accepts the exposed-state fallback with one canonical done target', () => {
     expect(
       completionFollowUp.safeParse({
-        kind: 'watch_watched',
-        ...shared,
-        mediaKind: 'movie',
-        current: { watchStatus: 'want' },
-        target: { watchStatus: 'watched' },
+        kind: 'list_item_state',
+        listId: LIST,
+        listTitle: 'Movies and shows',
+        itemId: ITEM,
+        current: { state: 'active' },
+        target: { state: 'done' },
       }).success,
     ).toBe(true);
   });
 
-  /**
-   * A `collection` upgraded to `watch` back-fills `watchStatus` and nothing else (P3-09), so
-   * an item with no `mediaKind` is ordinary rather than malformed. `kind` carries the copy.
-   */
   it('accepts an item that has never said whether it is a movie or a show', () => {
     expect(
       completionFollowUp.safeParse({
         kind: 'watch_progress',
         ...shared,
-        current: { watchStatus: 'want' },
+        current: {},
         target: { episode: 1 },
       }).success,
     ).toBe(true);
@@ -682,8 +679,15 @@ describe('the completion follow-up', () => {
       { kind: 'watch_watched', ...shared, target: { season: 2, episode: 5 } },
     ],
     [
-      'a target that would move the item somewhere other than watched',
-      { kind: 'watch_watched', ...shared, target: { watchStatus: 'watching' } },
+      'a state target that is not done',
+      {
+        kind: 'list_item_state',
+        listId: LIST,
+        listTitle: 'Movies and shows',
+        itemId: ITEM,
+        current: { state: 'open' },
+        target: { state: 'active' },
+      },
     ],
     [
       'an unknown follow-up kind',
@@ -705,8 +709,7 @@ describe('the completion follow-up', () => {
   /**
    * **An empty target is not a weaker question — it is no question.** `Update to ?` renders
    * nothing, and a client building the confirming `PATCH` from `{}` would send a `details`
-   * body that changes only `watchStatus`, turning the progress row into a status write
-   * nobody asked for (`plans-and-lists.md` §8.4 step 2).
+   * body that describes no visible update (`plans-and-lists.md` §8.4 step 2).
    */
   it('rejects a progress target naming neither a season nor an episode', () => {
     expect(
@@ -719,34 +722,32 @@ describe('the completion follow-up', () => {
     ).toBe(false);
   });
 
-  /**
-   * `mediaKind` is what **chooses** the arm, so these are the rows the two arms exist to
-   * make unrepresentable. Each carries a target its own arm accepts, so the only thing
-   * failing is the media/kind disagreement — a target-shaped rejection would pass whether or
-   * not the coupling held.
-   */
-  it.each([
-    [
-      'a progress row claiming the item is a movie',
-      {
+  it('accepts structured episode Progress for an item carrying movie context', () => {
+    expect(
+      completionFollowUp.safeParse({
         kind: 'watch_progress',
         ...shared,
         mediaKind: 'movie',
         target: { season: 2, episode: 5 },
-      },
-    ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
     [
-      'a watched row claiming the item is a show',
-      {
-        kind: 'watch_watched',
-        ...shared,
-        mediaKind: 'show',
-        target: { watchStatus: 'watched' },
-      },
-    ],
-    [
-      'a watched row that never says the item is a movie',
+      'the legacy watched arm',
       { kind: 'watch_watched', ...shared, target: { watchStatus: 'watched' } },
+    ],
+    [
+      'an already-done current state',
+      {
+        kind: 'list_item_state',
+        listId: LIST,
+        listTitle: 'Movies and shows',
+        itemId: ITEM,
+        current: { state: 'done' },
+        target: { state: 'done' },
+      },
     ],
   ])('rejects %s', (_why, value) => {
     expect(completionFollowUp.safeParse(value).success).toBe(false);

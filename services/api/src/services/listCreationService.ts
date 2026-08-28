@@ -90,25 +90,23 @@ export async function createListFromTemplate(
   }
 
   const list: List = {
+    schemaVersion: 2,
     listId: input.listId ?? newListId(),
     ownerId: userId,
-    behaviour: template.behaviour,
     templateKey: template.templateKey,
     title: input.title,
     icon: template.icon,
     emptyStateCopy: template.emptyStateCopy,
     // Field by field, so the stored row holds values rather than a live reference into the
     // catalogue — the copy acceptance criterion 3 mutates the template to prove.
-    capabilities: {
-      checkable: template.capabilities.checkable,
-      supportsLocation: template.capabilities.supportsLocation,
-    },
+    itemStateMode: structuredClone(template.itemStateMode),
+    featureConfig: structuredClone(template.featureConfig),
     slot,
     ...(input.sourceActivityId === undefined
       ? {}
       : { sourceActivityId: input.sourceActivityId }),
     itemCount: 0,
-    uncheckedCount: 0,
+    doneCount: 0,
     memberCount: 1,
     rankVersion: 0,
     itemVersion: 0,

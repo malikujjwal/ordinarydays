@@ -164,9 +164,9 @@ describe('§3.3 the list partition', () => {
       { pk: `LIST#${LST}`, sk: 'RANK_REPAIR#op_1' },
     ],
     [
-      'listBehaviourMigration',
-      keys.listBehaviourMigration(LST, 'op_1'),
-      { pk: `LIST#${LST}`, sk: 'BEHAVIOUR_MIGRATION#op_1' },
+      'listSchemaMigration',
+      keys.listSchemaMigration(LST, 'schema_v2'),
+      { pk: `LIST#${LST}`, sk: 'SCHEMA_MIGRATION#schema_v2' },
     ],
     ['listTombstone', keys.listTombstone(LST), { pk: `LIST#${LST}`, sk: 'TOMBSTONE' }],
   ])('%s', (_name, actual, expected) => {

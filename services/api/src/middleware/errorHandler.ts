@@ -37,7 +37,6 @@ function classify(err: Error): {
   message: string;
   details?: ErrorDetail[];
   retryAfterSeconds?: number;
-  confirmation?: AppErrorBody['confirmation'];
   status?: 503;
 } {
   if (err instanceof AppError) {
@@ -48,7 +47,6 @@ function classify(err: Error): {
       ...(err.retryAfterSeconds !== undefined && {
         retryAfterSeconds: err.retryAfterSeconds,
       }),
-      ...(err.confirmation !== undefined && { confirmation: err.confirmation }),
     };
   }
 
@@ -98,7 +96,6 @@ export function errorHandler(err: Error, c: Context<AppEnv>): Response {
     message,
     details,
     retryAfterSeconds,
-    confirmation,
     status: statusOverride,
   } = classify(err);
   const status = statusOverride ?? statusFor(code);
@@ -118,7 +115,6 @@ export function errorHandler(err: Error, c: Context<AppEnv>): Response {
       ...(details !== undefined && { details }),
       requestId,
     },
-    ...(confirmation === undefined ? {} : { confirmation }),
   };
 
   if (retryAfterSeconds !== undefined) {

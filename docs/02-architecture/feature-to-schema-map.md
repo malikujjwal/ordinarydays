@@ -131,17 +131,18 @@ single pointer for a private list — and one item row per bar. It has no `MEMBE
 rows exist only for non-owners. That is the whole storage cost.
 
 ```
-LIST#lst_bars | META                { behaviour: "collection",          ← the canonical list
-                                      templateKey: "bars-to-try",
-                                      capabilities: { checkable: true,
-                                                      supportsLocation: true },
+LIST#lst_bars | META                { schemaVersion: 2,                  ← the canonical list
+                                      templateKey: "places-to-visit",
+                                      itemStateMode: { mode: "checkbox" },
+                                      featureConfig: { place: { enabled: true } },
                                       slot: null, title: "Bars to try",
                                       memberCount: 1 }
 
 USER#usr_u    | LIST#lst_bars       { role: "owner", addedAt: ... }     ← a pure pointer
 
 LIST#lst_bars | ITEM#a0#itm_kimo    { title: "Kimo's",
-                                      location: { label: "Kimo's, Fishtown" } }
+                                      state: "open",
+                                      features: { place: { label: "Kimo's, Fishtown" } } }
 ```
 
 **The canonical list is in the `LIST#` partition, not the owner's.** The `USER#` row is an
@@ -160,32 +161,30 @@ This is why `List` is a separate entity rather than a view over Activities: an A
 carries a status, an index entry, a schedule and a lifecycle that a bar on a wishlist has
 no use for.
 
-### 4.2 Behaviour, capabilities and template are data, not code paths
+### 4.2 State presentation, typed features and creation preset are data
 
 Three lists a user might reasonably keep, and what distinguishes them in storage:
 
-| List | `behaviour` | `templateKey` | `capabilities` | `slot` |
+| List | `itemStateMode` | `templateKey` | `featureConfig` | `slot` |
 | --- | --- | --- | --- | --- |
-| Groceries — Costco | `collection` | `groceries` | `checkable: true`, `supportsLocation: false` | `groceries` |
-| Bars to try | `collection` | `bars-to-try` | `checkable: true`, `supportsLocation: true` | `null` |
-| Gift ideas | `collection` | `gift-ideas` | `checkable: false`, `supportsLocation: false` | `null` |
+| Groceries — Costco | `checkbox` | `groceries` | none | `groceries` |
+| Bars to try | `checkbox` | `places-to-visit` | Place enabled | `null` |
+| Gift ideas | `none` | `blank` | none | `null` |
 
-All three are the same behaviour, stored in the same partition shape, read by the same
-query, rendered by the same item renderer. They differ by **data on the row** — capability
-flags, an enum and a slot — and by nothing else. There is no `if (list.templateKey ===
-'groceries')` anywhere in the system.
+All three use the same List and ListItem shape, query and common item shell. They differ by
+**data on the row**. A small typed registry renders enabled/populated features; there is no
+`if (list.templateKey === 'groceries')` branch.
 
-The user selects a template/style before naming the list, and `POST /v1/lists` requires that
-exact `templateKey`. The selected template is a **seed**: the server copies its behaviour,
-capabilities, slot, icon, and empty-state copy onto the `List` and then forgets it. It never
-ranks templates from the title and never substitutes `simple-list`. `templateKey` survives
+The user selects a preset before naming the list, and `POST /v1/lists` requires that exact
+`templateKey`. The selected preset is a **seed**: the server copies its state presentation,
+feature configuration, slot, icon and empty-state copy onto the `List` and then forgets it. It never
+ranks presets from the title or substitutes a fallback. `templateKey` survives
 only as provenance and analytics. Nothing re-resolves a template at read time, so the list in the shop
 today renders from its own row and not from a catalogue that has since been edited.
 
-Two behaviours exist beyond `collection`, and only because the application genuinely does
-something different: `watch` groups its items under status headings, and `meals` carries
-structured `ingredients`. See
-[`data-model.md`](data-model.md#46-list-and-listitem) for the full test.
+Intrinsic `open | active | done` state exists on every item. State mode decides whether it is
+hidden, shown as a checkbox or exposed under stages. Progress, Place and Sub-items are optional
+typed values gated by keyed configuration; disabling a feature hides but never deletes values.
 
 ### 4.3 The optional bridge: a list item becomes a plan
 
@@ -197,7 +196,9 @@ membership does not grant Plan access.
 ```
 LIST#lst_watch | ITEM#a0#itm_severance
   { title: "Severance",
-    details: { behaviour: "watch", watchStatus: "want", season: 2, episode: 4 } }
+    state: "active",
+    features: { progress: { kind: "episode", mediaKind: "show",
+                            season: 2, episode: 4 } } }
 ```
 
 **The action.** Ujjwal chooses **Just me** and confirms a `watch` Plan:
@@ -250,7 +251,8 @@ not one global link for the shared object.
 
 **Afterwards.** Marking it watched writes `outcome: 'watched'` on `ACT#act_x | META`. The
 follow-up suggestion (`../01-product/plans-and-lists.md`) offers to advance the list item's
-`details.episode` from 5 to 6. The user confirms; one item updates. Nothing is auto-created.
+structured episode Progress from 5 to 6. The user confirms; one item updates. Nothing is
+auto-created.
 
 **Deleting either side clears only matching pointers and back-pointers.** It never cascades.
 A deleted Plan leaves the watchlist entry intact. Deleting the ListItem clears the Activity's
@@ -258,15 +260,15 @@ A deleted Plan leaves the watchlist entry intact. Deleting the ListItem clears t
 
 The same three-write shape covers a `Bars to try` item becoming an Event and a
 `Meals to try` item becoming a Meal. The request carries the type the caller confirmed; the
-server never derives it from behaviour, capabilities, template, or title. The ListItem title
+server never derives it from state presentation, features, preset, slot or title. The ListItem title
 seeds the Plan title once, then they are independently editable so a list member cannot
 rename an inaccessible private Plan.
 
 ### 4.4 Resolving a default destination
 
 "Add these ingredients to a shopping list" is a cross-entity flow with no obvious target
-once `Groceries`, `Costco` and `Packing for Lisbon` are all `behaviour: 'collection'`.
-Behaviour cannot answer it. The `slot` on the list can.
+when several Lists use checkbox presentation. State presentation cannot answer it. The `slot`
+on the list can.
 
 ```
 USER#usr_u | PROFILE          { defaultLists: { groceries: "lst_costco",
@@ -290,7 +292,7 @@ The flow is a query for the user's list pointers plus one batch get for their `M
 | Exactly one | Use it, do not ask | The items only |
 | Several, `defaultLists.<slot>` set | Use the default, show it, allow a one-off override | The items only — an override is not remembered |
 | Several, no default | Ask once | The items, plus `defaultLists.<slot>` on the profile |
-| None | Offer `New list`; open the ordinary full catalogue with no style selected. If the user explicitly chose a typed Watch destination, show only the three Watch templates in canonical relative order, still unselected | First `Create list`, then—only after the new destination is visibly named—the separate item write |
+| None | Offer `New list`; open the ordinary seven-preset catalogue with nothing selected | First `Create list`, then—only after the new destination is visibly named—the separate item write |
 
 Two properties fall out of storing the answer on the profile rather than deriving it.
 Opening a list writes nothing, so browsing `Costco` cannot change where tomorrow's
@@ -302,16 +304,15 @@ both, which is why it is rejected in `data-model.md` §4.6.
 
 ## 5. Plans can create related lists, after explicit choices
 
-**A user adds a Packing list to a trip.** Plan detail's named `Add list` action opens the full
-fixed-order template catalogue with nothing selected. Only after the user explicitly chooses
-Packing, reviews the editable title, and activates `Create list` does the ordinary List gain a
+**A user adds a Packing checklist to a trip.** Plan detail's named `Add list` action opens the
+fixed-order preset catalogue with nothing selected. Only after the user explicitly chooses
+Checklist, changes the title to Packing, and activates `Create list` does the ordinary List gain a
 back-pointer:
 
 ```
-LIST#lst_pack | META   { behaviour: "collection", templateKey: "packing",
-                         icon: "suitcase", emptyStateCopy: "Add something to pack.",
-                         capabilities: { checkable: true,
-                                          supportsLocation: false },
+LIST#lst_pack | META   { schemaVersion: 2, templateKey: "checklist",
+                         icon: "check-square", emptyStateCopy: "Add something to check off.",
+                         itemStateMode: { mode: "checkbox" }, featureConfig: {},
                          slot: null, sourceActivityId: "act_trip" }
 ```
 
@@ -631,13 +632,13 @@ two people tick through would fan out on every tick.
 and both check `Milk` within the same minute:
 
 ```
-LIST#lst_groc | ITEM#c4#itm_milk    SET checked = true      ← Sam
-LIST#lst_groc | ITEM#c4#itm_milk    SET checked = true      ← the owner, seconds later
+LIST#lst_groc | ITEM#c4#itm_milk    SET state = "done"      ← Sam
+LIST#lst_groc | ITEM#c4#itm_milk    SET state = "done"      ← the owner, seconds later
 ```
 
-Both succeed. Neither carries `If-Match`, neither returns `409`, and the item ends `true`.
-The rule that makes this work is one word: `checked` is **set, not toggled**. `SET checked =
-NOT checked` would read identically in one client and would flip the item back in two — and
+Both succeed. Neither carries `If-Match`, neither returns `409`, and the item ends `done`.
+The rule that makes this work is that state is **set, not toggled**. A toggle instruction
+would read identically in one client and would flip the item back in two — and
 would also break the offline queue, where the same intent may be delivered twice. Setting a
 field is idempotent and commutative; toggling it is neither.
 
@@ -645,7 +646,7 @@ The same three concurrency rules cover the rest ([`data-model.md`](data-model.md
 
 | Both members | Result | Why |
 | --- | --- | --- |
-| Check the same item | One row, `checked: true` | Set, not toggled |
+| Check the same item | One row, `state: 'done'` | Set, not toggled |
 | Insert at the same position | Two rows with distinct server ranks; `(rank, itemId)` remains the defensive read order | Both race on `List.rankVersion`; one conditional write wins and the other re-reads neighbours before retrying. The `itemId` tie-break keeps Undo-restored, legacy or seeded duplicate ranks deterministic within one committed generation; a repair marker gates item reads until the next generation commits. |
 | Add the same title | Two rows | Never auto-merged. Silently swallowing somebody's entry is worse than a visible duplicate they can delete. |
 
@@ -660,7 +661,7 @@ USER#usr_sam  | LLINK#psn_owner#…#lst_groc      deleted
 LIST#lst_groc | META             ADD memberCount :minus_one
 ```
 
-Every item Sam added stays, with its title, rank, note and checked state. A grocery list does
+Every item Sam added stays, with its title, rank, note, state and typed features. A grocery list does
 not forget the milk because the person who typed it moved out — the same rule as expenses
 surviving a participant's removal. Both `PERSON#` rows remain. Access ends the instant the
 pointer is gone, because the pointer is the check; there is no cached grant on the server to
@@ -752,7 +753,7 @@ Being honest about the seams is more useful than claiming there are none.
 | **Read-time recurrence expansion** | Avoids materialising infinite future rows | A user with hundreds of active series makes the agenda endpoint do real CPU. Capped at 200 with a warning. |
 | **`SUB#` pointers duplicate a child's title and status** | Buys a one-query plan detail screen | Two writes on every prep-task rename. Must stay in the same transaction. |
 | **`lastActivityAt` duplicates part of `updatedAt`'s job** | Keeps `If-Match` from failing on changes the editor did not make | Two timestamps to keep straight, and a write path that bumps the wrong one produces either a spurious `409` or a Needs-a-date list that does not resort. |
-| **Template-seeded List fields are frozen at creation** | A list renders its stored behaviour, capabilities, slot, icon and empty-state copy, so a catalogue edit cannot change a list a user is standing in a shop reading | Two users who each made a "Groceries" list six months apart can hold different seeded values. A template improvement reaches new lists only; later user settings changes affect only the fields explicitly changed. |
+| **Preset-seeded List fields are frozen at creation** | A list renders its stored state presentation, feature configuration, slot, icon and empty-state copy, so a catalogue edit cannot change a list a user is standing in a shop reading | Two users who each made a "Groceries" list six months apart can hold different seeded values. A preset improvement reaches new lists only; later user settings changes affect only the fields explicitly changed. |
 | **Shared lists trade `If-Match` on items for usability** | A checkbox that returns `409` is worse than a lost keystroke | Two members editing the same item's *title* in the same minute: one silently wins. There is no conflict banner for item fields, by design. |
 | **The list partition contains per-viewer `LNK#` rows** | A shared item can lead to private or selectively shared Plans without one global inaccessible link | The list-detail query reads other viewers' opaque pointers internally. Its projection must filter to the caller before Activity lookup or serialisation; history is not queryable. |
 | **One user's reminders sit in a partition every participant may read** | Keying on `userId` inside `ACT#<a>` keeps the detail screen and the reminder scheduler on **one** query (§8.2) | A detail handler that returns what it read leaks Alice's reminder offset to Ben. The filter is the mitigation and it is a test, not a review item — `security-privacy.md` §1 row 15. |
@@ -779,13 +780,13 @@ share a field, a participant's RSVP starts failing an owner's unrelated open edi
 way that only shows up under concurrent use.
 
 **The seventh is the honest cost of shared lists.** Item writes carry no `If-Match`, so last
-write wins on a field with no signal to either party. For `checked` this is not a compromise
-at all — setting a boolean is idempotent and commutative, so two members converge with no
+write wins on a field with no signal to either party. For setting `state: 'done'` this is not a compromise
+at all — assigning the same value is idempotent, so two members converge with no
 merge logic and the offline queue needs nothing special. For a *title* edit it genuinely
 loses one person's text, silently. That is accepted because the alternative is optimistic
 concurrency on every checkbox in a grocery list, which would produce constant spurious
 `409`s and would park half a shopping trip in the offline queue's conflict banner. List-level
-edits — title, capabilities, behaviour — do carry `If-Match`, because those are the changes
+edits — title, state presentation and feature configuration — do carry `If-Match`, because those are the changes
 worth protecting and nobody makes them in a shop. The boundary is deliberate and it is drawn
 in exactly one place.
 
@@ -832,12 +833,10 @@ If someone proposes a change, these are the questions that check it still fits.
 
 1. Does it need a new table? If yes, it is almost certainly a new `type`, a new `details`
    variant, or a new sort-key prefix in an existing partition.
-2. Does it need a new **list behaviour**, or is it a **template**? A behaviour is code —
-   items render differently, carry different typed fields, or take part in a flow no other
-   list has. A template is a row in `packages/shared/src/lists/templates.ts`. If the only
-   difference is the label, the icon and which capability flags are on, it is a template.
-   `Groceries`, `Packing`, `Restaurants` and `Bars to try` are all templates over
-   `collection`.
+2. Does it need a new keyed **List feature**, or only a creation preset? A feature requires a
+   typed configuration/value plus registry entry and optional Plan adapter. A preset is a row in
+   `packages/shared/src/lists/templates.ts` that seeds existing state/features. Do not add a
+   List type discriminator or inspect a display label to activate integration semantics.
 3. Does it need a new GSI? If yes, can it be a new sort-key prefix under `USER#<uid>`
    instead? Every GSI is a second write on every mutation.
 4. Does it write rows into the future? If yes, it should be expanded at read time.

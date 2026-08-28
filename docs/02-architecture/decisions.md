@@ -930,7 +930,7 @@ OIDC provider, and the two deploy roles — move to a separate `AccountStack` de
 
 ## ADR-031 — Three list behaviours, not eight list kinds
 
-**Status:** Accepted · **Date:** 2026-08-07
+**Status:** Superseded by ADR-058 · **Date:** 2026-08-07
 
 **Context.** Lists were modelled as a closed enum of eight `ListKind` values — `groceries`,
 `shopping`, `packing`, `general`, `restaurants`, `places`, `meals`, `watchlist`. The enum
@@ -2395,3 +2395,51 @@ generic local-first framework — no Phase 2.6 conflict model requires them. A n
 as a prerequisite — existing single-user contracts converge without it. SQLite on web — the
 browser has different lifecycle constraints and no durable mutation queue. Local expansion
 of server-known recurrence — duplicates the server's authoritative occurrence rules.
+
+---
+
+## ADR-058 — One List model with intrinsic state and keyed typed features
+
+**Status:** Accepted · **Date:** 2026-08-28 · **Supersedes ADR-031; amends ADR-032, ADR-033,
+ADR-043 and ADR-044**
+
+**Context.** ADR-031 correctly rejected a growing enum of purposes, but its replacement still
+made optional Watch progress and Meal ingredients into whole-List behaviours. That boundary
+promised every item had the same typed detail, made a settings change an aggregate rewrite and
+forced the renderer, API and offline intent log through three parallel branches. In practice
+episode progress is optional even on a Watch list, Place is independently useful, and a small
+ranked child collection is useful with vocabulary other than Ingredients.
+
+**Decision.** Store one schema-v2 `List` and one `ListItem`. Every item owns intrinsic
+`open | active | done` state. The List stores an `ItemStateMode` (`none`, `checkbox`, or labelled
+stages) and a keyed `featureConfig` for Progress, Place and Sub-items. Item values remain typed.
+Disabling a feature or changing state presentation hides behavior without rewriting or deleting
+values. Sub-item display labels are independent of the explicit optional `mealIngredients`
+integration; no adapter inspects words.
+
+Creation uses exactly seven ordered presets: Blank, Checklist, Groceries, Watch Later, Books to
+Read, Places to Visit and Meal Ideas. A preset is copied once and `templateKey` remains immutable
+provenance. Plan kind stays explicit and chooses a one-time copy adapter over the compatible
+enabled intersection. Slots remain independent semantic routing declarations.
+
+Legacy aggregates are converted losslessly and deterministically to schema v2. Server conversion
+uses one resumable aggregate gate; SQLite converts committed projections plus pending/outbox
+intent meaning transactionally. The old behaviour-change endpoint, destructive preview model,
+work marker and current public discriminator are removed after compatibility translation.
+
+**Consequences.** The common item shell and a small renderer/editor registry replace screen
+branches. Mode/feature settings are immediate, reversible and never destructive. Every writer
+maintains `doneCount`; checkbox bulk operations project `done` as checked and set explicit states
+rather than toggling. Typed additions require a configuration/value pair and registry entry,
+plus an adapter only when a cross-entity copy is justified. Adding a second List entity or a new
+purpose enum is not an extension path.
+
+Visual fidelity is contractual. The production-component gallery supplies deterministic web
+and native captures; first baselines are approved side-by-side with the founder reference, then
+path-filtered pixel gates protect them. Accessibility gates remain independent.
+
+**Alternatives rejected.** Keep the three behaviours — preserves the aggregate rewrite and
+optional-data mismatch. Store arbitrary fields — loses typing, stable PATCH paths and bounded
+Sub-items. Infer an integration from labels — renaming user-visible words would silently change
+domain behavior. Resolve presets at read time — lets a release mutate existing Lists without a
+user action.

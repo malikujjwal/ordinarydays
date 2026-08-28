@@ -52,17 +52,18 @@ afterEach(() => {
 });
 
 const aList = (overrides: Partial<List> = {}): List => ({
+  schemaVersion: 2,
   listId: repository.newListId(),
   ownerId: ALICE,
-  behaviour: 'collection',
   templateKey: 'simple-list',
   title: 'Errands',
   icon: 'list',
   emptyStateCopy: 'Nothing here yet.',
-  capabilities: { checkable: true, supportsLocation: false },
+  itemStateMode: { mode: 'checkbox' },
+  featureConfig: {},
   slot: null,
   itemCount: 0,
-  uncheckedCount: 0,
+  doneCount: 0,
   memberCount: 1,
   rankVersion: 0,
   archived: false,
@@ -76,7 +77,7 @@ type NewItem = Omit<ListItem, 'listId' | 'rank' | 'itemRevision'>;
 const anItem = (title: string, overrides: Partial<NewItem> = {}): NewItem => ({
   itemId: repository.newItemId(),
   title,
-  checked: false,
+  state: 'open',
   ...overrides,
 });
 
@@ -371,7 +372,7 @@ describe('ranked items', () => {
         list.listId,
         accessFor(list),
         target.itemId,
-        { title: 'Edited while moving', checked: true },
+        { title: 'Edited while moving', state: 'done' },
         LATER,
       ),
       repository.reorderListItem(ALICE, list.listId, accessFor(list), target.itemId, {
@@ -388,14 +389,14 @@ describe('ranked items', () => {
     );
     expect(stored).toMatchObject({
       title: 'Edited while moving',
-      checked: true,
+      state: 'done',
     });
     expect(
       (await repository.listItems(ALICE, list.listId, accessFor(list)))?.items[0]?.itemId,
     ).toBe(target.itemId);
     expect(
-      (await repository.getListMeta(ALICE, list.listId, accessFor(list)))?.uncheckedCount,
-    ).toBe(2);
+      (await repository.getListMeta(ALICE, list.listId, accessFor(list)))?.doneCount,
+    ).toBe(1);
   });
 
   it('returns the repair trigger for an equal-rank neighbour without allocating', async () => {
@@ -847,7 +848,7 @@ describe('strong item-page fence', () => {
   it.each([
     ['rank version', 'rankVersion'],
     ['rank-repair gate', 'rankRepairId'],
-    ['behaviour-migration gate', 'behaviourMigrationId'],
+    ['schema-migration gate', 'schemaMigrationId'],
   ] as const)(
     'returns no page when the %s changes between the two META reads',
     async (_name, field) => {

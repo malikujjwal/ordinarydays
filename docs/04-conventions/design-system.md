@@ -552,6 +552,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
 | `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
+| `SettingRow` switch | `label`, `summary?`, `switchValue`, `onPress`, `disabled?` | Shared token-owned track/thumb, light and dark palettes, reduced-motion-safe transition, focus-visible, disabled. The whole 72 pt minimum row is one 44 pt-or-larger target with `switch` semantics and checked state; no selected-row checkmark. |
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
 | `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
@@ -804,19 +805,17 @@ card:
 ```
 
 > **Corrected 2026-08-25 (founder), P3-25.** The count line was specified as "the list's
-> own vocabulary (`7 remaining`, `4 of 12 packed`, `12 places`) — supplied by the template's
+> own vocabulary (`7 remaining`, `4 of 12 packed`, `12 places`) — supplied by the preset's
 > copy". **No such field exists**: a §5.3 catalogue record carries a chooser label, summary,
-> default title, icon, behaviour, capability defaults, slot and empty-state copy, and nothing
+> default title, icon, state presentation, feature configuration, slot and empty-state copy, and nothing
 > else. Adding one would put per-type copy back into the catalogue and make the card renderer
 > read it again — precisely what ADR-031 removed and what P3-25's grep test forbids. It would
 > also drift, since template values are frozen at creation: a list made a year ago would
 > describe itself differently from the same template today, on a line that is arithmetic.
 >
-> **One vocabulary, every list**: `n items`, with `· k checked` appended only when
-> `behaviour === 'collection' && capabilities.checkable`, both from `itemCount` and
-> `uncheckedCount` on the `META` row the index already batch-reads. The progress bar is gated
-> on the same flag. A seventeenth template — or a fiftieth — then renders correctly on day one
-> with no catalogue copy at all.
+> **One vocabulary, every list**: `n items`, with `· k checked` appended only in checkbox mode,
+> from `itemCount` and `doneCount` on the `META` row the index already batch-reads. The progress
+> bar is gated on the same mode. A future preset then renders correctly without catalogue copy.
 
 The count line is computed from the List's own stored fields, never from template copy.
 
@@ -826,6 +825,39 @@ change but not on checking an item, so a card using it would say `Updated 3 days
 immediately after the list was used, and move when it was renamed — backwards from what the
 line means to a reader. `+ New list` is a `footnoteStrong` accent text action in the screen
 header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutates.
+
+#### 7.2a List creation and settings contract
+
+`New list` is a two-step sheet. Step one is headed `Choose a list type`, contains no title
+field, begins with nothing selected and shows exactly Blank, Checklist, Groceries, Watch Later,
+Books to Read, Places to Visit and Meal Ideas in that order. Blank is the explicit escape
+hatch. Step two alone contains the editable title.
+
+The List settings sheet keeps inline title editing above this exact hierarchy:
+
+```text
+ITEM STATE
+[ None | Checkboxes | Stages ]
+Group by stage                            [switch]   # stages only
+
+ITEM DETAILS
+Progress                                  [switch]
+Places                                    [switch]
+Sub-items                                 [switch]
+```
+
+Destination settings follow as a subordinate section. First enabling Sub-items opens a
+focused configuration sheet; its vocabulary controls never remain expanded in the main sheet.
+Rows use the 72 pt `SettingRow` rhythm, section spacing tokens and one aligned trailing switch
+column. The compact sheet uses the approved near-full-height detent rather than shrinking to its
+current content.
+
+The canonical founder reference is
+`docs/04-conventions/visual-references/p3-33-list-settings.png`. First screenshot baselines
+require a human side-by-side comparison with that reference; a baseline may not be approved
+merely because it matches the current implementation. Review explicitly records spacing,
+section gaps, row height, segmented-control geometry, switch alignment, selected state and
+sheet sizing. Only after that approval do exact CI pixel comparisons protect the result.
 
 ### 7.3 Plans — event cards
 

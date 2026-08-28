@@ -108,23 +108,23 @@ const meal = (overrides: Partial<Activity> = {}): Activity =>
 
 const list = (overrides: Partial<List> = {}): List =>
   ({
+    schemaVersion: 2,
     listId: LIST,
     ownerId: USER,
     title: 'Groceries',
     templateKey: 'groceries',
-    behaviour: 'collection',
-    capabilities: { checkable: true, supportsLocation: false },
+    itemStateMode: { mode: 'checkbox' },
+    featureConfig: {},
     slot: 'groceries',
     icon: 'cart',
     emptyStateCopy: 'Nothing yet',
     itemCount: 0,
-    uncheckedCount: 0,
+    doneCount: 0,
     rankVersion: 1,
     archived: false,
-    memberCount: 0,
-    createdAt: NOW,
+    memberCount: 1,
+    lastItemActivityAt: NOW,
     updatedAt: NOW,
-    schemaVersion: 1,
     ...overrides,
   }) as List;
 
@@ -134,7 +134,7 @@ const existingItem = (overrides: Partial<ListItem> = {}): ListItem => ({
   rank: 'n',
   itemRevision: 2,
   title: 'Chicken',
-  checked: false,
+  state: 'open',
   ...overrides,
 });
 
@@ -194,8 +194,15 @@ describe('what it refuses, before it writes anything', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
-  it.each(['watch', 'meals'] as const)('rejects a %s destination', async (behaviour) => {
-    vi.mocked(listRepository.getListMeta).mockResolvedValue(list({ behaviour }));
+  it.each([
+    { mode: 'none' as const },
+    {
+      mode: 'stages' as const,
+      labels: { open: 'Want', active: 'Doing', done: 'Done' },
+      groupByState: true,
+    },
+  ])('rejects a non-checkbox destination', async (itemStateMode) => {
+    vi.mocked(listRepository.getListMeta).mockResolvedValue(list({ itemStateMode }));
 
     await expect(run()).rejects.toThrow(AppError);
     expect(tx.transactWrite).not.toHaveBeenCalled();
@@ -261,9 +268,9 @@ describe('what it refuses, before it writes anything', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
-  it('validates collection behaviour on the exact transaction basis', async () => {
+  it('validates checkbox mode on the exact transaction basis', async () => {
     vi.mocked(listRepository.planListItemWrites).mockResolvedValue({
-      list: list({ behaviour: 'watch' }),
+      list: list({ itemStateMode: { mode: 'none' } }),
       ranks: ['n0'],
     });
 
@@ -346,9 +353,9 @@ describe('a stale read re-runs the whole cycle', () => {
     let attempt = 0;
     vi.mocked(listRepository.snapshotListItems).mockImplementation(() => {
       attempt += 1;
-      // First read: Chicken is unchecked, so it would be extended. Second: checked.
+      // First read: Chicken is open, so it would be extended. Second: done.
       return Promise.resolve({
-        items: [existingItem({ checked: attempt > 1 })],
+        items: [existingItem({ state: attempt > 1 ? 'done' : 'open' })],
         rankVersion: 1,
         itemVersion: attempt,
         ingredientDestinationBindings: new Map(),
@@ -481,7 +488,7 @@ describe('what it derives, and what it refuses to be told', () => {
         title: 'Chicken',
         sourceActivityId: MEAL,
         sourceLabel: 'Sunday dinner',
-        checked: false,
+        state: 'open',
       }),
       expect.objectContaining({ itemId: ITEM_TWO, title: 'Tortillas (8)' }),
     ]);
@@ -595,7 +602,7 @@ describe('the duplicate rule chooses which row is written', () => {
     expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
   });
 
-  it('extends and creates nothing when an unchecked row matches', async () => {
+  it('extends and creates nothing when an open row matches', async () => {
     snapshot([existingItem()]);
 
     const result = await run();
@@ -613,8 +620,8 @@ describe('the duplicate rule chooses which row is written', () => {
     expect((await run()).ingredients[0]?.outcome).toBe('labelled');
   });
 
-  it('creates a second row when the match is checked, because it was bought', async () => {
-    snapshot([existingItem({ checked: true })]);
+  it('creates a second row when the match is done, because it was bought', async () => {
+    snapshot([existingItem({ state: 'done' })]);
 
     const result = await run();
 
@@ -811,8 +818,8 @@ describe('the duplicate rule chooses which row is written', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
-  it('consults a durable binding after its target is checked and renamed', async () => {
-    const target = existingItem({ title: 'Bought chicken', checked: true });
+  it('consults a durable binding after its target is done and renamed', async () => {
+    const target = existingItem({ title: 'Bought chicken', state: 'done' });
     snapshot(
       [target],
       1,
@@ -835,7 +842,7 @@ describe('the duplicate rule chooses which row is written', () => {
 
     expect(result.ingredients[0]).toMatchObject({
       outcome: 'labelled',
-      item: { itemId: target.itemId, title: 'Bought chicken', checked: true },
+      item: { itemId: target.itemId, title: 'Bought chicken', state: 'done' },
     });
     expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
     expect(
@@ -866,8 +873,8 @@ describe('the duplicate rule chooses which row is written', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
-  it('does not let a checked replay target absorb a fresh same-title ingredient', async () => {
-    const target = existingItem({ title: 'Bought chicken', checked: true });
+  it('does not let a done replay target absorb a fresh same-title ingredient', async () => {
+    const target = existingItem({ title: 'Bought chicken', state: 'done' });
     const twoChickens = meal({
       details: {
         kind: 'meal',
@@ -902,11 +909,11 @@ describe('the duplicate rule chooses which row is written', () => {
     ]);
 
     expect(result.ingredients).toMatchObject([
-      { ingredientId: CHICKEN, item: { itemId: target.itemId, checked: true } },
+      { ingredientId: CHICKEN, item: { itemId: target.itemId, state: 'done' } },
       { ingredientId: TORTILLAS, outcome: 'created', item: { itemId: ITEM_TWO } },
     ]);
     expect(vi.mocked(listRepository.appendListItemCreates).mock.calls[0]?.[2]).toEqual([
-      expect.objectContaining({ itemId: ITEM_TWO, checked: false }),
+      expect.objectContaining({ itemId: ITEM_TWO, state: 'open' }),
     ]);
     expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
   });

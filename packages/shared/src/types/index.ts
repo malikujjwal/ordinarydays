@@ -61,16 +61,23 @@ export type {
 export type { DeletedList } from './deletedList.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type {
+  ItemStateMode,
   List,
-  ListBehaviour,
-  ListBehaviourConfirmation,
-  ListCapabilities,
+  ListFeatureConfig,
   ListIndex,
   ListItem,
   ListItemActivityLink,
-  ListItemDetails,
+  ListItemFeatures,
+  ListItemState,
   ListMember,
+  ListPlace,
+  ListSubItem,
   ListTemplate,
+  PlaceFeatureConfig,
+  ProgressFeatureConfig,
+  ProgressValue,
+  StageLabels,
+  SubItemsFeatureConfig,
 } from './list.js';
 export type { ListDetail } from './listDetail.js';
 export type { ListDetailItem } from './listDetailItem.js';

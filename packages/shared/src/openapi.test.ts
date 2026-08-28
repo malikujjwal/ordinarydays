@@ -42,8 +42,8 @@ describe('the generated document', () => {
     // **P3-05 added the two list paths** — the collection (`GET` and `POST` share it)
     // and the templated id (`GET` and `DELETE`); **P3-06 added the template catalogue**;
     // **P3-08 added the three item paths** — the collection, its `bulk` action, and the
-    // templated item id carrying `GET`, `PATCH` and `DELETE`; and **P3-09 added the
-    // behaviour action**, while giving the templated list id its settings `PATCH`; and
+    // templated item id carrying `GET`, `PATCH` and `DELETE`; and **P3-09 gave the
+    // templated list id its settings `PATCH`; and
     // **P3-10 added the two bulk actions and the compensation endpoint**; **P3-13 added
     // the schedule bridge** under the templated item id; and **P3-17 added the meal
     // ingredient action**, which is a §2.7 list operation authorised by the meal, so it is
@@ -73,7 +73,6 @@ describe('the generated document', () => {
       '/v1/activities/{id}/reminders/{reminderId}',
       '/v1/lists',
       '/v1/lists/{id}',
-      '/v1/lists/{id}/behaviour',
       '/v1/lists/{id}/items',
       '/v1/lists/{id}/items/bulk',
       '/v1/lists/{id}/items/{itemId}',
@@ -145,7 +144,6 @@ describe('the generated document', () => {
       'CaptureExtractInput',
       'CaptureLinkInput',
       'CaptureParseInput',
-      'ChangeListBehaviourInput',
       'CompleteActivityInput',
       'CompletionFollowUp',
       'ConfirmAttachmentInput',
@@ -162,7 +160,6 @@ describe('the generated document', () => {
       'Device',
       'ErrorResponse',
       'HealthResponse',
-      'ListBehaviourConfirmation',
       'ListDetail',
       'ListDetailItem',
       'ListItemPlanState',
@@ -293,6 +290,44 @@ describe('the generated document', () => {
         }),
       ]),
     );
+  });
+
+  it('publishes only the canonical composable List model', () => {
+    const list = asSchema(document.components?.schemas?.ListView, 'ListView');
+    const item = asSchema(document.components?.schemas?.ListItemView, 'ListItemView');
+    const patch = asSchema(
+      document.components?.schemas?.PatchListInput,
+      'PatchListInput',
+    );
+
+    expect(Object.keys(list.properties ?? {})).toEqual(
+      expect.arrayContaining([
+        'schemaVersion',
+        'itemStateMode',
+        'featureConfig',
+        'doneCount',
+      ]),
+    );
+    expect(list.properties).not.toHaveProperty('behaviour');
+    expect(list.properties).not.toHaveProperty('capabilities');
+    expect(list.properties).not.toHaveProperty('uncheckedCount');
+
+    expect(Object.keys(item.properties ?? {})).toEqual(
+      expect.arrayContaining(['state', 'features']),
+    );
+    expect(item.properties).not.toHaveProperty('checked');
+    expect(item.properties).not.toHaveProperty('details');
+
+    expect(Object.keys(patch.properties ?? {})).toEqual(
+      expect.arrayContaining([
+        'title',
+        'itemStateMode',
+        'featureConfig',
+        'slot',
+        'archived',
+      ]),
+    );
+    expect(document.paths).not.toHaveProperty('/v1/lists/{id}/behaviour');
   });
 
   /**

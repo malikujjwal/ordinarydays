@@ -1,10 +1,8 @@
 import type { PatchListItemInput } from '@od/shared/client';
 import type { ListTemplateSeed } from '@od/shared/lists';
 import {
-  type ChangeListBehaviourInput,
   type CreateListInput,
   type CreateListItemInput,
-  changeListBehaviourInput,
   createListInput,
   createListItemInput,
   listTemplate,
@@ -115,16 +113,6 @@ export interface ListPatchVariables {
  * `idempotencyKey` identifies the *migration*, so a replay resumes the work already started
  * rather than beginning a second pass over the same items.
  */
-export interface ListBehaviourVariables {
-  readonly listId: string;
-  readonly intentId: string;
-  readonly idempotencyKey: string;
-  readonly input: ChangeListBehaviourInput;
-  readonly ifMatch: string;
-  /** The behaviour this change replaced, for the optimistic half of an upgrade's Undo. */
-  readonly previous?: LocalListSettings;
-}
-
 export interface ListDeleteVariables {
   readonly listId: string;
   readonly intentId: string;
@@ -147,8 +135,8 @@ export interface ListUndoVariables {
  * catalogue it describes.
  */
 const persistedSeed = listTemplate.pick({
-  behaviour: true,
-  capabilities: true,
+  itemStateMode: true,
+  featureConfig: true,
   slot: true,
   icon: true,
   emptyStateCopy: true,
@@ -182,7 +170,7 @@ function parseCreateVariables(variables: object, listId: string): ListCreateVari
     intentId,
     idempotencyKey,
     input: parsed.data,
-    seed: seedFields.data,
+    seed: seedFields.data as ListTemplateSeed,
   };
 }
 
@@ -239,22 +227,18 @@ function parsePersistedPatch(variables: object): PatchListInput {
   return parsed.data;
 }
 
-/** The persisted behaviour payload, including the confirmation a downgrade must echo whole. */
-function parsePersistedBehaviour(variables: object): ChangeListBehaviourInput {
-  const parsed = changeListBehaviourInput.safeParse(Reflect.get(variables, 'input'));
-  if (!parsed.success) {
-    throw new Error('The saved list change is invalid. Discard it and try again.');
-  }
-  return parsed.data;
-}
-
 /** The patch, as the columns the optimistic row draws from. One shape, no re-interpretation. */
 function localSettingsFrom(patch: PatchListInput): LocalListSettings {
   return {
     ...(patch.title === undefined ? {} : { title: patch.title }),
     ...(patch.slot === undefined ? {} : { slot: patch.slot }),
     ...(patch.archived === undefined ? {} : { archived: patch.archived }),
-    ...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
+    ...(patch.itemStateMode === undefined
+      ? {}
+      : { itemStateMode: patch.itemStateMode as List['itemStateMode'] }),
+    ...(patch.featureConfig === undefined
+      ? {}
+      : { featureConfig: patch.featureConfig as List['featureConfig'] }),
   };
 }
 
@@ -271,18 +255,12 @@ function previousSettingsFor(current: List, patch: PatchListInput): LocalListSet
     ...(patch.title === undefined ? {} : { title: current.title }),
     ...(patch.slot === undefined ? {} : { slot: current.slot }),
     ...(patch.archived === undefined ? {} : { archived: current.archived }),
-    ...(patch.capabilities === undefined
+    ...(patch.itemStateMode === undefined
       ? {}
-      : {
-          capabilities: {
-            ...(patch.capabilities.checkable === undefined
-              ? {}
-              : { checkable: current.capabilities.checkable }),
-            ...(patch.capabilities.supportsLocation === undefined
-              ? {}
-              : { supportsLocation: current.capabilities.supportsLocation }),
-          },
-        }),
+      : { itemStateMode: current.itemStateMode }),
+    ...(patch.featureConfig === undefined
+      ? {}
+      : { featureConfig: current.featureConfig }),
   };
 }
 
@@ -295,7 +273,9 @@ function previousSettingsFor(current: List, patch: PatchListInput): LocalListSet
  */
 function recordsInverse(patch: PatchListInput): boolean {
   return (
-    patch.capabilities !== undefined ||
+    patch.title !== undefined ||
+    patch.itemStateMode !== undefined ||
+    patch.featureConfig !== undefined ||
     patch.slot !== undefined ||
     patch.archived !== undefined
   );
@@ -313,37 +293,21 @@ function previousSettingsOf(intent: OutboxIntent | undefined): LocalListSettings
   if (typeof variables !== 'object' || variables === null) return {};
   const previous = Reflect.get(variables, 'previous');
   if (typeof previous !== 'object' || previous === null) return {};
-  const capabilities = Reflect.get(previous, 'capabilities');
+  const itemStateMode = Reflect.get(previous, 'itemStateMode');
+  const featureConfig = Reflect.get(previous, 'featureConfig');
   const title = Reflect.get(previous, 'title');
   const slot = Reflect.get(previous, 'slot');
   const archived = Reflect.get(previous, 'archived');
-  const behaviour = Reflect.get(previous, 'behaviour');
-  const flag = (value: unknown) => (typeof value === 'boolean' ? value : undefined);
-  const checkable =
-    typeof capabilities === 'object' && capabilities !== null
-      ? flag(Reflect.get(capabilities, 'checkable'))
-      : undefined;
-  const supportsLocation =
-    typeof capabilities === 'object' && capabilities !== null
-      ? flag(Reflect.get(capabilities, 'supportsLocation'))
-      : undefined;
   return {
     ...(typeof title === 'string' ? { title } : {}),
-    ...(slot === null || typeof slot === 'string'
-      ? { slot: slot as LocalListSettings['slot'] }
-      : {}),
+    ...(slot === null || typeof slot === 'string' ? { slot: slot as List['slot'] } : {}),
     ...(typeof archived === 'boolean' ? { archived } : {}),
-    ...(typeof behaviour === 'string'
-      ? { behaviour: behaviour as LocalListSettings['behaviour'] }
+    ...(typeof itemStateMode === 'object' && itemStateMode !== null
+      ? { itemStateMode: itemStateMode as List['itemStateMode'] }
       : {}),
-    ...(checkable === undefined && supportsLocation === undefined
-      ? {}
-      : {
-          capabilities: {
-            ...(checkable === undefined ? {} : { checkable }),
-            ...(supportsLocation === undefined ? {} : { supportsLocation }),
-          },
-        }),
+    ...(typeof featureConfig === 'object' && featureConfig !== null
+      ? { featureConfig: featureConfig as List['featureConfig'] }
+      : {}),
   };
 }
 
@@ -595,46 +559,6 @@ export class ListTransactionService {
    * A **confirmed downgrade** records none: what it removed is gone, and an offer would promise
    * a restore the server cannot make.
    */
-  async changeBehaviour(
-    transaction: TransactionContext,
-    list: List,
-    input: ChangeListBehaviourInput,
-    intentId: string,
-  ): Promise<OutboxIntent> {
-    const current = await this.lists.getLocal(transaction.database, list.listId);
-    if (current === undefined)
-      throw new Error('The list is no longer available locally.');
-    const variables: ListBehaviourVariables = {
-      listId: list.listId,
-      intentId,
-      idempotencyKey: intentId,
-      input,
-      ifMatch: current.updatedAt,
-      previous: { behaviour: current.behaviour },
-    };
-    const appended = await this.outbox.append(transaction.database, {
-      intentId,
-      mutationKey: ['list', 'behaviour'],
-      variables,
-      entityId: list.listId,
-      orderingKey: `list:${list.listId}`,
-    });
-    if (appended.kind === 'inserted') {
-      await this.lists.applyLocalSettings(transaction, list.listId, {
-        behaviour: input.behaviour,
-      });
-      if (input.confirmation === undefined) {
-        await this.outbox.createListArchiveUndoOffer(
-          transaction.database,
-          intentId,
-          list.listId,
-        );
-      }
-    }
-    transaction.changed('outbox');
-    return appended.intent;
-  }
-
   /**
    * Accepts settings Undo as a durable compensation, never as a reconstructed PATCH.
    * If the forward write has not left the queue yet, cancelling it is the exact inverse.
@@ -808,7 +732,7 @@ export class ListTransactionService {
       );
       return intent;
     }
-    if (intent.mutationKey[1] === 'patch' || intent.mutationKey[1] === 'behaviour') {
+    if (intent.mutationKey[1] === 'patch') {
       /*
        * Both settings routes retry the same way: re-project the durable payload onto whatever
        * truth now is, and rebase its `If-Match` onto the version the rollback restored. Parsed
@@ -816,10 +740,7 @@ export class ListTransactionService {
        * words the recovery banner can show instead of being sent as something the server will
        * reject.
        */
-      const settings =
-        intent.mutationKey[1] === 'patch'
-          ? localSettingsFrom(parsePersistedPatch(variables))
-          : { behaviour: parsePersistedBehaviour(variables).behaviour };
+      const settings = localSettingsFrom(parsePersistedPatch(variables));
       const current = await this.lists.getLocal(transaction.database, intent.entityId);
       if (current === undefined) {
         throw new Error('The list is no longer available locally.');

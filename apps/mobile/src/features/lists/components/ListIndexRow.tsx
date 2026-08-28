@@ -3,9 +3,9 @@ import type { List } from '@od/shared/types';
 import { Card, IconTile, ProgressBar, Text, templateIcons, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import {
-  behaviourTint,
   checkedProgress,
   countLine,
+  listTint,
   showsCheckedCount,
 } from '../model/listCard';
 import { updatedLine } from '../model/updatedLine';
@@ -85,7 +85,7 @@ export function ListIndexRow({
       {...(testID === undefined ? {} : { testID })}
     >
       <View style={{ gap: theme.space[2], opacity: dimmed ? 0.6 : 1 }}>
-        <IconTile icon={glyph} tint={behaviourTint(list.behaviour)} />
+        <IconTile icon={glyph} tint={listTint()} />
         <Text variant="heading" numberOfLines={2}>
           {list.title}
         </Text>

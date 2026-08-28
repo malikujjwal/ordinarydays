@@ -44,12 +44,12 @@ describe('the catalogue payload', () => {
 
     for (const template of body.data) {
       expect(Object.keys(template).sort()).toEqual([
-        'behaviour',
-        'capabilities',
         'chooserLabel',
         'defaultTitle',
         'emptyStateCopy',
+        'featureConfig',
         'icon',
+        'itemStateMode',
         'slot',
         'summary',
         'templateKey',
@@ -81,8 +81,8 @@ describe('the catalogue payload', () => {
       summary: 'A watering checklist',
       defaultTitle: 'Plants to water',
       icon: 'leaf',
-      behaviour: 'collection',
-      capabilities: { checkable: true, supportsLocation: false },
+      itemStateMode: { mode: 'checkbox' },
+      featureConfig: {},
       slot: null,
       emptyStateCopy: 'Add a plant to water.',
     } as const;

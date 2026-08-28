@@ -327,6 +327,28 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
           <SettingRow label="1 day before" role="checkbox" disabled onPress={() => {}} />
         </RowGroup>
 
+        <RowGroup label="Switches — shared track and thumb">
+          <SettingRow
+            label="Progress"
+            summary="One optional line on each item"
+            switchValue
+            onPress={() => {}}
+          />
+          <SettingRow
+            label="Places"
+            summary="Place and address on each item"
+            switchValue={false}
+            onPress={() => {}}
+          />
+          <SettingRow
+            label="Sub-items"
+            summary="Add a short list inside each item"
+            switchValue={false}
+            disabled
+            onPress={() => {}}
+          />
+        </RowGroup>
+
         <RowGroup label="Inert — not a control at all">
           <SettingRow
             label="People"

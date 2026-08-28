@@ -80,7 +80,7 @@ test('a list item lands in the list the user named, from either route', async ({
    * plausible default and the most recent. Neither may pre-select it.
    */
   const groceriesId = await createList(request, groceries, 'groceries');
-  const restaurantsId = await createList(request, restaurants, 'restaurants-to-try');
+  const restaurantsId = await createList(request, restaurants, 'places-to-visit');
 
   const requests: string[] = [];
   page.on('request', (sent) => requests.push(`${sent.method()} ${sent.url()}`));

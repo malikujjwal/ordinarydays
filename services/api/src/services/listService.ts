@@ -61,6 +61,7 @@ export async function getListDetail(
   userId: string,
   listId: string,
   includeItems: boolean,
+  now: string,
 ): Promise<ListDetailProjection> {
   const access = await assertListAccess(userId, listId, 'read');
 
@@ -70,11 +71,17 @@ export async function getListDetail(
     return { list };
   }
 
-  const page = await withListWorkDrain(userId, listId, access.index, async () => {
-    const fenced = await listItems(userId, listId, access.index);
-    if (fenced === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
-    return fenced;
-  });
+  const page = await withListWorkDrain(
+    userId,
+    listId,
+    access.index,
+    async () => {
+      const fenced = await listItems(userId, listId, access.index);
+      if (fenced === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+      return fenced;
+    },
+    now,
+  );
 
   /**
    * The one implementation of the viewer-link rule, shared with the item page (P3-14).

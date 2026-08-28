@@ -6,8 +6,8 @@ import { LIST_TEMPLATES } from './templates.js';
  * `plans-and-lists.md` §5.3, §P3-05 step 2).
  *
  * Separate from `templateChoices.ts` on purpose. That projection is what the chooser *shows* —
- * label, summary, icon, default title — and P3-07's tests assert it carries no structural field,
- * because a renderer handed `behaviour` and `capabilities` is one step from branching on them.
+ * label, summary, icon, default title — and its tests assert it carries no structural field,
+ * because the chooser selects creation data and never drives a live list renderer.
  * This is the other half: what a create *writes*, and it exists for exactly one caller.
  *
  * ## Who may call this, and why the list is that short
@@ -33,7 +33,7 @@ import { LIST_TEMPLATES } from './templates.js';
  */
 export type ListTemplateSeed = Pick<
   ListTemplate,
-  'behaviour' | 'capabilities' | 'slot' | 'icon' | 'emptyStateCopy'
+  'itemStateMode' | 'featureConfig' | 'slot' | 'icon' | 'emptyStateCopy'
 >;
 
 /**
@@ -44,8 +44,8 @@ const SEEDS: ReadonlyMap<string, ListTemplateSeed> = new Map(
   LIST_TEMPLATES.map((template) => [
     template.templateKey,
     Object.freeze({
-      behaviour: template.behaviour,
-      capabilities: Object.freeze({ ...template.capabilities }),
+      itemStateMode: Object.freeze({ ...template.itemStateMode }),
+      featureConfig: Object.freeze({ ...template.featureConfig }),
       slot: template.slot,
       icon: template.icon,
       emptyStateCopy: template.emptyStateCopy,

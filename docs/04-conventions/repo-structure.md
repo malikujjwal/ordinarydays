@@ -121,13 +121,13 @@ ordinarydays/
 │  ├─ specs/*.spec.ts  fixtures/  playwright.config.ts
 │
 ├─ .github/
-│  ├─ workflows/                 ci.yml, deploy-dev.yml, deploy-prod.yml, mobile.yml,
-│  │                             nightly.yml
+│  ├─ workflows/                 ci.yml, deploy-dev.yml, deploy-prod.yml, lists-visual.yml,
+│  │                             mobile.yml, nightly.yml
 │  ├─ dependabot.yml
 │  ├─ pull_request_template.md
 │  └─ CODEOWNERS
 │
-├─ scripts/                      Repo-level node scripts: smoke.mjs, check-bundle-size.mjs
+├─ scripts/                      Repo-level Node scripts, including CI logic runnable locally
 ├─ docker-compose.yml            DynamoDB Local + dynamodb-admin + MinIO (local S3, Phase 3)
 ├─ pnpm-workspace.yaml  turbo.json  biome.json  lefthook.yml
 ├─ .dependency-cruiser.cjs  .npmrc  .nvmrc  .gitignore  .env.example
@@ -210,7 +210,7 @@ code belongs somewhere else.
 `docs/` is prose plus exactly one generated artefact, `docs/generated/openapi.json`, which
 is checked in (`api-contract.md` §6). No other generated file is committed.
 
-`.github/` holds the five workflows in `infrastructure.md` §7, the PR template referenced by
+`.github/` holds the six workflows in `infrastructure.md` §7, the PR template referenced by
 `git-workflow.md` §3, `dependabot.yml`, and `CODEOWNERS`. Workflow logic beyond a few lines
 goes in `scripts/*.mjs` so it can be run locally.
 
