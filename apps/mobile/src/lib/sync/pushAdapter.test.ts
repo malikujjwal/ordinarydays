@@ -111,6 +111,94 @@ describe('ActivityPushAdapter', () => {
     expect(listTransport[method]).toHaveBeenCalled();
   });
 
+  /**
+   * An **item** intent's entity is the item, and its route takes no `Idempotency-Key`
+   * (§P3-29, §5.11.5). Both are asserted at the call rather than described in a comment.
+   */
+  describe('durable list item intents', () => {
+    const ITEM = 'itm_01J000000000000000000000AA';
+
+    function listTransport(): ListPushTransport {
+      return {
+        create: vi.fn(async () => ({})),
+        createItem: vi.fn(async () => ({})),
+        patchItem: vi.fn(async () => ({})),
+        patch: vi.fn(async () => ({})),
+        remove: vi.fn(async () => ({})),
+        undo: vi.fn(async () => ({})),
+      };
+    }
+
+    function itemIntent(name: string, variables: unknown, entityId = ITEM): OutboxIntent {
+      return {
+        ...intent(name, variables),
+        mutationKey: ['list', name],
+        entityId,
+        orderingKey: `list:${LIST}`,
+      };
+    }
+
+    it('sends the fields with no idempotency key', async () => {
+      const list = listTransport();
+      await new ActivityPushAdapter(
+        transport(() => undefined),
+        list,
+      ).execute(
+        itemIntent('item-patch', {
+          listId: LIST,
+          itemId: ITEM,
+          intentId: 'patch-item',
+          idempotencyKey: 'patch-item',
+          input: { title: 'Oat milk' },
+        }),
+      );
+
+      expect(list.patchItem).toHaveBeenCalledWith(LIST, ITEM, { title: 'Oat milk' });
+      expect(vi.mocked(list.patchItem).mock.calls[0]).toHaveLength(3);
+    });
+
+    it('refuses an edit whose payload names a different item', async () => {
+      const list = listTransport();
+      await expect(
+        new ActivityPushAdapter(
+          transport(() => undefined),
+          list,
+        ).execute(
+          itemIntent(
+            'item-patch',
+            {
+              listId: LIST,
+              itemId: ITEM,
+              intentId: 'patch-item',
+              idempotencyKey: 'patch-item',
+              input: { title: 'Oat milk' },
+            },
+            'itm_01J000000000000000000000BB',
+          ),
+        ),
+      ).rejects.toThrow('entity identity does not match');
+      expect(list.patchItem).not.toHaveBeenCalled();
+    });
+
+    it('refuses a payload an older build wrote that the schema no longer accepts', async () => {
+      const list = listTransport();
+      await expect(
+        new ActivityPushAdapter(
+          transport(() => undefined),
+          list,
+        ).execute(
+          itemIntent('item-patch', {
+            listId: LIST,
+            itemId: ITEM,
+            intentId: 'patch-item',
+            idempotencyKey: 'patch-item',
+            input: { rank: 'm' },
+          }),
+        ),
+      ).rejects.toThrow('This saved change is invalid.');
+    });
+  });
+
   it.each([
     {
       mutation: 'create',

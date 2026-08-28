@@ -168,6 +168,173 @@ describe('native List transactional outbox', () => {
     });
   });
 
+  /**
+   * The durable field edit (§P3-29, §5.11.5).
+   *
+   * The create's twin, and the differences are the ones that matter: the merge happens inside
+   * the writer, the intent carries no `ifMatch`, and a position is refused outright.
+   */
+  describe('the durable item edit (§P3-29)', () => {
+    const ITEM = {
+      listId: LIST.listId,
+      itemId: 'itm_01J000000000000000000000AA',
+      intentId: 'intent-create-item',
+      idempotencyKey: 'intent-create-item',
+      input: { itemId: 'itm_01J000000000000000000000AA', title: 'Milk' },
+      rank: 'm',
+    };
+    const EDIT = {
+      listId: LIST.listId,
+      itemId: ITEM.itemId,
+      intentId: 'intent-patch-item',
+      idempotencyKey: 'intent-patch-item',
+      input: { title: 'Oat milk' },
+    };
+
+    async function withItem(currentDatabase: SqliteDatabase) {
+      const built = harness(currentDatabase);
+      await built.transactions.run((transaction) =>
+        built.service.createItem(transaction, ITEM),
+      );
+      return built;
+    }
+
+    it('stores the visible edit and the queued patch in one commit', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = await withItem(database);
+
+      await transactions.run((transaction) => service.patchItem(transaction, EDIT));
+
+      expect((await items.read(LIST.listId))[0]).toMatchObject({ title: 'Oat milk' });
+      expect(await outbox.all()).toEqual([
+        expect.objectContaining({ mutationKey: ['list', 'item-create'] }),
+        expect.objectContaining({
+          intentId: 'intent-patch-item',
+          mutationKey: ['list', 'item-patch'],
+          entityId: ITEM.itemId,
+          // The list, so the edit serialises behind the create that named the item.
+          orderingKey: `list:${LIST.listId}`,
+          status: 'queued',
+        }),
+      ]);
+    });
+
+    it('writes neither half when the transaction fails', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = await withItem(database);
+
+      await expect(
+        transactions.run(async (transaction) => {
+          await service.patchItem(transaction, EDIT);
+          throw new Error('the commit failed after both writes');
+        }),
+      ).rejects.toThrow('the commit failed after both writes');
+
+      expect((await items.read(LIST.listId))[0]).toMatchObject({ title: 'Milk' });
+      expect(await outbox.all()).toHaveLength(1);
+    });
+
+    /** Reading in the writer is what makes the second edit win rather than the last response. */
+    it('merges each edit onto the row the previous one committed', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, service, transactions } = await withItem(database);
+
+      await transactions.run((transaction) =>
+        service.patchItem(transaction, { ...EDIT, input: { note: 'two pints' } }),
+      );
+      await transactions.run((transaction) =>
+        service.patchItem(transaction, {
+          ...EDIT,
+          intentId: 'intent-patch-item-2',
+          idempotencyKey: 'intent-patch-item-2',
+          input: { title: 'Oat milk' },
+        }),
+      );
+
+      expect((await items.read(LIST.listId))[0]).toMatchObject({
+        title: 'Oat milk',
+        note: 'two pints',
+      });
+    });
+
+    /** `null` clears and absent leaves alone — the distinction the patch input exists for. */
+    it('clears a note with null and leaves an untouched field alone', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, service, transactions } = await withItem(database);
+      await transactions.run((transaction) =>
+        service.patchItem(transaction, { ...EDIT, input: { note: 'two pints' } }),
+      );
+
+      await transactions.run((transaction) =>
+        service.patchItem(transaction, {
+          ...EDIT,
+          intentId: 'intent-patch-item-3',
+          idempotencyKey: 'intent-patch-item-3',
+          input: { note: null },
+        }),
+      );
+
+      expect((await items.read(LIST.listId))[0]).toEqual({
+        itemId: ITEM.itemId,
+        listId: LIST.listId,
+        rank: 'm',
+        title: 'Milk',
+        checked: false,
+      });
+    });
+
+    /** P3-30 keeps reorder online-only: "no reorder intent enters the outbox". */
+    it('refuses an edit that carries a position', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { outbox, service, transactions } = await withItem(database);
+
+      await expect(
+        transactions.run((transaction) =>
+          service.patchItem(transaction, {
+            ...EDIT,
+            input: { title: 'Oat milk', afterItemId: 'itm_01J000000000000000000000BB' },
+          }),
+        ),
+      ).rejects.toThrow('cannot carry a position');
+      expect(await outbox.all()).toHaveLength(1);
+    });
+
+    it('refuses an edit to an item this device does not hold', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { outbox, service, transactions } = harness(database);
+
+      await expect(
+        transactions.run((transaction) => service.patchItem(transaction, EDIT)),
+      ).rejects.toThrow('no longer available locally');
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    /** Retry after an authoritative rollback re-applies the fields onto current truth. */
+    it('re-applies a rolled-back edit from its own durable payload', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = await withItem(database);
+      await transactions.run((transaction) => service.patchItem(transaction, EDIT));
+      const intent = await outbox.get(database, 'intent-patch-item');
+      if (intent === undefined) throw new Error('missing item patch intent');
+      // The rollback put the server's row back over the refused edit.
+      await transactions.run((transaction) =>
+        items.installAcknowledged(transaction, {
+          itemId: ITEM.itemId,
+          listId: LIST.listId,
+          rank: 'm',
+          title: 'Milk',
+          checked: false,
+        }),
+      );
+
+      await transactions.run((transaction) =>
+        service.reprojectRetry(transaction, 'usr_local_dev', intent),
+      );
+
+      expect((await items.read(LIST.listId))[0]).toMatchObject({ title: 'Oat milk' });
+    });
+  });
+
   describe('the durable create (§P3-26)', () => {
     const CREATE = {
       listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W9Z9',

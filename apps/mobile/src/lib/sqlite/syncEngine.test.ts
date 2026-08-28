@@ -4534,5 +4534,141 @@ describe('serialized native convergence guard', () => {
       expect(await items.read(LIST_ID)).toEqual([canonical]);
       expect(await outbox.all()).toEqual([]);
     });
+
+    /**
+     * The durable field edit (§P3-29).
+     *
+     * Three rules, and each one is the create's rule turned around: an acknowledged patch
+     * installs the server's row; a **rejected** patch restores it rather than deleting the row
+     * as a rejected create does; and a page arriving mid-flight may not overwrite the edit the
+     * device is still holding.
+     */
+    describe('the durable item edit (§P3-29)', () => {
+      async function withPendingEdit(currentDatabase: SqliteDatabase) {
+        const built = itemHarness(currentDatabase);
+        await transactions.run((transaction) =>
+          built.listService.createItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'create-milk',
+            idempotencyKey: 'create-milk',
+            input: { itemId: ITEM_ID, title: 'Milk' },
+            rank: 'm',
+          }),
+        );
+        await transactions.run((transaction) =>
+          outbox.acknowledge(transaction.database, 'create-milk'),
+        );
+        await transactions.run((transaction) =>
+          built.listService.patchItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'patch-milk',
+            idempotencyKey: 'patch-milk',
+            input: { title: 'Oat milk' },
+          }),
+        );
+        return built;
+      }
+
+      it('sends the fields and installs the acknowledged row', async () => {
+        if (database === undefined) throw new Error('missing item patch database');
+        const { lists, items } = await withPendingEdit(database);
+        // Server truth, including a rank and a note this device never sent.
+        const canonical = { ...row(ITEM_ID, 'q', 'Oat milk'), note: 'from the shop' };
+        const patchItem = vi.fn(async () => canonical);
+        const sync = itemEngine(lists, items, {}, { patchItem });
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(patchItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID, { title: 'Oat milk' });
+        expect(await items.read(LIST_ID)).toEqual([canonical]);
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      /** A rejected **edit** must not take a real row off the screen. */
+      it('restores server truth over a permanently rejected edit', async () => {
+        if (database === undefined) throw new Error('missing item rejection database');
+        const { lists, items } = await withPendingEdit(database);
+        const canonical = row(ITEM_ID, 'm', 'Milk');
+        const listItem = vi.fn(async () => canonical);
+        const sync = itemEngine(
+          lists,
+          items,
+          { listItem },
+          {
+            patchItem: async () => {
+              throw new ApiError('validation_failed', 'No.', 422, 'req-reject');
+            },
+          },
+        );
+
+        // The cycle reports the rejection; the rollback has already run by then.
+        await expect(sync.syncNow()).rejects.toThrow('No.');
+        sync.stop();
+
+        expect(listItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID);
+        expect(await items.read(LIST_ID)).toEqual([canonical]);
+        expect(await outbox.get(database, 'patch-milk')).toMatchObject({
+          status: 'needs_attention',
+          attention: { kind: 'rejected' },
+        });
+      });
+
+      /** `404` on the targeted read is an answer: the item is gone, so removing it is the restore. */
+      it('removes the row when the rejected edit names an item that no longer exists', async () => {
+        if (database === undefined) throw new Error('missing item gone database');
+        const { lists, items } = await withPendingEdit(database);
+        const sync = itemEngine(
+          lists,
+          items,
+          {
+            listItem: async () => {
+              throw new ApiError(
+                'not_found',
+                "This isn't here any more.",
+                404,
+                'req-404',
+              );
+            },
+          },
+          {
+            patchItem: async () => {
+              throw new ApiError(
+                'not_found',
+                "This isn't here any more.",
+                404,
+                'req-404',
+              );
+            },
+          },
+        );
+
+        await expect(sync.syncNow()).rejects.toThrow("This isn't here any more.");
+        sync.stop();
+
+        expect(await items.read(LIST_ID)).toEqual([]);
+      });
+
+      /** Otherwise a background page lands between the accepted edit and its acknowledgement. */
+      it('protects the edited row from a canonical page that predates it', async () => {
+        if (database === undefined) throw new Error('missing item protection database');
+        const { lists, items } = await withPendingEdit(database);
+        const sync = itemEngine(lists, items, {
+          listDetail: async () => ({
+            list: listRow(),
+            items: [row(ITEM_ID, 'm', 'Milk')],
+          }),
+        });
+
+        await sync.pullListDetail(LIST_ID);
+        sync.stop();
+
+        expect((await items.read(LIST_ID)).map((item) => item.title)).toEqual([
+          'Oat milk',
+        ]);
+      });
+    });
   });
 });

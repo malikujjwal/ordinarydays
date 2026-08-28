@@ -166,15 +166,27 @@ export function mergeListItemPatch(
   item: ListItemRow,
   changes: PatchListItemInput,
 ): ListItemRow {
-  const note = changes.note === undefined ? item.note : (changes.note ?? undefined);
+  /*
+   * The three clearable fields are taken **off** the row before the merge, so a `null` can
+   * produce a result that does not have them. Spreading the item and then conditionally
+   * spreading the field back would leave the old value in place, which is a clear that silently
+   * does nothing.
+   */
+  const {
+    note: currentNote,
+    location: currentPlace,
+    details: currentDetails,
+    ...rest
+  } = item;
+  const note = changes.note === undefined ? currentNote : (changes.note ?? undefined);
   const location =
-    changes.location === undefined ? item.location : (changes.location ?? undefined);
+    changes.location === undefined ? currentPlace : (changes.location ?? undefined);
   const details =
-    changes.details === undefined ? item.details : (changes.details ?? undefined);
+    changes.details === undefined ? currentDetails : (changes.details ?? undefined);
   return listItemView.parse({
-    ...item,
-    ...(changes.title === undefined ? {} : { title: changes.title }),
-    ...(changes.checked === undefined ? {} : { checked: changes.checked }),
+    ...rest,
+    title: changes.title ?? rest.title,
+    checked: changes.checked ?? rest.checked,
     ...(note === undefined ? {} : { note }),
     ...(location === undefined ? {} : { location }),
     ...(details === undefined ? {} : { details }),

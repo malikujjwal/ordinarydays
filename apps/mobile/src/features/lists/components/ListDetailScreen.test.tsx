@@ -81,14 +81,20 @@ function setView(overrides: Partial<ListDetailView> = {}) {
 
 function mount() {
   const onBack = vi.fn();
-  render(
+  const onOpenActivity = vi.fn();
+  const tree = () => (
     <SafeAreaProvider>
       <ThemeProvider scheme="light">
-        <ListDetailScreen listId={LIST_ID} onBack={onBack} />
+        <ListDetailScreen
+          listId={LIST_ID}
+          onBack={onBack}
+          onOpenActivity={onOpenActivity}
+        />
       </ThemeProvider>
-    </SafeAreaProvider>,
+    </SafeAreaProvider>
   );
-  return { onBack };
+  const rendered = render(tree());
+  return { onBack, onOpenActivity, rerender: () => rendered.rerender(tree()) };
 }
 
 beforeEach(() => {
@@ -255,6 +261,57 @@ describe('the bulk actions', () => {
 
     expect(screen.queryByRole('button', { name: /Clear checked/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Uncheck all' })).toBeNull();
+  });
+});
+
+/**
+ * U1 (§P3-29). The body opens the sheet and mutates nothing; the sheet's own rules are
+ * `ItemSheet.test.tsx`'s.
+ */
+describe('the item sheet', () => {
+  it('opens on a row body tap and closes on the way out', () => {
+    setView({ items: [item('AA', 'Milk')], itemCount: 1 });
+    mount();
+    const itemId = item('AA', 'Milk').itemId;
+
+    expect(screen.queryByTestId('item-sheet')).toBeNull();
+    fireEvent.click(screen.getByTestId(`list-item-${itemId}-body`));
+
+    expect(screen.getByTestId('item-sheet')).toBeDefined();
+    expect(screen.getByTestId('item-sheet-title')).toBeDefined();
+    // Opening is a read: nothing was written, and nothing was refreshed.
+    expect(view.current.refresh).not.toHaveBeenCalled();
+    expect(view.current.refetch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('item-sheet')).toBeNull();
+  });
+
+  /** Held by id, so a refreshed projection reaches the open sheet as new committed values. */
+  it('follows the row it opened rather than a copy of it', () => {
+    setView({ items: [item('AA', 'Milk')], itemCount: 1 });
+    const { rerender } = mount();
+    fireEvent.click(screen.getByTestId(`list-item-${item('AA', 'Milk').itemId}-body`));
+
+    setView({ items: [item('AA', 'Oat milk')], itemCount: 1 });
+    rerender();
+
+    expect(screen.getAllByRole('heading', { name: 'Oat milk' }).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  /** An item deleted underneath closes the sheet instead of editing a row that is gone. */
+  it('closes when the row leaves the projection', () => {
+    setView({ items: [item('AA', 'Milk')], itemCount: 1 });
+    const { rerender } = mount();
+    fireEvent.click(screen.getByTestId(`list-item-${item('AA', 'Milk').itemId}-body`));
+    expect(screen.getByTestId('item-sheet')).toBeDefined();
+
+    setView({ items: [], itemCount: 0 });
+    rerender();
+
+    expect(screen.queryByTestId('item-sheet')).toBeNull();
   });
 });
 
