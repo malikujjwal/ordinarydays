@@ -1,3 +1,4 @@
+import type { PatchListItemInput } from '@od/shared/client';
 import type { ListTemplateSeed } from '@od/shared/lists';
 import {
   type CreateListInput,
@@ -5,6 +6,7 @@ import {
   createListInput,
   createListItemInput,
   listTemplate,
+  patchListItemInput,
 } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type { List } from '@od/shared/types';
@@ -48,6 +50,23 @@ export interface ListItemCreateVariables {
   readonly idempotencyKey: string;
   readonly input: CreateListItemInput;
   readonly rank: string;
+}
+
+/**
+ * One durable item field edit (P3-29, §5.11.5).
+ *
+ * No `ifMatch`, unlike {@link ListPatchVariables}: item writes are per-field last-write-wins,
+ * and optimistic concurrency on every checkbox in a grocery list would produce constant
+ * spurious `409`s in exactly the situation the feature exists for. The `idempotencyKey` is
+ * carried for the outbox's own identity rather than for the route, which is not
+ * replay-protected — a repeated PATCH of the same value is the same outcome.
+ */
+export interface ListItemPatchVariables {
+  readonly listId: string;
+  readonly itemId: string;
+  readonly intentId: string;
+  readonly idempotencyKey: string;
+  readonly input: PatchListItemInput;
 }
 
 export interface ListPatchVariables {
@@ -142,6 +161,27 @@ function parseItemCreateVariables(
   return { listId, itemId, intentId, idempotencyKey, input: parsed.data, rank };
 }
 
+function parseItemPatchVariables(
+  variables: object,
+  itemId: string,
+): ListItemPatchVariables {
+  const parsed = patchListItemInput.safeParse(Reflect.get(variables, 'input'));
+  const listId = Reflect.get(variables, 'listId');
+  const intentId = Reflect.get(variables, 'intentId');
+  const idempotencyKey = Reflect.get(variables, 'idempotencyKey');
+  if (!parsed.success) {
+    throw new Error('The saved edit is invalid. Discard it and try again.');
+  }
+  if (
+    typeof listId !== 'string' ||
+    typeof intentId !== 'string' ||
+    typeof idempotencyKey !== 'string'
+  ) {
+    throw new Error('The saved edit has no retry identity.');
+  }
+  return { listId, itemId, intentId, idempotencyKey, input: parsed.data };
+}
+
 /** Commits each visible List-index mutation with its durable outbox intent. */
 export class ListTransactionService {
   constructor(
@@ -190,12 +230,58 @@ export class ListTransactionService {
     return appended.intent;
   }
 
-  /** Installs the server's item over the optimistic row once its create is acknowledged. */
+  /**
+   * The visible field edit and its queued patch, in one commit (P3-29).
+   *
+   * The same ordering key as the create — `list:<listId>` — so an edit to an item typed a
+   * moment ago serialises **behind** the create that names it, and neither races an archive or
+   * a delete of the list they are both on. The entity is the item, as it is for the create.
+   *
+   * ## It reads the row inside the transaction
+   *
+   * The projection is a merge onto current truth, and current truth may be a create that has
+   * not been acknowledged yet or an earlier edit still in the queue. Reading from the writer is
+   * what makes two quick edits to the same field land as the second value rather than as
+   * whichever response returned last.
+   *
+   * ## No reorder rides here
+   *
+   * `afterItemId` is refused outright. P3-30 keeps reorder online-only in as many words — "no
+   * reorder intent enters the outbox" — because a position resolved against neighbours the
+   * device saw an hour ago is not the position the user asked for.
+   */
+  async patchItem(
+    transaction: TransactionContext,
+    variables: ListItemPatchVariables,
+  ): Promise<OutboxIntent> {
+    const items = this.requireItems();
+    if (variables.input.afterItemId !== undefined) {
+      throw new Error('A durable item edit cannot carry a position.');
+    }
+    const current = await items.getLocal(variables.itemId, transaction.database);
+    if (current === undefined || current.listId !== variables.listId) {
+      throw new Error('The item is no longer available locally.');
+    }
+    const appended = await this.outbox.append(transaction.database, {
+      intentId: variables.intentId,
+      mutationKey: ['list', 'item-patch'],
+      variables,
+      entityId: variables.itemId,
+      orderingKey: `list:${variables.listId}`,
+    });
+    if (appended.kind === 'inserted') {
+      await items.applyLocalPatch(transaction, current, variables.input);
+    }
+    transaction.changed('outbox');
+    return appended.intent;
+  }
+
+  /** Installs the server's item over the optimistic row once its write is acknowledged. */
   async acceptCreatedItem(
     transaction: TransactionContext,
-    item: Parameters<ListItemsRepository['acceptCreated']>[1],
+    item: Parameters<ListItemsRepository['installAcknowledged']>[1],
   ): Promise<void> {
-    await this.requireItems().acceptCreated(transaction, item);
+    await this.requireItems().installAcknowledged(transaction, item);
   }
 
   /** Moves one unsynced item onto a freshly minted identity after an explicit Retry. */
@@ -439,6 +525,20 @@ export class ListTransactionService {
         parseItemCreateVariables(variables, intent.entityId),
         true,
       );
+      return intent;
+    }
+    if (intent.mutationKey[1] === 'item-patch') {
+      /*
+       * The rollback restored the server's row over the edit. Re-applying it from the durable
+       * payload is what a Retry means here — the same fields, onto whatever truth now is.
+       */
+      const parsed = parseItemPatchVariables(variables, intent.entityId);
+      const items = this.requireItems();
+      const current = await items.getLocal(intent.entityId, transaction.database);
+      if (current === undefined || current.listId !== parsed.listId) {
+        throw new Error('The item is no longer available locally.');
+      }
+      await items.applyLocalPatch(transaction, current, parsed.input);
       return intent;
     }
     if (intent.mutationKey[1] === 'create') {

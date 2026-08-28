@@ -8,11 +8,20 @@ import {
   Text,
   useTheme,
 } from '@od/ui';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
+import { useListItemActions } from '../hooks/useListItemActions';
+import {
+  type CheckedOverrides,
+  isChecked,
+  NO_OVERRIDES,
+  settleOverrides,
+  withOverride,
+  withoutOverride,
+} from '../model/checkedOverride';
 import {
   checkedCount,
   ITEM_SCROLL_FETCH_RATIO,
@@ -21,6 +30,7 @@ import {
 } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
 import { AddItemRow } from './AddItemRow';
+import { ItemSheet } from './ItemSheet';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
 
@@ -47,21 +57,55 @@ import { ListItemRow } from './ListItemRow';
  * ## What this screen deliberately does not do
  *
  * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
- * list's own `behaviour` and `capabilities` and nothing else. There is no reorder (P3-30), no
- * item sheet (P3-29) and no rename or settings (P3-32), so a row body tap does nothing yet
- * rather than pretending to open something.
+ * list's own `behaviour` and `capabilities` and nothing else. A body tap opens P3-29's
+ * `ItemSheet` and the checkbox writes through the same item PATCH path the sheet uses; there is
+ * still no reorder (P3-30) and no rename or settings (P3-32).
+ *
+ * ## The tick is a set, and it is drawn before the server agrees
+ *
+ * `onToggleChecked` receives the **next** value and sends it as `checked: next` — never
+ * `!checked` recomputed anywhere (§5.11.5). Until the projection carries that value the row
+ * draws it from `checkedOverride.ts`, so two people ticking `Milk` at once end with it checked
+ * once, and neither of them watches it flicker.
+ *
+ * ## The open row is held by id, not by value
+ *
+ * `ItemSheet` is handed the row **out of `view.items`** each render, so a save that refreshes
+ * the projection reaches the open sheet as new committed values rather than leaving it editing
+ * a copy taken when it opened. An item deleted underneath — by Undo expiring, or by another
+ * member — closes the sheet rather than editing a row that is gone.
  */
 export interface ListDetailScreenProps {
   listId: string;
   onBack: () => void;
+  /**
+   * Opens an Activity, for §7.5's provenance row inside the item sheet.
+   *
+   * Owned by the route, like every other navigation on this screen. Absent leaves the
+   * provenance row plain text, which is what it is on the row itself in v1.
+   */
+  onOpenActivity?: (activityId: string) => void;
 }
 
-export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
+export function ListDetailScreen({
+  listId,
+  onBack,
+  onOpenActivity,
+}: ListDetailScreenProps) {
   const theme = useTheme();
   const view = useListDetail(listId);
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [openItemId, setOpenItemId] = useState<string>();
+  const [checks, setChecks] = useState<CheckedOverrides>(NO_OVERRIDES);
+  const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
+  const items = useListItemActions({ onSaved: view.refresh, onRemoved: view.refetch });
+
+  // Retire each pending tick as the projection catches up with it, and never before.
+  useEffect(() => {
+    setChecks((current) => settleOverrides(current, view.items));
+  }, [view.items]);
 
   const progress = {
     itemCount: view.itemCount,
@@ -185,7 +229,17 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
               <ListItemRow
                 key={item.itemId}
                 list={list}
-                item={item}
+                item={{ ...item, checked: isChecked(item, checks) }}
+                onOpen={() => setOpenItemId(item.itemId)}
+                onToggleChecked={(next) => {
+                  setChecks((current) => withOverride(current, item.itemId, next));
+                  void items.save(item, { checked: next }).then((saved) => {
+                    // A refused tick goes back to committed truth; §5.3's toast is the hook's.
+                    if (!saved) {
+                      setChecks((current) => withoutOverride(current, item.itemId));
+                    }
+                  });
+                }}
                 onOpenLocation={() => void openInMaps(item.location)}
                 testID={`list-item-${item.itemId}`}
               />
@@ -210,6 +264,24 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
           />
         )}
       </ScrollView>
+
+      {list === undefined || openItem === undefined ? null : (
+        <ItemSheet
+          open
+          list={list}
+          item={openItem}
+          onClose={() => setOpenItemId(undefined)}
+          /*
+           * The same pair the screen already draws on: `refresh` for a write this device has
+           * committed — native re-reads SQLite, web asks the server — and `refetch` for the
+           * online delete, which only the server knows about. `useListBulkActions` takes
+           * `refetch` for its deletes for exactly this reason.
+           */
+          onChanged={view.refresh}
+          onRemoved={view.refetch}
+          {...(onOpenActivity === undefined ? {} : { onOpenSource: onOpenActivity })}
+        />
+      )}
 
       {list === undefined ? null : (
         <ListHeaderMenu

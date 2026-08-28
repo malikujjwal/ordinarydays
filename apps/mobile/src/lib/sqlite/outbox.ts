@@ -503,10 +503,16 @@ export class OutboxRepository {
   }
 
   /**
-   * Item rows a canonical page must not overwrite: their creates are still unresolved, so the
-   * server could not have included them and its silence is not evidence of absence.
+   * Item rows a canonical page must not overwrite, because this device still owes a write for
+   * them: an unresolved **create**, whose row the server could not have included, or an
+   * unresolved **edit**, whose fields the page predates (P3-29).
    *
-   * Rolled-back work is excluded on the same rule `protectedListIds` uses — a rejected create
+   * The edit case is what stops a background page landing between an accepted edit and its
+   * acknowledgement and flickering the old value back onto the screen. The protection ends at
+   * settlement, where the server's own row — including whatever a concurrent member changed —
+   * replaces the optimistic one.
+   *
+   * Rolled-back work is excluded on the same rule `protectedListIds` uses: a rejected write
    * must not shield the projection that replaced it.
    */
   async protectedListItemIds(
@@ -515,7 +521,7 @@ export class OutboxRepository {
   ): Promise<ReadonlySet<string>> {
     const rows = await database.all(
       `SELECT DISTINCT entity_id FROM outbox_intents
-       WHERE mutation_key_json = '["list","item-create"]'
+       WHERE mutation_key_json IN ('["list","item-create"]', '["list","item-patch"]')
          AND json_extract(variables_json, '$.listId') = ?
          AND status IN ('queued', 'in_flight', 'needs_attention')
          AND NOT (

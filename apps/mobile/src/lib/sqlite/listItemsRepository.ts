@@ -1,3 +1,4 @@
+import type { PatchListItemInput } from '@od/shared/client';
 import { compareListItems } from '@od/shared/rank';
 import { listItemView } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
@@ -145,6 +146,53 @@ async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promis
   );
 }
 
+/**
+ * The local projection of one `PATCH /v1/lists/:id/items/:itemId` (P3-29).
+ *
+ * Pure, so the one rule that matters can be asserted without a database: **`null` clears and
+ * absent leaves alone**. `patchListItemInput` keeps the two distinguishable precisely so a note
+ * can be removed at all, and a merge that collapsed them would make an emptied note either
+ * unremovable or removed by accident on every unrelated edit.
+ *
+ * `rank` is not merged: it is server-owned, and `afterItemId` — the only way a client asks for
+ * a different one — never reaches a durable intent (P3-30 keeps reorder online-only).
+ *
+ * The result goes through `listItemView` for `fromRow`'s reason, one step earlier: what is
+ * about to be written is half a persisted payload and half a stored row, and a merge that
+ * produced something the schema rejects would put it in the table for every later reader to
+ * parse instead.
+ */
+export function mergeListItemPatch(
+  item: ListItemRow,
+  changes: PatchListItemInput,
+): ListItemRow {
+  /*
+   * The three clearable fields are taken **off** the row before the merge, so a `null` can
+   * produce a result that does not have them. Spreading the item and then conditionally
+   * spreading the field back would leave the old value in place, which is a clear that silently
+   * does nothing.
+   */
+  const {
+    note: currentNote,
+    location: currentPlace,
+    details: currentDetails,
+    ...rest
+  } = item;
+  const note = changes.note === undefined ? currentNote : (changes.note ?? undefined);
+  const location =
+    changes.location === undefined ? currentPlace : (changes.location ?? undefined);
+  const details =
+    changes.details === undefined ? currentDetails : (changes.details ?? undefined);
+  return listItemView.parse({
+    ...rest,
+    title: changes.title ?? rest.title,
+    checked: changes.checked ?? rest.checked,
+    ...(note === undefined ? {} : { note }),
+    ...(location === undefined ? {} : { location }),
+    ...(details === undefined ? {} : { details }),
+  }) as ListItemRow;
+}
+
 /** How far a list's item pages have been drained, and against which rank generation. */
 export interface ListItemPageState {
   readonly rankVersion: number;
@@ -190,6 +238,33 @@ export class ListItemsRepository {
     reader: SqliteReader = this.reader,
   ): Promise<readonly ListItemRow[]> {
     return readItemRows(reader, listId);
+  }
+
+  /**
+   * One committed row by id, or `undefined`.
+   *
+   * `reader` is explicit for `read`'s reason: a patch derives its next value from the current
+   * one, so it must read inside its own writer transaction rather than from the default
+   * connection's snapshot, where a write committed a moment ago may not be visible yet.
+   */
+  async getLocal(
+    itemId: string,
+    reader: SqliteReader = this.reader,
+  ): Promise<ListItemRow | undefined> {
+    const row = await reader.first('SELECT * FROM list_items WHERE item_id = ?;', [
+      itemId,
+    ]);
+    return row === undefined ? undefined : fromRow(row);
+  }
+
+  /** Projects one accepted field edit onto the visible row, committed with its intent. */
+  async applyLocalPatch(
+    transaction: TransactionContext,
+    item: ListItemRow,
+    changes: PatchListItemInput,
+  ): Promise<void> {
+    await writeItemRow(transaction.database, mergeListItemPatch(item, changes));
+    transaction.changed(this.scope(item.listId));
   }
 
   async pageState(
@@ -303,8 +378,18 @@ export class ListItemsRepository {
     transaction.changed(this.scope(item.listId));
   }
 
-  /** Replaces that optimistic row with the server's item once the create is acknowledged. */
-  async acceptCreated(transaction: TransactionContext, item: ListItemRow): Promise<void> {
+  /**
+   * Installs the server's row over whatever this device was showing.
+   *
+   * One method for every acknowledgement, because they are one operation: a create's real rank
+   * and provenance, a field patch's server-resolved result, and a collision recovery's adopted
+   * row all replace the optimistic copy with the same authority. Named for what it does rather
+   * than for the create that first needed it (renamed in P3-29, when the patch arrived).
+   */
+  async installAcknowledged(
+    transaction: TransactionContext,
+    item: ListItemRow,
+  ): Promise<void> {
     await writeItemRow(transaction.database, item);
     transaction.changed(this.scope(item.listId));
   }
