@@ -102,7 +102,7 @@ been measured against the numbers in
 | P5-31 | Review notes and the demo account | ops | P5-28, P5-08 | no | S |
 | P5-32 | TestFlight: internal, then external | ops | P5-11, P5-28, P5-08 | no | M |
 | P5-33 | Performance pass and the cold-start budget check | api/mobile | P2-11 | no | L |
-| P5-34 | Accessibility pass | mobile | P2-22, P3-36 | no | L |
+| P5-34 | Accessibility pass | mobile | P2-22, P3-37 | no | L |
 | P5-35 | Prod alarms, dashboard, and the on-call runbook | infra | P4-31, P5-13 | no | M |
 | P5-36 | Rehearse a rollback | ops | P5-35 | no | S |
 | P5-37 | Beta onboarding and the feedback channel | ops | P5-32 | yes | S |

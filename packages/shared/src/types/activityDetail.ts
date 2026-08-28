@@ -71,7 +71,7 @@ export interface ActivityDetail {
   completedOccurrenceCount?: number;
   /**
    * The newest page of the plan's feed, embedded so opening a plan is **one** request
-   * (§2.3, P3-36's one-request rule). `updatesCursor` continues it through P3-19's
+   * (§2.3, P3-37's one-request rule). `updatesCursor` continues it through P3-19's
    * `GET .../updates?cursor=`; its absence means the feed ends here rather than that paging
    * is unavailable.
    */

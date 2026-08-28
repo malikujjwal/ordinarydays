@@ -16,7 +16,7 @@ useTestTable();
  *
  * **Deferred, recorded not dropped:** §P3-13's offline projection and local arming lines —
  * that a bridge intent carrying two stable reminder ids projects and arms those same ids in
- * SQLite before replay — are the native client's and belong to P3-42/P3-25. They cannot be
+ * SQLite before replay — are the native client's and belong to P3-43/P3-25. They cannot be
  * exercised from the API side. What is testable here is the server half: the same ids arrive
  * as exactly two caller `REM#` rows, and a replay creates no third.
  */

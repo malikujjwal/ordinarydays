@@ -194,7 +194,7 @@ export function continuePastWindow(
  * and makes the second August free because the dates are already there, not because the request
  * happened to match.
  *
- * The same store answers the question P3-47's calendar depends on: **which ranges have actually
+ * The same store answers the question P3-48's calendar depends on: **which ranges have actually
  * been loaded**. A date with no rows is ambiguous on its own — nothing planned, or nothing
  * fetched — and the calendar's no-dot-means-no-claim rule needs the difference. That is what
  * {@link isRangeCovered} is for, and why coverage is tracked separately from rows.

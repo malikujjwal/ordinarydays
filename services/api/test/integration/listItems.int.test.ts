@@ -894,7 +894,7 @@ describe('paging items', () => {
 });
 
 /**
- * **The two timestamps, and every writer that must move the right one** (P3-46).
+ * **The two timestamps, and every writer that must move the right one** (P3-47).
  *
  * `updatedAt` backs `If-Match` and moves only when the List row itself changes.
  * `lastItemActivityAt` moves when any **item** changes and backs nothing — the Lists index
@@ -908,7 +908,7 @@ describe('paging items', () => {
  * and the reason the loop below is written out per route rather than as one clever helper
  * is that a helper is a place a route can be forgotten.
  */
-describe('the two timestamps (P3-46)', () => {
+describe('the two timestamps (P3-47)', () => {
   /** Both stored values, read from the META row the Lists index batch-reads. */
   const stampsOf = async (listId: string) => {
     const meta = (await metaOf(listId)) as {
@@ -953,7 +953,7 @@ describe('the two timestamps (P3-46)', () => {
   });
 
   /**
-   * **The canonical pair**, and the one §P3-46 names first: checking an item moves the
+   * **The canonical pair**, and the one §P3-47 names first: checking an item moves the
    * display timestamp and leaves the concurrency token byte-identical.
    */
   it('checking an item moves lastItemActivityAt and leaves updatedAt byte-identical', async () => {
@@ -1137,7 +1137,7 @@ describe('the two timestamps (P3-46)', () => {
   });
 
   /**
-   * **Once for the operation, not once per item** (§P3-46's edge case). Every chunk of one
+   * **Once for the operation, not once per item** (§P3-47's edge case). Every chunk of one
    * request writes the identical instant, so a three-item clear moves the field to exactly
    * one value rather than to whichever chunk committed last.
    */
@@ -1167,7 +1167,7 @@ describe('the two timestamps (P3-46)', () => {
   });
 
   /**
-   * **Undo bumps it again**, and §P3-46 says why in one line: the list did change, twice.
+   * **Undo bumps it again**, and §P3-47 says why in one line: the list did change, twice.
    * Restoring three deleted items is as much a change to the list as deleting them was.
    */
   it('undo of a bulk operation bumps it a second time', async () => {
@@ -1225,7 +1225,7 @@ describe('the two timestamps (P3-46)', () => {
 
   /**
    * A behaviour migration rewrites every item row, and still moves `updatedAt` rather than
-   * this — §P3-46 names the case. It is a change to the *list*, whatever it costs in item
+   * this — §P3-47 names the case. It is a change to the *list*, whatever it costs in item
    * writes to carry out.
    */
   it('a behaviour migration moves updatedAt and not lastItemActivityAt', async () => {

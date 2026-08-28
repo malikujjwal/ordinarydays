@@ -104,7 +104,7 @@ product-wide invariant in
 | Completed | Suggestion | On tap |
 | --- | --- | --- |
 | `watch`, a show with season and episode | `{list name} · currently S2 E4 — Update to S2 E5?` | Updates that named item, then offers `Create a Plan for S2 E6?` as a **separate** second step |
-| `meal` with ingredients | `Add ingredients to a list?` | Opens the ingredient picker, then the destination sheet (P3-42); names the destination before writing only what the user selects, where they chose |
+| `meal` with ingredients | `Add ingredients to a list?` | Opens the ingredient picker, then the destination sheet (P3-43); names the destination before writing only what the user selects, where they chose |
 | Any type, ≥ 1 participant and ≥ 1 expense | `Review expenses?` | Navigates. No write. |
 | Any type, ≥ 2 participants and 0 expenses | `Add an expense?` | Opens the sheet. No write until saved. |
 | A recurring occurrence | Nothing | The next occurrence already exists |
@@ -358,13 +358,13 @@ shared between the queue and the flush.
 
 | Mutation | Queueable | Why |
 | --- | --- | --- |
-| Check / uncheck an item | **Yes** | `checked` is **set, not toggled**, so the operation is idempotent and commutative. Two members setting `true` converge on `true` whatever order the writes land in, and a replay is a no-op. This is the one that had to be safe, because it is the whole point of an offline grocery list. |
+| Set an item's state (`done` / `open` / `active`) | **Yes** | State is **set, not toggled**, so each operation is idempotent. Two members setting the same value converge whatever order the writes land in, and a replay is a no-op. This is the one that had to be safe, because it is the whole point of an offline grocery List. |
 | Add an item | **Yes** | A create with an `Idempotency-Key`. Two members adding the same title produce two rows, which is the canonical rule — duplicates are never auto-merged — and is what would happen online. |
-| Edit an item's title, note or location | **Yes** | Last write wins on a field. No `If-Match` on item writes, by design. |
+| Edit an item's title, note or typed feature | **Yes** | Last write wins on a field. No `If-Match` on item writes, by design. |
 | Delete an item | **Yes** | Idempotent. A delete of an item another member already deleted returns `404`, which rule 5 treats as success. |
 | **Reorder an item** | **No** | Not commutative. `afterItemId` is resolved against neighbours **at flush time**, so a rank computed against a list that has since changed puts the item somewhere the user did not mean, silently and with no error. |
 | Rename the list | Yes, but `If-Match` applies | List-level edits carry `If-Match` (rule 2). A `409` names the field, as for an activity. |
-| Change capabilities, behaviour or slot | Yes, `If-Match`, owner only | Destructive changes are confirmed before they are queued, so a queued one was already agreed to. |
+| Change item-state mode, typed-feature configuration or slot | Yes, `If-Match`, owner only | P3-33 makes these non-destructive and independently undoable; values stay retained, while `If-Match` protects the owner-managed shared configuration. |
 | Add or remove a member | **No** | Membership changes need a server round trip to resolve an address to an account or a `status`, and the sheet's per-person result is the user's feedback. The share sheet is disabled offline with `Sharing needs a connection.` |
 
 **Reordering offline.** The drag is refused, not queued: the row springs back and a toast
@@ -391,9 +391,9 @@ registered before claims begin; the idempotency key is stable across three retri
 with one `ordering_key` apply in order while unrelated work may progress; the 200 cap refuses
 with the specified copy.
 
-Plus one test per row of the queueable table: a check queued offline flushes and the item is
-`checked` exactly once even when the same intent is delivered twice; two devices queueing a
-check on the same item both flush without a `409` and converge; a drag offline is refused
+Plus one test per row of the queueable table: a `done` state write queued offline flushes and
+lands exactly once even when the same intent is delivered twice; two devices queueing the
+same state value both flush without a `409` and converge; a drag offline is refused
 with the specified copy and enqueues nothing; the share sheet is disabled offline; a queued
 delete of an item another member already deleted is dropped silently under rule 5.
 
@@ -420,10 +420,11 @@ for the two objects more than one person can write to, a shared plan and a share
    precise.
 4. **State-setters are last-write-wins with no `If-Match`.** Completion, un-completion, skip,
    snooze, RSVP change and **every list-item write** are idempotent settings of a state, not
-   merges. Re-applying one is harmless, and a `409` on them would be noise. `checked` in
-   particular is set, never toggled, which is what makes it survive the queue with no merge
+   merges. Re-applying one is harmless, and a `409` on them would be noise. List-item `state`
+   in particular is set, never toggled, which is what makes it survive the queue with no merge
    logic — a toggle would flip twice on a duplicate delivery and land on the wrong value.
-   List-*level* edits — title, capabilities, behaviour, slot — are rule 2, not rule 4.
+   List-*level* edits — title, item-state mode, typed-feature configuration, slot — are rule
+   2, not rule 4.
 5. **A `404` on a queued mutation is success.** The thing is already gone; drop it silently
    and count it.
 6. **A `403` is rejected and named.** The user lost permission — usually they were removed
@@ -1157,13 +1158,12 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
 13. A queued mutation returning `404` is dropped silently; `403` and other `4xx` are dropped and
     named; `429` retries after `Retry-After`; `5xx` retries with backoff up to six attempts and
     then parks in an `Unsent changes` list the user can see.
-14. Completion, RSVP, skip, snooze and every list-item write are last-write-wins with no
-    `If-Match`. No code path writes `SET checked = NOT checked`, asserted by a grep.
+14. Completion, RSVP, skip, snooze and every ListItem write are last-write-wins with no
+    `If-Match`. No code path implements ListItem state as an invert/toggle, asserted by a grep.
 15. The 200-mutation cap refuses new writes with the specified copy, and web persists no
     mutation queue.
-16. Checking an item offline flushes to exactly one `checked: true` even when the same
-    intent is delivered twice, and two devices checking the same item offline converge with
-    no `409`.
+16. Setting an item to `done` offline lands exactly once even when the same intent is
+    delivered twice, and two devices queueing that state converge with no `409`.
 17. Reordering a list item offline is refused with `Reordering needs a connection.`,
     enqueues nothing, and the row springs back. The list share sheet is disabled offline.
 18. On reconnect, a shared list sync transaction installs canonical server rows and resolves

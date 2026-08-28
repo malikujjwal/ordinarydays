@@ -463,7 +463,7 @@ export async function drainPendingUploads(
  * may have expired.** That is the correct trade — the alternative is a retry silently
  * creating a second pending record for an upload the client thinks is one — and it is
  * recoverable, because a client that is told its URL has lapsed asks for a fresh one under a
- * new key (P3-40 step 5). An expired URL is a retry; a duplicate record is a leak.
+ * new key (P3-41 step 5). An expired URL is a retry; a duplicate record is a leak.
  */
 export async function requestUploadUrl(
   userId: string,

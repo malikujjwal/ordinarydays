@@ -166,7 +166,7 @@ export async function listActivityUpdates(
       limit: options.limit ?? UPDATES_PAGE_SIZE,
       keyAttributes: ['pk', 'sk'],
       /**
-       * **Strongly consistent, because a client reads its own post.** P3-39 posts optimistically
+       * **Strongly consistent, because a client reads its own post.** P3-40 posts optimistically
        * and then refetches; an eventually consistent page can come back without the entry it
        * just created, which reads as the post having failed. It is a base-table Query on one
        * partition, so this is cheap and available — unlike on the GSI.

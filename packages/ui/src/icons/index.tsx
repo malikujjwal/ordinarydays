@@ -247,7 +247,7 @@ export const ListLines = ({ size, color }: IconProps) => (
   </Frame>
 );
 
-// ── The List template catalogue (P3-45) ─────────────────────────────────────────────────
+// ── The List template catalogue (P3-46) ─────────────────────────────────────────────────
 
 /**
  * The eleven glyphs `LIST_TEMPLATES` names and this registry did not have.
@@ -324,7 +324,7 @@ export const Glass = ({ size, color }: IconProps) => (
  *
  * Deliberately **not** a steaming vessel. {@link Bowl} is already a rounded container with
  * two wisps above it, and a second one would be two catalogue entries a user cannot tell
- * apart — which is the failure §P3-45's edge case names.
+ * apart — which is the failure §P3-46's edge case names.
  */
 export const Cup = ({ size, color }: IconProps) => (
   <Frame size={size}>
@@ -432,7 +432,7 @@ export const typeIcons = {
 
 /**
  * The List template catalogue's markers, keyed by the exact `icon` string
- * `LIST_TEMPLATES` stores (P3-45).
+ * `LIST_TEMPLATES` stores (P3-46).
  *
  * A map rather than a naming convention, for the reason `navIcons` and `typeIcons` are maps:
  * a renderer looks a value up instead of switching on it, and a template whose icon has no

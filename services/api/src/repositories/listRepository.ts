@@ -2928,7 +2928,7 @@ export async function finishRankRepair(work: RankRepairWork): Promise<void> {
           Update: {
             Key: listMeta(work.listId),
             /**
-             * **No `lastItemActivityAt` here, deliberately** (P3-46). A rank repair rewrites
+             * **No `lastItemActivityAt` here, deliberately** (P3-47). A rank repair rewrites
              * ranks the user already asked to change: the reorder that triggered it bumped
              * the field, and bumping again when the repair lands would move a *display*
              * timestamp for maintenance the user never performed and cannot see.
@@ -3498,7 +3498,7 @@ export async function finishBehaviourMigration(
     Update: {
       Key: listMeta(work.listId),
       /**
-       * **`updatedAt`, and not `lastItemActivityAt`** — §P3-46 names this case outright. A
+       * **`updatedAt`, and not `lastItemActivityAt`** — §P3-47 names this case outright. A
        * behaviour change is a change to the *list*, not to its items, however many item rows
        * the migration rewrites on the way; the card should say the list was changed, and the
        * settings sheet holding a stale token should conflict.
@@ -4329,7 +4329,7 @@ async function applyBulkChunk(
       Update: {
         Key: listMeta(listId),
         /**
-         * **One value for the whole operation, not one per chunk** (§P3-46: a bulk operation
+         * **One value for the whole operation, not one per chunk** (§P3-47: a bulk operation
          * bumps this once, not once per item). `now` arrives from `runBulkCheckedOperation`'s
          * stored `acceptedAt`, read once at the edge and persisted before any chunk, so every
          * chunk and every resumed request writes the identical instant and the field moves
@@ -5108,7 +5108,7 @@ export async function deleteList(
 }
 
 /**
- * Clears one List's `sourceActivityId` back-link when its source Plan is deleted (P3-49).
+ * Clears one List's `sourceActivityId` back-link when its source Plan is deleted (P3-50).
  *
  * The mirror of the projection delete in {@link beginDeleteList}: that direction is a List
  * going away and taking its `SOURCE_LIST#` row with it, this one is the **Plan** going away

@@ -16,7 +16,7 @@ import type { ListItemView } from './listItemView.js';
  *
  * A pointer whose Activity the caller cannot read is omitted rather than serialised as a dead
  * link. Without the plan a row could not tell a scheduled Plan from an unscheduled or
- * completed one, which is the whole of the state line (P3-34).
+ * completed one, which is the whole of the state line (P3-35).
  */
 export type ListDetailItem =
   | { item: ListItemView }

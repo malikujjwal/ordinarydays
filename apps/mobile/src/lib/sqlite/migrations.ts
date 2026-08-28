@@ -385,7 +385,7 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
      * the screen re-deriving it.
      *
      * `last_item_activity_at` is stored beside `updated_at` rather than instead of it: the
-     * card renders the first (P3-46) and `If-Match` carries the second, and a table holding
+     * card renders the first (P3-47) and `If-Match` carries the second, and a table holding
      * one would force a refetch to do the other.
      */
     apply: (database) =>

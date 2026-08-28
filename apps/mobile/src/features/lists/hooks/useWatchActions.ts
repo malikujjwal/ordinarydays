@@ -36,11 +36,11 @@ import { type ItemWriteOutcome, usePatchListItem } from './usePatchListItem';
  * the durable path reads the committed row inside its writer transaction and refuses an item
  * this device does not hold, and §8.4's follow-up is confirmed from **Today**, about a list the
  * device may never have opened. Making it durable needs the intent to carry the item rather
- * than find it, which is P3-43's question to answer with the surface that offers it.
+ * than find it, which is P3-44's question to answer with the surface that offers it.
  *
  * ## `watching → watched` is never automatic
  *
- * Every write here starts at a tap — the swipe action, or P3-43's confirmed follow-up. Nothing
+ * Every write here starts at a tap — the swipe action, or P3-44's confirmed follow-up. Nothing
  * in this file observes a completion, a date or a count and decides a show is finished; §8.1 is
  * explicit that the app cannot know how many episodes there are. The one status the app may
  * offer on evidence is a **movie**'s, and even that arrives as a follow-up the user confirms.
@@ -55,7 +55,7 @@ export interface WatchActions {
    */
   readonly markWatched: (item: ListItemView) => void;
   /**
-   * §8.4 step 2, confirmed. **P3-43 calls this**; it does not build the body.
+   * §8.4 step 2, confirmed. **P3-44 calls this**; it does not build the body.
    *
    * The argument is the server's own `followUp` object, handed back untouched. Dismissal never
    * reaches here — it is the absence of a call, not a call that declines.
@@ -169,7 +169,7 @@ export function useWatchActions(onChanged: OnWatchItemChanged): WatchActions {
         write(
           online(followUp.listId, followUp.itemId),
           // The list's title is what §8.4's copy names; the toast names the row that changed,
-          // and the payload does not carry the item's own title. P3-43 renders the question.
+          // and the payload does not carry the item's own title. P3-44 renders the question.
           followUp.listTitle,
           followUpItemPatch(followUp),
           followUpUndoPatch(followUp),

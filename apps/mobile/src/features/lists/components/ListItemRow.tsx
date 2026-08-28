@@ -86,7 +86,7 @@ export interface ListItemRowProps {
    */
   viewerPlan?: ListItemPlanState;
   /**
-   * P3-34's rendered state line.
+   * P3-35's rendered state line.
    *
    * The wording, the relative date format and the `Cancelled` arm are that task's; the
    * eligibility rule above is this one's, and it wins — passing a line for an unscheduled Plan
@@ -99,7 +99,7 @@ export interface ListItemRowProps {
   onToggleChecked?: (next: boolean) => void;
   /** Opens the platform maps app for a qualifying collection's stored place. */
   onOpenLocation?: () => void;
-  /** Opens the caller's linked Activity (P3-34). */
+  /** Opens the caller's linked Activity (P3-35). */
   onOpenPlan?: () => void;
   testID?: string;
 }
@@ -122,7 +122,7 @@ export function ListItemRow({
   const status = watchStatusLabel(item);
   const progress = watchProgress(item);
   const ingredients = ingredientCount(item);
-  /* Both gates: the row decides eligibility, P3-34 decides the words. */
+  /* Both gates: the row decides eligibility, P3-35 decides the words. */
   const stateLine =
     mayShowPlanStateLine(viewerPlan) && planStateLine !== undefined
       ? planStateLine
@@ -266,7 +266,7 @@ export function ListItemRow({
         )}
 
         {/*
-         * §6.2's state line, and P3-34's rule that tapping it opens the **Activity** while
+         * §6.2's state line, and P3-35's rule that tapping it opens the **Activity** while
          * tapping the title opens the item. Two targets, because they are two destinations.
          */}
         {stateLine === undefined ? null : (

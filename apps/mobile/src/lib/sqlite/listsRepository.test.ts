@@ -86,7 +86,7 @@ describe('the native Lists SQLite index', () => {
 
     const [read] = await repository.read();
     // Parsed back through `listView`, so this is the shape the renderer will actually get —
-    // including `lastItemActivityAt`, which the card renders instead of `updatedAt` (P3-46).
+    // including `lastItemActivityAt`, which the card renders instead of `updatedAt` (P3-47).
     expect(read).toEqual(stored);
   });
 

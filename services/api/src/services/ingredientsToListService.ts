@@ -51,7 +51,7 @@ import { repairListRanks } from './listRankRepairService.js';
  * ## The destination is given, not resolved
  *
  * There is no `resolveSlot` call here. §P3-17 puts resolution on the **client**, over the
- * Lists projection it already holds, and P3-42 renders the answer before the button is
+ * Lists projection it already holds, and P3-43 renders the answer before the button is
  * enabled — so by the time this runs the user has read the list's name. Resolving again
  * server-side would be a second implementation of the rule §P3-12 says must have exactly one,
  * and worse, it could disagree with the name the user was shown.

@@ -25,7 +25,7 @@ export const activityUpdateKind = z.enum(['user', 'system']);
  *
  * `authorUserId` must be present on a `user` entry and absent on a `system` one. As a lone
  * optional field it was neither: a system row carrying an author parsed happily, which would
- * let P3-39 render a name on a record nobody wrote, and a user row *without* one parsed too,
+ * let P3-40 render a name on a record nobody wrote, and a user row *without* one parsed too,
  * leaving an entry whose delete nobody could ever authorise.
  *
  * A discriminated union is the obvious spelling and is **not** available here. Forbidding a
@@ -87,7 +87,7 @@ export const postActivityUpdateInput = z
  *
  * The timestamp is not a convenience. `#P` sorts on it and GSI1 is eventually consistent, so
  * a client that refetched to find its new position could read a projection older than the
- * write it just made. Returning the authoritative value lets P3-39 move the row immediately
+ * write it just made. Returning the authoritative value lets P3-40 move the row immediately
  * and treat a later, staler page as reconciliation rather than truth.
  */
 export const postActivityUpdateResult = z

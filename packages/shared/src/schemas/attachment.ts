@@ -23,7 +23,7 @@ export const attachmentId = ulidId('att');
  * unbounded set would be an unbounded set of things that can be permanently stored.
  *
  * `image/heic` is on the list because the iOS camera produces it and the client does not
- * transcode (P3-40). Leaving it off would mean every photo taken in the app failed.
+ * transcode (P3-41). Leaving it off would mean every photo taken in the app failed.
  */
 export const uploadContentType = z.enum([
   'image/jpeg',

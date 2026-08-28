@@ -30,7 +30,7 @@ build the multi-player half and launch it.** Section 3 states the boundary exact
 | **2** | [Today and tasks](phase-02-today-and-tasks.md) | A planner you open every morning. | Today at 3 PM on a real day: UP NEXT, SCHEDULE, ANYTIME, EARLIER TODAY. Tick today's Gym; tomorrow's is still at six. Snooze tonight's task to eight; tomorrow's is unchanged. Airplane mode, tick three things, kill the app, come back online, and all three land exactly once. |
 | **2.5** | [Recurrence stabilization](phase-02-5-recurrence-stabilization.md) | Recurring activities behave as one coherent system before more features depend on them. | Open an occurrence from a cold start; complete or move only that occurrence; convert an explicitly selected occurrence to a one-off; separately end and restart a series; stale agenda reads never undo an acknowledged write. |
 | **2.6** | [Sync hardening](phase-02-6-sync-hardening.md) | What you create offline survives, is visible, is cancellable — and still reminds you. | In airplane mode, create a task with a reminder, kill the app, relaunch still offline: the row shows `Pending`, the reminder fires at its time. Reconnect: exactly one server entity and the `Pending` state clears. A create whose response was lost replays a day later without a duplicate; an activity deleted from another device is never resurrected. |
-| **3** | [Plans and lists](phase-03-plans-and-lists.md) | The full personal loop. Save things with no date; explicitly turn a list item into a Plan when you decide; let a plan suggest the lists it needs. | Create a list by choosing **TV shows** from the unselected style catalogue, add `Severance` at S2 E4, then tap **Plan this item** and explicitly choose **Watch**; the form offers S2 E5 as a field pre-fill, not as a type guess. Watch it and accept the separate progress suggestion. Create a New York trip, add two prep tasks, explicitly choose **Packing** for its list, and see `Book hotel` land on Today with `New York Trip` underneath it. |
+| **3** | [Plans and lists](phase-03-plans-and-lists.md) | The full personal loop. Save things with no date; explicitly turn a ListItem into a Plan when you decide; let a Plan suggest the Lists it needs. | Create a List by explicitly choosing **Watch Later** from the unselected seven-type catalogue, add `Severance`, then add optional Progress S2 E4. Tap **Plan this item** and explicitly choose **Watch**; the form offers S2 E5 as a field pre-fill, not as a type guess. Watch it and accept the separate progress suggestion. Create a New York trip, add two prep tasks, explicitly choose **Checklist** and title its List `Packing · New York Trip`, and see `Book hotel` land on Today with `New York Trip` underneath it. |
 | **4** | [Deploy and identity](phase-04-deploy-and-identity.md) | An account of their own, on a system that runs on AWS rather than on your laptop. | Sign up on the simulator, receive the code, confirm, sign in. Sign in with Apple on a physical device, including Hide My Email. `curl "$API_URL/v1/health"` against the dev `execute-api` endpoint returns the SHA of the commit you merged five minutes ago. Ask for another user's activity by ID and get `404` with nothing in the body. |
 | **5** | [Ship v1](phase-05-ship-v1.md) | The app on their phone from TestFlight, at a real domain, with reminders that fire. | Send someone a TestFlight link. They install, sign in with Apple in one Face ID prompt, set a reminder two minutes out, lock the phone, and the push arrives with the task's own words in it. Then they delete the account from inside the app and sign back in the next day to find everything restored. |
 | **6** | [Sharing, invites and shared lists](phase-06-sharing.md) | Plans and lists with other people in them, including people who will never install anything. | Add a friend to Saturday dinner. With the app, it appears on their Today with Going / Maybe / Decline. Without it, they get a link that opens the plan with no account and no install, they tap Going, and it is on your plan thirty seconds later. Share a grocery list with your housemate, then each use **Plan this item → Event → Just me** on the same row; each sees only their own Plan. Choose people on another item and only the people explicitly selected join it. |
@@ -120,23 +120,26 @@ as passed by the Windows implementation run; task counts and AWU do not change.
 
 ### 1.4 Phase 3 — Plans and lists
 
-Lists and list items as independent collections: three behaviours and an unbounded template
-catalogue on top. The selected record's behaviour, capabilities, slot, icon and empty-state
-copy are copied onto the row at creation, so adding a list style is a config entry and later
-catalogue edits cannot rewrite an existing List. Every general New list flow starts with that catalogue unselected and
+Lists and ListItems as independent collections with one model: intrinsic `open` / `active` /
+`done` item state, List-selected state presentation, and a small registry of typed Progress,
+Place and generic Sub-items features. Seven explicit creation types copy resolved state,
+feature, slot, icon and empty-state configuration onto the List, so later catalogue edits
+cannot rewrite it. Every general New list flow starts with that catalogue unselected and
 `POST /v1/lists` requires the exact user-selected `templateKey`; title, source Plan and model
 output never choose or rank it. Default slots and the four-step resolution that decides where
 an explicitly invoked "add these ingredients" operation goes. `lexoRankBetween`, so
 reordering is a single-item write. The optional **Plan this item** bridge requires an explicit
 Plan `CreationTarget` and writes `LNK#<viewer>#<item>` rather than a global
 `linkedActivityId`; title fields copy once and never mirror. The full viewer-projection
-lifecycle covers complete, skip, unschedule and delete. Watch progress changes only after a
-named follow-up is tapped; `want → watching` is explicit and undoable. Meal ingredients go to a chosen list with stored provenance
+lifecycle covers complete, skip, unschedule and delete. Structured Watch Progress changes only
+after a named follow-up is tapped; `open → active` is explicit and undoable. The Meal adapter
+consumes only explicitly integrated, ingredient-labelled Sub-items, which go to a chosen List with stored provenance
 labels and the duplicate rule. Prep tasks as child activities that survive their parent's
 deletion. The plan detail screen with all ten sections, the plan → list suggestion sheet, the
 updates feed, and attachments through presigned uploads. After this phase a list that never
 becomes a plan is a finished thing, and one that does becomes a plan without duplication — on
-one laptop and one phone. **43 tasks** (a 44th, P3-11, was cut on 2026-08-07).
+one laptop and one phone. **50 tasks** (P3-11 was cut on 2026-08-07; P3-33 was inserted on
+2026-08-28 and the former P3-33…P3-50 ids moved by one).
 
 ### 1.5 Phase 4 — Deploy and identity
 
@@ -282,7 +285,7 @@ graph TD
     P2["Phase 2 · Today and tasks<br/>local · 48 tasks · 120 AWU"]
     P25["Phase 2.5 · Recurrence stabilization<br/>local · 5 tasks · 16 AWU"]
     P26["Phase 2.6 · Sync hardening<br/>local · 8 tasks · 30 AWU"]
-    P3["Phase 3 · Plans and lists<br/>local · 47 tasks · 119 AWU"]
+    P3["Phase 3 · Plans and lists<br/>local · 50 tasks · 128 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
     P6["Phase 6 · Sharing, invites and shared lists<br/>52 tasks · 125 AWU"]
@@ -449,16 +452,16 @@ sizings did not support; those are corrected here.
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **120** | ~6.0 weeks |
 | 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **16** | ~0.8 weeks |
 | 2.6 — Sync hardening | 8 (P2-48…P2-50, P2-57, P2-59 and P2-61…P2-63; P2-58 parked and P2-60 historical, uncounted) | 0 / 1 / 7 | **30** | ~1.5 weeks |
-| 3 — Plans and lists | 49 (44 minus P3-11, cut 2026-08-07; plus P3-45…P3-48 — 2026-08-25; plus P3-49 — 2026-08-26; plus P3-50 — 2026-08-27) | 7 / 27 / 15 | **123** | ~6.2 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **171** | **26 / 92 / 53** | **424** | **~21.2 weeks** |
+| 3 — Plans and lists | 50 (44 minus P3-11, cut 2026-08-07; plus P3-46…P3-49 — 2026-08-25; plus P3-50 — 2026-08-26; plus P3-51 — 2026-08-27; plus P3-33 — 2026-08-28) | 6 / 27 / 17 | **128** | ~6.4 weeks |
+| **0–3 subtotal (local, $0 AWS)** | **172** | **25 / 92 / 55** | **429** | **~21.4 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **241** | **38 / 137 / 66** | **578** | **~28.9 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **242** | **37 / 137 / 68** | **583** | **~29.1 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phases 2.5 and 2.6** | **390** | **51 / 228 / 111** | **953** | **~47.7 weeks (~11.0 months)** |
+| **Total 0–9 plus Phases 2.5 and 2.6** | **391** | **50 / 228 / 113** | **958** | **~47.9 weeks (~11.1 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -511,37 +514,45 @@ one-off/occurrence snooze plus unsnooze, and transport-level ETag body caching. 
 **+8 AWU**, with no new task and no dependency inversion.
 
 A Phase 3 design pass on **2026-08-25**, run against the Plans and Lists screens before their
-mobile tasks started, added **P3-45** (the eleven catalogue icons P3-02 named but never drew,
-M), **P3-46** (`List.lastItemActivityAt` and its writers, M), **P3-47** (the Upcoming/Past
-calendar navigator, L) and **P3-48** (per-type row markers in `RowLeading`, S). Net **+4 tasks
+mobile tasks started, added **P3-46** (the eleven catalogue icons P3-02 named but never drew,
+M), **P3-47** (`List.lastItemActivityAt` and its writers, M), **P3-48** (the Upcoming/Past
+calendar navigator, L) and **P3-49** (per-type row markers in `RowLeading`, S). Net **+4 tasks
 and +9 AWU**, giving **388 tasks and 949 AWU**. Two of the four are consequences of tasks that
 had already shipped, the same as the note below.
 
-The **P3-26 review on 2026-08-27** added **P3-50** (a `Sheet`-owned present/dismiss
+The **P3-26 review on 2026-08-27** added **P3-51** (a `Sheet`-owned present/dismiss
 animation, S). Net **+1 task and +2 AWU**. P3-26's accessibility fix removed the only sheet
 animation web had — react-native-web ties the dialog role and the focus trap to an
 animation-end event that never fires — and `design-system.md` §4.3 has specified this row
 since P2-43 without any component owning it. Forward work, not an amendment.
 
-**The two rows below Phase 3 were two behind.** P3-49 was added to the Phase 3 row and the
+**The two rows below Phase 3 were two behind.** P3-50 was added to the Phase 3 row and the
 0–3 subtotal on 2026-08-26 but never propagated to the 0–5 subtotal or the total, which is
 why the prose under this table read 389 tasks and 951 AWU while the table read 388 and 949.
 Every aggregate above is recomputed from the phase rows, so the two figures now agree.
 
-The **P3-18 review on 2026-08-26** added **P3-49** (clear `List.sourceActivityId` when its
+The **P3-18 review on 2026-08-26** added **P3-50** (clear `List.sourceActivityId` when its
 source Plan is deleted, S). Net **+1 task and +2 AWU**, giving **389 tasks and 951 AWU**. It is
 the same pattern one more time: `data-model.md` §7 and `api-contract.md` §2.3 both already
 required the clear, P3-05 had shipped the write that makes the dangling link reachable, and
-the only task describing the cleanup was **P3-38, a `mobile` task** — so no backend task owned
+the only task describing the cleanup was **P3-39, a `mobile` task** — so no backend task owned
 it and nothing would have until a client task ran. Found by reading the contract against the
-cascade, not scope growth. P3-49 now gates P3-38. With P3-50 above, the current figures are
-**390 tasks and 953 AWU**.
+cascade, not scope growth. P3-50 now gates P3-39. With P3-51 above, the current figures are
+**390 tasks and 953 AWU** as reported at that point.
+
+The **List model correction on 2026-08-28** inserted **P3-33** (one List model with intrinsic
+item state, typed features, generic Sub-items, a lossless offline/server migration and exact
+UI/visual gates, L) before the remaining List-to-Plan work. Every former P3-33…P3-50 id moved
+by one and every repository reference moved with it. This is **+1 task and +4 AWU**. The same
+recount exposed a one-AWU error already present in the Phase 3 headline: its own task table was
+6 S / 27 M / 16 L = 124 AWU before this insertion, not the displayed 7 / 27 / 15 = 123.
+Including that arithmetic correction, the current plan is **391 tasks and 958 AWU**.
 
 The 2026-08-25 additions, continued. Two of the four are consequences of tasks that
 had already shipped — P3-02 named icons that do not exist, and the four writers that must bump
 `lastItemActivityAt` are all on `main` — which is the same lesson as the fourteenth correction:
 unowned work found by reading the plan against the code, not scope growth. The other two are
-genuine additions the founder accepted after seeing the screens drawn. P3-46 is cheapest now
+genuine additions the founder accepted after seeing the screens drawn. P3-47 is cheapest now
 and dearer later: nothing is deployed before Phase 4, so it needs no migration today.
 
 The second Phase 2 gate on **2026-08-10** moved six agenda-boundary cases from P2-02 to
@@ -787,7 +798,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-165 tasks, 411 AWU, ~20.6 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+172 tasks, 429 AWU, ~21.4 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -799,7 +810,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-235 tasks, 565 AWU, ~28.3 weeks. External testers who are not the founder are using it on
+242 tasks, 583 AWU, ~29.1 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -811,7 +822,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-313 tasks, 752 AWU, ~37.6 weeks. Sharing, guests, invites, shared lists, date suggestions,
+326 tasks, 786 AWU, ~39.1 weeks. Sharing, guests, invites, shared Lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 

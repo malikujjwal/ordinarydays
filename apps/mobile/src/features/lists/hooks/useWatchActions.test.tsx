@@ -139,7 +139,7 @@ describe('Mark watched', () => {
   });
 });
 
-describe('the confirmed follow-up (P3-43 calls this)', () => {
+describe('the confirmed follow-up (P3-44 calls this)', () => {
   const followUp: CompletionFollowUp = {
     kind: 'watch_progress',
     listId: LIST_ID,
@@ -186,7 +186,7 @@ describe('the confirmed follow-up (P3-43 calls this)', () => {
 
   /**
    * §8.4: "Dismissing it leaves the item untouched". Dismissal is not a request that declines —
-   * it is the absence of one, so there is nothing in this hook for P3-43 to call.
+   * it is the absence of one, so there is nothing in this hook for P3-44 to call.
    */
   it('has no dismissal path at all', () => {
     const { watch } = setup();

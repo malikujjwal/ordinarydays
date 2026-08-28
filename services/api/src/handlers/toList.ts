@@ -34,7 +34,7 @@ export function toList(list: List): Record<string, unknown> {
     updatedAt: list.updatedAt,
     /**
      * Serialised, and it must be: the Lists index renders this rather than `updatedAt`
-     * (`design-system.md` §7.2, P3-46). It is a display value with no precondition attached —
+     * (`design-system.md` §7.2, P3-47). It is a display value with no precondition attached —
      * the opposite of `itemVersion` above it, which is concurrency state and stays behind.
      */
     lastItemActivityAt: list.lastItemActivityAt,

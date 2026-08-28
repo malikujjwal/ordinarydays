@@ -2533,7 +2533,7 @@ with the row components from P2-21, so there is one row component in the product
 
 This is the Plans tab's Phase 2 form and it is deliberately partial: it is the **Upcoming**
 stage only. The three-stage screen — Needs a date, Upcoming, Past — arrives in Phase 3 with
-`GET /v1/plans` (`phase-03-plans-and-lists.md` P3-20, P3-35), because Needs a date needs the
+`GET /v1/plans` (`phase-03-plans-and-lists.md` P3-20, P3-36), because Needs a date needs the
 `#P` bucket's RSVP summary and its `lastActivityAt` ordering, neither of which the agenda
 endpoint carries.
 
@@ -3770,7 +3770,7 @@ contain. Do not add a colour outside P2-40's tables.
 | The notification permission prompt and pre-prompt sheet | Phase 5 |
 | Lists, the optional list ↔ activity bridge, prep-task UI inside a plan, watchlist progress | Phase 3 |
 | Attachments and image upload | Phase 3 |
-| `GET /v1/plans`, the three-stage Plans screen, the Needs-a-date row and its RSVP summary | Phase 3 (P3-20, P3-35) |
+| `GET /v1/plans`, the three-stage Plans screen, the Needs-a-date row and its RSVP summary | Phase 3 (P3-20, P3-36) |
 | Writers for `lastActivityAt`: the updates feed (Phase 3), RSVP (Phase 6), expenses (Phase 7). The field, the sort key and the helper ship here; the callers do not. | Phases 3, 6, 7 |
 | Participants, RSVP badges on rows (the projection field exists; it renders empty) | Phase 6 |
 | Expenses | Phase 7 |

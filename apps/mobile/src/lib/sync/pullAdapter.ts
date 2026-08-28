@@ -95,7 +95,7 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
     const detail = await getList(apiClient, listId, { includeItems: true });
     return {
       list: detail.list as List,
-      // The detail item is a union carrying the caller's link when there is one; P3-34 renders
+      // The detail item is a union carrying the caller's link when there is one; P3-35 renders
       // that line and owns storing it. This slice takes the item and nothing else.
       items: (detail.items ?? []).map((entry) => entry.item as ListItemRow),
       ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),
@@ -104,7 +104,7 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
   listItemsPage: async (listId, cursor) => {
     const page = await getListItems(apiClient, listId, cursor);
     return {
-      // P3-34 renders the caller's link; this slice takes the item, as page one does.
+      // P3-35 renders the caller's link; this slice takes the item, as page one does.
       items: page.data.map((entry) => entry.item as ListItemRow),
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
     };

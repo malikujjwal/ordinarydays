@@ -1946,7 +1946,7 @@ describe('the prep-task cap', () => {
    * A prep task is a **task** (`plans-and-lists.md` §3). `parentActivityId` sits on the shape
    * both `objectKind` arms share, so nothing in the schema refused an attached Plan — and the
    * row it produced would take a `SUB#` pointer, a slot against the 50-cap, and a place in
-   * P3-43's bulk `Complete all` while plan completion is owner-only and global.
+   * P3-44's bulk `Complete all` while plan completion is owner-only and global.
    */
   describe('the child of a plan is itself a task', () => {
     it('refuses a Plan created with a parent, and writes nothing', async () => {

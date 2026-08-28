@@ -2,7 +2,7 @@ import type { ActivitySchedule } from './activity.js';
 import type { ActivityStatus, PlanType } from './vocabulary.js';
 
 /**
- * The caller's linked Plan, trimmed to what a list row can say about it (P3-15, P3-34).
+ * The caller's linked Plan, trimmed to what a list row can say about it (P3-15, P3-35).
  *
  * **Deliberately not the Activity.** A list row renders one line — `Planned Saturday · 7 PM`,
  * `Next session Friday · 8 PM`, `Done Saturday` — and shipping the whole Activity to draw it

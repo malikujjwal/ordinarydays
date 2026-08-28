@@ -3,7 +3,7 @@ import { templateIcons } from '@od/ui';
 import { describe, expect, it } from 'vitest';
 
 /**
- * **Every template's icon resolves to a real glyph** (P3-45).
+ * **Every template's icon resolves to a real glyph** (P3-46).
  *
  * This is the assertion that would have caught the gap at P3-02, which shipped a catalogue
  * naming fifteen icons when four existed. Nothing failed for three phases because no screen

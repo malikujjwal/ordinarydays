@@ -369,7 +369,7 @@ export const motion = {
 > reports as a **critical** `aria-allowed-attr` on every sheet. `Sheet` therefore passes no
 > animation type on web, and a present animation this table can hold true belongs to `Sheet`
 > itself, gated by `useMotion()` like every other row. Native is unaffected. **Owned by
-> P3-50**, which builds this row on both platforms; the accessibility fix stays either way.
+> P3-51**, which builds this row on both platforms; the accessibility fix stays either way.
 
 > **A frame in a product doc does not place a control** — settled 2026-08-27 (founder), on
 > the divergence raised in P3-26's PR and recorded in
@@ -482,7 +482,7 @@ Non-task rows render a small non-interactive marker in the type's accent — out
 `16 × 16` and `accessibilityElementsHidden` — its meaning goes into the row's label instead
 (`interaction-contract.md` §6.2).
 
-> **Corrected 2026-08-25 (founder), P3-48.** This paragraph named abstract shapes — "a
+> **Corrected 2026-08-25 (founder), P3-49.** This paragraph named abstract shapes — "a
 > diamond outline for events, a ring for meals" — which contradicted the table directly above
 > it, and `RowLeading.tsx` shipped neither: every non-task type rendered one 8 pt filled grey
 > square rotated 45°, ignoring both the glyph and the accent. **The table is correct and is
@@ -864,7 +864,7 @@ header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutat
 - The stage switcher is the `SegmentedControl` (`Needs a date · Upcoming · Past`); below it,
   the `All · Personal · Shared` filter Chips.
 
-  > **Corrected 2026-08-25 (founder), P3-35.** This line said "with counts where a stage
+  > **Corrected 2026-08-25 (founder), P3-36.** This line said "with counts where a stage
   > carries a badge-worthy number". `plans-and-lists.md` §1.3.2 rule 1 is "no badge on the
   > Plans tab, **ever, for any stage**" and rule 2 forbids a count in a stage heading — so
   > there is no badge-worthy number to render. The control carries its three words and
@@ -938,7 +938,7 @@ and the reference for every later task that adds a capability to this screen.
  + Add task
 ```
 
-> **Amended 2026-08-25 (founder), P3-36 — reconciled with `plans-and-lists.md` §2.1.** The two
+> **Amended 2026-08-25 (founder), P3-37 — reconciled with `plans-and-lists.md` §2.1.** The two
 > documents disagreed: §2.1 specified ten expanded sections with the completion button last;
 > this section specified collapsed disclosure rows throughout. **Rule 1 below wins and is
 > unchanged** — the completion action stays at the top. Rule 2 is narrowed: *always collapsed*

@@ -120,7 +120,7 @@ const NESTING_CAP =
  * shape shared by both `objectKind` arms, so nothing in the schema stopped a Plan being
  * created with a parent, and such a row is a contradiction the rest of the model then acts
  * on: it takes a `SUB#` pointer and a slot against the 50-cap, renders in a PREP section that
- * `plans-and-lists.md` §3 describes as tasks, and would be offered to P3-43's `Complete all`
+ * `plans-and-lists.md` §3 describes as tasks, and would be offered to P3-44's `Complete all`
  * — which completes children in bulk while plan completion is owner-only and global
  * (`activities.md` §5.1). Phase 6 makes it worse rather than better: prep authority is
  * inherited from the parent's participants, so an attached Plan would hand a participant
@@ -134,7 +134,7 @@ const CHILD_MUST_BE_TASK = 'Only a task can be a prep task.';
  * `plans-and-lists.md` §3 opens with "`parentActivityId` set to the plan" and caps the count
  * "per Plan"; §P3-18 says "A Plan has at most 50 prep tasks". A Task parent contradicts all
  * three, and produces a row no screen can render: the PREP section belongs to plan detail
- * (§P3-37), and Task detail (`today-and-tasks.md` §5.6) has no PREP section at all — it shows
+ * (§P3-38), and Task detail (`today-and-tasks.md` §5.6) has no PREP section at all — it shows
  * a `Related plan` row and nothing else. So a child under a Task is invisible, uncountable
  * against a per-Plan cap, and unreachable by the drill-down that `3 of 5 done` promises.
  *
@@ -1627,7 +1627,7 @@ export async function duplicateActivity(
  * - **Viewer-link rows are cleared**, by {@link viewerLinksToClear} below — P3-15 added them
  *   and this cascade handles them.
  * - **`SOURCE_LIST#` back-links are cleared**, by {@link clearSourcedListBacklinks} below
- *   (§P3-49) — and **before** the cascade removes the projections, because those rows are the
+ *   (§P3-50) — and **before** the cascade removes the projections, because those rows are the
  *   only record of which Lists point here. `data-model.md` §7 *Delete activity* and
  *   `api-contract.md` §2.3 both require the clear. This bullet twice said the opposite: first
  *   that nothing wrote these rows, then that the clear was somebody else's open work. Both
@@ -1697,7 +1697,7 @@ export async function removeActivity(
 }
 
 /**
- * Clears the `sourceActivityId` on every List this Plan sourced (P3-49).
+ * Clears the `sourceActivityId` on every List this Plan sourced (P3-50).
  *
  * **Before the cascade, and that ordering is the whole design.** The `SOURCE_LIST#` rows are
  * the only record of which Lists point back here, and the cascade deletes them along with the
@@ -1745,14 +1745,14 @@ export interface PrepTaskCollection {
  * whole collection, so counting it here needs no second read and no aggregate to drift.
  *
  * `openCount` is everything not `completed`, including a skipped or cancelled child — from
- * the section's point of view those are not done. P3-43's follow-up narrows further, to open
+ * the section's point of view those are not done. P3-44's follow-up narrows further, to open
  * children that are also not recurring, which is what `isRecurring` on each pointer is for;
  * it is not this function's filter to apply.
  *
  * **Authorisation belongs to the caller**, as it does for `projectDetail`: both named
  * consumers reach this only after establishing that the caller may read the plan — detail
- * assembly through the partition it has already read (P3-36), completion through the action
- * context it already holds (P3-43). Re-deriving it here would be a second authoritative read
+ * assembly through the partition it has already read (P3-37), completion through the action
+ * context it already holds (P3-44). Re-deriving it here would be a second authoritative read
  * of a partition the caller is holding.
  */
 export async function getPrepTasks(activityId: string): Promise<PrepTaskCollection> {
@@ -1887,7 +1887,7 @@ export async function getActivityDetail(
    * partition above (§2.3, P3-19).
    *
    * Filtering would be one fewer round trip and wrong twice. The partition read is unbounded
-   * — P3-36 replaces it with bounded prefix reads, and until then filtering would silently
+   * — P3-37 replaces it with bounded prefix reads, and until then filtering would silently
    * make the embedded page as large as the feed. And a page assembled in memory has no
    * cursor: `LastEvaluatedKey` comes from a Query that actually stopped at fifty, so a client
    * paging older entries needs this read to have happened.

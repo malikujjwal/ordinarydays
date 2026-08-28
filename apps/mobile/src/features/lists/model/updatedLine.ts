@@ -2,7 +2,7 @@ import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 
 /**
- * The card's footnote — `Updated today` (`design-system.md` §7.2, P3-46).
+ * The card's footnote — `Updated today` (`design-system.md` §7.2, P3-47).
  *
  * ## It renders `lastItemActivityAt`, never `updatedAt`
  *

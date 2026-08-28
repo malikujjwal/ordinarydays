@@ -4,21 +4,25 @@
 
 At the end of this phase the third noun exists. Lists are independent collections: a user can
 keep a list of bars, gift ideas or things to pack, and a list that never produces an Activity
-is a finished thing, not an unfinished one. There are **three behaviours** — `collection`,
-`watch`, `meals` — and an unbounded catalogue of templates on top of them, so adding "Bars to
-try" is a config entry rather than a schema change. The selected template's behaviour,
-capabilities, slot, icon and empty-state guidance are copied onto the row at creation.
+is a finished thing, not an unfinished one. P3-33 replaces the original closed
+`collection` / `watch` / `meals` behaviour taxonomy with **one List model**. A creation type
+copies a resolved configuration onto the List: one item-state mode (`none`, `checkbox`, or
+labelled `stages`) plus a small registry of typed item features (`progress`, `place`, and
+generic `subItems`). The creation type is provenance after creation, never the item's domain
+type and never a renderer switch.
 
 The bridge to Activities then exists as an explicit option rather than an inferred
 destination. `Plan this item` asks for a Plan kind and an audience, creates one Activity, and
 writes caller-scoped link pointers without duplicating the ListItem. Different people may
 independently plan the same shared item; nobody sees another person's private state. A plan
 detail screen shows the full anatomy — when and where, prep tasks, related lists, notes,
-attachments — and a plan can produce lists rather than only consuming them. A meal's
-ingredients become grocery items with honest provenance labels, in a destination the user
-chose, on confirmation and never automatically. A watch item carries season and episode, gains
-`watching` status on its first completed session, and offers the next episode as a suggestion
-the user must accept. Images upload through presigned URLs to a local S3-compatible object
+attachments — and a plan can produce lists rather than only consuming them. Typed Plan
+adapters copy only the List features they understand: Meal can consume an explicitly
+integrated sub-item collection, Watch can consume structured episode progress, and Event can
+consume a place. A meal's ingredients become grocery items with honest provenance labels, in
+a destination the user chose, on confirmation and never automatically. A completed watch
+session can offer an explicit progress/state update; completion never mutates the source item
+by itself. Images upload through presigned URLs to a local S3-compatible object
 store, over the same `@aws-sdk/client-s3` code path that will address the deployed media
 bucket unchanged.
 
@@ -32,8 +36,8 @@ Today's Anytime list and is not a backlog with a counter on it.
 | --- | --- | --- |
 | 1 | Phases 1, 2 and blocking Phase 2.5 complete and passing | The Activity CRUD, agenda, completion, explicit occurrence targeting and recurrence reconciliation are all load-bearing here. Phase 3 implementation does not overlap the stabilization gate. |
 | 1a | Phase 2.6 P2-63 complete and its real-device/account-migration gate passing | Native Lists/ListItems start on typed SQLite repositories and the same transactional outbox; they do not extend the retired AsyncStorage/TanStack domain materializer. Web binds the shared use cases to its existing online-first TanStack adapter. |
-| 2 | [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) read in full | It is the specification for this phase, including the three worked examples in §9 which are the integration fixtures. |
-| 3 | [`../02-architecture/data-model.md#46-list-and-listitem`](../02-architecture/data-model.md#46-list-and-listitem) and [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists) read in full | The list model is behaviour plus capabilities plus templates, not a closed enum of list kinds. ADR-031 to ADR-035 in [`../02-architecture/decisions.md`](../02-architecture/decisions.md) record why, and are the reference when a task looks like it wants a new kind. |
+| 2 | P3-33, then [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md), read in full | P3-33 is the founder correction that supersedes the legacy behaviour taxonomy still present in already-completed task history. Its implementation amends the product document and preserves the three worked examples as integration fixtures. |
+| 3 | P3-33, [`../02-architecture/data-model.md#46-list-and-listitem`](../02-architecture/data-model.md#46-list-and-listitem) and [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists) read in full | The final model is item state plus typed features plus creation presets. P3-33 amends ADR-031 to ADR-035; no later task may use the superseded `ListBehaviour` vocabulary merely because a historical task below records it. |
 | 3a | [`../02-architecture/data-model.md#33-list-partition`](../02-architecture/data-model.md#33-list-partition) read | The canonical list is at `LIST#<l>`, not in the owner's partition, and the `USER#` row is a near-pure pointer. Building it the other way round works for one user and has to be migrated for two (ADR-041, ADR-042). |
 | 3b | Phase 2's `deriveGsi1Bucket` (P2-05) and `lastActivityAt` (P2-06) merged | `GET /v1/plans` is a read over the `#P` bucket. Without both, the Needs-a-date stage has nothing to query and nothing to sort by. |
 | 4 | MinIO running in the local `docker compose` stack, with the `od-media-local` bucket created | Nothing is deployed to AWS before Phase 4, so every attachment task is built and tested against this **local S3-compatible store**. MinIO speaks the S3 API including SigV4 presigned `PUT`, so the endpoint and credentials differ and the application code does not — see [`../02-architecture/infrastructure.md#61-dynamodb-local-and-minio`](../02-architecture/infrastructure.md#61-dynamodb-local-and-minio). |
@@ -42,8 +46,8 @@ Today's Anytime list and is not a backlog with a counter on it.
 ## Deliverables
 
 - [ ] `List` and `ListItem` entities and repository, with the canonical list at `LIST#<l>` /
-      `META`, owner-and-active-member pointers at `USER#<u>` / `LIST#<l>`, the three behaviours, the
-      capability flags, and `ListItemDetails` for `watch` and `meals`.
+      `META`, owner-and-active-member pointers at `USER#<u>` / `LIST#<l>`, intrinsic item
+      state, keyed typed features, and a lossless migration from the legacy behaviour rows.
 - [ ] The Lists tab as **one `Query` plus one `BatchGetItem`**. A list screen reads exact
       `META`, then exactly the first 50 `ITEM#` rows and bounded caller-link hydration; later
       item pages use the opaque cursor and no path queries the whole `LIST#` partition.
@@ -51,48 +55,51 @@ Today's Anytime list and is not a backlog with a counter on it.
       repository, the projection and the client.
 - [ ] `GET /v1/plans` and the three-stage Plans screen, with the needs-a-date row, its RSVP
       summary and its most-recently-discussed ordering, and no badge or count anywhere.
-- [ ] The template/style catalogue in `packages/shared/src/lists/templates.ts` and
-      `GET /v1/list-templates`, with a stable explicit-selection order and no title matcher.
-- [ ] Template resolution at creation: behaviour, capabilities, slot, icon and empty-state
-      copy **copied** onto the list, never re-resolved on read.
+- [ ] The seven-type creation catalogue in `packages/shared/src/lists/templates.ts` and
+      `GET /v1/list-templates` — Blank, Checklist, Groceries, Watch Later, Books to Read,
+      Places to Visit, Meal Ideas — with Blank first, no preselection and no title matcher.
+- [ ] Creation-type resolution: item-state mode, typed feature configuration, slot, icon and
+      empty-state copy **copied** onto the list, never re-resolved on read. `templateKey` is
+      provenance only.
 - [ ] `lexoRankBetween` in `packages/shared`, so reordering changes one logical item and its
       identity locator rather than renumbering the list.
 - [ ] Lists CRUD, item CRUD, `bulk`, `clear-checked` (no dialog, 10-second bulk undo),
       `uncheck-all` (10-second bulk undo), archive, and the tombstone-aware restore path used
       by item-delete undo.
-- [ ] `PATCH /v1/lists/:id` capability changes and replay-protected
-      `POST /v1/lists/:id/behaviour` transitions, with additive changes applying immediately
-      and destructive ones gated by echoing the complete server-authored preview.
+- [ ] Non-destructive List settings for item-state presentation and enabled typed features.
+      Turning a presentation mode or feature off retains item state/data; the legacy
+      behaviour-transition protocol is retired after compatibility rollout.
 - [ ] `User.defaultLists` and the four-step slot resolution shared by every "add to X" flow.
 - [ ] `POST /v1/lists/:id/items/:itemId/schedule` — the optional bridge to Activities — with
       a required client-minted `activityId`, required `creationTarget` and `audience`, no type
       or audience inference, a one-time title copy, and per-viewer `LNK#` pointers rather than
       one global item state.
 - [ ] Link titles independent after creation; list edits cannot rename a private Plan.
-- [ ] Watch progress: `mediaKind`, `watchStatus`, season, episode; grouped item rendering;
-      an explicit, undoable progress update that may apply `want` → `watching`; and the
-      next-episode suggestion that creates nothing.
-- [ ] Meal ingredients → a chosen destination list: the `Add ingredients to:` sheet, the
-      stored provenance label, the duplicate-handling rule, and `addedToListId` marking on
-      the source rows.
-- [ ] The template-first list creation sheet with a visible editable title and exact
-      `Create list` action, plus the capability-driven item renderer — one renderer for every
-      list, reading flags off the row.
+- [ ] Typed Progress, including structured episode progress where configured; generic stage
+      rendering; an explicit, undoable progress/state update; and the next-episode suggestion
+      that creates nothing.
+- [ ] Generic Sub-items as one bounded, ranked child collection with configurable labels.
+      The explicit Meal integration adapts ingredient-labelled sub-items into a chosen
+      destination list with provenance and duplicate handling; labels alone never imply Meal
+      semantics.
+- [ ] The creation-type-first List sheet with a visible editable title and exact `Create
+      list` action, plus one production item shell and a typed feature-renderer registry.
 - [ ] Global `List item` creation requires an explicit destination list; list detail uses
       `+ Add an item` and ends with `Add to {list name}`. Neither route guesses a destination.
 - [ ] Prep tasks as child activities inside a plan, with `childCount`, the two-level nesting
       cap, and survival of the parent's deletion.
-- [ ] Plan → list catalogue sheet with the same full explicit order as general `New list` and
-      every Plan type; nothing selected or created without confirmation. A typed Watch
-      destination is the documented three-style eligibility exception.
+- [ ] Plan → list catalogue sheet with the same seven-type explicit order as general `New
+      list` and every Plan type; nothing selected or created without confirmation. An
+      explicit Watch destination constrains creation to the single Watch Later type.
 - [ ] The plan detail screen with all ten sections in fixed order and their visibility rules.
 - [ ] The updates feed: `GET`/`POST /v1/activities/:id/updates` with server-written system
       entries.
 - [ ] Attachments: presigned `PUT`, confirm-and-link, `primaryAttachmentId` as the hero
       image, the viewer, delete.
 - [ ] Follow-up suggestions after completion, all dismissible, none of which write.
-- [ ] The eleven catalogue icons P3-02 named but never drew, and a test that every
-      `LIST_TEMPLATES` icon resolves to an exported component.
+- [ ] Every icon used by the seven-type catalogue resolves to an exported component. P3-46's
+      already-landed public icons remain, but its larger catalogue requirement is superseded
+      by P3-33.
 - [ ] `List.lastItemActivityAt`, bumped by every item writer and by neither `If-Match` nor a
       list-level edit, backing the Lists index's `Updated today`.
 - [ ] Discriminated `GET /v1/plans` modes. Initial loading launches all four streams;
@@ -142,41 +149,42 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-30 | Drag to reorder | mobile | P3-27, P3-03 | no | M |
 | P3-31 | Watch behaviour: grouped items and progress UI | mobile | P3-28, P3-16 | no | M |
 | P3-32 | Inline List title edit; settings for capabilities, slot and behaviour | mobile | P3-27, P3-09 | no | M |
-| P3-33 | The `Plan this item` kind-and-audience sheet | mobile | P3-29, P3-13 | no | L |
-| P3-34 | Caller-scoped Plan state line on a list item | mobile | P3-33 | no | M |
-| P3-35 | The Plans tab: three stages | mobile | P3-20, P3-24, P2-32 | no | L |
-| P3-36 | Plan detail screen: full anatomy | mobile | P1-26, P3-24 | no | L |
-| P3-37 | Prep section inside a plan | mobile | P3-36, P3-18 | no | M |
-| P3-38 | Lists section and the `Add list` catalogue sheet | mobile | P3-36, P3-05, P3-26, P3-49 | no | M |
-| P3-39 | Updates section | mobile | P3-36, P3-19 | yes | M |
-| P3-40 | Image picker, upload, and progress | mobile | P3-21, P3-22 | no | L |
-| P3-41 | Attachment viewer and hero image | mobile | P3-40 | no | M |
-| P3-42 | Explicit Plan-to-list side effects: Meal ingredients and Watch items | mobile | P3-13, P3-17, P3-12, P3-26, P1-25 | no | L |
-| P3-43 | Follow-up suggestions after completion | mobile | P3-16, P3-17, P3-18 | no | M |
-| P3-44 | E2E: the worked examples, a list that links to nothing, and a plan with no date | ci | P3-34, P3-35, P3-42, P3-38 | no | L |
-| P3-45 | The eleven missing catalogue icons | ui | P3-02 | yes | M |
-| P3-46 | `List.lastItemActivityAt` and every writer that must bump it | shared/api | P3-04, P3-05, P3-08, P3-10 | no | M |
-| P3-47 | The Upcoming/Past calendar navigator | mobile | P3-35, P3-20, P3-24 | no | L |
-| P3-48 | Per-type row markers in `RowLeading` | mobile | P2-44 | yes | S |
-| P3-49 | Clear `List.sourceActivityId` when its source Plan is deleted | api | P3-05, P1-14 | yes | S |
-| P3-50 | A `Sheet`-owned present/dismiss animation, so web has one at all | ui | P3-26 | yes | S |
+| P3-33 | Redesign Lists around item state, typed features and configurable sub-items | cross-cutting | P3-32, P3-17 | no | L |
+| P3-34 | The `Plan this item` kind-and-audience sheet | mobile | P3-33, P3-29, P3-13 | no | L |
+| P3-35 | Caller-scoped Plan state line on a list item | mobile | P3-34 | no | M |
+| P3-36 | The Plans tab: three stages | mobile | P3-20, P3-24, P2-32 | no | L |
+| P3-37 | Plan detail screen: full anatomy | mobile | P1-26, P3-24 | no | L |
+| P3-38 | Prep section inside a plan | mobile | P3-37, P3-18 | no | M |
+| P3-39 | Lists section and the `Add list` catalogue sheet | mobile | P3-37, P3-33, P3-05, P3-26, P3-50 | no | M |
+| P3-40 | Updates section | mobile | P3-37, P3-19 | yes | M |
+| P3-41 | Image picker, upload, and progress | mobile | P3-21, P3-22 | no | L |
+| P3-42 | Attachment viewer and hero image | mobile | P3-41 | no | M |
+| P3-43 | Explicit Plan-to-list side effects: Meal ingredients and Watch items | mobile | P3-33, P3-13, P3-17, P3-12, P3-26, P1-25 | no | L |
+| P3-44 | Follow-up suggestions after completion | mobile | P3-33, P3-16, P3-17, P3-18 | no | M |
+| P3-45 | E2E: the worked examples, a list that links to nothing, and a plan with no date | ci | P3-35, P3-36, P3-43, P3-39 | no | L |
+| P3-46 | ~~The eleven missing catalogue icons~~ — already landed; no remaining work after P3-33 | ui | P3-02 | yes | M |
+| P3-47 | `List.lastItemActivityAt` and every writer that must bump it | shared/api | P3-33, P3-04, P3-05, P3-08, P3-10 | no | M |
+| P3-48 | The Upcoming/Past calendar navigator | mobile | P3-36, P3-20, P3-24 | no | L |
+| P3-49 | Per-type row markers in `RowLeading` | mobile | P2-44 | yes | S |
+| P3-50 | Clear `List.sourceActivityId` when its source Plan is deleted | api | P3-05, P1-14 | yes | S |
+| P3-51 | A `Sheet`-owned present/dismiss animation, so web has one at all | ui | P3-26 | yes | S |
 
-> **Added 2026-08-27 (founder).** **P3-50** owns the animation `Sheet` has never had. P3-26
+> **Added 2026-08-27 (founder).** **P3-51** owns the animation `Sheet` has never had. P3-26
 > removed react-native-web's, because RNW ties the dialog role and the focus trap to an
 > animation-end event that never arrives; native still has RNW's fade, at the wrong duration
 > and outside `useMotion()`. Nothing depends on it, so it is unblocked and unblocking.
 
-> **Added 2026-08-26 (founder).** **P3-49** carries the backend half of a cleanup that
-> §P3-38's edge cases described but no shipped task owned. P3-05 already writes
+> **Added 2026-08-26 (founder).** **P3-50** carries the backend half of a cleanup that
+> §P3-39's edge cases described but no shipped task owned. P3-05 already writes
 > `sourceActivityId` and its `SOURCE_LIST#` reverse projection, so the dangling link is
-> reachable today; P3-38 is a `mobile` task and cannot be what closes it. Raised in the P3-18
-> review, and **it gates P3-38**, which keeps the section's UI and its own catalogue tests.
+> reachable today; P3-39 is a `mobile` task and cannot be what closes it. Raised in the P3-18
+> review, and **it gates P3-39**, which keeps the section's UI and its own catalogue tests.
 
-> **Added 2026-08-25 (founder).** P3-45 to P3-48 came out of the design pass on the Plans and
-> Lists screens. Two of them are consequences of tasks that have **already shipped**, so they
-> are forward work rather than amendments: P3-45 closes a gap P3-02 left, and P3-46 adds a
-> field whose four writers (P3-04, P3-05, P3-08, P3-10) are all on `main`. **P3-45 and P3-46
-> both gate P3-25** and want doing before the mobile work starts.
+> **Added 2026-08-25 (founder), amended by P3-33.** The icon, item-activity timestamp,
+> calendar and row-marker tasks came out of the Plans/Lists design pass. P3-33's smaller
+> catalogue supersedes the independent icon expansion (now cut P3-46); P3-47 through P3-49
+> retain the other work. P3-47 remains forward work because its four original writers
+> (P3-04, P3-05, P3-08, P3-10) are on `main`, and P3-33 adds more writers it must cover.
 
 P3-23 is mechanical; follow the canonical sections and skip the discussion.
 
@@ -1015,7 +1023,7 @@ never reach it, and nothing in the list model treats an item that does not as un
 ```
 
 `activityId` is required and is the permanent monotonic id minted with the Phase 2.6 native
-generator before the bridge intent—or P3-42's combined item-plus-bridge chain—enters SQLite.
+generator before the bridge intent—or P3-43's combined item-plus-bridge chain—enters SQLite.
 Every supplied reminder likewise carries its permanent client-minted `reminderId`; this
 offline-capable route never relies on a server response to identify or arm a reminder.
 `PlanType = Exclude<ActivityType, 'task'>`. `creationTarget` is required and `type` must be
@@ -1127,14 +1135,14 @@ Neither side ever cascade-deletes the other.
 deletes it and clears the Activity provenance in the conversion transaction; retaining an
 unrenderable pointer would create permanent hidden state. Cancellation is different: the
 Activity remains a Plan and the cancellation itself is useful context, so the pointer stays
-and P3-34 renders `Cancelled`.
+and P3-35 renders `Cancelled`.
 
 **What the read side must carry.** Rows 1 and 2 both turn on the client seeing the Plan's
 current state, so the projection returns `viewerPlan` — `ListItemPlanState`, the caller's
 linked Plan trimmed to `type`, `status` and an optional `schedule` — beside `viewerLink`
 (`api-contract.md` §3). The two are one shape, not two optional fields: a row has both or
 neither. Without it a scheduled Plan and the same Plan after
-unscheduling are indistinguishable in the response, and P3-34 has no state to render. The
+unscheduling are indistinguishable in the response, and P3-35 has no state to render. The
 Activities are hydrated in **one bounded batch** per page, after the caller filter, never one
 read per link.
 
@@ -1328,7 +1336,7 @@ projection.
   `validation_failed`. Arbitrary nesting turns the product into an outliner.
 - **A Plan has at most 50 prep tasks.** Creating the 51st returns `validation_failed` with
   `Plan has too many prep tasks.` and writes nothing. The cap is what makes the complete
-  `3 of 5 done` ratio and P3-43's exact eligible one-off count compatible with a bounded detail read.
+  `3 of 5 done` ratio and P3-44's exact eligible one-off count compatible with a bounded detail read.
 - **Deleting the parent does not delete prep tasks.** It clears `parentActivityId` and they
   become ordinary tasks. A user who cancels a trip may still need to return the rental car;
   cascade-deleting real to-dos because the container went away is the kind of data loss that
@@ -1422,7 +1430,7 @@ change.
 > stage paid for all three. `mode` now selects one strict query/response arm: `initial`,
 > `upcoming_window`, `past_window` or `past_cursor`. Past calendar navigation supplies both
 > visible bounds, and dense windows continue under the same bounds until their returned
-> coverage is complete. Contract in `api-contract.md` §2.2a; P3-47 is the caller.
+> coverage is complete. Contract in `api-contract.md` §2.2a; P3-48 is the caller.
 
 > **Amended 2026-08-26 (founder) — close the shared Activity-authorisation consistency
 > gap alongside P3-20.** P3-19 made feed callers opt into strong reads, but the same stale
@@ -1478,7 +1486,7 @@ cannot replace another stage with an empty array.
    service, merge them with `#S`, and propagate its recurrence warnings.
 3. Items in `upcoming` and `past` are ordinary `AgendaItem` projections (P2-10). Items in
    `needsDate` are an `AgendaItem` **plus** `lastActivityAt`, `rsvpSummary` and
-   `suggestionCount`. The timestamp is required for P3-39's monotonic merge when an
+   `suggestionCount`. The timestamp is required for P3-40's monotonic merge when an
    eventually consistent GSI page is older than a mutation response.
 4. Each `rsvpSummary` group is `{ count: number, names: string[] }`; `names` contains at most
    the first two display names while `count` is the full group size. The four keys are
@@ -1657,7 +1665,7 @@ these writes bumps `icsSequence`.
 > can hold both. Responses merge into a **date-keyed** store rather than one cached by window
 > bounds — a month grid can request up to 42 days, so consecutive months overlap, and keying
 > by bounds would re-fetch and re-store the overlap while making "August → September → August"
-> free only if the exact bounds repeat. The same store is what lets P3-47 answer which ranges
+> free only if the exact bounds repeat. The same store is what lets P3-48 answer which ranges
 > have actually been loaded, which its no-dot-means-no-claim rule depends on.
 
 **Files.**
@@ -1709,13 +1717,11 @@ grep test that no exported client function has a `rank` parameter.
 
 ### P3-25 — Lists index screen
 
-> **Amended 2026-08-25 (founder).** The count line below is confirmed as written — `n items`
-> plus `· k checked` for a checkable collection, from `META` — and `design-system.md` §7.2 was
-> corrected to match, having specified template-supplied vocabulary that no catalogue field
-> could supply. Two additions: the card also renders `Updated today` from **`lastItemActivityAt`**
-> (P3-46), never `updatedAt`; and the stored `icon` only resolves once **P3-45** exists, since
-> eleven of the seventeen templates name glyphs the registry does not yet have. **This task now
-> depends on P3-45 and P3-46.**
+> **Amended 2026-08-25 (founder), then superseded in part by P3-33.** The shipped count line is
+> historical input to P3-33: checkbox-mode Lists may still say `· k checked`, derived from
+> intrinsic `done` state, while other modes do not borrow that vocabulary. The card renders
+> `Updated today` from **`lastItemActivityAt`** (P3-47), never `updatedAt`. P3-33's seven-type
+> catalogue owns its smaller icon set and cuts the independent icon expansion P3-46.
 
 **Files.** `apps/mobile/app/(app)/(tabs)/lists.tsx`,
 `apps/mobile/src/features/lists/{hooks/useLists.ts, components/ListIndexRow.tsx}`.
@@ -1803,7 +1809,7 @@ frozen values copied from the chosen style.
   `lst_` identity, then atomically stores the visible row and queued create. Transport retry
   reuses both that id and the mutation id. `GET /v1/list-templates` exposes that same module to other
   clients and contract tests, not a second catalogue or a required mobile startup fetch.
-- Creating from a plan's `Add list` sheet (P3-38) enters the same full fixed-order catalogue
+- Creating from a plan's `Add list` sheet (P3-39) enters the same full fixed-order catalogue
   with **none selected**. Plan kind, title and participants do not group, rank, hide or select
   styles. The title is pre-filled only after the user's explicit style tap.
 
@@ -1873,7 +1879,7 @@ comparison against a template key, the model has been misunderstood.
 | `behaviour: 'collection'`, `capabilities.supportsLocation`, and `item.location` | Renders the location subtitle and the maps tap target |
 | `behaviour: 'watch'` | Renders `S2 E4` and the status chip instead of a checkbox |
 | `behaviour: 'meals'` | Renders the ingredient count |
-| Caller-scoped `viewerLink` whose hydrated Activity has `schedule.date` | Renders the state line (P3-34) |
+| Caller-scoped `viewerLink` whose hydrated Activity has `schedule.date` | Renders the state line (P3-35) |
 | `item.sourceLabel` | Renders `— Sunday dinner` |
 
 **Edge cases.**
@@ -1885,7 +1891,7 @@ comparison against a template key, the model has been misunderstood.
   `meals` response is invalid data, not a default the renderer invents.
 - Item metadata and caller state occupy independent slots. Render every applicable provenance
   label and location line without hiding either, then render the caller-scoped state line as
-  its own tap target (P3-34). A linked item may therefore legitimately use more than one line.
+  its own tap target (P3-35). A linked item may therefore legitimately use more than one line.
 - `checked` is retained when either half of the operational gate is false: a non-collection
   behaviour or `capabilities.checkable === false`. The renderer hides it; it does not clear it.
 
@@ -1940,7 +1946,7 @@ exactly as P3-28's renderer is — no template-key comparison, same CI grep:
 - `watch`: `mediaKind`, the status control (`want` / `watching` / `watched` — any → any is
   manual here, §8.1), season and episode for a show only, and `Mark as watched`.
 - `meals`: the typed ingredient rows (name + optional quantity) and the
-  `Add ingredients to…` entry into P3-42's destination flow.
+  `Add ingredients to…` entry into P3-43's destination flow.
 - When the response carries the caller's `viewerLink` **and its hydrated Activity has
   `schedule.date`**, the state line renders with its own tap target opening the Activity
   (§6.2). An unscheduled link remains stored but has no state line.
@@ -1960,7 +1966,7 @@ mutation path this task builds**. Three rules bind every caller of it, the check
 - **Durable and replayable on native**, on the P3-27 pattern: the visible change and its outbox
   intent commit in one SQLite transaction, ordered behind that list's other work, with a stable
   mutation id so a replay after the idempotency receipt expires is the same write rather than a
-  second one. Web stays online-first. `Plan this item` opens P3-33
+  second one. Web stays online-first. `Plan this item` opens P3-34
 and is one action among several, never the primary one (§5.1). `Delete` deletes with **no
 confirmation** and returns P3-10's opaque token for a 6-second undo that restores the same
 item id, previous rank, live viewer links and Activity provenance
@@ -2010,11 +2016,11 @@ open its linked Plan, assert the Plan title is unchanged; the CI grep for templa
 
 **Not built here, and why.**
 
-- **`Plan this item`** (P3-33) and **`Add ingredients to…`** (P3-42) are **absent, not
+- **`Plan this item`** (P3-34) and **`Add ingredients to…`** (P3-43) are **absent, not
   disabled**. Both name a flow this build does not have, and §5.6 offers an action when it can
   be taken.
 - **The §6.2 state line inside the sheet.** Its eligibility rule is P3-28's
-  (`mayShowPlanStateLine`) and its wording is P3-34's, and no projection carries the
+  (`mayShowPlanStateLine`) and its wording is P3-35's, and no projection carries the
   `viewerLink`/`viewerPlan` pair yet: `useListDetail` keeps only `entry.item` on web, and the
   native `list_items` slice has no columns for a per-viewer pointer. Rendering it needs those
   three pieces, and the row renderer already takes the props for when they exist.
@@ -2148,10 +2154,10 @@ holding P3-28 rows sorted by `(rank, itemId)` within the group.
   ([`../01-product/interaction-contract.md#3-gesture-table`](../01-product/interaction-contract.md#3-gesture-table)
   §3.2) — an ordinary `PATCH` with the 6-second undo. `watching → watched` is manual only;
   the app does not know how many episodes there are (§8.1).
-- This task provides the **progress-update mutation** that P3-43's follow-up calls: one
+- This task provides the **progress-update mutation** that P3-44's follow-up calls: one
   `PATCH` setting season/episode to the session's values and, only when the item was
   `want`, `watchStatus: 'watching'` — one write, its own undo toast (§8.4). Dismissal
-  calls nothing. The follow-up's presentation belongs to P3-43; building any of it here
+  calls nothing. The follow-up's presentation belongs to P3-44; building any of it here
   duplicates the confirmation slot.
 - A status change regroups the item under its new heading at its existing rank; nothing
   else about the row changes — no move to top, no highlight.
@@ -2186,7 +2192,7 @@ absent; unit test that the progress-update mutation applies `want → watching` 
 - **The mutation covers both arms of `completionFollowUp`**, not only `watch_progress`. The
   movie arm's `Update {list name} item to Watched?` is §8.4's own copy and its confirmation is a
   tap with its own undo, not the automatic transition §8.1 forbids. Typing the input as the
-  whole union is what stops P3-43 re-deriving the other half — which is the point of typing it
+  whole union is what stops P3-44 re-deriving the other half — which is the point of typing it
   from the payload at all.
 - **A committed watch row with no typed details is kept and left unclassified.** The response
   schema is meant to reject it; if one arrives anyway it renders without a heading rather than
@@ -2205,7 +2211,7 @@ names is on screen, so the committed local row that path requires is there by co
 the durable path reads the committed row inside its writer transaction and refuses an item this
 device does not hold, and §8.4's follow-up is confirmed from **Today**, about a list the device
 may never have opened. Making it durable needs the intent to carry the item rather than find it.
-**That is P3-43's to answer**, with the surface that offers the question.
+**That is P3-44's to answer**, with the surface that offers the question.
 
 ---
 
@@ -2289,7 +2295,338 @@ transport retries; the undo toast on an additive toggle reverts the change.
 
 ---
 
-### P3-33 — The `Plan this item` kind-and-audience sheet
+### P3-33 — Redesign Lists around item state, typed features and configurable sub-items
+
+> **Founder correction — 2026-08-28.** P3-01 through P3-32 built the documented
+> `collection | watch | meals` model correctly, but using a List behaviour for optional Watch
+> progress and Meal ingredients is the wrong product boundary. A behaviour makes a promise
+> about every item and turns later configuration into an aggregate rewrite. Most people do not
+> record an episode on every Watch item, while ingredients are useful well beyond a Meal-shaped
+> List. Stop before the Plan UI and replace that taxonomy once. This task is the dependency for
+> every remaining List-to-Plan surface.
+
+**Files.** This is deliberately cross-cutting. Its minimum inventory is the canonical List
+product/architecture/decision docs and this phase plan; shared List types, schemas, constants,
+template resolution, client endpoints and generated OpenAPI; List routes, services,
+repositories, migration/Undo compatibility and seeds; the mobile List feature, SQLite
+migrations/repositories/transactions, sync adapters and pending intents; the shared UI
+settings-row family, a new Switch treatment and the runtime galleries; and the List component,
+integration, Playwright, native and visual-regression tests. The inventory is a minimum under
+`agent-playbook.md` §1.1a: every behaviour-dependent writer, projection and future task
+contract belongs to this change even when not named here.
+
+**What to build.** There is one `List` and one `ListItem`. A user-facing List **type** is an
+explicit creation preset, not a stored domain enum and not a behaviour that keeps controlling
+the List. Every item owns `title`, optional `note`, and one intrinsic state. A List decides how
+that state is exposed and which small, typed item features are available:
+
+```ts
+type ListItemState = 'open' | 'active' | 'done';
+
+type ItemStateMode =
+  | { mode: 'none' }
+  | { mode: 'checkbox' }
+  | {
+      mode: 'stages';
+      labels: { open: string; active: string; done: string };
+      groupByState: boolean;
+    };
+
+type ProgressValue =
+  | { kind: 'text'; value: string }
+  | {
+      kind: 'episode';
+      mediaKind?: 'movie' | 'show';
+      season?: number;
+      episode?: number;
+    };
+
+type ListSubItem = {
+  id: string;
+  title: string;
+  secondary?: string;
+  rank: string;
+};
+
+type ListItemFeatures = {
+  progress?: ProgressValue;
+  place?: Place;
+  subItems?: { entries: ListSubItem[] };
+};
+```
+
+The corresponding List configuration is keyed, not an array: one optional configuration for
+`progress`, `place` and `subItems`, each with an explicit `enabled` state. A keyed object makes
+duplicate features unrepresentable and gives item PATCH one stable field path. Progress
+configuration records `text` or `episode`; a manual enable uses `text`, while Watch Later seeds
+`episode`. Sub-items configuration stores its section label, singular label, optional secondary
+label and optional semantic integration. It is not a generic `value`/`rows` domain model:
+presentation is uniform, data stays typed.
+
+**State semantics.** A new item begins `open`, including on a List whose state mode is `none`.
+Mode changes never rewrite item state:
+
+- `none` hides state.
+- `checkbox` renders only `done` as checked. `open` and `active` are unchecked. Checking writes
+  `done`; unchecking a checked item writes `open`. Merely switching an active item into checkbox
+  mode leaves it `active`. `Uncheck all` changes only `done → open`.
+- `stages` exposes the three configured labels. A manually enabled staged List defaults to
+  `Saved · In progress · Done`; presets supply natural labels. `groupByState` exists inside this
+  variant only. Empty groups have no heading. Each populated group is its own drag surface, so
+  drag never changes state; changing stage is an explicit item action.
+
+Replace `uncheckedCount` assumptions with state-derived aggregate counts. The List META must at
+least hold the exact `done` count required by `Clear checked`; if all three counts are stored,
+every existing item writer advances them transactionally. Rank, item revision and rank-version
+cursor fences retain their existing meanings.
+
+**Typed item features.** The effective feature set is the intersection of the List's enabled
+configuration and the item's populated values. Disabling a feature applies immediately and is
+undoable: values remain stored, disappear from rows and item editing, drive no adapter, count or
+bulk operation, and reappear byte-identically when re-enabled.
+
+- **Progress** is one optional item line. Generic Progress is short text such as `Page 143` and
+  is never parsed. Watch Later uses the structured episode variant so the existing next-episode
+  workflow can increment data rather than inspect `S2 E4`. Season and episode controls appear
+  only after the user chooses to add Progress; an empty Watch item shows no blank fields or row
+  summary. `mediaKind` is retained during migration even when numeric progress is empty.
+- **Place** retains the current typed label/address and Maps action, but is available on any
+  configured List rather than on a `collection` branch.
+- **Sub-items** are one bounded, ordered collection per item. Configuration uses generic words;
+  the item uses natural configured words. `Ingredients / Ingredient / Quantity`,
+  `Materials / Material / Quantity` and `Stops / Stop / Duration` share storage and rendering.
+  A sub-item is structurally not a `ListItem`: it has stable id, title, optional secondary text
+  and rank, and cannot have state, checkbox, note, features, Plan relationship, reminder/date or
+  children. Reuse the existing ingredient-sized bound; do not introduce an unbounded embedded
+  array.
+
+Sub-item labels and semantics are separate. The configuration may carry
+`integration: 'mealIngredients'`; only the Meal Ideas preset seeds it. Manually enabling
+Sub-items is generic. Changing `Ingredients` to `Materials` does not silently change the
+integration, but the consequence is visible in configuration and the Plan preview as
+`Used as ingredients when creating Meal plans`. No adapter inspects a label.
+
+**Creation types.** Replace the seventeen-row style catalogue with this compact, fixed order:
+
+| Type | State | Features | Slot |
+| --- | --- | --- | --- |
+| **Blank** | none | none | — |
+| **Checklist** | checkbox | none | — |
+| **Groceries** | checkbox | none | `groceries` |
+| **Watch Later** | stages: Want to watch / Watching / Watched; grouped | episode Progress | `watch` |
+| **Books to Read** | stages: Want to read / Reading / Read; grouped | text Progress | — |
+| **Places to Visit** | checkbox | Place | — |
+| **Meal Ideas** | none | Sub-items labelled Ingredients, with `mealIngredients` | `meals` |
+
+`Blank` is first and explicit. Step one is headed `Choose a list type`, has no title field,
+nothing selected, recommended or history-ranked, and contains the sentence that Blank is the
+escape hatch. Step two alone contains the editable title. The tap stores `templateKey`; words
+typed later cannot select or change anything. `templateKey`, icon and empty guidance remain
+provenance/presentation owned by the created List. Preset changes affect future creation only.
+
+Legacy template keys remain valid migration provenance and resolve to equivalent stored
+configuration, even when they leave the creation catalogue. Do not rewrite an existing List's
+name, icon, empty guidance or template key merely because its old type is no longer offered.
+Groceries stays visible because Meal-to-groceries is an established workflow and its semantic
+slot must remain discoverable.
+
+**The exact Settings UI.** Preserve inline title editing from P3-32. Replace the current
+behaviour/capability part of `List settings` with the approved production hierarchy:
+
+```text
+ITEM STATE
+
+[ None | Checkboxes | Stages ]
+
+Group by stage                            [switch]   # stages only
+Show a section for each populated stage
+
+ITEM DETAILS
+
+Progress                                  [switch]
+One optional line on each item
+
+Places                                    [switch]
+Place and address on each item
+
+Sub-items                                 [switch]
+Add a short list inside each item
+```
+
+Destination-slot settings remain as a subordinate section below this frame; a slot is still a
+semantic destination, not state, type or feature. The destructive behaviour section and dialog
+disappear. Every setting writes independently, immediately and with the existing six-second
+Undo. Turning a capability off retains values, so no List setting is destructive.
+
+The switch must be a token-owned addition to the shared `SettingRow` family and runtime token
+gallery, not a hand-built screen control or a selected-row checkmark. The row exposes `switch`
+semantics, checked/disabled state and one 44-point target. Track, thumb, motion, focus and both
+palettes belong to the shared UI module.
+
+First manually enabling Sub-items opens a focused configuration sheet. When configured, its
+Settings summary becomes e.g. `Ingredients · Quantity`, with an explicit `Edit` action that
+reopens that sheet. Name/Singular/Secondary controls never stay expanded in the main Settings
+screen. Inside an item, the generic name never appears:
+
+```text
+Ingredients
+
+Chicken                              2 lb
+Rice                                1 cup
+Yogurt                              1 cup
+
++ Add ingredient
+```
+
+**One item shell.** Title, Note and exposed state render in one common item sheet. Configured
+features follow through a small registry that supplies summary, renderer and editor. Empty
+configured features have a quiet `Add` affordance in the sheet but no row metadata; never render
+`No ingredients`, blank season/episode fields, or placeholder metadata on the List row.
+Populated summaries are one line (`S2 E4`, `Page 143`, `8 ingredients`, a place label). Adding a
+future capability is one typed configuration/value plus registry entry and optional Plan
+adapter, not another List behaviour or screen branch.
+
+**Plan adapters, not List purpose.** `Plan this item` continues to ask General / Meal / Watch /
+Event with nothing preselected. The explicit Plan kind chooses a one-time copy adapter:
+
+| Adapter | Copies |
+| --- | --- |
+| General | title, note |
+| Meal | title, note; enabled Sub-items only when `integration === 'mealIngredients'` |
+| Watch | title, note; enabled structured episode Progress |
+| Event | title, note; enabled Place |
+
+Unsupported or disabled features are ignored, never guessed and never errors. The created
+Activity owns copied values/ids and immediately diverges; there is no synchronization. Plan
+completion never edits the List automatically. A linked Watch completion may offer `done` when
+state is exposed and may offer the next episode only for structured episode Progress. Accepting
+is an ordinary independent List write with Undo; uncompleting the Activity does not reverse it.
+Generic Progress and generic stage labels never trigger Watch semantics.
+
+Slots `groceries | watch | meals` remain routing declarations. Assigning a slot never enables a
+feature. A destination adapter copies the enabled compatible intersection and must preview an
+explicit text fallback when information would otherwise be lost. In particular, do not parse
+human titles or quantities to manufacture structure. Existing generated grocery titles with a
+parenthesized quantity stay byte-identical during migration.
+
+**Lossless migration.** Advance the stored List schema and implement one deterministic,
+idempotent aggregate converter shared by the server and local migration fixtures:
+
+| Legacy value | New value |
+| --- | --- |
+| `collection`, not checkable | state mode none |
+| `collection`, checkable | checkbox |
+| `capabilities.supportsLocation: true` | Place configured and enabled |
+| `watch` | grouped stages; Want to watch / Watching / Watched; episode Progress configured |
+| `meals` | none; Ingredients Sub-items configured with `mealIngredients` |
+| `checked: false / true` | `open / done` |
+| `watchStatus: want / watching / watched` | `open / active / done` |
+| `location` | `features.place` |
+| watch media kind/season/episode | structured `features.progress` |
+| meal ingredient name/quantity | deterministically identified/ranked Sub-item title/secondary |
+
+Preserve List and item ids, titles, notes, global item ranks, timestamps, slots, template
+provenance, source activity/provenance segments, viewer/Plan links, revisions, idempotency
+identity and all user-entered values. Generate sub-item ids and ranks deterministically from
+stable legacy identity so an interrupted retry cannot duplicate them. Never parse a title to
+recover quantity or progress.
+
+Reuse the existing list-partition gate and resumable migration lessons, but generalize them as
+one stored-schema transition rather than retain behaviour change as a product operation. The
+aggregate moves from one complete shape to the other and advances the cursor version once. A
+reader never observes half converted items. Retain a compatibility reader/translator until old
+data, receipts and queued calls have drained; then delete the behaviour preview/confirm endpoint,
+work records, destructive field-loss errors, client confirmation model and
+`['list','behaviour']` current intent.
+
+Add the next contiguous SQLite migration. It converts committed List/ListItem projections and
+handles pending settings, behaviour, item-patch, bulk and reorder intents transactionally.
+Translate a pending legacy operation when its meaning is lossless; otherwise allow it through a
+temporary compatibility adapter before removal. Do not discard a queued user write, clear the
+database, require a refetch, or make online access a condition of upgrade. Optimistic overlays,
+rollback snapshots, Undo deadlines and per-List serialization move with the new shape.
+
+Roll out readers before writers: dual-read/translate; migrate server aggregates; switch canonical
+API writers; migrate local projections/outbox; switch production UI; delete compatibility. Each
+landed slice must still open and edit every existing List. The end state has one schema, writer,
+response shape, presentation registry and settings interface.
+
+**The mock becomes enforceable.** The external HTML/image is an exploration, not a second UI
+implementation. Add a development-only Lists contract gallery that renders production components
+and deterministic fixtures for Blank, Checklist, Groceries, Watch, Books, Places, Meals and a
+generic Materials/Stops example. It must not duplicate markup or CSS from the screens.
+
+Approve baselines from the exported production app, with pinned data, fonts, locale, timezone,
+reduced motion and viewport. Playwright screenshot assertions cover 390 × 844 compact light/dark
+and the relevant expanded layout. A path-filtered iOS job captures the same key states and image
+diffs them, because a web screenshot cannot verify native safe area, host text or sheet geometry.
+CI never updates baselines; a human-reviewed command does. Failure artifacts contain expected,
+actual and diff. Platform-specific approved baselines may differ, but each is exact in its pinned
+environment. Token, contrast, dynamic type, keyboard, screen-reader, reduced-motion, hit-target
+and focus-restoration requirements still bind; pixel fidelity cannot waive accessibility.
+
+**Future task impact.** This task is inserted before the former P3-33 and all still-unimplemented
+P3-33–P3-50 ids move by one. Amend their contracts now and build them only on the new model:
+
+- P3-34's Plan sheet consumes the adapter intersection and never reads a behaviour.
+- P3-35's caller Plan-state line remains independent of intrinsic item state; checkbox state and
+  Activity completion never control one another.
+- P3-39's Add-list sheet uses the seven-type catalogue.
+- P3-43 destination side effects use slots plus enabled typed features/integrations.
+- P3-44 follow-ups use explicit suggestions, intrinsic state and structured Progress.
+- P3-45's worked examples and E2E fixtures use the migrated model and visual gates.
+- The old eleven-icon P3-46 has already landed and has no remaining branch; retain those
+  public exports, while P3-33's smaller catalogue uses only the icons it needs.
+- P3-47 runs after this task because every item writer it must cover is reshaped here.
+- Phase 6 treats List configuration as owner-managed and feature edits through its existing
+  member permission matrix; it must not restore behaviour as a sharing shortcut.
+
+Supersede the closed-three-behaviour ADR and amend `plans-and-lists.md`, `data-model.md`,
+`api-contract.md`, `feature-to-schema-map.md`, `interaction-contract.md`, `design-system.md`,
+`testing.md`, the definition of done, roadmap and generated OpenAPI in the implementation PR.
+No canonical example or future task may still require `ListBehaviour` afterward.
+
+**Scope guards.** Do not build arbitrary user fields, schemas, select options, formulas or an
+`Add field` UI; more than one Sub-item collection; recursive/nested ListItems; Sub-item state,
+notes, dates, reminders, Plans or features; quantity/unit or generic-progress parsing; automatic
+type/feature/integration/Plan-kind/destination inference; ongoing List↔Activity sync; a new
+Activity type, tab, table or GSI; or the P3-34 Plan UI itself. This task supplies its adapter
+contract and migration, not the later screen.
+
+**Tests.** The acceptance suite is layered, and all layers are required:
+
+1. Shared table tests pin state-mode validity, feature bounds, strict public schemas, the seven
+   creation types, Blank-first/no-selection/no-title-inference, legacy template recognition and
+   the deterministic aggregate migration for every behaviour/status/empty/partial case.
+2. DynamoDB Local tests interrupt migration at every resumable boundary and prove exact-once
+   conversion, one cursor invalidation, transactional state counts, retained links/provenance/
+   ranks, item-revision conflicts, idempotent rerun and no mixed aggregate generation.
+3. SQLite tests start from a real pre-P3-33 database containing committed Lists plus pending
+   behaviour/settings/item/bulk/reorder intents, migrate twice, relaunch offline and prove every
+   visible value and queued write survives exactly once.
+4. Route/client/component tests cover create, state changes, mode changes, feature off/on
+   retention, Place, text/episode Progress, Sub-item CRUD/reorder, slot changes, Undo, bulk
+   checkbox semantics, grouped/flat rendering, populated-only summaries, the exact Settings
+   hierarchy, Switch roles/states, dynamic type and focus return.
+5. Adapter tests choose all four Plan kinds from the same item and assert only the explicit
+   compatible intersection is copied once. Follow-up tests prove no automatic List write, no
+   generic-text parsing, explicit confirmation/Undo and independence after copy.
+6. Existing List Playwright journeys are rewritten rather than deleted. Visual assertions cover
+   the approved create, settings, generic stages, Watch, Meals/Sub-items, empty feature and
+   populated item frames in compact light/dark plus expanded layout; axe and keyboard checks
+   remain. The path-filtered native capture is a required gate for Lists/shared-UI changes.
+7. A final repository grep fails if current schemas, application code, generated contracts,
+   current intents or any remaining future task still depends on `ListBehaviour`, behaviour
+   migration markers, watch/meals detail discriminants or behaviour-specific UI branches.
+
+This task is an explicit exception to the ordinary diff-size preference: the old and new
+aggregate shapes cannot be cut over safely in unrelated branches. Keep reviewable locality with
+the compatibility-first sequence above, but do not merge a halfway state that makes `main`
+depend on a later task to open existing Lists.
+
+---
+
+### P3-34 — The `Plan this item` kind-and-audience sheet
 
 **Approach.** One sheet, opened from the exact list-item action `Plan this item` or its swipe
 equivalent. Step one requires `General`, `Meal`, `Watch`, or `Event`; nothing is pre-selected
@@ -2300,23 +2637,27 @@ with compatible item fields pre-filled. Confirming issues one bridge call with r
 `creationTarget` and the audience the user explicitly tapped.
 
 The user can edit all compatible fields before confirming. The selected kind changes only by
-returning to the explicit kind step; no title, behaviour, capability or parser result
-changes it. Nothing is written until confirmation, whose final button reads `Save plan`.
+returning to the explicit kind step; no title, creation type, item-state mode, enabled
+feature, semantic integration or parser result changes it. Nothing is written until
+confirmation, whose final button reads `Save plan`.
 
-**Edge cases.** After the user explicitly chooses `Watch`, structured watch fields may be
-offered from the item and remain editable. A `watching` item at S2 E4 may offer S2 E5; that
-offer does not select Watch and does not exist in another kind's form. `audience.mode` can
-only become `just_me` in this phase, but only after the visible tap; it has no initial value.
+**Edge cases.** After the user explicitly chooses `Watch`, P3-33's Watch adapter may offer an
+enabled structured episode Progress value from the item, and it remains editable. An item in
+intrinsic state `active` at S2 E4 may offer S2 E5; that offer does not select Watch and does
+not exist in another kind's form. Disabled features are not copied merely because retained
+data exists. `audience.mode` can only become `just_me` in this phase, but only after the
+visible tap; it has no initial value.
 
 **Tests.** Playwright: open `Plan this item` on `Severance`, assert all four kinds and no
 selection, choose `Watch`, assert the form is still closed until `Just me` is visibly tapped,
 then edit the offered S2 E5 to S2 E6 and confirm. Assert `creationTarget.type: 'watch'`,
-`audience.mode: 'just_me'` and S2 E6. Repeat on a watch list
-while choosing `General`; the result is `custom`, proving the list never chooses the kind.
+`audience.mode: 'just_me'` and S2 E6. Repeat on a Watch Later-configured List while choosing
+`General`; the result is `custom`, proving neither the creation type nor resolved List
+configuration chooses the Plan kind.
 
 ---
 
-### P3-34 — The caller-scoped Plan state line on a list item
+### P3-35 — The caller-scoped Plan state line on a list item
 
 **Approach.** The item stays in its list, in place. When the list-detail response includes the
 caller's `viewerLink` and its `viewerPlan` either carries `schedule.date` or has
@@ -2346,9 +2687,10 @@ Rules that are easy to get wrong:
   Both targets are ≥ 44 pt and are separate accessibility elements.
 - A caller-linked item is distinguished by the state line **alone**. No colour change, no
   strike-through, no move.
-- An item on a `collection` with `capabilities.checkable` is still checkable once scheduled. Checking one does not
-  complete the Activity, and completing the Activity never checks it. The tick changes only
-  through an explicit List action (P3-15).
+- An item whose List exposes `itemStateMode.mode: 'checkbox'` remains checkable once
+  scheduled. Checking it changes intrinsic item state to `done`; it does not complete the
+  Activity, and completing the Activity never changes the item. The state changes only
+  through an explicit List action (P3-15/P3-33).
 
 **Tests.** Render test asserting two separate accessibility elements with the labels from
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6.2.
@@ -2356,11 +2698,11 @@ Playwright asserting each tap target navigates to the correct screen. A projecti
 two viewers with different pointers and proves each response and render contains only that
 viewer's Plan; a third member sees the ordinary item with no state line. A cancelled fixture
 renders `Cancelled` while retaining the same tap target. Completing the Plan
-from both a checked and unchecked source fixture leaves the ListItem byte-identical.
+from `done`, `active`, and `open` source fixtures leaves the ListItem byte-identical.
 
 ---
 
-### P3-35 — The Plans tab: three stages
+### P3-36 — The Plans tab: three stages
 
 > **Amended 2026-08-25 (founder) — the stages are a switcher, not a stack.** Everything below
 > about *content* stands: the three stages, their order, their ordering rules, their empty
@@ -2373,7 +2715,7 @@ from both a checked and unchecked source fixture leaves the ListItem byte-identi
 > `design-system.md` §7.3 was corrected, having asked for them in direct conflict with
 > §1.3.2's first two rules. The grep test for badge components and stage-length counts is
 > unchanged and now also covers the switcher. The calendar navigator that sits beneath it is
-> **P3-47**, not this task.
+> **P3-48**, not this task.
 
 **Files.** `apps/mobile/app/(app)/(tabs)/plans.tsx`,
 `apps/mobile/src/features/plans/{hooks/usePlans.ts, components/NeedsDateRow.tsx,
@@ -2452,7 +2794,7 @@ months out, reaches the sentinel, and renders that plan after exactly one furthe
 
 ---
 
-### P3-36 — Plan detail screen: full anatomy
+### P3-37 — Plan detail screen: full anatomy
 
 > **Amended 2026-08-25 (founder) — settings always, sections once filled.** This task pointed
 > at `plans-and-lists.md` §2.1's ten expanded sections while `design-system.md` §7.5 —
@@ -2526,7 +2868,7 @@ component contains no `userId` comparison.
 
 ---
 
-### P3-37 — Prep section inside a plan
+### P3-38 — Prep section inside a plan
 
 **Approach.** The empty PREP section renders the exact contextual action
 `+ Add prep task`. The parent Plan is already explicit, so this action fixes
@@ -2540,12 +2882,12 @@ reads `Save task`.
 
 ---
 
-### P3-38 — The `Add list` catalogue sheet
+### P3-39 — The `Add list` catalogue sheet
 
-**Approach.** The LISTS section's `Add list` opens the same explicit template/style catalogue
-from P3-26, in the same stable order and with no selection. A small context line names the
+**Approach.** The LISTS section's `Add list` opens P3-33's same explicit seven-type creation
+catalogue, in the same stable order and with no selection. A small context line names the
 Plan the eventual list will relate to; Plan type, title, duration and participants do not
-rank, hide, select or pre-select a style.
+rank, hide, select or pre-select a type.
 
 After the user taps a template, the next step shows a title pre-filled as
 `<Default title> · <Plan title>`, visibly editable before `Create list`. Confirmation
@@ -2557,7 +2899,7 @@ silently produce three lists.
 **Edge cases.** `List.sourceActivityId` is the **only domain link**. Its id-only
 `ACT#<activityId>` / `SOURCE_LIST#<listId>` row is a reverse access projection, not a second
 source of truth. Detaching or deleting the List clears `sourceActivityId` and removes that row
-in the same transaction. **Deleting the plan is §P3-49's**, not this task's — it enumerates
+in the same transaction. **Deleting the plan is §P3-50's**, not this task's — it enumerates
 those rows, clears the matching back-links and leaves every List and item intact. This task
 depends on it and asserts the outcome; it does not implement it. Completing a
 plan does not archive its lists. A list of things you own is not owned by the trip. A list
@@ -2565,16 +2907,17 @@ created this way forces `slot: null` regardless of the selected template, so one
 never becomes a standing destination without a later explicit settings change.
 
 **Tests.** Integration: creating an `event` writes zero lists; `Add list` initially shows the
-same full unselected catalogue as general `New list`; explicitly choosing and confirming `Packing`
-writes exactly one with `sourceActivityId` set, `behaviour: 'collection'`, `slot: null` and one
+same seven unselected types as general `New list`; explicitly choosing and confirming
+`Checklist` writes exactly one with `sourceActivityId` set, the Checklist's resolved
+`itemStateMode` and feature configuration copied, no `behaviour` field, `slot: null`, and one
 matching `SOURCE_LIST#` projection; deleting the plan leaves the list with its items and
-`sourceActivityId` cleared and removes the projection (the clear itself is §P3-49's; this
+`sourceActivityId` cleared and removes the projection (the clear itself is §P3-50's; this
 asserts the sourced List this task creates is one it correctly reaches). A test runs
 every Plan type through the entry point and asserts catalogue order and selection are identical.
 
 ---
 
-### P3-39 — Updates section
+### P3-40 — Updates section
 
 **Files.** `apps/mobile/src/features/plans/UpdatesSection.tsx`.
 
@@ -2586,7 +2929,7 @@ newest first, with `+ Write an update` at the foot.
 
 - The first page arrives inside `GET /v1/activities/:id`; older entries page through
   P3-19's `GET .../updates?cursor=` on scroll. Opening the plan issues no second request
-  (P3-36's one-request rule).
+  (P3-37's one-request rule).
 - An entry renders its body and a relative timestamp (`2 days ago`). System entries render
   the same row de-emphasised with no author name — the entry text is the event (decision
   recorded here — §2.1 specifies content, not styling — raise in PR if wrong). In this
@@ -2618,7 +2961,7 @@ response matches the local order.
 
 ---
 
-### P3-40 — Image picker, upload, and progress
+### P3-41 — Image picker, upload, and progress
 
 **Files.**
 `apps/mobile/src/features/attachments/{useAttachmentUpload.ts, AttachmentPicker.tsx}`.
@@ -2661,7 +3004,7 @@ uploaded ids in `attachmentIds`.
 
 ---
 
-### P3-41 — Attachment viewer and hero image
+### P3-42 — Attachment viewer and hero image
 
 **Files.**
 `apps/mobile/src/features/attachments/{AttachmentViewer.tsx, HeroImage.tsx}`.
@@ -2700,14 +3043,16 @@ at the right image.
 
 ---
 
-### P3-42 — Explicit Plan-to-list side effects: Meal ingredients and Watch items
+### P3-43 — Explicit Plan-to-list side effects: Meal ingredients and Watch items
 
 **Files.** `apps/mobile/src/features/meals/IngredientPicker.tsx`,
 `apps/mobile/src/features/watch/WatchListDestination.tsx`,
 `apps/mobile/src/features/lists/DestinationSheet.tsx`.
 
-**What to build.** The client half of P3-17. The ingredient list on a meal, with a checkbox
-per ingredient, and a destination sheet that makes the target explicit.
+**What to build.** The client half of P3-17 using P3-33's explicit `mealIngredients`
+integration over generic Sub-items. The ingredient-labelled rows on a meal get a selection
+checkbox here; an arbitrary List whose Sub-items happen to use the same labels does not. The
+destination sheet makes the target explicit.
 
 **Approach.** Every ingredient starts **unchecked**. Selecting some enables
 `Add 3 selected`. Tapping it resolves the destination through P3-12 and renders one of three
@@ -2717,7 +3062,7 @@ states:
 | --- | --- |
 | `use` | A confirm row: `Add ingredients to: Groceries ▾`. The `▾` opens the picker for a one-off change. |
 | `ask` | The picker, open, listing every eligible list, with `Remember this choice` checked by default. |
-| `none` | `Choose or create a list`. `New list` opens P3-26 with the full fixed-order catalogue and nothing selected; after `Create list`, this sheet returns with the new list named and still requires `Add <n> to <list>`. |
+| `none` | `Choose or create a list`. `New list` opens P3-33's seven-type catalogue with nothing selected; after `Create list`, this sheet returns with the new list named and still requires `Add <n> to <list>`. |
 
 The destination is **always visible before the write**, including in the `use` case. Silent
 step 1 means the app does not ask, not that it does not say.
@@ -2739,10 +3084,10 @@ same meal.
 The Watch Plan's separate `Also add a list item to…` toggle appears in the reviewed Watch form
 and is off in every context. Turning
 it on resolves the `watch` slot and always shows the named destination before a write. If no
-eligible destination exists, `New list` opens P3-26 constrained to exactly `watchlist`,
-`movies-to-watch`, and `tv-shows`, in their canonical relative order and with none selected.
-That filter comes from the user's explicit Watch-destination control; title and capture text
-are not inputs. `Create list` writes only the List and returns here. Only the later named
+eligible destination exists, `New list` opens P3-33's creation flow constrained to the one
+`Watch Later` type, still unselected. That constraint comes from the user's explicit
+Watch-destination control; title and capture text are not inputs. `Create list` writes only
+the List and returns here. Only the later named
 `Save plan and add <title> to <list>` action creates the item, then submits the reviewed Plan
 through P3-13's `/schedule`
 bridge, which creates the Plan and caller's viewer-local `LNK#`
@@ -2768,7 +3113,7 @@ pending system or making TanStack native domain authority here is a defect.
   opens the full index. A user is allowed to put ingredients in a list that is not marked as
   a destination.
 - With no network, the resolution runs against the cached list index and the write queues.
-- Cancelling either Watch style selection or `Create list` returns without a List, ListItem,
+- Cancelling the Watch Later selection or `Create list` returns without a List, ListItem,
   Plan, or link write. A created Watch list is visibly selected but receives no item until the
   later combined action is activated.
 
@@ -2779,8 +3124,8 @@ and leaves `defaultLists` untouched; with none, no template is selected or sugge
 `Create list` writes no ingredient, and only the later `Add <n> to <list>` action does. Render
 test: every ingredient starts unchecked.
 Watch tests cover one destination, several with and without a saved default, and none. The
-none case begins with all three compatible styles unselected; choosing a style never writes
-the item, and the final action names both objects and the destination before any of its writes.
+none case begins with Watch Later unselected; choosing it never writes the item, and the
+final action names both objects and the destination before any of its writes.
 The Phase 3 combined bridge payload explicitly contains `{ mode: 'just_me' }`; the Phase 6
 fixture contains exactly the audience selected in the reviewed People field.
 A forced offline gap after item creation shows `Plan will finish syncing`; replaying the same
@@ -2789,7 +3134,7 @@ and one caller pointer, then clears that state.
 
 ---
 
-### P3-43 — Follow-up suggestions after completion
+### P3-44 — Follow-up suggestions after completion
 
 **Approach.** Completion may present **exactly one** contextual follow-up. Its presentation
 rules are the product-wide invariant in
@@ -2799,10 +3144,10 @@ rules are the product-wide invariant in
 
 | Completed | Follow-up | Creates on tap |
 | --- | --- | --- |
-| `watch` (show with progress) | `{list name} · currently S2 E4 — Update to S2 E5?` then, separately, `Create a Plan for S2 E6?` | Explicit progress update; then opens `Plan this item`, which creates nothing until kind, audience and final confirmation are chosen. |
-| `watch` (movie) | `Update {list name} item to Watched?` | Sets that named item's `watchStatus` to `watched`. |
-| `meal` with ingredients | `Add ingredients to a list?` | Opens the ingredient picker and then the destination sheet (P3-42); writes only what the user selects, where they chose. |
-| `event` created through `Plan this item` from a `collection` list with both `checkable` and `supportsLocation` | `Mark {item title} visited in {list name}?` | Sets that named item's `checked` only when tapped; completion itself leaves the item byte-identical. |
+| `watch` created from an item with enabled structured episode Progress | `{list name} · currently S2 E4 — Update to S2 E5?` then, separately, `Create a Plan for S2 E6?` | Explicitly updates that Progress value and may move `open` to `active`; then opens `Plan this item`, which creates nothing until kind, audience and final confirmation are chosen. |
+| `watch` without episode Progress, linked to a List that exposes state | `Mark {list name} item done?` | Sets that named item's intrinsic state to `done`. A List with state mode `none` offers nothing. |
+| `meal` whose source uses the explicit `mealIngredients` Sub-items integration | `Add ingredients to a list?` | Opens the ingredient picker and then the destination sheet (P3-43); writes only what the user selects, where they chose. Matching labels without the semantic integration offer nothing. |
+| `event` created through `Plan this item` from a checkbox-mode List with enabled Place | `Mark {item title} visited in {list name}?` | Sets that named item's intrinsic state to `done` only when tapped; completion itself leaves the item byte-identical. |
 | ≥ 1 participant and ≥ 1 expense | `Review expenses?` | Navigation only. Phase 7. |
 | ≥ 2 participants and 0 expenses | `Add an expense?` | Opens the sheet. No write until saved. Phase 7. |
 | ≥ 1 incomplete **non-recurring** prep task | `2 one-off prep tasks are still open — keep them?` with `Keep` · `Complete all` · `Delete` and the real eligible-child count | Completion itself leaves every prep child untouched. `Keep` and dismiss write nothing; the other explicit taps complete or delete exactly those incomplete non-recurring children. Recurring prep tasks are retained and excluded from the count and bulk actions. |
@@ -2813,11 +3158,13 @@ row and any other row qualify, the open-prep question is the one follow-up shown
 a show-progress update has been explicitly confirmed may its separate next-episode prompt be
 offered; it is not a second simultaneous completion follow-up.
 
-**Tests.** An integration test asserting that dismissing every follow-up produces zero
-writes. A qualifying bridged Event offers `Mark visited`; tapping it checks only the named
-item. General, a manually linked Event, a non-collection list, and a list missing either
-capability offer nothing. A movie offers the watched transition. A completion with open
-one-off prep and another qualifying suggestion offers only the counted prep question and
+**Tests.** An integration test asserting that completion and dismissing every follow-up leave
+the source ListItem byte-identical. A qualifying bridged Event offers `Mark visited`; tapping
+it marks only the named item `done`. General, a manually linked Event, a state-mode-`none`
+List, and a List missing enabled Place offer nothing. A Watch item without structured
+episode Progress offers `done` only when the List exposes state. Episode suggestions require
+the typed structured value, not a parsed display string. A completion with open one-off prep
+and another qualifying suggestion offers only the counted prep question and
 exercises each explicit choice. Mix incomplete one-off and recurring prep children: the copy,
 Complete all and Delete name/affect only the one-off ids, and the recurring rows and their
 occurrences remain byte-identical. A Plan with only recurring prep children offers no prep
@@ -2826,7 +3173,7 @@ another row would otherwise qualify.
 
 ---
 
-### P3-44 — E2E: the worked examples, a list that links to nothing, and a plan with no date
+### P3-45 — E2E: the worked examples, a list that links to nothing, and a plan with no date
 
 **Approach.** The three end-to-end examples in
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §9 are written as
@@ -2840,11 +3187,11 @@ individually and nothing else verifies together:
 3. **Trip plan → Packing list** (§9.3), all eleven steps, asserting both lists survive the
    plan's completion, unarchived, with their items.
 
-A fourth flow, short and just as load-bearing, because it is the case the model now leads
-with: **a list that never links to anything.** From the Lists index choose `New list`,
-explicitly tap the **Bars to try** style, keep or edit its visible title, and tap `Create
-list`; add three items, check one, reopen the app, and assert three items, one checked, zero
-Activities in the table and nothing on Today.
+A fourth flow, short and just as load-bearing, covers the user who wants no category:
+**a List that never links to anything.** From the Lists index choose `New list`, explicitly
+tap **Blank** (first in the catalogue but not preselected), enter `Bars to try`, and tap
+`Create list`; add three items, reopen the app, and assert three ordinary rows with no state
+control or empty feature chrome, zero Activities in the table and nothing on Today.
 
 A fifth, for the stage that did not exist before this phase: **a plan with no date.** Create
 `Poconos trip` as an `event` with no date, assert it appears under Needs a date and on no
@@ -2858,46 +3205,26 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 
 ---
 
-### P3-45 — The eleven missing catalogue icons
+### P3-46 — ~~The eleven missing catalogue icons~~ — already landed; no remaining work
 
-**Files.** `packages/ui/src/icons/index.tsx`.
-
-**What to build.** P3-02 shipped `packages/shared/src/lists/templates.ts` naming fifteen
-icons. **Four exist** — `bowl`, `check-square`, `map-pin`, `play-rect`. The other eleven do
-not: `bag`, `book`, `cart`, `cup`, `film`, `gift`, `glass`, `heart`, `list`, `star`,
-`suitcase`. Nothing has surfaced it because no screen renders a list card yet; P3-25 is the
-first and would fail on eleven of the seventeen templates.
-
-**Approach.** Draw the eleven to the registry's existing grammar: a `24 × 24` viewBox, the
-shared `stroke` constant (1.5 weight, round caps and joins), no fill, colour taken from the
-`color` prop. `CheckSquare`'s filled check is the documented exception and is not a licence
-for more. Each is exported by name and added to the same barrel as the rest.
-
-**Founder approval.** Given 2026-08-25. `plans-and-lists.md` §5.3 requires it — "a new
-template must reuse an icon already in `packages/ui/src/icons/` unless the founder approves a
-new one" — precisely so that adding a template does not quietly become a design task. It did
-here, once, and this closes it.
-
-**Edge cases.** Do not let a template share a glyph with another to avoid drawing one; the
-catalogue's seventeen entries are meant to be distinguishable at a glance in the style
-chooser. `list` is the `simple-list` glyph and must not be confused with `ListLines`, which is
-the Lists **tab** icon.
-
-**Tests.** A test asserting **every** `icon` value in `LIST_TEMPLATES` resolves to an exported
-component — the assertion that would have caught this at P3-02, and that keeps a
-seventeenth template honest. Render each at 24 and at 44 and assert a non-empty path set.
+The eleven-icon expansion is already present in the current code and its public exports remain
+to avoid an unrelated breaking removal. P3-33 replaces the old seventeen-style catalogue with
+seven creation types and owns any additional icon work those seven require. Its registry test
+asserts that every shipped catalogue icon resolves. There is no remaining P3-46 implementation
+branch; code comments may cite this id as the historical origin of the landed icons.
 
 ---
 
-### P3-46 — `List.lastItemActivityAt` and every writer that must bump it
+### P3-47 — `List.lastItemActivityAt` and every writer that must bump it
 
 **Files.** `packages/shared/src/types/list.ts`, `packages/shared/src/schemas/list.ts`,
 `services/api/src/repositories/listRepository.ts`, `listService.ts`, `listItemService.ts`.
 
 **What to build.** A second timestamp on `List`, per `data-model.md` §4.6. `updatedAt` backs
 `If-Match` and moves only when the List row itself changes; `lastItemActivityAt` moves when
-any **item** is created, edited, checked, deleted, reordered or touched by a bulk operation,
-and backs nothing. The Lists index renders the second (P3-25, `design-system.md` §7.2).
+any **item** is created, edited, state-changed, feature/sub-item-changed, deleted, reordered
+or touched by a bulk operation, and backs nothing. The Lists index renders the second (P3-25,
+`design-system.md` §7.2).
 
 **Why it is its own task.** Its four natural owners — P3-04, P3-05, P3-08, P3-10 — are all on
 `main`. This is forward work against shipped code, not an amendment to their text.
@@ -2914,10 +3241,12 @@ in `If-Match`: an ordinary item write would otherwise bump the concurrency token
 list-settings sheet is holding.
 
 **Edge cases.** A bulk operation bumps it once for the operation, not once per item. Undo of
-a bulk operation bumps it again — the list did change, twice. A behaviour migration is a
-list-level change and moves `updatedAt`, not this.
+a bulk operation bumps it again — the list did change, twice. P3-33's aggregate schema
+migration represents stored-shape conversion, not user item activity; it must not bump
+`lastItemActivityAt` merely for conversion.
 
-**Tests.** Checking an item moves `lastItemActivityAt` and leaves `updatedAt` untouched;
+**Tests.** Changing an item's intrinsic state moves `lastItemActivityAt` and leaves
+`updatedAt` untouched;
 renaming the list does the reverse. A `PATCH` carrying a stale `If-Match` still fails on
 `updatedAt` after an unrelated item write — the regression this split exists to prevent.
 `clear-checked` bumps once. Every item route is covered, because a missed writer is invisible
@@ -2925,7 +3254,7 @@ until a card silently goes stale.
 
 ---
 
-### P3-47 — The Upcoming/Past calendar navigator
+### P3-48 — The Upcoming/Past calendar navigator
 
 **Files.** `apps/mobile/src/features/plans/components/{CalendarNavigator.tsx, DayCell.tsx}`,
 `apps/mobile/src/features/plans/model/deriveCalendarCells.ts`.
@@ -2991,7 +3320,7 @@ never handed a network payload — its signature admits none. A render test that
 
 ---
 
-### P3-48 — Per-type row markers in `RowLeading`
+### P3-49 — Per-type row markers in `RowLeading`
 
 **Files.** `apps/mobile/src/features/agenda/components/RowLeading.tsx`.
 
@@ -3018,7 +3347,7 @@ rather than a marker. Snapshot both Today and Plans, since both consume this com
 
 ---
 
-### P3-49 — Clear `List.sourceActivityId` when its source Plan is deleted
+### P3-50 — Clear `List.sourceActivityId` when its source Plan is deleted
 
 **Files.** `services/api/src/repositories/listRepository.ts`,
 `services/api/src/services/activityService.ts`,
@@ -3050,16 +3379,16 @@ a transaction, and one re-sourced List must not cancel the other ninety-nine.
 
 **Edge cases.**
 
-- **The clear does not advance `List.updatedAt`, and that is load-bearing.** The
-  behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and
-  condition-checks it (P3-09). Advancing the version underneath an in-flight migration fails
-  that condition **permanently** — a retry re-reads the same stored value — leaving
-  `behaviourMigrationId` installed and every item read and mutation gated into `503` for ever.
+- **The clear does not advance `List.updatedAt`, and that is load-bearing.** P3-33's
+  stored-schema migration finisher pins `expectedUpdatedAt` in its durable work record and
+  condition-checks it. Advancing the version underneath an in-flight migration fails that
+  condition **permanently** — a retry re-reads the same stored value — leaving the migration
+  marker installed and every item read and mutation gated into `503` for ever.
   Bricking a list to freshen a version is the wrong trade. It is safe because
   `patchListMeta` is `SET` over named fields and never a whole-item `Put`, so no client holding
   a stale copy can write the attribute back; the worst case is one stale render until refetch.
 - **The clear is not gated on the migration or repair markers.** Removing an unrelated META
-  attribute leaves `updatedAt`, `rankVersion` and `behaviourMigrationId` untouched, so every
+  attribute leaves `updatedAt`, `rankVersion` and the active schema-migration marker untouched, so every
   in-flight condition still holds. Gating it would let a running migration block a Plan
   deletion and leave behind exactly the dangling link this task exists to remove.
 - A Plan with no sourced Lists does no extra reads and issues no writes.
@@ -3076,7 +3405,7 @@ deleted, and a condition failure is swallowed rather than raised.
 
 ---
 
-### P3-50 — A `Sheet`-owned present/dismiss animation, so web has one at all
+### P3-51 — A `Sheet`-owned present/dismiss animation, so web has one at all
 
 **Files.** `packages/ui/src/primitives/Sheet.tsx`, `packages/ui/src/primitives/Sheet.test.tsx`.
 
@@ -3119,36 +3448,37 @@ P3-26 still passes, which is what pins the accessibility fix in place.
 
 ## Acceptance criteria
 
-1. A list created from the `bars-to-try` template, filled with three items and never
-   scheduled, is a complete feature: three item rows, zero Activities, zero index entries,
-   nothing on Today, and nothing in the UI implying the items are pending.
-2. Adding a template is a config entry. Adding one fixture template to
-   `packages/shared/src/lists/templates.ts` makes it available in `GET /v1/list-templates`,
-   in the creation sheet and in creation, with **no** schema change, no migration and no new
-   branch anywhere — asserted by a test that adds one and exercises the whole path.
-3. **Every seeded field is copied, not referenced.** Create a list from the `groceries`
-   template, mutate its behaviour, capabilities, slot, icon and empty-state copy in the
-   running process, then re-read the List: every stored value is unchanged. `templateKey`
-   is provenance only, and no stored-List read path imports the catalogue.
-4. `POST /v1/lists/:id/behaviour` from `collection` to `watch` initialises `details` with
-   `watchStatus: 'want'` on every existing item and preserves titles and ranks; the client
-   applies that upgrade immediately with the returned settings-operation Undo and no
-   confirmation. A paused or crashed chunked migration leaves public META on the old
-   behaviour, gates every item read/mutation, and resumes to one target generation; the final
-   transaction advances `rankVersion`, so old item cursors receive `503`. Undo uses the
-   dedicated compensation endpoint and restores only unchanged upgrade defaults; it does not
-   attempt an ordinary destructive transition. Posting a `watch` list back to `collection`
-   **without** `confirmation` returns `409`, writes nothing, and names the behaviours,
-   `itemVersion`, fields lost and exact number of items affected; echoing that complete object
-   succeeds only while the shown snapshot is still current.
+1. A **Blank** List named `Bars to try`, filled with three items and never scheduled, is a
+   complete feature: three ordinary rows with no state control or empty feature chrome, zero
+   Activities, zero index entries, nothing on Today, and nothing implying the items are
+   pending.
+2. Adding a future creation type that composes existing state/features is a config entry.
+   Adding one fixture preset to `packages/shared/src/lists/templates.ts` makes it available
+   through `GET /v1/list-templates`, the creation sheet and creation with **no** schema change,
+   migration, renderer branch or Plan-kind inference — asserted across the whole path.
+3. **Every seeded field is copied, not referenced.** Create a List from `groceries`, mutate
+   that catalogue entry's state mode, feature configuration, slot, icon and empty-state copy
+   in the running process, then re-read the List: every stored value is unchanged.
+   `templateKey` is provenance only, and no stored-List read or item-render path imports the
+   catalogue.
+4. Seed legacy `collection`, `watch` and `meals` aggregates containing every state/detail
+   variant, live links/provenance, duplicate ranks and queued offline settings/item/bulk/
+   reorder writes. P3-33's resumable server converter and contiguous SQLite migration produce
+   the documented state plus typed-feature model without changing ids, user values, global
+   ranks, timestamps, slots, template provenance, links, revisions or idempotency identity.
+   Deterministic Sub-item ids prevent duplicates across interruption and a second migration.
+   Readers never expose a mixed generation; cutover invalidates an old item cursor exactly
+   once. The compatibility path drains legacy rows/intents before removal, and the final API
+   and UI contain no user-invokable behaviour transition, destructive preview or confirmation.
 5. Slot resolution behaves correctly in all four cases: one eligible list is used silently
    but still shown; several with a default use the default; several with none ask once and
    store the answer; none offers creation and writes nothing until confirmed. **Opening a
    list never changes the default** — verified by resolving, opening a different eligible
    list, and resolving again to the same answer.
-6. List creation shows the explicit template/style catalogue before the title field, starts
-   with no selection, and enables `Create list` only after a style tap and a non-empty visible
-   title. No `/v1/lists/suggest-template` route or title matcher exists.
+6. List creation shows, in exact order, Blank, Checklist, Groceries, Watch Later, Books to
+   Read, Places to Visit and Meal Ideas before the title field. Blank is first but nothing is
+   preselected; `Create list` becomes available only after a type tap and non-empty visible
+   title. No `/v1/lists/suggest-template` route, history ranking or title matcher exists.
 7. `Plan this item` for `Zahav` requires the fixed order Plan kind → audience → matching form,
     with neither of the first two choices pre-selected. Confirming an Event creates exactly one
     Activity and one caller `LNK#` row while leaving exactly one
@@ -3161,20 +3491,24 @@ P3-26 still passes, which is what pins the accessibility fix in place.
    hydrated Activity has `schedule.date`** renders a state line, with no colour change,
    strike-through or reorder; tapping the title opens item
    detail and tapping the state line opens an Activity the caller may read. That state line
-   does not suppress the item's provenance or location metadata.
+   does not suppress the item's intrinsic state, provenance or enabled Place metadata.
 9. The item title seeds the Plan title once. Editing either title or note afterwards leaves
    the other object byte-identical.
 10. Deleting the Activity deletes only matching `LNK#` pointers and leaves the item intact.
     Deleting the item clears every current pointer and each linked Activity's provenance;
     every Activity survives. Skipping clears the matching pointer, while unscheduling retains
     it without a state line; rescheduling makes that same link visible again.
-11. Completing a watch session at S2 E5 leaves the watch item at S2 E4 and returns an explicit
-    progress-update suggestion. Dismissal writes nothing; confirming advances it to S2 E5 and
-    may set `want → watching`. Completing a recurring watch occurrence writes only its
+11. Completing a Watch session at S2 E5 leaves the source item's structured Progress at S2 E4
+    and intrinsic state unchanged, then returns an explicit update suggestion. Dismissal
+    writes nothing; confirming advances Progress to S2 E5 and may set `open → active`.
+    Completing a recurring Watch occurrence writes only its
     `OCC#` row, leaves series META unchanged and returns no follow-up.
 12. The `Create a Plan for S2 E6?` follow-up creates nothing when dismissed and opens `Plan this item` —
     not an Activity — when tapped, verified by a table item count.
-13. Creating a meal with four ingredients writes zero list items. Tapping `Add 3 selected`
+13. Creating a Meal from a List item whose enabled Sub-items carry the explicit
+    `mealIngredients` integration copies those rows once; generic Sub-items with identical
+    labels do not. Creating a meal with four ingredients writes zero destination ListItems.
+    Tapping `Add 3 selected`
     and confirming the destination calls the activity-scoped ingredient action and writes
     exactly three, into the list the user confirmed,
     each with `sourceActivityId` and a `sourceLabel` of `Sunday dinner`. A valid maximum-length
@@ -3182,9 +3516,9 @@ P3-26 still passes, which is what pins the accessibility fix in place.
     preserves the full name and truncates only the quantity with an ellipsis. Ingredient
     selection is by stable `ing_` id, not array index; reorder before offline replay cannot
     redirect the action, and a deleted selected id rejects the whole write.
-14. Adding the same ingredient again while the existing row is unchecked extends its label to
+14. Adding the same ingredient again while the existing row is not `done` extends its label to
     `Sunday dinner · Thursday lunch` and creates no second row; doing it while the row is
-    checked creates a second row.
+    `done` creates a second row.
 15. Rescheduling the source meal does not change any existing item's label; deleting the meal
     leaves the items and their labels intact.
 16. Reordering a 200-item list changes exactly one logical ListItem, verified by a repository
@@ -3192,38 +3526,41 @@ P3-26 still passes, which is what pins the accessibility fix in place.
     ranked row, put the new ranked row, update its identity locator, and conditionally
     increment `META.rankVersion`. No other ListItem row is written. Concurrent allocation
     conflicts re-read neighbours and retry with a distinct rank. A reorder racing a title or
-    checked-state PATCH conditionally loses on `itemRevision`, refreshes, and preserves both
+    state PATCH conditionally loses on `itemRevision`, refreshes, and preserves both
     the field edit and requested move. Reordering remains available online; an offline drop springs back with
     `Reordering needs a connection.` and writes and enqueues nothing.
 17. Adding a 501st item to a list returns `400` with the message `List is full.`
-18. `checked: true` is rejected with `400` on a list whose `capabilities.checkable` is false
-    and accepted on the same **collection** after that capability is turned on. It is rejected
-    on `watch` and `meals` even when the flag remains stored. Counts, clear/uncheck endpoints
-    and UI controls use the same two-part gate. No endpoint, service or
-    component contains a list of "checkable kinds". The row renderer additionally requires
-    `behaviour: 'collection'`; `watch` and `meals` render no checkbox even if the stored flag
-    is true. Location rendering uses the parallel collection-plus-capability gate; retained
-    locations stay hidden on `watch` and `meals`.
+18. Item-state presentation is lossless and feature-driven. `none` hides the stored state;
+    `checkbox` renders only `done` as checked while `active` remains stored and unchecked;
+    checking writes `done`, and unchecking writes `open`. `stages` uses the configured labels;
+    grouping hides empty headings, and drag never changes state. Disabling Progress, Place or
+    Sub-items hides its editor/summary and excludes it from adapters while retaining values
+    byte-identically for re-enable. Generic Sub-items can render `Materials · Quantity` or
+    `Stops · Duration` through the same bounded CRUD/rank path as `Ingredients · Quantity`;
+    labels do not grant Meal semantics. No renderer, endpoint or service branches on a legacy
+    behaviour or creation type.
 19. `Clear checked (7)` deletes seven items with **no confirmation dialog** and shows a
     10-second undo toast. Undo may be initiated only while that toast is offered; once accepted,
     its durable inverse restores all seven even if offline replay reaches the server after
     `undoExpiresAt`, with their
-    original ids, previous ranks, live links and Activity provenance. Normal create cannot
+    original ids, previous ranks, intrinsic states, live links and Activity provenance. Normal create cannot
     bypass their tombstones. `Uncheck all` also shows a 10-second Undo; compensation rechecks
     exactly the affected items that still exist. If no Undo is initiated before the UI window
     closes, the operation is permanent; an already accepted inverse is never discarded for
-    crossing that presentation deadline.
+    crossing that presentation deadline. In checkbox mode `Uncheck all` means `done → open`;
+    its accepted inverse restores exactly the affected items to `done`.
 20. A prep task created inside a plan appears on Today on its own date with the plan's title
     as its subtitle, and deleting the plan leaves it as an ordinary task with its schedule
     intact.
 21. Creating a prep task on a prep task returns `400`. A Plan accepts at most 50 prep tasks;
     the 51st returns `400` with `Plan has too many prep tasks.` and no write. The complete set
     and exact done/open counts come from one `Limit: 50` `SUB#` Query, never `queryAll`.
-22. Creating an `event` writes zero lists; confirming `Packing` in the suggestion
-    sheet writes exactly one, with `behaviour: 'collection'`, `slot: null` and an id-only
+22. Creating an `event` writes zero Lists; confirming `Checklist` in the suggestion sheet
+    writes exactly one, with the Checklist's resolved state/feature configuration copied, no
+    `behaviour`, `slot: null` and an id-only
     `SOURCE_LIST#` projection; deleting the plan removes that projection and leaves the list
-    and its items with `sourceActivityId` cleared (the creation half is §P3-38, the deletion
-    half §P3-49).
+    and its items with `sourceActivityId` cleared (the creation half is §P3-39, the deletion
+    half §P3-50).
 23. A presigned upload URL rejects a different `Content-Type` than declared, rejects a body
     over the declared length, and is unusable after five minutes.
 24. An uploaded image round-trips through the local store: the presigned `PUT` succeeds, the
@@ -3235,7 +3572,7 @@ P3-26 still passes, which is what pins the accessibility fix in place.
     renders it as the hero.
 26. The three worked examples in
     [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §9 pass as
-    executable E2E flows, step for step, alongside the unlinked-list flow in P3-44.
+    executable E2E flows, step for step, alongside the unlinked-list flow in P3-45.
 27. The canonical list is `LIST#<l>` / `META` and the `USER#<u>` / `LIST#<l>` row carries
     `role` and `addedAt` and nothing else — asserted by reading both items after creation and
     comparing the pointer's attribute set to a checked-in literal list.
@@ -3280,10 +3617,11 @@ P3-26 still passes, which is what pins the accessibility fix in place.
     hydration are bounded to each page. No repository path queries or serialises the whole
     List partition, and the server-side `itemCount` remains 500 throughout pagination. A
     repair/migration marker or a version change between the strong pre-read, strongly
-    consistent item Query and strong post-read returns no item page; after repair or behaviour
-    migration, a cursor bound to the prior `rankVersion` receives `503` and the client restarts
+    consistent item Query and strong post-read returns no item page; after repair or P3-33's
+    stored-schema migration, a cursor bound to the prior `rankVersion` receives `503` and the client restarts
     from page one without omissions or duplicates.
-37. Follow-up selection covers the full §5.3 catalogue: a movie offers the watched update;
+37. Follow-up selection covers the full §5.3 catalogue: a Watch item without episode Progress
+    offers an explicit `done` update only when its List exposes state;
     a completion with incomplete one-off prep and any other qualifying row offers only the
     counted prep question; Complete all/Delete affect only those one-off ids while recurring
     prep tasks remain untouched; and a recurring parent occurrence offers nothing even when
@@ -3302,7 +3640,7 @@ P3-26 still passes, which is what pins the accessibility fix in place.
 | RSVP summaries with real people or date suggestions on the needs-a-date row. The grouped fields ship here with zero counts, empty names and `suggestionCount: 0`. | Phase 6 |
 | Sub-lists, tags, labels | Not in v1 at all |
 | **User-authored** list templates — the catalogue ships with the app | Not in v1 at all |
-| A fourth list behaviour. Templates are unbounded and free to add; behaviours are not | Needs a product decision (ADR-031) |
+| Arbitrary user-authored fields, schemas or multiple/nested Sub-item collections | Not in v1; new typed features require an explicit product/domain decision |
 | Full link history between a list item and every activity derived from it | Not in v1 (ADR-034) |
 | Any template suggester, whether model, heuristic or title matcher | Not in v1 at all; the user chooses from the catalogue |
 | Nutrition, macros, recipe steps, scaling, servings | Not in v1 at all |
@@ -3320,26 +3658,26 @@ P3-26 still passes, which is what pins the accessibility fix in place.
 | Delete Undo is routed through ordinary create or hard-expires at the toast deadline | Every Undo fails on `ITEM_TOMBSTONE#`, weakening the tombstone lets a delayed create resurrect deleted data, or an accepted offline inverse is rejected before replay | Only the opaque, retained and unused `UNDO#` operation may restore the same ids and delete matching tombstones. The UI deadline controls whether a new inverse may be accepted; replay retention controls how long an accepted inverse can arrive. Criterion 19 tests normal-create rejection, exact restoration after the UI deadline, retention expiry and token mismatch. |
 | Related Lists are discovered with a scan or one read per List | Plan detail slows with table size, or Plan deletion leaves stale `sourceActivityId` values | List creation transactionally writes id-only `SOURCE_LIST#` projections. Access pattern 4 uses a bounded `SOURCE_LIST#` prefix Query plus one bounded BatchGet; Plan deletion uses the same ids. |
 | Prep tasks are cascade-deleted with their parent by pattern-matching the `PART#`/`EXP#` cascade | Real to-dos vanish when a trip is cancelled | P3-18's explicit test, and a comment at the cascade site naming the exception. |
-| Provenance is implemented as a viewer link | Checking off `Chicken` marks the meal as cooked, or deleting the meal deletes the groceries | §6.5 is a separate test group; `sourceActivityId` records origin while `LNK#` is caller-scoped Plan navigation, with deliberately different behaviour. |
+| Provenance is implemented as a viewer link | Marking `Chicken` done marks the meal as cooked, or deleting the meal deletes the groceries | §6.5 is a separate test group; `sourceActivityId` records origin while `LNK#` is caller-scoped Plan navigation, with deliberately different lifecycle semantics. |
 | The provenance label is recomputed on read | Labels change after a meal is rescheduled and become lies after it is deleted | Computed once at creation and stored; acceptance criterion 15. |
 | Ingredients are added to a list automatically | The user's shopping list fills with things they did not ask for, or lands somewhere they did not choose | Acceptance criterion 13 asserts zero writes before the tap and that the destination is confirmed. This is the "suggest, never auto-create" rule and it has a test. |
 | Reordering renumbers the list | A 400-item list write on every drag | `lexoRankBetween` plus acceptance criterion 16's one-logical-item assertion. |
 | **The list is stored in the owner's partition** with a mirror at `LIST#`, which is the obvious layout and the wrong one | It works perfectly for one user. Phase 6 then needs a migration, and every rename becomes one write per member | The canonical row is `LIST#<l>` / `META` from the first line of P3-04, the pointer carries `role` and `addedAt` only, and acceptance criteria 27 and 28 assert both. ADR-041 and ADR-042 record why. |
 | A denormalised `title` or `itemCount` is added to the `USER#` pointer "to save a `BatchGetItem`" | Renaming a shared list becomes one write per member, and a grocery list two people are ticking generates fan-out writes per tick | Acceptance criterion 27 compares the pointer's attributes to a literal list and fails on any addition. The one saved call is a `BatchGetItem` over at most 100 keys. |
 | A list-item comparator sorts on `rank` alone, or a reader treats that comparator as permission to expose repair-pending rows | Two devices show two orders for an Undo-restored, legacy or seeded duplicate rank, or one client receives pages from two rank generations — so it is discovered by a user, not a test | One exported `compareListItems`, the `(rank, itemId)` pair, acceptance criterion 29 and the defensive-order test in P3-03. New allocation separately serialises on `rankVersion`; strong pre/post META fences around the strongly consistent Query reject either work marker or a changed version. |
-| Reorder serialises only rank allocation | A concurrent title/check edit commits and is then replaced by the stale full item image moved to its new key | Ranked row and locator share `itemRevision`; both reorder and field PATCH advance it conditionally, and retry applies the move to refreshed truth. Criterion 16 races both orderings. |
-| Behaviour META changes before chunked item conversion finishes | A crash leaves half the list invalid under its advertised behaviour | `behaviourMigrationId` gates every item read/mutation while the stable snapshot is transformed; only the final transaction flips behaviour and advances `rankVersion`. Criterion 4 pauses every chunk. |
+| Reorder serialises only rank allocation | A concurrent title/state/feature edit commits and is then replaced by the stale full item image moved to its new key | Ranked row and locator share `itemRevision`; both reorder and field PATCH advance it conditionally, and retry applies the move to refreshed truth. Criterion 16 races both orderings. |
+| Schema META changes before chunked aggregate conversion finishes | A crash exposes half the List in the legacy shape and half in the new state/feature shape | P3-33's schema-migration marker gates every item read/mutation while the stable snapshot is transformed; only the final transaction exposes the new shape and advances `rankVersion`. Criterion 4 pauses every chunk. |
 | Plans filters dated or recurring Tasks out of shared `#S`/`#R` buckets | Rows already visible in the shipped Phase 2 Plans tab disappear, contradicting the product's dated-Activity stages | P3-20 applies no Task discriminator to `#S` or `#R`; criterion 30 seeds Tasks on bucket/page and timezone boundaries and requires them exactly once. |
 | The bridge implements only its three core rows | A reminder selected offline is dropped or comes back with a different identity | Bridge reminder input requires the locally persisted `reminderId`, and P3-13 extends the ordinary durable Activity-create transaction with one caller `REM#` per supplied id. |
-| The Needs-a-date stage grows a stage count, a badge or an age sort | Plans becomes the backlog the stage was designed not to be | The endpoint returns no stage total to badge (P3-20), the client re-sorts nothing (P3-35), and both a schema-shape test and a directory grep test enforce it. |
+| The Needs-a-date stage grows a stage count, a badge or an age sort | Plans becomes the backlog the stage was designed not to be | The endpoint returns no stage total to badge (P3-20), the client re-sorts nothing (P3-36), and both a schema-shape test and a directory grep test enforce it. |
 | Completion mutates watch progress or recurring series META | A session advances its source list without consent, or one occurrence completes every future occurrence | Non-recurring completion returns a suggestion only; recurring completion requires `occurrenceDate`, writes `OCC#` only and returns none. Acceptance criterion 11 covers both. |
 | Prep `Complete all` includes a recurring child without an occurrence selection | The request either fails or guesses which occurrence happened | `SUB#` mirrors `isRecurring`; the counted prompt and both bulk actions include incomplete one-off children only. Recurring prep tasks remain untouched. |
 | A template is resolved at read time instead of copied at creation | A shipped change to the catalogue silently alters a list the user is standing in a shop reading | Acceptance criterion 3 mutates a template and asserts an existing list is unaffected. The catalogue module is importable only by creation services, the templates route, and creation-choice projections—never a stored-List read path or renderer. |
-| The three behaviours grow back into eight kinds under another name | A `templateKey` comparison appears in a renderer, service or creation-target map | Plan kind is never derived from a list; the item renderer is one component (P3-28) with a CI grep asserting it holds no template key. The test for a fourth behaviour is in ADR-031. |
-| A destructive behaviour change ships without the confirmation | A user turns a watch list into a checklist and loses season, episode and status on every item with no warning | Acceptance criterion 4: the unconfirmed call `409`s and writes nothing, and the dialog renders the server's own field list and item count (P3-32). |
+| Creation types grow back into domain kinds | A `templateKey` comparison appears in a renderer, service, adapter or creation-target map | Plan kind is never derived from a List; one item shell dispatches only on enabled typed features, and the P3-33 grep/test rejects template-driven branches. |
+| A setting hides data by deleting it | Switching Watch Later to checkboxes erases `active`, or disabling Progress/Place/Sub-items erases values | Mode/feature settings alter exposure only. Acceptance criterion 18 disables and re-enables every feature and compares retained values byte-for-byte; no destructive dialog exists. |
 | The ingredients flow hard-codes "the Groceries list" | The first user with two shopping lists has items land in the wrong one, or the flow breaks when the list is renamed | One `resolveSlot` implementation (P3-12), used by every add-to flow, with the destination always shown before the write. |
 | Most-recently-used creeps back in as a convenience | Opening a list to check something silently redirects tomorrow's ingredients | ADR-033 rejects it explicitly; acceptance criterion 5 opens a list between two resolutions and asserts the answer is unchanged. |
-| A title matcher or default style is reintroduced | `Costco run` silently becomes Groceries while an ambiguous title becomes the `Blank` / `simple-list` style, so the words—not the user's tap—choose structure | P3-07 accepts no title, P3-26 starts with no selection, and criterion 6 asserts the suggestion route and symbol do not exist. |
+| A title matcher or default type is reintroduced | `Costco run` silently becomes Groceries while an ambiguous title silently becomes Blank, so the words—not the user's tap—choose structure | P3-07 accepts no title, P3-33 starts with no selection, and criterion 6 asserts the suggestion route and symbol do not exist. |
 | An attachment upload path that goes through Lambda | 6 MB payload failures and burnt duration | Presigned `PUT` only; the API never touches image bytes. |
 | The media bucket is made public "to make the images load" | Every user's images are world-readable by URL | Block Public Access on all four settings with a CDK assertion test (P0-26), since MinIO cannot catch this. The deployed check that a direct S3 `GET` returns `403` is Phase 5. |
 | MinIO is treated as "close enough" and the S3 client grows a local branch | An `if (STAGE === 'local')` in the attachment path, and the deployed path is first executed in Phase 4 having never run | Endpoint and path style are read from `S3_ENDPOINT` in `lib/s3.ts` and nowhere else, exactly as `DDB_ENDPOINT` is read in `lib/ddb.ts`. A review that finds a stage check in a route, service or repository rejects the pull request. |

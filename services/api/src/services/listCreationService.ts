@@ -115,7 +115,7 @@ export async function createListFromTemplate(
     archived: false,
     updatedAt: instant.parse(now),
     /**
-     * Seeded equal to `createdAt` (P3-46). A brand-new list has had no item written to it, so
+     * Seeded equal to `createdAt` (P3-47). A brand-new list has had no item written to it, so
      * the honest answer to "when was this last used" is "when it was made" — and the Lists
      * index renders this field, so leaving it to the first item write would give a fresh card
      * nothing to say.

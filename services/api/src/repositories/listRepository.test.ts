@@ -435,7 +435,7 @@ describe('the bulk checked operations', () => {
     expect(meta?.ExpressionAttributeValues).toMatchObject({
       ':delta': -2,
       ':itemVersionIncrement': 1,
-      // The operation's own instant, one value for every chunk of it (P3-46).
+      // The operation's own instant, one value for every chunk of it (P3-47).
       ':lastItemActivityAt': LATER,
     });
   });
@@ -1377,7 +1377,7 @@ describe('rank allocation and item mutations', () => {
         'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
       ExpressionAttributeValues: {
         ':itemVersionIncrement': 1,
-        // Editing a note moves no counter, and still counts as using the list (P3-46).
+        // Editing a note moves no counter, and still counts as using the list (P3-47).
         ':lastItemActivityAt': LATER,
       },
     });
@@ -1962,7 +1962,7 @@ describe('the composable list-write primitives', () => {
 });
 
 /**
- * The Plan-side half of the source-List link (P3-49).
+ * The Plan-side half of the source-List link (P3-50).
  *
  * The integration suite proves the cascade clears the right Lists. What belongs here is the
  * shape of the one write it issues: which condition it carries, and what it deliberately does

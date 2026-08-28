@@ -10,7 +10,7 @@ import { NewListSheet } from '@/features/lists/components/NewListSheet';
  * invalidated the index query.
  *
  * The sheet itself takes `open`/`onClose`/`onCreated` rather than reaching for the router,
- * because P3-27's no-destination flow and P3-38's `Add list` open the same component from
+ * because P3-27's no-destination flow and P3-39's `Add list` open the same component from
  * inside their own surfaces, where there is no route to go back from.
  */
 export default function NewListRoute() {

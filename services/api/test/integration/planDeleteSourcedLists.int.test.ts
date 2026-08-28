@@ -6,7 +6,7 @@ import { documents, TEST_TABLE, useTestTable } from './harness.js';
 useTestTable();
 
 /**
- * Deleting a Plan that sourced Lists, against DynamoDB Local (§P3-49).
+ * Deleting a Plan that sourced Lists, against DynamoDB Local (§P3-50).
  *
  * The property is a two-way link staying symmetric across a destructive write. The List half
  * already shipped — deleting a List removes its `SOURCE_LIST#` projection — and the Plan half

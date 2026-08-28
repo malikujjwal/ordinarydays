@@ -958,7 +958,7 @@ describe('prep-task pointer and parent counter', () => {
     expect(counter?.ExpressionAttributeNames).not.toHaveProperty('#updatedAt');
   });
 
-  /** The bit P3-43 counts by, so a follow-up never has to guess a child's occurrence. */
+  /** The bit P3-44 counts by, so a follow-up never has to guess a child's occurrence. */
   it('records a recurring child on the pointer at create', async () => {
     await createActivity(
       ALICE,

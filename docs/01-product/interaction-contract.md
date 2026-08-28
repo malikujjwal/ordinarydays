@@ -611,7 +611,7 @@ not obvious from the label.
 
 > **The `watch` row's state line is its own element** — corrected 2026-08-28 (founder), on the
 > discrepancy raised in P3-28's PR. That row used to fold `next session Friday 8:00 PM` into the
-> body label while the two rows above it made the state line a separate element, and P3-34
+> body label while the two rows above it made the state line a separate element, and P3-35
 > requires "two separate accessibility elements" because the two targets go to two different
 > screens: the body opens the item, the state line opens the Activity. One label carrying both
 > would announce the session twice and offer only one destination. The split above is the rule

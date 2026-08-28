@@ -142,7 +142,7 @@ export function ingredientCount(item: ListItemView): string | undefined {
  * rescheduled. So the question this answers is structural — *is there a hydrated Activity with
  * a date behind this row* — and it is the row's to answer.
  *
- * What the line then **says** is P3-34's: the verb per `status` and Plan kind, the relative
+ * What the line then **says** is P3-35's: the verb per `status` and Plan kind, the relative
  * date format, and the `Cancelled` arm that has no date to show. Splitting it here keeps the
  * product rule that governs visibility in the component that owns the layout, and the wording
  * in the task that owns the wording.

@@ -371,7 +371,7 @@ export async function scheduleActivity(
  * The one-line record of what just happened to this plan's schedule, or `undefined`.
  *
  * Copy is deliberately the plain past tense the feed reads in — `plans-and-lists.md` §2.1 row
- * 9 specifies that these entries exist and P3-39 renders them without an author, but neither
+ * 9 specifies that these entries exist and P3-40 renders them without an author, but neither
  * fixes the wording, so it is settled here and named in the PR. Dates are the stored wall
  * clock, not a localisation: the feed is a record, and a record of "8 PM" that renders as
  * "20:00" to the next reader has changed what it says.

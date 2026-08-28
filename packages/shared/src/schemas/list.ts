@@ -123,7 +123,7 @@ export const list = z
     archived: z.boolean(),
     updatedAt: instant,
     /**
-     * Required, and deliberately not `.optional()` (P3-46). Nothing is deployed, so there is
+     * Required, and deliberately not `.optional()` (P3-47). Nothing is deployed, so there is
      * no row without it — and an optional branch here would be a permanent `?? updatedAt`
      * fallback in every reader, which is exactly the display/precondition confusion the two
      * fields exist to end.
@@ -463,7 +463,7 @@ export const listItemView = listItem
   .meta({ id: 'ListItemView' });
 
 /**
- * The caller's linked Plan, trimmed to what a list row can say about it (P3-15, P3-34).
+ * The caller's linked Plan, trimmed to what a list row can say about it (P3-15, P3-35).
  *
  * **Deliberately not the Activity.** A list row renders one line — `Planned Saturday · 7 PM`,
  * `Next session Friday · 8 PM`, `Done Saturday` — and shipping the whole Activity to draw it
@@ -855,7 +855,7 @@ export const scheduledListItem = z
  * `listId` is required and is never inferred. §P3-17: "There is no 'the Groceries list' —
  * there is whichever `collection` the user's `groceries` slot resolves to under P3-12."
  * Resolution is a **client-side read** over the Lists projection, and the destination is
- * visible before the write (P3-42). By the time this request exists the user has seen the
+ * visible before the write (P3-43). By the time this request exists the user has seen the
  * name of the list they are writing to, so the server takes it verbatim and checks they may
  * write it; it does not resolve a slot, and it does not fall back to one if the id is bad.
  *

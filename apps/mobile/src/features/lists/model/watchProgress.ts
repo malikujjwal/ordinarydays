@@ -9,10 +9,10 @@ import { watchStatusOf } from './watchSections';
  * ([`plans-and-lists.md`](../../../../../docs/01-product/plans-and-lists.md) §8.4, §8.1;
  * §P3-16, §P3-31).
  *
- * ## This is the mutation; P3-43 is the question
+ * ## This is the mutation; P3-44 is the question
  *
  * §8.4 step 2 is offered in the confirmation slot, and that slot — its copy, its dismiss
- * control, its placement — is P3-43's. What lives here is what happens **after** the tap:
+ * control, its placement — is P3-44's. What lives here is what happens **after** the tap:
  * `PATCH /v1/lists/:id/items/:itemId`, once, through the route that already enforces every
  * behaviour and field gate. There is no confirm endpoint and no server-side accept
  * (`interaction-contract.md` §1a.2), and **dismissal calls nothing at all** — it is the absence
@@ -21,7 +21,7 @@ import { watchStatusOf } from './watchSections';
  * ## Typed from the server's payload, so nothing is re-derived
  *
  * The input is `CompletionFollowUp` itself — the object `POST /v1/activities/:id/complete`
- * returned. P3-43 hands that back untouched and receives a body; it never picks fields out of
+ * returned. P3-44 hands that back untouched and receives a body; it never picks fields out of
  * it, because picking fields out of it is where `mediaKind` and the arm come to disagree
  * (§P3-16's note on why there are two arms). `details` is a whole replacement on the wire, and
  * assembling that replacement correctly — preserving what the session says nothing about — is
@@ -73,7 +73,7 @@ function watchDetails(fields: {
  *
  * One `PATCH`, one field, and the arm decides what goes in it. Nothing here reads the item: the
  * payload already carries where the item is (`current`) and what the session did (`target`),
- * which is what lets P3-43 confirm without a second read and what stops a stale row on screen
+ * which is what lets P3-44 confirm without a second read and what stops a stale row on screen
  * from writing a status nobody chose.
  */
 export function followUpItemPatch(followUp: CompletionFollowUp): PatchListItemInput {

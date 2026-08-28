@@ -69,7 +69,7 @@ export function listSwipeActions(role: ListRowRole): readonly ListSwipeAction[] 
  * does. `Delete` is destructive and never commits on a swipe.
  *
  * A watch row's other §3.2 columns are not this task's: swipe **right** is `Plan this item`
- * (P3-33), and the row body opens the item sheet (P3-29).
+ * (P3-34), and the row body opens the item sheet (P3-29).
  */
 export function watchItemSwipeActions(): readonly ListSwipeAction[] {
   return [MARK_WATCHED, DELETE];

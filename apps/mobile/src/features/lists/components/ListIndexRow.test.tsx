@@ -108,7 +108,7 @@ describe('the updated line', () => {
   });
 
   /**
-   * The P3-46 distinction, asserted as a difference rather than as a value. `updatedAt` moves
+   * The P3-47 distinction, asserted as a difference rather than as a value. `updatedAt` moves
    * on a rename and not on checking an item, so a card using it would say `Updated today`
    * because someone renamed the list — backwards from what the line means.
    */

@@ -619,7 +619,7 @@ third level returns `validation_failed`, and so does a `PATCH` that would assemb
 > (`parentActivityId` set **to the plan**), the Cap row (**per Plan**), §P3-18 ("A Plan has at
 > most 50 prep tasks") and the code, which has refused a parent that itself has a parent since
 > Phase 1. It also described something no screen can show: the PREP section belongs to plan
-> detail (§P3-37), and Task detail has no PREP section at all
+> detail (§P3-38), and Task detail has no PREP section at all
 > ([`today-and-tasks.md`](today-and-tasks.md#56-task-detail) §5.6). Read as: **a prep task's
 > parent is always a Plan**, which is what everything else in this document already said. A
 > `parentActivityId` naming a Task is `validation_failed` with `A prep task belongs to a plan.`

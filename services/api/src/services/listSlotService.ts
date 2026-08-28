@@ -8,7 +8,7 @@ import { getProfile } from '../repositories/userRepository.js';
  *
  * Three flows add items to a list the user did not open first — ingredients from a meal
  * (P3-17), episodes from a watch item, and the destination sheet the client renders before
- * either (P3-42). All three ask the same question, so they ask it here, and the rule itself
+ * either (P3-43). All three ask the same question, so they ask it here, and the rule itself
  * is the one pure `resolveSlot` in `@od/shared/lists` that the app also calls. §P3-12's whole
  * point is that exactly one implementation exists: "a second copy in the ingredients path is
  * how the two drift".

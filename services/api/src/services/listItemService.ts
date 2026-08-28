@@ -815,7 +815,7 @@ export async function hydrateViewerLinks(
     /**
      * The pointer and the Plan it resolved to travel together, or neither does. The batch
      * already holds the Activity — this is what it was read for — so the row can say whether
-     * the Plan is scheduled, unscheduled or done rather than only that one exists (P3-34).
+     * the Plan is scheduled, unscheduled or done rather than only that one exists (P3-35).
      */
     const viewerPlan = toPlanState(joined.plan);
     if (viewerPlan === undefined) return { item };
@@ -827,7 +827,7 @@ export async function hydrateViewerLinks(
 }
 
 /**
- * The three fields a list row can say about a Plan, and no more (P3-15, P3-34). The Activity's
+ * The three fields a list row can say about a Plan, and no more (P3-15, P3-35). The Activity's
  * id is not among them: it is on the `viewerLink` this always travels with.
  *
  * Trimmed here rather than at the handler because the trim is a **contract** decision, not a

@@ -655,7 +655,7 @@ const watchFollowUpItem = {
  * `Update to ?` renders nothing a user can answer, and a client building the confirming
  * `PATCH` from `{}` sends a `details` body that changes only `watchStatus`, quietly turning
  * the progress row into a status write nobody asked for. The service already declines to
- * emit one; this is what stops the contract from describing it as legal (P3-43).
+ * emit one; this is what stops the contract from describing it as legal (P3-44).
  *
  * Read as: season with an optional episode, or an episode on its own. `{ season, episode }`,
  * `{ season }` and `{ episode }` all pass; `{}` matches neither arm.
@@ -666,7 +666,7 @@ const watchProgressTarget = z.union([
 ]);
 
 /**
- * The **one** contextual follow-up a completion may offer (P3-16, for P3-24 and P3-43).
+ * The **one** contextual follow-up a completion may offer (P3-16, for P3-24 and P3-44).
  *
  * ## It is data, and only data
  *

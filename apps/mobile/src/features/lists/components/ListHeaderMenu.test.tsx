@@ -21,7 +21,7 @@ const list = (overrides: Partial<List> = {}): List => ({
   rankVersion: 0,
   archived: false,
   updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
-  // Later than `updatedAt`: the list was renamed, then used (P3-46).
+  // Later than `updatedAt`: the list was renamed, then used (P3-47).
   lastItemActivityAt: instant.parse('2026-08-25T18:30:00.000Z'),
   ...overrides,
 });

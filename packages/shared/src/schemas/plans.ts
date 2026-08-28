@@ -136,7 +136,7 @@ export const rsvpSummary = z
  *
  * `lastActivityAt` is not decoration. `#P` sorts on it and GSI1 is eventually consistent, so a
  * client that refetched after posting an update could read a projection older than its own
- * mutation response; carrying the value lets P3-35 merge it monotonically.
+ * mutation response; carrying the value lets P3-36 merge it monotonically.
  */
 export const needsDateItem = agendaItem
   .extend({

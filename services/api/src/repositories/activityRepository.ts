@@ -1626,7 +1626,7 @@ export interface PrepTaskPointer {
  *
  * **Strongly consistent**, because both named consumers act on what they read. Plan detail's
  * `3 of 5 done` is composed inside an authoritative read (pattern 4), and the completion
- * follow-up (P3-43) counts children immediately after a write that may have changed one of
+ * follow-up (P3-44) counts children immediately after a write that may have changed one of
  * these very pointers. An eventually consistent page would show the user a ratio that
  * disagrees with the rows underneath it.
  *

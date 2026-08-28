@@ -164,7 +164,7 @@ const storedList = {
   rankVersion: 0,
   archived: false,
   updatedAt: '2026-08-23T00:00:00.000Z',
-  /** Later than `updatedAt`: the list was renamed, then used (P3-46). */
+  /** Later than `updatedAt`: the list was renamed, then used (P3-47). */
   lastItemActivityAt: '2026-08-24T18:30:00.000Z',
 } as const;
 

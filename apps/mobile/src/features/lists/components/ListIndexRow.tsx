@@ -33,7 +33,7 @@ import { updatedLine } from '../model/updatedLine';
  * are frozen at creation precisely so it cannot.
  *
  * A stored icon with no glyph falls back to `list` rather than rendering an empty square.
- * P3-45 closed the eleven-glyph gap and `templateIcons.test.ts` keeps the registry total, so
+ * P3-46 closed the eleven-glyph gap and `templateIcons.test.ts` keeps the registry total, so
  * this branch should be unreachable — it exists because a blank tile is the kind of bug that
  * gets shrugged at instead of diagnosed, and a generic list marker is not.
  *
@@ -67,7 +67,7 @@ export function ListIndexRow({
     templateIcons[list.icon as keyof typeof templateIcons] ?? templateIcons.list;
   const count = countLine(list);
   const progress = checkedProgress(list);
-  // `lastItemActivityAt`, never `updatedAt`. The distinction is the whole of P3-46 and the
+  // `lastItemActivityAt`, never `updatedAt`. The distinction is the whole of P3-47 and the
   // reason the field exists; `model/updatedLine.ts` records why using the other reads backwards.
   const updated = updatedLine(list.lastItemActivityAt, now, timezone);
 

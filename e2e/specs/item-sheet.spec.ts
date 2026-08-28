@@ -60,7 +60,7 @@ async function createItem(
 /**
  * `Plan this item`, as the API sees it.
  *
- * Driven through the API rather than the UI because that flow's sheet is P3-33's and is
+ * Driven through the API rather than the UI because that flow's sheet is P3-34's and is
  * deliberately absent from this build. Every explicit choice the route requires is supplied
  * here — the Plan kind and the audience — because the client is forbidden from defaulting
  * either, and a helper that filled them in would be modelling the bug.

@@ -5,7 +5,7 @@ import type { IconProps } from './index';
 import * as icons from './index';
 
 /**
- * The icon registry's grammar, and the eleven catalogue glyphs P3-45 added to it.
+ * The icon registry's grammar, and the eleven catalogue glyphs P3-46 added to it.
  *
  * ## Why the shapes are inspected rather than snapshotted
  *
@@ -57,7 +57,7 @@ const allIcons = Object.entries(icons).filter(
   (entry): entry is [string, IconComponent] => typeof entry[1] === 'function',
 );
 
-/** The eleven P3-45 drew, named so a removal fails here rather than at a call site. */
+/** The eleven P3-46 drew, named so a removal fails here rather than at a call site. */
 const CATALOGUE_GLYPHS = [
   'Bag',
   'Book',
@@ -83,7 +83,7 @@ describe('the eleven catalogue glyphs exist', () => {
 
   /**
    * `list` is the `simple-list` glyph. `ListLines` is the Lists **tab** — three lines with
-   * leading dots — and P3-45's edge case names confusing the two as the failure to avoid.
+   * leading dots — and P3-46's edge case names confusing the two as the failure to avoid.
    */
   it('draws List and ListLines differently', () => {
     // By geometry, not by element name: the stub's exports are anonymous, so `kind` is empty
@@ -141,7 +141,7 @@ describe('the registry grammar (design-system.md §5.4)', () => {
 /**
  * **No glyph borrows another's shape.**
  *
- * P3-45's edge case: the catalogue's seventeen entries are meant to be tellable apart at a
+ * P3-46's edge case: the catalogue's seventeen entries are meant to be tellable apart at a
  * glance in the style chooser, so a template must not share a glyph with another to avoid
  * drawing one. Two icons with identical geometry is exactly what that looks like in code,
  * and it is the shortcut a future task under time pressure would take.

@@ -69,7 +69,7 @@ import { openInMaps } from '../model/openInMaps';
  *
  * ## Two §5.6 actions are missing on purpose
  *
- * `Plan this item` arrives with P3-33 and `Add ingredients to…` with P3-42. Both are **absent**
+ * `Plan this item` arrives with P3-34 and `Add ingredients to…` with P3-43. Both are **absent**
  * rather than disabled: a control that names a flow the build does not have is a promise, and
  * §5.6 offers actions when they can be taken.
  *
@@ -503,7 +503,7 @@ export function ItemSheet({
               </View>
               <IconButton
                 /* `Close` rather than a bin: the package has no trash glyph, and drawing one
-                   is `ui` work with its own task (P3-45's shape). The label carries the verb. */
+                   is `ui` work with its own task (P3-46's shape). The label carries the verb. */
                 icon={Close}
                 label={`Remove ${ingredient.name === '' ? 'ingredient' : ingredient.name}`}
                 onPress={() =>

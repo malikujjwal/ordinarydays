@@ -785,7 +785,7 @@ describe('a full page of linked items reads in bounded batches', () => {
  * The state line's data, and the assertion the projection lacked (P3-15, raised in review).
  *
  * Every earlier projection test asserted `viewerLink.activityId` — that a link exists. None
- * proved a row could tell **which** state the Plan is in, which is the whole of P3-34: a
+ * proved a row could tell **which** state the Plan is in, which is the whole of P3-35: a
  * scheduled Plan and the same Plan after unscheduling produced identical responses.
  */
 describe('the caller’s Plan state reaches the row', () => {

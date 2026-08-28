@@ -57,7 +57,7 @@ export interface NewListSheetProps {
    * The list that was made, by id.
    *
    * P3-27's no-destination flow (§5.4 rule 5) returns to the ListItem form with this list
-   * visibly selected, and P3-38 opens the same sheet from a Plan. Both need the identity the
+   * visibly selected, and P3-39 opens the same sheet from a Plan. Both need the identity the
    * moment it exists, which on native is before the server has seen it.
    */
   onCreated?: (listId: string) => void;

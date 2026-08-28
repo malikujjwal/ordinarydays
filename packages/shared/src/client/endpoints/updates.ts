@@ -58,7 +58,7 @@ export function getActivityUpdates(
  * not a convenience: `#P` sorts on `lastActivityAt`, GSI1 is eventually consistent, and a
  * client that posted and then refetched could read a projection older than the write it just
  * made — putting the row it just touched back where it was. Returning the authoritative value
- * lets P3-39 move the row immediately and treat a later, staler page as reconciliation.
+ * lets P3-40 move the row immediately and treat a later, staler page as reconciliation.
  *
  * A signature that returned only the `ActivityUpdate` would make that mistake the default and
  * invisible, so the whole result is returned and the caller destructures what it needs. Merge

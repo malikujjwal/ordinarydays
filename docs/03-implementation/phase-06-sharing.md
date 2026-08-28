@@ -169,18 +169,18 @@ Two canonical-document amendments this phase depends on are already recorded in
 | P6-37 | Web fallback: manual entry, no picker | mobile/web | P6-35 | yes | S |
 | P6-38 | Plan detail: PEOPLE section, share sheet, invite-link affordances | mobile | P6-13, P6-17 | no | M |
 | P6-39 | RSVP affordances on agenda rows and in the inbox | mobile | P6-14, P6-24 | no | M |
-| P6-40 | The RSVP label switch: dated and undated vocabulary | shared/mobile | P6-39, P3-35 | no | M |
+| P6-40 | The RSVP label switch: dated and undated vocabulary | shared/mobile | P6-39, P3-36 | no | M |
 | P6-41 | Updates feed UI | mobile | P6-22 | yes | M |
 | P6-42 | Add-to-calendar affordance on plan detail | mobile | P6-20, P6-21 | yes | S |
 | P6-43 | List share, shared-item audience, MEMBERS and leave flows | mobile | P6-30, P6-31, P3-27 | no | L |
-| P6-44 | A shared plan suggests sharing its generated lists | mobile | P6-43, P3-38 | no | M |
+| P6-44 | A shared plan suggests sharing its generated lists | mobile | P6-43, P3-39 | no | M |
 | P6-45 | The public invite page | web | P6-18, P6-19, P6-20 | no | L |
 | P6-46 | E2E and projection-leak tests, S4 and S8 | ci | P6-45 | no | M |
 | P6-47 | Shared-list E2E, concurrency and access tests | ci | P6-43, P6-32 | no | M |
 | P6-48 | `DateSuggestion` schema, repository and the 5-per-activity cap | shared/api | P6-10 | yes | M |
 | P6-49 | Suggestion endpoints: list, create, delete, `works` toggle | api | P6-48, P6-28 | no | M |
 | P6-50 | `schedule { fromSuggestionId }` and suggestion cleanup | api | P6-49, P6-15 | no | M |
-| P6-51 | Date suggestions on plan detail and the Needs-a-date row | mobile | P6-49, P3-35, P3-36 | no | L |
+| P6-51 | Date suggestions on plan detail and the Needs-a-date row | mobile | P6-49, P3-36, P3-37 | no | L |
 | P6-52 | Date-suggestion tests: authorisation, cap, cleanup, guest refusal | ci | P6-50, P6-51 | no | M |
 
 ---
@@ -838,9 +838,9 @@ owner, and the shared-list branch of the existing `ScheduleListItemInput`. The s
 
 | Role | Can |
 | --- | --- |
-| `owner` | Everything: delete the list, add and remove members, change `behaviour`, `capabilities` and `slot` |
-| `member` | Add, edit, check, reorder and delete **items**; rename the list; leave it |
-| `member` cannot | Change `behaviour` or `capabilities` — those are destructive under the interaction contract — delete the list, or remove anyone but themselves |
+| `owner` | Everything: delete the List, add and remove members, change item-state mode, typed-feature configuration and slot |
+| `member` | Add, edit, state-change, reorder and delete **items**; rename the List; leave it |
+| `member` cannot | Change item-state mode, typed-feature configuration or slot — shared List configuration remains owner-managed — delete the List, or remove anyone but themselves |
 
 Two roles, not three. They live on `ListIndex`: the owner's pointer is `owner`, and every
 active non-owner's pointer is `member`. A read-only viewer is a deferred open decision
@@ -889,7 +889,7 @@ copies of `20` is the bug this file exists to prevent.
 
   `selected_people.participants` is non-empty. Missing `creationTarget`, missing `audience`,
   `type: 'task'`, participants on `just_me`, and unknown keys are validation failures. The
-  list's title, item words, `templateKey`, `behaviour`, capabilities, and membership are never
+  List title, item words, `templateKey`, item-state mode, enabled features and membership are never
   inputs to Plan-type or audience selection.
 - No create or patch schema for `ListItem` contains `linkedActivityId`. Link fields are
   server-written `ListItemActivityLink` rows; a request carrying `viewerUserId`, `activityId`,
@@ -2084,7 +2084,7 @@ assertListAccess(userId, listId, level): Promise<{ role: ListRole; list: List }>
 | `GET /v1/lists/:id`, `/items`, `/members` | `member` |
 | All item writes: `POST`/`PATCH`/`DELETE .../items*`, `clear-checked`, item `schedule` | `member` |
 | `PATCH /v1/lists/:id` with `title` only | `member` |
-| `PATCH /v1/lists/:id` with `capabilities` or `slot`; `POST /v1/lists/:id/behaviour` | `owner` |
+| `PATCH /v1/lists/:id` with item-state mode, typed-feature configuration or `slot` | `owner` |
 | `POST /v1/lists/:id/members`, `DELETE /v1/lists/:id/members/:other` | `owner` |
 | `DELETE /v1/lists/:id/members/:self` | `member` — the leave path |
 | `DELETE /v1/lists/:id` | `owner` |
@@ -2098,11 +2098,13 @@ selected for the new Plan cannot read it even though they can still edit the sou
 Row 4 is the only field-sensitive one: the level depends on **which keys** the patch body
 carries, not on the route. Compute it from the parsed body, reject the whole request if any
 key requires `owner` and the caller is a `member`, and never apply half a patch — the same
-rule P3-09 already applies to destructive capability changes.
+rule P3-33 applies to owner-managed configuration changes.
 
-**A member cannot change behaviour or capabilities**, and the reason is the interaction
-contract rather than a trust hierarchy: those changes drop typed fields from every item in
-the list, and a destructive change to shared data belongs to the person who owns it.
+**A member cannot change item-state mode or typed-feature configuration.** P3-33 makes those
+changes non-destructive—state and feature values are retained—but they reshape the shared
+List's presentation, editing surface and Plan-adapter eligibility. One owner-managed
+configuration prevents members from repeatedly changing that shared shape underneath one
+another.
 
 **Edge cases.**
 
@@ -2116,8 +2118,9 @@ the list, and a destructive change to shared data belongs to the person who owns
 member, invited member, stranger — over every list route, asserting the exact status code.
 The test enumerates the Hono router's registered list routes and fails if one has no matrix
 row. Specifically: a member `PATCH`ing `title` succeeds; the same member `PATCH`ing
-`capabilities` gets `403` and **writes nothing**; a `PATCH` carrying both `title` and
-`capabilities` from a member is rejected whole; a non-member gets `404` on every route
+`itemStateMode` or feature configuration gets `403` and **writes nothing**; a `PATCH`
+carrying both `title` and an owner-only configuration field from a member is rejected whole;
+a non-member gets `404` on every route
 including `GET`; an invited member gets `404` on every route.
 
 For item scheduling, a member may create a `just_me` Plan (`201`); another member gets `404`
@@ -2385,7 +2388,7 @@ on undo; accessibility actions expose all three responses without swiping.
 ### P6-40 — The RSVP label switch: dated and undated vocabulary
 
 **Files.** `packages/shared/src/activities/rsvpLabels.ts` (pure),
-`apps/mobile/src/features/plans/model/rsvpSummary.ts` (extend, P3-35),
+`apps/mobile/src/features/plans/model/rsvpSummary.ts` (extend, P3-36),
 `apps/mobile/src/features/agenda/components/RsvpControl.tsx`.
 
 **What to build.** One pure function that turns a stored RSVP value plus "does this plan have
@@ -2412,7 +2415,7 @@ date — which is exactly the event the word changes on. The canonical statement
 **Approach.** The signal is `Boolean(activity.schedule?.date)`, read from the same response
 the row is rendering, so the label cannot disagree with the row it sits on. Every surface
 that renders an RSVP calls this function: the inline `Going · Maybe · Decline` control on an
-agenda row, the PEOPLE section of plan detail, the needs-a-date row's summary (P3-35), the
+agenda row, the PEOPLE section of plan detail, the needs-a-date row's summary (P3-36), the
 notification inbox, and the updates feed's `rsvp_set` entry.
 
 **The public invite page and the guest emails are also surfaces of this function**, and this
@@ -2565,11 +2568,11 @@ The `Keeps:` line is the honest one and it is the question every user asks. Thei
 (P6-31). Confirming issues one `DELETE .../members/<self>`, removes the list from the cached
 index immediately, and navigates back to the Lists tab.
 
-**What a member cannot do, and how it renders.** The list settings sheet (P3-32) shows
-`behaviour`, `capabilities` and `slot` as **read-only rows with a one-line reason** for a
-member — `Only <owner name> can change this` — rather than hiding them. A hidden control is
-indistinguishable from a missing feature; a disabled one with a reason explains the shape of
-the product. `Rename` stays editable, because a member may rename.
+**What a member cannot do, and how it renders.** The List settings sheet (P3-33) shows the
+Item state control, Item details switches/configuration and slot as **read-only rows with a
+one-line reason** for a member — `Only <owner name> can change this` — rather than hiding
+them. A hidden control is indistinguishable from a missing feature; a disabled one with a
+reason explains the shape of the product. `Rename` stays editable, because a member may rename.
 
 **Edge cases.**
 
@@ -2584,14 +2587,14 @@ the product. `Rename` stays editable, because a member may rename.
 **Tests.** Component tests for the picker at the 20 cap, the disabled no-email row, and the
 required-email new-person form; the MEMBERS section rendered for owner, member and invited
 member; the leave dialog's copy asserted verbatim, including the items line; a test that a
-member's settings sheet renders the three controls read-only with the reason and that the
+member's settings sheet renders state, details and slot read-only with the reason and that the
 rename field is editable. Playwright: leave a list and assert it is gone from the index and
 that a direct navigation to it returns the not-found screen.
 
 For `Plan this item`, render tests assert the Plan-kind chooser and audience step both start
-with no selection across every list template. The submit button remains unavailable until
+with no selection across every List creation type/configuration. The submit button remains unavailable until
 both choices are explicit. One test enters `Watch Severance` on a Groceries list and still
-shows the unchanged five-kind chooser, proving words and template do not classify it. With
+shows the unchanged four-kind chooser, proving words and creation type do not classify it. With
 Alice and Ben on the list, choosing **Just me** submits no participants; choosing people with
 Alice selected submits Alice and not Ben. A two-context Playwright flow gives Alice and Ben
 different private Plans from the same item and proves each row opens only its own Plan.
@@ -2601,24 +2604,24 @@ different private Plans from the same item and proves each row opens only its ow
 ### P6-44 — A shared plan suggests sharing its generated lists
 
 **Files.** `apps/mobile/src/features/lists/NewListSheet.tsx` (extend, P3-26),
-`apps/mobile/src/features/plans/AddListSheet.tsx` (P3-38).
+`apps/mobile/src/features/plans/AddListSheet.tsx` (P3-39).
 
-**What to build.** One unticked row on the sheet that creates a list from a plan, after the
-user explicitly selects its list style, per
+**What to build.** One unticked row on the sheet that creates a List from a Plan, after the
+user explicitly selects its List creation type, per
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §4.1:
 
 ```
   ☐  Share with Alice and Ben
-     They can add and check items.
+     They can add and edit items.
 ```
 
 **Rules, all five of which are tests.**
 
-1. The sheet first shows the full fixed-order template catalogue with nothing selected. The
+1. The sheet first shows P3-33's seven creation types in fixed order with nothing selected. The
    source Plan's kind, title, participants, date, and generated-list suggestion never choose,
-   rank, or preselect a template. `POST /v1/lists` carries the exact user-selected
+   rank, or preselect a type. `POST /v1/lists` carries the exact user-selected
    `templateKey`; there is no title matcher or simple-list fallback.
-2. **Unticked by default, on every template, with no exceptions.** Creating one thing never
+2. **Unticked by default, on every creation type, with no exceptions.** Creating one thing never
    shares another. This is the product-wide invariant in
    [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#1a-product-wide-invariants)
    §1a.2 applied to a second object.
@@ -2632,8 +2635,8 @@ user explicitly selects its list style, per
 
 > **Decision — suggested, never automatic, and never pre-ticked.** For packing this is not a
 > nicety: each person packs their own bag, and a shared `Packing · New York Trip` where three
-> people tick one `Charger` row is actively wrong. Groceries and `Places to visit` for the
-> same trip usually should be shared. The app cannot tell which is which from the template,
+> people mark one `Charger` row done is actively wrong. Groceries and `Places to visit` for
+> the same trip usually should be shared. The app cannot tell which is which from the creation type,
 > so it asks once, cheaply, and defaults to the answer that loses nothing.
 
 **Edge cases.** If the plan gains participants after the list was created, nothing happens —
@@ -2641,15 +2644,15 @@ there is no watcher and no retroactive suggestion. If adding one member fails, t
 exists and the banner names the failure; a list that was not created because the fourth
 invite failed would be worse.
 
-**Tests.** The template catalogue starts unselected for Meal, Watch, Event and General
+**Tests.** The seven-type catalogue starts unselected for Meal, Watch, Event and General
 Plans; changing the proposed title does not change selection; save is unavailable until a
-style is tapped; the request carries that exact `templateKey`; a missing key is `400` and
+creation type is tapped; the request carries that exact `templateKey`; a missing key is `400` and
 writes no list. The share row is absent for a private plan and unticked for a shared one, on
-every template in the catalogue — a table-driven render test, because "except for packing"
+every creation type in the catalogue — a table-driven render test, because "except for packing"
 is exactly the kind of exception that gets added later. Creating without ticking writes the
 list and **zero** `MEMBER#` rows, asserted by a table item count. Ticking with two app users
 and one guest writes two `MEMBER#` rows and renders the guest line. A second list created
-from the same plan shows the style catalogue unselected and, after selection, the share row
+from the same plan shows the creation-type catalogue unselected and, after selection, the share row
 unticked again.
 
 ---
@@ -2730,9 +2733,9 @@ in one place because each of them is a property of the whole feature rather than
 **The ten that matter, each named because each is a thing the obvious implementation gets
 wrong:**
 
-1. **A member cannot change behaviour or capabilities.** Two accounts, one shared list.
-   The member `PATCH`es `capabilities.checkable`, gets `403`, and the stored capabilities are
-   byte-identical afterwards. Repeat for `behaviour` and `slot`. Then assert the same member
+1. **A member cannot change shared List configuration.** Two accounts, one shared List. The
+   member `PATCH`es `itemStateMode`, gets `403`, and the stored configuration is byte-identical
+   afterwards. Repeat for typed-feature configuration and `slot`. Then assert the same member
    **can** rename the list, so the test is proving a boundary rather than a blanket denial.
 2. **A non-member gets `404`, not `403`.** A third account requests the list, its items, its
    members, and writes an item. Every one is `404`, with a body byte-identical to the `404`
@@ -2743,10 +2746,11 @@ wrong:**
    list-index pointer, `MEMBER#`, both reciprocal `LLINK#` rows and three `LNK#<user>#` rows.
    Both `PERSON#` rows, every `ITEM#` and referenced Plan are unchanged; another viewer's
    `LNK#` rows are byte-identical.
-4. **Concurrent checks from two members converge.** Two clients, both holding the list, both
-   check the same item within the same second, one of them from a queued offline mutation.
-   Both requests succeed, no `409` is returned, exactly one item row exists, and its `checked`
-   is `true`. Then both uncheck it concurrently and it converges to `false`. The property
+4. **Concurrent checkbox state writes from two members converge.** Two clients, both holding
+   a checkbox-mode List, both set the same item to `done` within the same second, one from a
+   queued offline mutation. Both requests succeed, no `409` is returned, exactly one item row
+   exists, and its state is `done`. Then both set it to `open` concurrently and it converges
+   to `open`. The property
    under test is that `checked` is **set, not toggled** — a toggle implementation passes the
    first half of this test and fails the second.
 5. **An invited-but-not-signed-up member has no index entry and can read nothing.** Invite an
@@ -2947,7 +2951,7 @@ that suggestion as workable; `fromSuggestionId` plus `date` is `400`.
 
 **Files.** `apps/mobile/src/features/plans/components/{SuggestedDates.tsx,
 SuggestDateSheet.tsx}`, `apps/mobile/src/features/plans/components/NeedsDateRow.tsx`
-(extend, P3-35), `apps/mobile/src/features/plans/PlanDetail.tsx` (extend, P3-36).
+(extend, P3-36), `apps/mobile/src/features/plans/PlanDetail.tsx` (extend, P3-37).
 
 **What to build.** The two surfaces where a suggestion is made and seen.
 
@@ -2967,7 +2971,7 @@ people will be asked again, and then calls `POST .../schedule { fromSuggestionId
 At five suggestions the footer reads `Five suggested dates — that's the limit` and the sheet
 does not open. Refusing inline beats a `422` the user has to read.
 
-**On the Needs-a-date row** (P3-35), the summary line gains the suggestion state after the
+**On the Needs-a-date row** (P3-36), the summary line gains the suggestion state after the
 RSVP summary, in the same sentence style:
 
 ```
@@ -3122,8 +3126,8 @@ see the date and both see a pending RSVP.
     member, one access pointer, owner/member People when absent, two active `LLINK#` rows and
     the counter. It creates no `PLINK#` or activity-counter write, and renames remain **one
     write** regardless of member count.
-31. A `member` gets `403` on `behaviour`, `capabilities`, `slot`, member management and
-    delete, writes nothing on any of them, and **can** rename the list, edit, check, reorder
+31. A `member` gets `403` on item-state mode, typed-feature configuration, `slot`, member
+    management and delete, writes nothing on any of them, and **can** rename the List, edit, state-change, reorder
     and delete items, and leave.
 32. A non-member gets `404` — never `403` — on every list-scoped route, with a body identical
     to the `404` for a list id that has never existed.
@@ -3131,9 +3135,9 @@ see the date and both see a pending RSVP.
     both reciprocal `LLINK#` rows, then removes every `LNK#<leaver>#` row. Both People, every
     item and every referenced Plan survive; another viewer's links are unchanged and
     `itemCount` is unchanged.
-34. Two members checking the same item concurrently both succeed with no `409`, and the item
-    converges to `checked: true`; both unchecking converges to `false`. No code path writes
-    `SET checked = NOT checked`.
+34. Two members setting the same item to `done` concurrently both succeed with no `409`, and
+    the item converges to `done`; both setting it to `open` converges to `open`. No code path
+    writes a toggle operation.
 35. Two members inserting at the same position produce two items whose order is identical on
     both devices, decided by `(rank, itemId)`.
 36. An add that would make the total 21 people is refused with `422` and writes nothing. From
@@ -3156,10 +3160,10 @@ see the date and both see a pending RSVP.
     stored value — asserted against a checked-in literal array and a grep. The same
     participant renders `Interested` before a date exists and `Going` after, with the stored
     value byte-identical.
-41. Creating a list from a shared plan begins with the full style catalogue unselected and
+41. Creating a List from a shared Plan begins with the seven creation types unselected and
     requires the exact user-selected `templateKey`. The Plan's kind and title select nothing.
     With the share row untouched it writes the list and **zero** `MEMBER#` rows; that row is
-    unticked on every template and absent for a private plan.
+    unticked on every creation type and absent for a private Plan.
 42. `GET /public/v1/invites/:token` for an **undated** plan returns `dateStatus: 'undecided'`
     with null date fields, and the page renders `The date is being decided` with
     `Interested · Maybe · Pass` and no add-to-calendar affordance. The same token after the
@@ -3257,14 +3261,14 @@ Each of these is tempting here and belongs elsewhere.
 | 15 | **The 50-participant cap interacts with a shareable link** — the 51st stranger gets a hard error on a page that otherwise never fails. | Explicit copy (`This plan is full.`) and a test; the owner sees the cap on the plan detail before it is reached. |
 | 16 | **The contact picker quietly grows into a contact sync.** `expo-contacts` also exports `getContactsAsync`; one call to it turns a permissionless flow into a permission prompt, an App Store privacy-label change, and third-party PII at rest. | One importing file, a `dependency-cruiser` rule, a lint ban on every other export, and acceptance criteria 27 and 29. Adding the read API is a product decision, not a refactor. |
 | 17 | **The picker fills the address book with duplicates.** A user who picks the same contact twice, or picks someone they typed in last month, gets two `Person` rows and two halves of a balance. | P6-36's match runs before any write; the merge route is Phase 7. `Add as a new person` remains available on purpose, because two people do share a name. |
-| 18 | **`checked` is implemented as a toggle.** `SET checked = NOT checked` reads correctly in one client and produces two people un-doing each other in two. It also breaks the offline queue, where the same intent may be delivered twice. | The canonical rule is *set, not toggle* (`data-model.md` §4.6). Acceptance criterion 34 checks concurrently **and** unchecks concurrently — a toggle passes the first half and fails the second — plus a grep test for `NOT checked` and for a client-side `!item.checked` in a mutation payload. |
-| 19 | **`If-Match` is added to list item writes** "for consistency with activities". | Every checkbox in a shopping list starts returning spurious `409`s and the offline queue parks half a shop. Item writes carry no `If-Match` by design; list-*level* edits do. Asserted by a route test that an item `PATCH` with a stale `If-Match` still returns `200`. |
+| 18 | **ListItem state is implemented as a toggle.** An invert-current-state write reads correctly in one client and produces two people undoing each other in two. It also breaks the offline queue, where the same intent may be delivered twice. | The canonical rule is *set `open` / `active` / `done`, never toggle* (`data-model.md` §4.6 after P3-33). Acceptance criterion 34 sets `done` concurrently and then `open` concurrently—a toggle passes the first half and fails the second—plus a grep test for toggle-shaped storage/client mutations. |
+| 19 | **`If-Match` is added to ListItem writes** "for consistency with activities". | Every state tap in a shared shopping List starts returning spurious `409`s and the offline queue parks half a shop. Item writes carry no `If-Match` by design; List-level edits do. Asserted by a route test that an item `PATCH` with a stale `If-Match` still returns `200`. |
 | 20 | **A non-member gets `403` instead of `404`**, because `403` is what the code naturally produces when a role check fails. | It confirms the list exists to somebody with no relationship to it. `assertListAccess` returns `404` when the **pointer** is missing and only ever returns `403` when the pointer exists with the wrong role — two distinct failure paths, both in the matrix test (P6-32, criterion 32). |
 | 21 | **The invited member is given an index entry** "so the query is uniform", or a placeholder user id is invented for them. | Both make an account-less person addressable in a partition that does not exist, and the first grants access before signup. The rule is: no `userId`, no pointer, `404` everywhere, until the verified email arrives (P6-29, P6-27, criterion 37). |
 | 22 | **The RSVP reset is skipped, or applied to the owner**, or a new `interested` enum value is introduced so the label can be stored. | A date landing without a reset claims consent nobody gave; a stored `interested` forces a migration on the exact event that changes the word. P6-15 and P6-40, criteria 38 and 40, with the enum compared to a literal array. |
 | 23 | **The reset transaction exceeds 100 items** at the participant cap and is discovered at 50 people rather than in review. | The budget is computed in P6-15 (103 items at the cap), the threshold is a shared constant, and the two-phase path is tested at 45 and 46 with an assertion that the intermediate read never shows a stale response. |
-| 24 | **A denormalised field creeps onto the list pointer** — a title for the Lists tab, a count for a badge. | Renaming a shared list becomes 20 writes and a ticked checkbox becomes a fan-out. The pointer's attribute set is compared to a literal list in Phase 3 (criterion 27) and the property is restated in criterion 30. |
-| 25 | **The plan → list share row is pre-ticked** for "obviously shared" templates like groceries. | The exception grows, and the first time it is wrong it silently shares a packing list. Unticked on every template, asserted by a table-driven test over the whole catalogue (P6-44, criterion 41). |
+| 24 | **A denormalised field creeps onto the List pointer** — a title for the Lists tab, a count for a badge. | Renaming a shared List becomes 20 writes and an item-state change becomes a fan-out. The pointer's attribute set is compared to a literal list in Phase 3 (criterion 27) and the property is restated in criterion 30. |
+| 25 | **The Plan → List share row is pre-ticked** for "obviously shared" creation types like Groceries. | The exception grows, and the first time it is wrong it silently shares a packing List. Unticked for every creation type, asserted by a table-driven test over the whole catalogue (P6-44, criterion 41). |
 | 26 | **Marking a suggestion as workable is treated as consent**, so the RSVP reset is skipped when the owner schedules from a suggestion everybody said worked. | It is the most tempting optimisation in the feature and it defeats the rule on the exact path that will be used most. `worksFor` says "I could do Thursday", not "I am coming on Thursday" — the second is a different question and it is asked separately. Criterion 48 schedules from a suggestion every participant marked and asserts every row reads `pending`. ADR-049. |
 | 27 | **An `LLINK#` is mistaken for list access or left dangling.** | `assertListAccess` accepts only the exact `USER#/LIST#` pointer; add/remove/delete tests assert both reciprocal link lifecycles and Person retention. |
 | 28 | **Removing one pending list invite deletes the Person-level `GUESTEMAIL#`.** | The invite removes only its `MEMBER#` and invited `LLINK#`; the locator survives until Person/email deletion or verified linking, with a test covering another relationship for the same guest. |
