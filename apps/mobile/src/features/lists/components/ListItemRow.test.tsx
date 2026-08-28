@@ -423,6 +423,34 @@ describe('the accessibility labels', () => {
     );
   });
 
+  /**
+   * §6.2's `watch` row, as corrected 2026-08-28: two elements going to two screens, and
+   * neither label repeating the other.
+   */
+  it('splits a watch row into a body and a state line, without saying either twice', () => {
+    mount({
+      list: list('watch', false),
+      item: item({
+        title: 'Severance',
+        details: {
+          behaviour: 'watch',
+          mediaKind: 'show',
+          watchStatus: 'watching',
+          season: 2,
+          episode: 4,
+        },
+      }),
+      viewerPlan: { ...SCHEDULED, type: 'watch' },
+      planStateLine: 'Next session Friday 8:00 PM',
+    });
+
+    const body = screen.getByTestId('row-body').getAttribute('aria-label');
+    const line = screen.getByTestId('row-plan-state').getAttribute('aria-label');
+    expect(body).toBe('Severance, watching, season 2 episode 4');
+    expect(line).toBe('Next session Friday 8:00 PM, open plan');
+    expect(body).not.toContain('Next session');
+  });
+
   it('names the state line and what tapping it does', () => {
     mount({ viewerPlan: SCHEDULED, planStateLine: 'Planned Saturday · 7 PM' });
 

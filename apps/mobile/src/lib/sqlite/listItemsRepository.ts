@@ -40,6 +40,11 @@ import type { TransactionContext } from '@/lib/sqlite/transaction';
  * storage-only fields". P3-27 restated its `Omit` here; a second declaration of one shape is a
  * second place for it to drift, so this is an alias and the name stays only because the
  * repository's callers read better with a row-shaped one.
+ *
+ * The alias is only correct while this table carries **nothing the view does not**, and it
+ * does not: `list_items`' ten columns are exactly the view's ten fields, `fromRow` parses
+ * through `listItemView`, and neither `itemRevision` nor `sourceProvenance` is stored. A
+ * storage-only column added later needs its own type again rather than a widened alias.
  */
 export type ListItemRow = ListItemView;
 

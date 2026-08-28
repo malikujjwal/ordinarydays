@@ -47,6 +47,11 @@ import {
  * a source meal legitimately uses four lines, and its checkbox, its address and its state line
  * are three distinct accessibility elements with three distinct labels.
  *
+ * That holds on **every** behaviour, `watch` included: the body says
+ * `Severance, watching, season 2 episode 4` and the state line says
+ * `Next session Friday 8:00 PM, open plan`, because they go to two different screens
+ * (`interaction-contract.md` §6.2, corrected 2026-08-28). Neither label repeats the other.
+ *
  * ## The checkbox is the only tap that mutates
  *
  * `CLAUDE.md` rule 6 and U1/U2: the body opens item detail, the address opens Maps, the state
