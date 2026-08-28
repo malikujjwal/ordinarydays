@@ -1192,30 +1192,48 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           intent.seq,
           canonical.updatedAt,
         );
-      } else if (intent.mutationKey[1] === 'patch') {
+      } else if (
+        intent.mutationKey[1] === 'patch' ||
+        intent.mutationKey[1] === 'behaviour'
+      ) {
         if (canonical?.listId !== intent.entityId) {
           throw new Error('List settings acknowledgement omitted its canonical List.');
         }
-        if (later.length === 0) await lists.applySettings(transaction, canonical);
-        const archived = field(field(intent.variables, 'input'), 'archived');
-        if (archived === true) {
-          const offer = await this.outbox.listArchiveUndoOffer(
+        if (later.length === 0) {
+          /*
+           * A behaviour change installs the **whole** canonical row, not the settings subset:
+           * it moves `behaviour` and advances `rankVersion`, and `applySettings` writes
+           * neither. A settings PATCH keeps the subset for its own reason — it must not
+           * restate fields it never touched.
+           */
+          if (intent.mutationKey[1] === 'behaviour') {
+            await lists.installCanonicalRow(transaction, canonical);
+          } else {
+            await lists.applySettings(transaction, canonical);
+          }
+        }
+        /*
+         * The offer's existence is what says an Undo was promised, not a re-reading of the
+         * payload. `patchSettings` and `changeBehaviour` decide that at enqueue time — every
+         * additive settings change records one, a rename and a confirmed destructive downgrade
+         * do not — so the settlement only has to install the token the offer is waiting for.
+         */
+        const offer = await this.outbox.listArchiveUndoOffer(
+          transaction.database,
+          intent.intentId,
+        );
+        if (offer !== undefined) {
+          const undoToken = field(response, 'undoToken');
+          const undoExpiresAt = field(response, 'undoExpiresAt');
+          if (typeof undoToken !== 'string' || typeof undoExpiresAt !== 'string') {
+            throw new Error('List settings acknowledgement omitted its Undo receipt.');
+          }
+          await this.outbox.recordListArchiveUndoToken(
             transaction.database,
             intent.intentId,
+            undoToken,
+            undoExpiresAt,
           );
-          if (offer !== undefined) {
-            const undoToken = field(response, 'undoToken');
-            const undoExpiresAt = field(response, 'undoExpiresAt');
-            if (typeof undoToken !== 'string' || typeof undoExpiresAt !== 'string') {
-              throw new Error('List archive acknowledgement omitted its Undo receipt.');
-            }
-            await this.outbox.recordListArchiveUndoToken(
-              transaction.database,
-              intent.intentId,
-              undoToken,
-              undoExpiresAt,
-            );
-          }
         }
         await this.outbox.rebaseNextQueuedListPatch(
           transaction.database,

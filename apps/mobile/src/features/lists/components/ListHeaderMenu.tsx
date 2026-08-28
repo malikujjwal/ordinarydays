@@ -41,6 +41,13 @@ export interface ListHeaderMenuProps {
   onUncheckAll: () => void;
   /** `PATCH { archived: true }`; the caller shows the 6-second settings undo. */
   onArchive: () => void;
+  /**
+   * Opens `List settings` — the capabilities, the default slot and the behaviour (§5.5, §P3-32).
+   *
+   * **Not rename.** §5.6 puts renaming inline on the header title and §P3-32 forbids a second
+   * home for it, so neither this menu nor the sheet it opens has a Rename row.
+   */
+  onOpenSettings: () => void;
 }
 
 /** The two-part gate, read from the row and not from its template (ADR-031). */
@@ -56,6 +63,7 @@ export function ListHeaderMenu({
   onClearChecked,
   onUncheckAll,
   onArchive,
+  onOpenSettings,
 }: ListHeaderMenuProps) {
   const theme = useTheme();
   const checkable = supportsCheckedActions(list);
@@ -79,6 +87,17 @@ export function ListHeaderMenu({
             testID="list-uncheck-all"
           />
         ) : null}
+        {/*
+         * Offered on every behaviour, unlike the two bulk rows above it: the slot and the
+         * behaviour are settings a `watch` or `meals` list has as much as a collection, and
+         * the sheet is what decides which of its own controls apply (§5.5).
+         */}
+        <Button
+          variant="secondary"
+          label="List settings"
+          onPress={onOpenSettings}
+          testID="list-settings-open"
+        />
         <Button
           variant="secondary"
           label="Archive list"

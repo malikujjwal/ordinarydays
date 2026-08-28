@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { instant } from '@od/shared/schemas';
-import type { List } from '@od/shared/types';
+import type { List, ListBehaviourConfirmation } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 import { NativeActivityActionCoordinator } from './actionCoordinator';
@@ -524,6 +524,219 @@ describe('native List transactional outbox', () => {
     });
   });
 
+  /**
+   * §P3-32's three additive controls ride the intent P3-25's archive introduced, with `input`
+   * widened to the whole `PatchListInput`.
+   */
+  describe('the durable settings write (§P3-32, §5.5)', () => {
+    it('projects one capability and queues it as a list patch', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, outbox, service, transactions } = harness(database);
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [LIST]),
+      );
+
+      await transactions.run((transaction) =>
+        service.patchSettings(
+          transaction,
+          LIST,
+          { capabilities: { checkable: false } },
+          'intent-checkable',
+        ),
+      );
+
+      const row = (await lists.read())[0];
+      // The one flag moves; the other and every unrelated field stay exactly as they were.
+      expect(row?.capabilities).toEqual({ checkable: false, supportsLocation: false });
+      expect(row?.title).toBe('Groceries');
+      expect(row?.updatedAt).toBe(LIST.updatedAt);
+      expect(await outbox.all()).toEqual([
+        expect.objectContaining({
+          intentId: 'intent-checkable',
+          mutationKey: ['list', 'patch'],
+          entityId: LIST.listId,
+          orderingKey: `list:${LIST.listId}`,
+          status: 'queued',
+        }),
+      ]);
+    });
+
+    it('records the committed values it replaced, for the local half of Undo', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, outbox, service, transactions } = harness(database);
+      const slotted = { ...LIST, slot: 'groceries' as const };
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [slotted]),
+      );
+
+      await transactions.run((transaction) =>
+        service.patchSettings(transaction, slotted, { slot: null }, 'intent-slot'),
+      );
+
+      expect((await outbox.get(database, 'intent-slot'))?.variables).toMatchObject({
+        input: { slot: null },
+        previous: { slot: 'groceries' },
+        ifMatch: LIST.updatedAt,
+      });
+      expect((await lists.read())[0]?.slot).toBeNull();
+    });
+
+    /** §4.1 has no undo row for renaming a list, and the response carries no token. */
+    it('records no Undo offer for a rename', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, outbox, service, transactions } = harness(database);
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [LIST]),
+      );
+
+      await transactions.run((transaction) =>
+        service.patchSettings(transaction, LIST, { title: 'Shopping' }, 'intent-rename'),
+      );
+
+      expect((await lists.read())[0]?.title).toBe('Shopping');
+      expect(
+        await outbox.listArchiveUndoOffer(database, 'intent-rename'),
+      ).toBeUndefined();
+    });
+
+    it('restores exactly the field the forward write moved when Undo is accepted', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, outbox, service, transactions } = harness(database);
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [LIST]),
+      );
+      await transactions.run((transaction) =>
+        service.patchSettings(
+          transaction,
+          LIST,
+          { capabilities: { checkable: false } },
+          'intent-checkable',
+        ),
+      );
+
+      const result = await transactions.run((transaction) =>
+        service.undoSettings(
+          transaction,
+          LIST.listId,
+          'intent-checkable',
+          'inverse-checkable',
+        ),
+      );
+
+      expect(result.kind).toBe('cancelled');
+      expect((await lists.read())[0]?.capabilities).toEqual({
+        checkable: true,
+        supportsLocation: false,
+      });
+      expect(await outbox.all()).toEqual([]);
+    });
+  });
+
+  /**
+   * The P3-32 **inventory extension**: `['list','behaviour']`, its own variables, and the
+   * shared `list:<listId>` ordering key so it cannot overtake a queued settings write.
+   */
+  describe('the durable behaviour change (§P3-09, §P3-32)', () => {
+    it('projects an upgrade and offers Undo', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, outbox, service, transactions } = harness(database);
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [LIST]),
+      );
+
+      await transactions.run((transaction) =>
+        service.changeBehaviour(
+          transaction,
+          LIST,
+          { behaviour: 'watch' },
+          'intent-upgrade',
+        ),
+      );
+
+      expect((await lists.read())[0]?.behaviour).toBe('watch');
+      expect(await outbox.all()).toEqual([
+        expect.objectContaining({
+          intentId: 'intent-upgrade',
+          mutationKey: ['list', 'behaviour'],
+          entityId: LIST.listId,
+          orderingKey: `list:${LIST.listId}`,
+        }),
+      ]);
+      expect((await outbox.get(database, 'intent-upgrade'))?.variables).toMatchObject({
+        input: { behaviour: 'watch' },
+        previous: { behaviour: 'collection' },
+        ifMatch: LIST.updatedAt,
+      });
+      expect(await outbox.listArchiveUndoOffer(database, 'intent-upgrade')).toMatchObject(
+        { listId: LIST.listId },
+      );
+    });
+
+    it('undoes an upgrade back to the behaviour it replaced', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, service, transactions } = harness(database);
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [LIST]),
+      );
+      await transactions.run((transaction) =>
+        service.changeBehaviour(
+          transaction,
+          LIST,
+          { behaviour: 'watch' },
+          'intent-upgrade',
+        ),
+      );
+
+      await transactions.run((transaction) =>
+        service.undoSettings(
+          transaction,
+          LIST.listId,
+          'intent-upgrade',
+          'inverse-upgrade',
+        ),
+      );
+
+      expect((await lists.read())[0]?.behaviour).toBe('collection');
+    });
+
+    /**
+     * A confirmed destructive change gets **no** Undo (§4.1): what it removed is gone, and an
+     * offer would promise a restore the server cannot make.
+     */
+    it('records no Undo offer for a confirmed downgrade, and carries the preview whole', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { lists, outbox, service, transactions } = harness(database);
+      const watching = { ...LIST, behaviour: 'watch' as const };
+      await transactions.run((transaction) =>
+        lists.replaceCanonical(transaction, [watching]),
+      );
+      const confirmation: ListBehaviourConfirmation = {
+        fromBehaviour: 'watch',
+        toBehaviour: 'collection',
+        itemVersion: 12,
+        itemCount: 7,
+        fields: ['Watch status', 'Season', 'Episode'],
+      };
+
+      await transactions.run((transaction) =>
+        service.changeBehaviour(
+          transaction,
+          watching,
+          { behaviour: 'collection', confirmation },
+          'intent-downgrade',
+        ),
+      );
+
+      expect((await lists.read())[0]?.behaviour).toBe('collection');
+      expect(
+        await outbox.listArchiveUndoOffer(database, 'intent-downgrade'),
+      ).toBeUndefined();
+      expect((await outbox.get(database, 'intent-downgrade'))?.variables).toMatchObject({
+        input: { behaviour: 'collection', confirmation },
+      });
+    });
+  });
+
   it('archives the visible row in the same commit that queues the API patch', async () => {
     if (database === undefined) throw new Error('test database not open');
     const { lists, outbox, service, transactions } = harness(database);
@@ -557,7 +770,7 @@ describe('native List transactional outbox', () => {
     );
 
     const result = await transactions.run((transaction) =>
-      service.undoArchive(
+      service.undoSettings(
         transaction,
         LIST.listId,
         'archive-before-push',
@@ -583,7 +796,7 @@ describe('native List transactional outbox', () => {
     await transactions.run((transaction) => outbox.claimNext(transaction.database));
 
     await transactions.run((transaction) =>
-      service.undoArchive(
+      service.undoSettings(
         transaction,
         LIST.listId,
         'archive-in-flight',
@@ -632,7 +845,7 @@ describe('native List transactional outbox', () => {
     expect(await outbox.get(database, 'archive-acknowledged')).toBeUndefined();
 
     await transactions.run((transaction) =>
-      service.undoArchive(
+      service.undoSettings(
         transaction,
         LIST.listId,
         'archive-acknowledged',
@@ -759,7 +972,7 @@ describe('native List transactional outbox', () => {
     );
     await transactions.run((transaction) => outbox.claimNext(transaction.database));
     await transactions.run((transaction) =>
-      service.undoArchive(
+      service.undoSettings(
         transaction,
         LIST.listId,
         'rejected-archive-with-undo',

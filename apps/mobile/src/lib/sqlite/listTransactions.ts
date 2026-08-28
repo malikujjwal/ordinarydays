@@ -1,11 +1,15 @@
 import type { PatchListItemInput } from '@od/shared/client';
 import type { ListTemplateSeed } from '@od/shared/lists';
 import {
+  type ChangeListBehaviourInput,
   type CreateListInput,
   type CreateListItemInput,
+  changeListBehaviourInput,
   createListInput,
   createListItemInput,
   listTemplate,
+  type PatchListInput,
+  patchListInput,
   patchListItemInput,
 } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
@@ -13,7 +17,7 @@ import type { List } from '@od/shared/types';
 import { pendingListFromInput } from '@/lib/pendingList';
 import { pendingListItemFromInput } from '@/lib/pendingListItem';
 import type { ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
-import type { ListsRepository } from '@/lib/sqlite/listsRepository';
+import type { ListsRepository, LocalListSettings } from '@/lib/sqlite/listsRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
@@ -69,12 +73,56 @@ export interface ListItemPatchVariables {
   readonly input: PatchListItemInput;
 }
 
+/**
+ * One durable List **settings** write (P3-25's archive, P3-32's rename, capabilities and slot).
+ *
+ * `input` is the whole `PatchListInput` rather than the archive flag it started as: §P3-32's
+ * three additive controls are the same route, the same `If-Match` and the same opaque Undo
+ * token as archiving, so they ride the same intent instead of acquiring a second one that would
+ * have to be ordered against it.
+ *
+ * ## `previous` is a projection, never an inverse
+ *
+ * It is the local row's values before this write, and it exists for exactly one job: drawing the
+ * old state again the instant Undo is tapped, before the server's compensation has run. The
+ * **real** inverse stays where `undoListOperation` documents it — on the server, behind an
+ * opaque token — and nothing here sends these values back as authority. `setArchivedLocal` has
+ * always done the same thing for archiving; this only stops it being hard-coded to one field.
+ */
 export interface ListPatchVariables {
   readonly listId: string;
   readonly intentId: string;
   readonly idempotencyKey: string;
-  readonly input: { readonly archived: boolean };
+  readonly input: PatchListInput;
   readonly ifMatch: string;
+  /** The committed values this write replaced, for the optimistic half of Undo. */
+  readonly previous?: LocalListSettings;
+}
+
+/**
+ * One durable behaviour change — the P3-32 inventory extension (§P3-09, §P3-32).
+ *
+ * A separate mutation key from `['list','patch']` because it is a separate **route**:
+ * `patchListInput` has no `behaviour` field by type, and the server runs a gated, resumable item
+ * migration rather than one conditional `META` write. Sharing the patch key would mean a push
+ * adapter guessing which endpoint a payload meant.
+ *
+ * `input.confirmation` is present only for a confirmed destructive downgrade, and it is the
+ * server's own preview echoed **whole**. An unconfirmed downgrade never reaches this type: that
+ * call is a direct online preview with its own key and is deliberately not accepted into the
+ * outbox, because a question the user has not answered must not survive the app being closed.
+ *
+ * `idempotencyKey` identifies the *migration*, so a replay resumes the work already started
+ * rather than beginning a second pass over the same items.
+ */
+export interface ListBehaviourVariables {
+  readonly listId: string;
+  readonly intentId: string;
+  readonly idempotencyKey: string;
+  readonly input: ChangeListBehaviourInput;
+  readonly ifMatch: string;
+  /** The behaviour this change replaced, for the optimistic half of an upgrade's Undo. */
+  readonly previous?: LocalListSettings;
 }
 
 export interface ListDeleteVariables {
@@ -180,6 +228,123 @@ function parseItemPatchVariables(
     throw new Error('The saved edit has no retry identity.');
   }
   return { listId, itemId, intentId, idempotencyKey, input: parsed.data };
+}
+
+/** The persisted settings payload, parsed rather than read field by field. */
+function parsePersistedPatch(variables: object): PatchListInput {
+  const parsed = patchListInput.safeParse(Reflect.get(variables, 'input'));
+  if (!parsed.success) {
+    throw new Error('The saved list change is invalid. Discard it and try again.');
+  }
+  return parsed.data;
+}
+
+/** The persisted behaviour payload, including the confirmation a downgrade must echo whole. */
+function parsePersistedBehaviour(variables: object): ChangeListBehaviourInput {
+  const parsed = changeListBehaviourInput.safeParse(Reflect.get(variables, 'input'));
+  if (!parsed.success) {
+    throw new Error('The saved list change is invalid. Discard it and try again.');
+  }
+  return parsed.data;
+}
+
+/** The patch, as the columns the optimistic row draws from. One shape, no re-interpretation. */
+function localSettingsFrom(patch: PatchListInput): LocalListSettings {
+  return {
+    ...(patch.title === undefined ? {} : { title: patch.title }),
+    ...(patch.slot === undefined ? {} : { slot: patch.slot }),
+    ...(patch.archived === undefined ? {} : { archived: patch.archived }),
+    ...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
+  };
+}
+
+/**
+ * The committed values for exactly the fields this patch names, and no others.
+ *
+ * Narrowed to the patch rather than snapshotting the whole row, because Undo has to put back
+ * what *this* operation changed. A whole-row snapshot would also restore a rename somebody made
+ * in between, which is the "never replaces the List with a whole-list snapshot" rule §P3-10
+ * states for items, applied to settings.
+ */
+function previousSettingsFor(current: List, patch: PatchListInput): LocalListSettings {
+  return {
+    ...(patch.title === undefined ? {} : { title: current.title }),
+    ...(patch.slot === undefined ? {} : { slot: current.slot }),
+    ...(patch.archived === undefined ? {} : { archived: current.archived }),
+    ...(patch.capabilities === undefined
+      ? {}
+      : {
+          capabilities: {
+            ...(patch.capabilities.checkable === undefined
+              ? {}
+              : { checkable: current.capabilities.checkable }),
+            ...(patch.capabilities.supportsLocation === undefined
+              ? {}
+              : { supportsLocation: current.capabilities.supportsLocation }),
+          },
+        }),
+  };
+}
+
+/**
+ * Whether the server will retain an inverse for this patch.
+ *
+ * Every additive settings field does; a rename does not, because `interaction-contract.md` §4.1
+ * has no undo row for renaming a list. Creating an offer for a title-only patch would leave a
+ * row waiting forever for a token the response is never going to carry.
+ */
+function recordsInverse(patch: PatchListInput): boolean {
+  return (
+    patch.capabilities !== undefined ||
+    patch.slot !== undefined ||
+    patch.archived !== undefined
+  );
+}
+
+/**
+ * The forward intent's recorded projection, for the local half of an accepted Undo.
+ *
+ * Parsed defensively and never required: an intent written before this field existed simply
+ * restores nothing locally, and the server's compensation — the only authority for what really
+ * goes back — still runs. Refusing the Undo instead would strand the offer.
+ */
+function previousSettingsOf(intent: OutboxIntent | undefined): LocalListSettings {
+  const variables = intent?.variables;
+  if (typeof variables !== 'object' || variables === null) return {};
+  const previous = Reflect.get(variables, 'previous');
+  if (typeof previous !== 'object' || previous === null) return {};
+  const capabilities = Reflect.get(previous, 'capabilities');
+  const title = Reflect.get(previous, 'title');
+  const slot = Reflect.get(previous, 'slot');
+  const archived = Reflect.get(previous, 'archived');
+  const behaviour = Reflect.get(previous, 'behaviour');
+  const flag = (value: unknown) => (typeof value === 'boolean' ? value : undefined);
+  const checkable =
+    typeof capabilities === 'object' && capabilities !== null
+      ? flag(Reflect.get(capabilities, 'checkable'))
+      : undefined;
+  const supportsLocation =
+    typeof capabilities === 'object' && capabilities !== null
+      ? flag(Reflect.get(capabilities, 'supportsLocation'))
+      : undefined;
+  return {
+    ...(typeof title === 'string' ? { title } : {}),
+    ...(slot === null || typeof slot === 'string'
+      ? { slot: slot as LocalListSettings['slot'] }
+      : {}),
+    ...(typeof archived === 'boolean' ? { archived } : {}),
+    ...(typeof behaviour === 'string'
+      ? { behaviour: behaviour as LocalListSettings['behaviour'] }
+      : {}),
+    ...(checkable === undefined && supportsLocation === undefined
+      ? {}
+      : {
+          capabilities: {
+            ...(checkable === undefined ? {} : { checkable }),
+            ...(supportsLocation === undefined ? {} : { supportsLocation }),
+          },
+        }),
+  };
 }
 
 /** Commits each visible List-index mutation with its durable outbox intent. */
@@ -354,18 +519,47 @@ export class ListTransactionService {
     archived: boolean,
     intentId: string,
   ): Promise<OutboxIntent> {
+    return this.patchSettings(transaction, list, { archived }, intentId);
+  }
+
+  /**
+   * One durable List settings write and its optimistic row, in one commit (P3-25, §P3-32).
+   *
+   * The generalisation of what `setArchived` did for one field. Everything the settings sheet
+   * and the inline rename change — `title`, the two capability flags, the default `slot` and
+   * `archived` — is the same route under the same `If-Match`, so it is one intent kind and one
+   * ordering key. Behaviour is **not** here: it has no place in `patchListInput` by type and
+   * goes through {@link changeBehaviour}.
+   *
+   * ## Which changes get an Undo offer, and why the check is on the fields
+   *
+   * The server records an inverse for every additive settings change and none for a rename
+   * (`listSettingsMutation`'s union, `interaction-contract.md` §4.1, which has no undo row for
+   * renaming a list). So the offer row is created when the patch touches anything **other**
+   * than the title, and a title-only patch creates none rather than creating one that would
+   * wait forever for a token the response will not carry.
+   */
+  async patchSettings(
+    transaction: TransactionContext,
+    list: List,
+    patch: PatchListInput,
+    intentId: string,
+  ): Promise<OutboxIntent> {
     const current = await this.lists.getLocal(transaction.database, list.listId);
     if (current === undefined)
       throw new Error('The list is no longer available locally.');
+    const projection = localSettingsFrom(patch);
     const variables: ListPatchVariables = {
       listId: list.listId,
       intentId,
       idempotencyKey: intentId,
-      input: { archived },
-      // The card callback can outlive acknowledgement of an earlier archive. Reading inside
-      // this transaction makes an Undo use the latest committed canonical version, while a
-      // still-queued predecessor retains its original version and is rebased on settlement.
+      input: patch,
+      // The sheet's callback can outlive acknowledgement of an earlier settings write. Reading
+      // inside this transaction makes the next one use the latest committed canonical version,
+      // while a still-queued predecessor retains its original version and is rebased on
+      // settlement.
       ifMatch: current.updatedAt,
+      previous: previousSettingsFor(current, patch),
     };
     const appended = await this.outbox.append(transaction.database, {
       intentId,
@@ -375,8 +569,8 @@ export class ListTransactionService {
       orderingKey: `list:${list.listId}`,
     });
     if (appended.kind === 'inserted') {
-      await this.lists.setArchivedLocal(transaction, list.listId, archived);
-      if (archived) {
+      await this.lists.applyLocalSettings(transaction, list.listId, projection);
+      if (recordsInverse(patch)) {
         await this.outbox.createListArchiveUndoOffer(
           transaction.database,
           intentId,
@@ -389,10 +583,67 @@ export class ListTransactionService {
   }
 
   /**
-   * Accepts archive Undo as a durable compensation, never as a reconstructed PATCH.
-   * If the forward write has not left the queue yet, cancelling it is the exact inverse.
+   * One durable behaviour change and its optimistic row, in one commit (§P3-09, §P3-32).
+   *
+   * The **inventory extension** this task adds: a new `['list','behaviour']` mutation key, its
+   * own variables shape, its own push branch and its own settlement. It is ordered behind every
+   * other write to the same list by the shared `list:<listId>` key, because a migration that
+   * overtook a queued rename would run its `If-Match` against a version that never existed.
+   *
+   * An **upgrade** — the only direction that reaches here without a `confirmation` — records the
+   * Undo offer, because the server retains a dedicated compensation for it (§4.1's upgrade row).
+   * A **confirmed downgrade** records none: what it removed is gone, and an offer would promise
+   * a restore the server cannot make.
    */
-  async undoArchive(
+  async changeBehaviour(
+    transaction: TransactionContext,
+    list: List,
+    input: ChangeListBehaviourInput,
+    intentId: string,
+  ): Promise<OutboxIntent> {
+    const current = await this.lists.getLocal(transaction.database, list.listId);
+    if (current === undefined)
+      throw new Error('The list is no longer available locally.');
+    const variables: ListBehaviourVariables = {
+      listId: list.listId,
+      intentId,
+      idempotencyKey: intentId,
+      input,
+      ifMatch: current.updatedAt,
+      previous: { behaviour: current.behaviour },
+    };
+    const appended = await this.outbox.append(transaction.database, {
+      intentId,
+      mutationKey: ['list', 'behaviour'],
+      variables,
+      entityId: list.listId,
+      orderingKey: `list:${list.listId}`,
+    });
+    if (appended.kind === 'inserted') {
+      await this.lists.applyLocalSettings(transaction, list.listId, {
+        behaviour: input.behaviour,
+      });
+      if (input.confirmation === undefined) {
+        await this.outbox.createListArchiveUndoOffer(
+          transaction.database,
+          intentId,
+          list.listId,
+        );
+      }
+    }
+    transaction.changed('outbox');
+    return appended.intent;
+  }
+
+  /**
+   * Accepts settings Undo as a durable compensation, never as a reconstructed PATCH.
+   * If the forward write has not left the queue yet, cancelling it is the exact inverse.
+   *
+   * The local row is put back from the forward intent's recorded `previous` — its projection,
+   * not its inverse. The server's compensation is the opaque token and only the opaque token;
+   * this is the same optimistic redraw archiving has always done, no longer pinned to one field.
+   */
+  async undoSettings(
     transaction: TransactionContext,
     listId: string,
     originalIntentId: string,
@@ -403,29 +654,30 @@ export class ListTransactionService {
       originalIntentId,
     );
     if (offer === undefined || offer.listId !== listId) {
-      throw new Error('This archive Undo offer is no longer available.');
+      throw new Error('This Undo offer is no longer available.');
     }
     const original = await this.outbox.get(transaction.database, offer.currentIntentId);
+    const restore = previousSettingsOf(original);
     if (original?.status === 'queued' && original.attempts === 0) {
       if (
         !(await this.outbox.cancelQueued(transaction.database, offer.currentIntentId))
       ) {
-        throw new Error('The archive started syncing before it could be cancelled.');
+        throw new Error('The change started syncing before it could be cancelled.');
       }
       await this.outbox.clearListArchiveUndoOffer(transaction.database, originalIntentId);
-      await this.lists.setArchivedLocal(transaction, listId, false);
+      await this.lists.applyLocalSettings(transaction, listId, restore);
       transaction.changed('outbox');
       return { kind: 'cancelled' };
     }
     if (original?.status === 'needs_attention') {
-      throw new Error('The archive needs recovery before it can be undone.');
+      throw new Error('The change needs recovery before it can be undone.');
     }
     if (
       offer.undoToken === undefined &&
       original?.status !== 'in_flight' &&
       !(original?.status === 'queued' && original.attempts > 0)
     ) {
-      throw new Error('The archive acknowledgement did not provide an Undo token.');
+      throw new Error('The acknowledgement did not provide an Undo token.');
     }
     const variables: ListUndoVariables = {
       listId,
@@ -449,7 +701,7 @@ export class ListTransactionService {
         originalIntentId,
         inverseIntentId,
       );
-      await this.lists.setArchivedLocal(transaction, listId, false);
+      await this.lists.applyLocalSettings(transaction, listId, restore);
     }
     transaction.changed('outbox');
     return { kind: 'queued', intent: appended.intent };
@@ -556,15 +808,18 @@ export class ListTransactionService {
       );
       return intent;
     }
-    if (intent.mutationKey[1] === 'patch') {
-      const input = Reflect.get(variables, 'input');
-      const archived =
-        typeof input === 'object' && input !== null
-          ? Reflect.get(input, 'archived')
-          : undefined;
-      if (typeof archived !== 'boolean') {
-        throw new Error('The List settings retry payload is malformed.');
-      }
+    if (intent.mutationKey[1] === 'patch' || intent.mutationKey[1] === 'behaviour') {
+      /*
+       * Both settings routes retry the same way: re-project the durable payload onto whatever
+       * truth now is, and rebase its `If-Match` onto the version the rollback restored. Parsed
+       * rather than read field by field, so a payload written by an older build fails here with
+       * words the recovery banner can show instead of being sent as something the server will
+       * reject.
+       */
+      const settings =
+        intent.mutationKey[1] === 'patch'
+          ? localSettingsFrom(parsePersistedPatch(variables))
+          : { behaviour: parsePersistedBehaviour(variables).behaviour };
       const current = await this.lists.getLocal(transaction.database, intent.entityId);
       if (current === undefined) {
         throw new Error('The list is no longer available locally.');
@@ -578,10 +833,15 @@ export class ListTransactionService {
         transaction.database,
         intent.intentId,
       );
-      await this.lists.setArchivedLocal(
+      /*
+       * An Undo the user already accepted outranks the forward change it compensates: retrying
+       * the original must not redraw a state they have taken back. So the projection is the
+       * recorded `previous` in that case, and the forward payload in every other.
+       */
+      await this.lists.applyLocalSettings(
         transaction,
         intent.entityId,
-        undoOffer?.inverseIntentId === undefined ? archived : false,
+        undoOffer?.inverseIntentId === undefined ? settings : previousSettingsOf(intent),
       );
       return rebased;
     }

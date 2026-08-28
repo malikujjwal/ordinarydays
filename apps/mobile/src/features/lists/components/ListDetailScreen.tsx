@@ -1,19 +1,11 @@
-import {
-  Button,
-  EmptyState,
-  IconButton,
-  MoreHorizontal,
-  ScreenShell,
-  Skeleton,
-  Text,
-  useTheme,
-} from '@od/ui';
+import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
 import { useListItemActions } from '../hooks/useListItemActions';
+import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
 import { useWatchActions } from '../hooks/useWatchActions';
 import {
@@ -36,8 +28,10 @@ import { orderedItems, reorderRange } from '../model/reorder';
 import { groupDropIndex } from '../model/watchSections';
 import { AddItemRow } from './AddItemRow';
 import { ItemSheet } from './ItemSheet';
+import { ListHeader } from './ListHeader';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
+import { ListSettingsSheet } from './ListSettingsSheet';
 import { ReorderableList } from './ReorderableList';
 import { WatchSections } from './WatchSections';
 
@@ -65,8 +59,15 @@ import { WatchSections } from './WatchSections';
  *
  * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
  * list's own `behaviour` and `capabilities` and nothing else. A body tap opens P3-29's
- * `ItemSheet`, and its checkbox writes through the same item PATCH path the sheet uses; there
- * is still no rename or settings (P3-32).
+ * `ItemSheet`, and its checkbox writes through the same item PATCH path the sheet uses.
+ *
+ * ## Settings arrive through one overlay, not through five call sites
+ *
+ * `useListSettings` owns the rename, the two capability toggles, the slot and the behaviour
+ * change (P3-32), and this screen reads `settings.view` — the committed row with the user's
+ * un-acknowledged change drawn over it — as **the** list. Everything below renders from that one
+ * value, so a toggle cannot show as on in the sheet while the rows below it still draw no
+ * checkbox. Rename is inline on `ListHeader`'s title and appears in no menu (§5.6).
  *
  * ## The tick is a set, and it is drawn before the server agrees
  *
@@ -119,11 +120,22 @@ export function ListDetailScreen({
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
   const [checks, setChecks] = useState<CheckedOverrides>(NO_OVERRIDES);
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({ onSaved: view.refresh, onRemoved: view.refetch });
   const watch = useWatchActions(view.refresh);
+  /*
+   * `refresh` for a change this device accepted — native re-reads SQLite, web asks the server —
+   * and `refetch` for the online downgrade preview that turned out to lose nothing and was
+   * applied server-side, which no local projection knows about. The same split `ItemSheet` takes.
+   */
+  const settings = useListSettings({
+    list: view.list,
+    onChanged: view.refresh,
+    onServerChanged: view.refetch,
+  });
   const reorder = useReorderItems({
     listId,
     /*
@@ -131,7 +143,7 @@ export function ListDetailScreen({
      * un-draggable and `supportsLocation` has nothing to say about position — so handing the
      * whole list row would be handing over fields nothing here may branch on.
      */
-    list: { behaviour: view.list?.behaviour ?? 'collection' },
+    list: { behaviour: settings.view?.behaviour ?? 'collection' },
     items: view.items,
     applyRank: view.applyRank,
     onMoved: view.refresh,
@@ -166,37 +178,20 @@ export function ListDetailScreen({
     [view.loadMore],
   );
 
-  const list = view.list;
+  /*
+   * One overlay, applied once, so the header, the rows, the `⋯` menu and the settings sheet all
+   * draw the same optimistic truth. A sheet showing checkboxes on while the rows below still
+   * drew none is the flicker §1a.1's "applies immediately, optimistically" exists to prevent.
+   */
+  const list = settings.view;
 
   const header = (
-    <View style={{ gap: theme.space[2], paddingBottom: theme.space[3] }}>
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <Button
-          label="Back"
-          variant="ghost"
-          flush
-          onPress={onBack}
-          testID="list-detail-back"
-        />
-        {list === undefined ? null : (
-          <IconButton
-            icon={MoreHorizontal}
-            label="More"
-            onPress={() => setMenuOpen(true)}
-            testID="list-detail-menu"
-          />
-        )}
-      </View>
-      <Text variant="display" color="textDisplay" accessibilityRole="header">
-        {list?.title ?? 'List'}
-      </Text>
-    </View>
+    <ListHeader
+      list={list}
+      onBack={onBack}
+      onOpenMenu={() => setMenuOpen(true)}
+      onRename={settings.rename}
+    />
   );
 
   return (
@@ -382,6 +377,19 @@ export function ListDetailScreen({
             // Archiving leaves the index, so it leaves this screen with it (§5.6).
             onBack();
           }}
+          onOpenSettings={() => {
+            setMenuOpen(false);
+            setSettingsOpen(true);
+          }}
+        />
+      )}
+
+      {list === undefined ? null : (
+        <ListSettingsSheet
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          list={list}
+          settings={settings}
         />
       )}
     </ScreenShell>

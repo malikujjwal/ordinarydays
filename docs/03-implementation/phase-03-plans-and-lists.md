@@ -2211,8 +2211,9 @@ may never have opened. Making it durable needs the intent to carry the item rath
 
 ### P3-32 — Inline List title edit; settings for capabilities, slot and behaviour
 
-**Files.** `apps/mobile/src/features/lists/ListHeader.tsx`,
-`apps/mobile/src/features/lists/ListSettingsSheet.tsx`.
+**Files.** `apps/mobile/src/features/lists/components/{ListHeader.tsx, ListSettingsSheet.tsx}`
+— under `components/`, where `repo-structure.md` §7 puts a feature's components and where every
+sibling in this slice already lives (`ListHeaderMenu.tsx`, `ItemSheet.tsx`). Corrected in P3-32.
 
 **What to build.** Rename is inline on the List header title: activating the title swaps it for
 a focused text field, and save/cancel returns focus to the title. It is not duplicated in the
@@ -2235,10 +2236,24 @@ and no dialog. Only destructive behaviour changes go through a confirmation in t
   confirmation.
 - Downgrading (`watch` or `meals` → anything) sends the behaviour `POST` **without** a
   `confirmation`, receives the `409`, and renders the server's field list and item count
-  verbatim: "This will remove season, episode and watch status from 7 items. This cannot be
-  undone." That direct online preview carries its own key but is not accepted into the outbox.
+  verbatim, in the dialog
+  [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5.5 mocks — heading,
+  `This will remove:`, `Watch status, season and episode from 7 items`, and the `Keeps:` line.
+  That direct online preview carries its own key but is not accepted into the outbox.
   Only on confirm does the client enqueue a new replay-protected call with the complete
   `confirmation` object echoed in its body and its own stable idempotency key.
+
+> **Amended 2026-08-28 (P3-32) — the quoted sentence pointed at §5.5 instead.** This bullet
+> used to spell the dialog out as *"This will remove season, episode and watch status from 7
+> items. This cannot be undone."* Three things about that paraphrase disagreed with
+> [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5.5, which mocks the
+> same dialog and outranks this file on behaviour: the field order is the server's
+> (`Watch status, Season, Episode`), §5.5 carries a `Keeps:` line naming what survives, and it
+> has no "cannot be undone" sentence —
+> [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §1a.1's
+> required shape does not include one either, and names `This can't be undone.` *alone* as a
+> defect. Nothing about the protocol changes; only the illustrative copy, which now points at
+> the one place that owns it.
 
 > **Decision:** the client asks the server what would be lost rather than computing it
 > locally. A count computed from a paginated cache would be wrong for a long list, and being
