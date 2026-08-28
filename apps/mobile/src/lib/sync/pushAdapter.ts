@@ -11,6 +11,7 @@ import {
   duplicateActivity,
   patchActivityForReplay,
   patchListForReplay,
+  patchListItem,
   scheduleActivity,
   skipActivity,
   snoozeActivity,
@@ -29,8 +30,10 @@ import {
   createListItemInput,
   type PatchActivityInput,
   type PatchListInput,
+  type PatchListItemInput,
   patchActivityInput,
   patchListInput,
+  patchListItemInput,
   type ReminderInput,
   reminderInput,
   type ScheduleActivityInput,
@@ -103,6 +106,8 @@ export interface ListPushTransport {
     input: CreateListItemInput,
     idempotencyKey: string,
   ): Promise<unknown>;
+  /** No `Idempotency-Key`: the route is not replay-protected, per §5.11.5 (P3-29). */
+  patchItem(listId: string, itemId: string, input: PatchListItemInput): Promise<unknown>;
   patch(
     listId: string,
     input: PatchListInput,
@@ -174,6 +179,7 @@ export const sharedListPushTransport: ListPushTransport = {
   create: (input, idempotencyKey) => createList(apiClient, input, idempotencyKey),
   createItem: (listId, input, idempotencyKey) =>
     createListItem(apiClient, listId, input, idempotencyKey),
+  patchItem: (listId, itemId, input) => patchListItem(apiClient, listId, itemId, input),
   patch: (listId, input, ifMatch, idempotencyKey) =>
     patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
@@ -341,6 +347,20 @@ export class ActivityPushAdapter {
         listId,
         parsePersisted(createListItemInput, field(value, 'input')),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+      );
+    }
+    if (name === 'item-patch') {
+      /* The entity is the item here too, and for the same reason the create records. */
+      const itemId = requiredString(field(value, 'itemId'), 'itemId');
+      if (itemId !== intent.entityId) {
+        throw new DurableActivityIntentError(
+          'Durable list item intent entity identity does not match its payload.',
+        );
+      }
+      return this.listTransport.patchItem(
+        listId,
+        itemId,
+        parsePersisted(patchListItemInput, field(value, 'input')),
       );
     }
     if (listId !== intent.entityId) {

@@ -1,4 +1,9 @@
-import type { List, ListItemPlanState, ListItemView } from '@od/shared/types';
+import type {
+  List,
+  ListItemDetails,
+  ListItemPlanState,
+  ListItemView,
+} from '@od/shared/types';
 
 /**
  * What a list row renders, decided from the list's own fields and the item (§P3-28, §5.7).
@@ -84,12 +89,31 @@ export function spokenWatchProgress(item: ListItemView): string | undefined {
 export function watchStatusLabel(item: ListItemView): string | undefined {
   const details = item.details;
   if (details?.behaviour !== 'watch') return undefined;
-  return {
-    want: 'Want to watch',
-    watching: 'Watching',
-    watched: 'Watched',
-  }[details.watchStatus];
+  return WATCH_STATUS_LABELS[details.watchStatus];
 }
+
+/**
+ * §5.2's three headings, in §8.1's stored order, as the one place the words live.
+ *
+ * The chip, P3-31's group headings and P3-29's any-to-any status control all say them, and a
+ * second copy is how one of the three comes to read `Want` in one place and `Want to watch` in
+ * another. Ordered `want -> watching -> watched`, which is the transition order §8.1 states;
+ * the *list* renders `Watching` first, and that is P3-31's ordering rather than this one.
+ */
+export const WATCH_STATUS_LABELS = {
+  want: 'Want to watch',
+  watching: 'Watching',
+  watched: 'Watched',
+} as const satisfies Record<WatchStatus, string>;
+
+/** The three values, in the same order, for a control that has to enumerate them. */
+export const WATCH_STATUSES = ['want', 'watching', 'watched'] as const;
+
+/**
+ * Derived from the shared union rather than re-declared, so a fourth status added in
+ * `packages/shared` fails the `satisfies` above instead of quietly rendering nothing.
+ */
+export type WatchStatus = Extract<ListItemDetails, { behaviour: 'watch' }>['watchStatus'];
 
 /**
  * The ingredient count on a `meals` row.

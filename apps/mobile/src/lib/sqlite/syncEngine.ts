@@ -396,10 +396,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       return false;
     }
     if (intent.mutationKey[0] === 'list') {
-      // An item rejection rolled its own row back already; there is no List index to refresh.
-      return intent.mutationKey[1] === 'item-create'
-        ? true
-        : this.recoverRejectedListIntent(intent);
+      // A rejected item create rolled its own row back already, with no read to repeat and
+      // no List index to refresh. A rejected edit may still owe one (P3-29).
+      if (intent.mutationKey[1] === 'item-create') return true;
+      if (intent.mutationKey[1] === 'item-patch') {
+        return this.recoverRejectedItemPatchIntent(intent);
+      }
+      return this.recoverRejectedListIntent(intent);
     }
     if (intent.recoveryRequired !== true) return false;
     const occurrenceDate = occurrenceDateFromIntent(intent);
@@ -1151,13 +1154,21 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         intent.orderingKey,
         intent.seq,
       );
-      if (intent.mutationKey[1] === 'item-create') {
+      if (
+        intent.mutationKey[1] === 'item-create' ||
+        intent.mutationKey[1] === 'item-patch'
+      ) {
         const item = listItemFromResponse(response);
         if (item?.itemId !== intent.entityId) {
-          throw new Error('List item creation acknowledged a different item.');
+          throw new Error('A list item write acknowledged a different item.');
         }
-        // Server truth over the optimistic row: the rank it allocated, and the provenance
-        // and revision fences only it can resolve.
+        /*
+         * Server truth over the optimistic row, for both writes and for the same reason: the
+         * create's allocated rank and resolved provenance, and the patch's server-decided
+         * result — including whatever a concurrent member changed in the fields this edit did
+         * not touch. Later queued work for this list owns the row afterwards through its own
+         * settlement, exactly as the List branches below arrange.
+         */
         await this.requireItems().installAcknowledged(transaction, item);
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
@@ -1439,6 +1450,10 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       await this.rollbackPermanentItemRejection(intent, failure);
       return;
     }
+    if (intent.mutationKey[1] === 'item-patch') {
+      await this.rollbackPermanentItemPatchRejection(intent, failure);
+      return;
+    }
     let rows: readonly List[] | undefined;
     try {
       rows = await this.pullAllLists();
@@ -1509,6 +1524,125 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
       transaction.changed('outbox');
     });
+  }
+
+  /**
+   * A rejected item **edit** leaves a row that must go back to being the server's (P3-29).
+   *
+   * The opposite of the create above, and the distinction is the whole reason this is a second
+   * method: the create's row was the only copy that ever existed, so it goes with the
+   * rejection; the patch's row exists on the server and only the edit was refused. Deleting it
+   * would take a real item off the screen because one of its fields was rejected.
+   *
+   * One targeted read, not a page pull: `GET /v1/lists/:id/items/:itemId` names exactly the row
+   * in question, and re-pulling the list would discard every cursor and restart pagination to
+   * repair one field. A `404` means the item is genuinely gone — someone deleted it during the
+   * window — and removing it locally is then the restore, not a loss.
+   *
+   * A read that fails for any other reason leaves the optimistic row in place and the receipt
+   * `recoveryRequired`, so Retry/Discard still has authoritative truth to install first.
+   */
+  private async rollbackPermanentItemPatchRejection(
+    intent: OutboxIntent,
+    failure: Error,
+  ): Promise<void> {
+    const items = this.requireItems();
+    const listId = field(intent.variables, 'listId');
+    const pullItem = this.pull.listItem;
+    let canonical: ListItemRow | undefined;
+    let missing = false;
+    if (pullItem !== undefined && typeof listId === 'string') {
+      try {
+        canonical = await this.serialNetwork(() => pullItem(listId, intent.entityId));
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          missing = true;
+        } else if (__DEV__) {
+          console.warn('native_item_patch_rollback_read_failed', {
+            intentId: intent.intentId,
+            message: message(error),
+          });
+        }
+      }
+    }
+    const restored = canonical !== undefined || missing;
+    await this.transactions.run(async (transaction) => {
+      await this.outbox.needsAttention(
+        transaction.database,
+        intent.intentId,
+        rejectedAttention(failure, !restored),
+        failure.message,
+      );
+      if (canonical !== undefined) {
+        await items.installAcknowledged(transaction, canonical);
+      } else if (missing && typeof listId === 'string') {
+        await items.removeCanonical(transaction, listId, intent.entityId);
+      }
+      transaction.changed('outbox');
+    });
+  }
+
+  /**
+   * Repeats the one targeted read a rejected item edit could not complete (P3-29).
+   *
+   * `recoveryRequired` is set only when {@link rollbackPermanentItemPatchRejection} could not
+   * reach the server, so the common case returns immediately: the row is already the server's
+   * and Retry or Discard may proceed. When it is set, the row on screen is still the refused
+   * edit, and blessing it would be exactly the stale-data promotion the receipt exists to stop.
+   */
+  private async recoverRejectedItemPatchIntent(intent: OutboxIntent): Promise<boolean> {
+    if (intent.recoveryRequired !== true) return true;
+    try {
+      const items = this.requireItems();
+      const listId = field(intent.variables, 'listId');
+      const pullItem = this.pull.listItem;
+      if (pullItem === undefined || typeof listId !== 'string') {
+        throw new Error('Native list item state is not ready.');
+      }
+      let canonical: ListItemRow | undefined;
+      try {
+        canonical = await this.serialNetwork(() => pullItem(listId, intent.entityId));
+      } catch (error) {
+        // `404` is an answer: the item is gone, and removing it locally is the restore.
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+      }
+      return await this.transactions.run(async (transaction) => {
+        const current = await this.outbox.get(transaction.database, intent.intentId);
+        if (
+          current?.status !== 'needs_attention' ||
+          current.mutationKey[0] !== 'list' ||
+          current.entityId !== intent.entityId
+        ) {
+          return false;
+        }
+        if (canonical === undefined) {
+          await items.removeCanonical(transaction, listId, intent.entityId);
+        } else {
+          await items.installAcknowledged(transaction, canonical);
+        }
+        if (
+          current.recoveryRequired === true &&
+          !(await this.outbox.completeAuthoritativeRecovery(
+            transaction.database,
+            intent.intentId,
+          ))
+        ) {
+          throw new Error(
+            'The authoritative list item recovery receipt changed during installation.',
+          );
+        }
+        transaction.changed('outbox');
+        return true;
+      });
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('native_rejected_item_patch_recovery_failed', {
+          intentId: intent.intentId,
+          message: message(error),
+        });
+      }
+      return false;
+    }
   }
 
   /** Restores authoritative List state before a Retry/Discard retires its recovery receipt. */

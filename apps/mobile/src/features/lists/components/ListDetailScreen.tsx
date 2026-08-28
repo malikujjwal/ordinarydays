@@ -21,6 +21,7 @@ import {
 } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
 import { AddItemRow } from './AddItemRow';
+import { ItemSheet } from './ItemSheet';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
 
@@ -47,21 +48,40 @@ import { ListItemRow } from './ListItemRow';
  * ## What this screen deliberately does not do
  *
  * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
- * list's own `behaviour` and `capabilities` and nothing else. There is no reorder (P3-30), no
- * item sheet (P3-29) and no rename or settings (P3-32), so a row body tap does nothing yet
- * rather than pretending to open something.
+ * list's own `behaviour` and `capabilities` and nothing else. A body tap opens P3-29's
+ * `ItemSheet`; there is still no reorder (P3-30) and no rename or settings (P3-32).
+ *
+ * ## The open row is held by id, not by value
+ *
+ * `ItemSheet` is handed the row **out of `view.items`** each render, so a save that refreshes
+ * the projection reaches the open sheet as new committed values rather than leaving it editing
+ * a copy taken when it opened. An item deleted underneath — by Undo expiring, or by another
+ * member — closes the sheet rather than editing a row that is gone.
  */
 export interface ListDetailScreenProps {
   listId: string;
   onBack: () => void;
+  /**
+   * Opens an Activity, for §7.5's provenance row inside the item sheet.
+   *
+   * Owned by the route, like every other navigation on this screen. Absent leaves the
+   * provenance row plain text, which is what it is on the row itself in v1.
+   */
+  onOpenActivity?: (activityId: string) => void;
 }
 
-export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
+export function ListDetailScreen({
+  listId,
+  onBack,
+  onOpenActivity,
+}: ListDetailScreenProps) {
   const theme = useTheme();
   const view = useListDetail(listId);
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [openItemId, setOpenItemId] = useState<string>();
+  const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
 
   const progress = {
     itemCount: view.itemCount,
@@ -186,6 +206,7 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
                 key={item.itemId}
                 list={list}
                 item={item}
+                onOpen={() => setOpenItemId(item.itemId)}
                 onOpenLocation={() => void openInMaps(item.location)}
                 testID={`list-item-${item.itemId}`}
               />
@@ -210,6 +231,24 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
           />
         )}
       </ScrollView>
+
+      {list === undefined || openItem === undefined ? null : (
+        <ItemSheet
+          open
+          list={list}
+          item={openItem}
+          onClose={() => setOpenItemId(undefined)}
+          /*
+           * The same pair the screen already draws on: `refresh` for a write this device has
+           * committed — native re-reads SQLite, web asks the server — and `refetch` for the
+           * online delete, which only the server knows about. `useListBulkActions` takes
+           * `refetch` for its deletes for exactly this reason.
+           */
+          onChanged={view.refresh}
+          onRemoved={view.refetch}
+          {...(onOpenActivity === undefined ? {} : { onOpenSource: onOpenActivity })}
+        />
+      )}
 
       {list === undefined ? null : (
         <ListHeaderMenu
