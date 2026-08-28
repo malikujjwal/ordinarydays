@@ -48,6 +48,8 @@ export interface WatchSectionsProps {
   /** §3.2's left-swipe actions for a watch row. An empty list disables the gesture. */
   actions: readonly ListSwipeAction[];
   onAction: (item: ListItemRowType, action: ListSwipeAction) => void;
+  /** U1 — the body opens the item sheet, on this row as on every other (§3.2). */
+  onOpen?: (item: ListItemRowType) => void;
   /** A drop **within** a section: the position among that group's rows. */
   onReorder: (itemId: string, withinGroup: number) => void;
   testID?: string;
@@ -58,6 +60,7 @@ export function WatchSections({
   items,
   actions,
   onAction,
+  onOpen,
   onReorder,
   testID = 'watch-sections',
 }: WatchSectionsProps) {
@@ -109,6 +112,7 @@ export function WatchSections({
                 item={item}
                 actions={actions}
                 onAction={(action) => onAction(item, action)}
+                {...(onOpen === undefined ? {} : { onOpen: () => onOpen(item) })}
                 testID={`list-item-${item.itemId}`}
               />
             )}

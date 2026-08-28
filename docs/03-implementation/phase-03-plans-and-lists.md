@@ -1909,9 +1909,21 @@ assertion — or a grep test in CI — that the file contains no template key st
 > the phase table had no task that owned check/uncheck and P3-28 shipped the control
 > deliberately disabled while none existed. Raised in P3-28's PR.
 
-**Files.** `apps/mobile/src/features/lists/ItemSheet.tsx`,
-`apps/mobile/src/hooks/usePatchListItem{,.native}.ts` (or wherever two features can share it,
-per `repo-structure.md` §3.2).
+**Files.** `apps/mobile/src/features/lists/components/ItemSheet.tsx`,
+`apps/mobile/src/features/lists/hooks/usePatchListItem{,.native}.ts`,
+`apps/mobile/src/features/lists/hooks/useListItemActions.ts`,
+`apps/mobile/src/features/lists/model/{itemSheet,itemUndoToast,undoOffer,checkedOverride}.ts`,
+wiring in `ListDetailScreen.tsx` and the `/lists/:listId` route.
+
+The PATCH hook stays **inside the feature**: `repo-structure.md` §3.2 moves a thing up to
+`src/hooks/` when *two features* need it, and both callers — the sheet and P3-28's row — are
+`features/lists`. The parenthetical in the amendment above allows exactly this.
+
+Its native half extends the P3-27 inventory rather than adding a domain:
+`lib/sqlite/{listItemsRepository,listTransactions,syncEngine,outbox}.ts` and
+`lib/sync/pushAdapter.ts` learn the `['list','item-patch']` intent — the merge, the route, the
+settlement, the rejection rollback, and the protection of a pending edit from a page that
+predates it.
 
 **What to build.** The sheet opened by tapping an item row's body (U1). Per
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5.6: title, note,
@@ -1973,6 +1985,39 @@ Focus lands on the first control, is trapped, and returns to the row on close
 set appears — a location field on a `supportsLocation: false` list is absent, not
 disabled; delete shows no dialog and shows the undo toast; Playwright: rename an item,
 open its linked Plan, assert the Plan title is unchanged; the CI grep for template keys.
+
+**Decisions recorded while building this (2026-08-28), each raised in its PR.**
+
+- **Provenance resolvability is a client-side reading, not a field.** Nothing on the wire says
+  whether `sourceActivityId` still resolves, so the row offers navigation until an attempt
+  meets a `404` and degrades to plain text for the rest of the sheet's life. **Only** a `404`:
+  offline or a `5xx` still navigates, because a row that went dead in a tunnel would be lying
+  about the data.
+- **A builder writes only when something changed.** The sheet commits on blur, so tapping
+  `Delete` blurs the title — a write fired there would race the delete that caused it, and on a
+  shared list would re-assert an untouched field over another member's edit under
+  last-write-wins.
+- **`Mark as watched` is absent once the item is `watched`**, like every other control this
+  phase offers only when it can be taken. The any→any chips remain.
+- **Deleting one item is online-first on both platforms**, matching `Clear checked` and
+  `Uncheck all`, which are §P3-10's other half and already delete items through one online
+  call. Undo *is* the server's opaque token, so an offline delete would have nothing to offer
+  it with until acknowledgement. The consequence is that
+  [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5.4's "Undo
+  while offline: works" is not yet true for this action on native; closing it needs the
+  item-scoped equivalent of the archive Undo offer the outbox already keeps for lists, which is
+  **not** in this task.
+
+**Not built here, and why.**
+
+- **`Plan this item`** (P3-33) and **`Add ingredients to…`** (P3-42) are **absent, not
+  disabled**. Both name a flow this build does not have, and §5.6 offers an action when it can
+  be taken.
+- **The §6.2 state line inside the sheet.** Its eligibility rule is P3-28's
+  (`mayShowPlanStateLine`) and its wording is P3-34's, and no projection carries the
+  `viewerLink`/`viewerPlan` pair yet: `useListDetail` keeps only `entry.item` on web, and the
+  native `list_items` slice has no columns for a per-viewer pointer. Rendering it needs those
+  three pieces, and the row renderer already takes the props for when they exist.
 
 ---
 
@@ -2147,17 +2192,20 @@ absent; unit test that the progress-update mutation applies `want → watching` 
   schema is meant to reject it; if one arrives anyway it renders without a heading rather than
   being filed under `Want to watch`, which is P3-28's rule for the same data one level down.
   Dropping it would hide a row the user owns.
-- **`Delete` is listed but not wired.** §3.2 gives this row `Mark watched` · `Delete`;
-  `watchItemSwipeActions()` states both and their order, and the component renders an action
-  only where the caller supplied a handler. The item delete and its undo belong to **P3-29**,
-  which is not on `main` — see the seam below.
+- **`Delete` is listed and, since P3-29 landed, wired.** §3.2 gives this row `Mark watched` ·
+  `Delete`; `watchItemSwipeActions()` states both and their order, and the component renders an
+  action only where the caller supplied a handler. Both handlers exist now.
 
-**The P3-29 seam.** The status write here is an online-first `patchListItem`, which is what every
-merged item write on this screen does (`useReorderItems`, `useListBulkActions`). P3-29 owns the
-durable item-write path — `usePatchListItem{,.native}` and the `['list','item-patch']` intent —
-and when it lands, `useWatchActions`' two calls become that hook and native gains an offline
-`Mark watched`, and its `Delete` handler fills the second swipe action. A second durable path
-built here would be the drift the one-mutation-path rule exists to prevent.
+**The P3-29 seam, closed when it landed (2026-08-28).** `Mark watched` goes through
+`usePatchListItem` — the one item-write path — so on native the row and its
+`['list','item-patch']` intent commit together and the swipe works with no signal. The row it
+names is on screen, so the committed local row that path requires is there by construction.
+
+`confirmFollowUp` stays **online-first**, and that is a precondition rather than an oversight:
+the durable path reads the committed row inside its writer transaction and refuses an item this
+device does not hold, and §8.4's follow-up is confirmed from **Today**, about a list the device
+may never have opened. Making it durable needs the intent to carry the item rather than find it.
+**That is P3-43's to answer**, with the surface that offers the question.
 
 ---
 

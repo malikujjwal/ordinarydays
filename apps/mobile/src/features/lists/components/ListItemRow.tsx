@@ -55,7 +55,8 @@ import {
  * ## The checkbox is the only tap that mutates
  *
  * `CLAUDE.md` rule 6 and U1/U2: the body opens item detail, the address opens Maps, the state
- * line opens the Activity, and only the checkbox writes. Each is its own 44 pt target — which
+ * line opens the Activity, and only the checkbox writes — as `checked: next`, the absolute
+ * value, which is why the callback takes one rather than being a bare `onToggle` (§5.11.5). Each is its own 44 pt target — which
  * is `Touchable`'s minimum — because they mean four different things.
  *
  * ## Retained is not cleared
@@ -152,11 +153,11 @@ export function ListItemRow({
           checked={item.checked}
           label={checkboxLabel(item)}
           /*
-           * Disabled rather than inert while no caller can operate it. The tick's own write
-           * has no owning phase task yet (raised in P3-28's PR), and a control that looks
-           * live and does nothing is the worse of the two incomplete states: `Checkbox`
-           * draws the disabled form and announces `aria-disabled`, so nothing is implied by
-           * colour alone (§6.4).
+           * Disabled rather than inert without a caller. P3-29 owns the write and the list
+           * screen supplies it, so this is now the exception rather than the rule — but a
+           * surface that renders the row without one still gets the disabled form and its
+           * `aria-disabled`, because a control that looks live and does nothing is the worse
+           * of the two incomplete states and nothing may be implied by colour alone (§6.4).
            */
           disabled={onToggleChecked === undefined}
           {...(onToggleChecked === undefined ? {} : { onChange: onToggleChecked })}
