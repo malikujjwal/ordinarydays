@@ -19,9 +19,10 @@ import {
   mayActOnWholeList,
   mayShowEmptyState,
 } from '../model/listDetail';
+import { openInMaps } from '../model/openInMaps';
 import { AddItemRow } from './AddItemRow';
 import { ListHeaderMenu } from './ListHeaderMenu';
-import { ListItemTitleRow } from './ListItemTitleRow';
+import { ListItemRow } from './ListItemRow';
 
 /**
  * One list, its items and its inline add row
@@ -45,9 +46,10 @@ import { ListItemTitleRow } from './ListItemTitleRow';
  *
  * ## What this screen deliberately does not do
  *
- * Rows are `ListItemTitleRow`, which P3-28 replaces with the capability-driven renderer; there
- * is no checkbox, no reorder (P3-30), no item sheet (P3-29), and no rename or settings
- * (P3-32). Tapping a row does nothing yet rather than pretending to open something.
+ * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
+ * list's own `behaviour` and `capabilities` and nothing else. There is no reorder (P3-30), no
+ * item sheet (P3-29) and no rename or settings (P3-32), so a row body tap does nothing yet
+ * rather than pretending to open something.
  */
 export interface ListDetailScreenProps {
   listId: string;
@@ -172,12 +174,19 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
             body={list.emptyStateCopy}
             testID="list-detail-empty"
           />
-        ) : (
+        ) : list === undefined ? null : (
           <View testID="list-detail-items">
+            {/*
+             * The row is handed the list's own `behaviour` and `capabilities` and nothing
+             * else — not the title, not the template key. That narrowing is the whole of
+             * ADR-032 at the call site (P3-28).
+             */}
             {view.items.map((item) => (
-              <ListItemTitleRow
+              <ListItemRow
                 key={item.itemId}
+                list={list}
                 item={item}
+                onOpenLocation={() => void openInMaps(item.location)}
                 testID={`list-item-${item.itemId}`}
               />
             ))}
