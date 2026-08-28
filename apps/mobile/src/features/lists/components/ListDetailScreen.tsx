@@ -8,11 +8,20 @@ import {
   Text,
   useTheme,
 } from '@od/ui';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
+import { useListItemActions } from '../hooks/useListItemActions';
+import {
+  type CheckedOverrides,
+  isChecked,
+  NO_OVERRIDES,
+  settleOverrides,
+  withOverride,
+  withoutOverride,
+} from '../model/checkedOverride';
 import {
   checkedCount,
   ITEM_SCROLL_FETCH_RATIO,
@@ -49,7 +58,15 @@ import { ListItemRow } from './ListItemRow';
  *
  * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
  * list's own `behaviour` and `capabilities` and nothing else. A body tap opens P3-29's
- * `ItemSheet`; there is still no reorder (P3-30) and no rename or settings (P3-32).
+ * `ItemSheet` and the checkbox writes through the same item PATCH path the sheet uses; there is
+ * still no reorder (P3-30) and no rename or settings (P3-32).
+ *
+ * ## The tick is a set, and it is drawn before the server agrees
+ *
+ * `onToggleChecked` receives the **next** value and sends it as `checked: next` — never
+ * `!checked` recomputed anywhere (§5.11.5). Until the projection carries that value the row
+ * draws it from `checkedOverride.ts`, so two people ticking `Milk` at once end with it checked
+ * once, and neither of them watches it flicker.
  *
  * ## The open row is held by id, not by value
  *
@@ -81,7 +98,14 @@ export function ListDetailScreen({
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
+  const [checks, setChecks] = useState<CheckedOverrides>(NO_OVERRIDES);
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
+  const items = useListItemActions({ onSaved: view.refresh, onRemoved: view.refetch });
+
+  // Retire each pending tick as the projection catches up with it, and never before.
+  useEffect(() => {
+    setChecks((current) => settleOverrides(current, view.items));
+  }, [view.items]);
 
   const progress = {
     itemCount: view.itemCount,
@@ -205,8 +229,17 @@ export function ListDetailScreen({
               <ListItemRow
                 key={item.itemId}
                 list={list}
-                item={item}
+                item={{ ...item, checked: isChecked(item, checks) }}
                 onOpen={() => setOpenItemId(item.itemId)}
+                onToggleChecked={(next) => {
+                  setChecks((current) => withOverride(current, item.itemId, next));
+                  void items.save(item, { checked: next }).then((saved) => {
+                    // A refused tick goes back to committed truth; §5.3's toast is the hook's.
+                    if (!saved) {
+                      setChecks((current) => withoutOverride(current, item.itemId));
+                    }
+                  });
+                }}
                 onOpenLocation={() => void openInMaps(item.location)}
                 testID={`list-item-${item.itemId}`}
               />

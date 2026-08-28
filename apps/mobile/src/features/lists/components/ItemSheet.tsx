@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Platform, View } from 'react-native';
 import { newLocalId } from '@/lib/localIds';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
-import { useItemSheetActions } from '../hooks/useItemSheetActions';
+import { useListItemActions } from '../hooks/useListItemActions';
 import {
   type IngredientRow,
   ingredientRows,
@@ -118,7 +118,7 @@ export function ItemSheet({
   testID = 'item-sheet',
 }: ItemSheetProps) {
   const theme = useTheme();
-  const actions = useItemSheetActions({ onSaved: onChanged, onRemoved });
+  const actions = useListItemActions({ onSaved: onChanged, onRemoved });
   const fields = itemSheetFields(list, item);
   const watch = watchDetails(item);
   const provenance = itemProvenance(item);
@@ -187,7 +187,12 @@ export function ItemSheet({
 
   const id = (suffix: string) => ({ testID: `${testID}-${suffix}` });
 
-  /** Sends one field, and puts it back if the server refused it. */
+  /**
+   * Sends one field, and puts it back if it was refused — by the builder or by the server.
+   *
+   * `undefined` covers both refusals, and both want the same repair: a title emptied to
+   * nothing, and a blur that changed nothing, both leave the box showing what is committed.
+   */
   async function commit(
     changes: Parameters<typeof actions.save>[1] | undefined,
     revert: () => void,
@@ -201,7 +206,7 @@ export function ItemSheet({
 
   function commitIngredients(next: readonly IngredientRow[]) {
     setIngredients(next);
-    void commit(ingredientsPatch(next), () => setIngredients(ingredientRows(item)));
+    void commit(ingredientsPatch(item, next), () => setIngredients(ingredientRows(item)));
   }
 
   async function openSource(activityId: string) {
@@ -256,7 +261,7 @@ export function ItemSheet({
          */
         autoFocus={Platform.OS === 'web'}
         onBlur={() => {
-          void commit(titlePatch(title), () => setTitle(item.title));
+          void commit(titlePatch(item, title), () => setTitle(item.title));
         }}
         {...id('title')}
       />
@@ -268,7 +273,7 @@ export function ItemSheet({
         multiline
         maxLength={MAX_NOTES_LEN}
         onBlur={() => {
-          void commit(notePatch(note), () => setNote(item.note ?? ''));
+          void commit(notePatch(item, note), () => setNote(item.note ?? ''));
         }}
         {...id('note')}
       />

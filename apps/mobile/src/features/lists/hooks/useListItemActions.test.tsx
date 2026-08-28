@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import { useToast } from '@/stores/toast';
-import { useItemSheetActions } from './useItemSheetActions';
+import { useListItemActions } from './useListItemActions';
 
 /**
  * Deleting one item, and the six seconds it can be taken back in
@@ -53,7 +53,7 @@ function wrapper({ children }: { children: ReactNode }) {
 function setup() {
   const onSaved = vi.fn();
   const onRemoved = vi.fn();
-  const { result } = renderHook(() => useItemSheetActions({ onSaved, onRemoved }), {
+  const { result } = renderHook(() => useListItemActions({ onSaved, onRemoved }), {
     wrapper,
   });
   return { actions: result, onSaved, onRemoved };

@@ -14,12 +14,12 @@ import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import { type ToastMessage, useToast } from '@/stores/toast';
 import { deletedItemToast } from '../model/itemUndoToast';
 import { remainingUndoOfferMs } from '../model/undoOffer';
-import { useItemPatch } from './useItemPatch';
+import { usePatchListItem } from './usePatchListItem';
 
 /**
  * Everything the item sheet writes, and the one read it makes (§P3-29).
  *
- * Shared by both platforms. Only the field PATCH differs — `useItemPatch` resolves to the
+ * Shared by both platforms. Only the field PATCH differs — `usePatchListItem` resolves to the
  * durable native adapter or the online web one — so composing it here keeps the delete, its
  * Undo and the provenance probe in one file instead of two that would drift.
  *
@@ -50,7 +50,7 @@ import { useItemPatch } from './useItemPatch';
  * mid-window leaves the item deleted, which is the correct outcome for a window nobody acted
  * in.
  */
-export interface ItemSheetActions {
+export interface ListItemActions {
   /**
    * Sends one field and reports whether it was accepted.
    *
@@ -96,19 +96,19 @@ function failureToast(error: unknown, message: string, retry: () => void): Toast
   };
 }
 
-export interface ItemSheetRefresh {
+export interface ListItemRefresh {
   /** After an accepted field edit. Native re-reads SQLite; web asks the server. */
   readonly onSaved: () => void;
   /** After the online delete or its Undo. Both platforms ask the server. */
   readonly onRemoved: () => void;
 }
 
-export function useItemSheetActions({
+export function useListItemActions({
   onSaved,
   onRemoved,
-}: ItemSheetRefresh): ItemSheetActions {
+}: ListItemRefresh): ListItemActions {
   const clock = useClock();
-  const patch = useItemPatch();
+  const patch = usePatchListItem();
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);

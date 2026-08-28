@@ -27,7 +27,7 @@ export interface ItemWriteOutcome {
   readonly error?: unknown;
 }
 
-export interface ItemPatchResult {
+export interface PatchListItemResult {
   /** Sends one field. Resolves once the write is accepted — by the server, or by SQLite. */
   readonly patch: (
     item: ListItemRow,
@@ -36,7 +36,7 @@ export interface ItemPatchResult {
   readonly isSaving: boolean;
 }
 
-export function useItemPatch(): ItemPatchResult {
+export function usePatchListItem(): PatchListItemResult {
   const [saving, setSaving] = useState(false);
 
   return {

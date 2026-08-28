@@ -1,13 +1,14 @@
 import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddListItemResult } from '@/hooks/useAddListItem';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import type { ListBulkActions } from '../hooks/useListBulkActions';
 import type { ListDetailView } from '../hooks/useListDetail';
+import type { ListItemActions } from '../hooks/useListItemActions';
 import { ListDetailScreen } from './ListDetailScreen';
 
 /**
@@ -21,10 +22,14 @@ import { ListDetailScreen } from './ListDetailScreen';
 const view = vi.hoisted(() => ({ current: {} as ListDetailView }));
 const add = vi.hoisted(() => ({ current: {} as AddListItemResult }));
 const bulk = vi.hoisted(() => ({ current: {} as ListBulkActions }));
+const actions = vi.hoisted(() => ({ current: {} as ListItemActions }));
 vi.mock('../hooks/useListDetail', () => ({ useListDetail: () => view.current }));
 vi.mock('@/hooks/useAddListItem', () => ({ useAddListItem: () => add.current }));
 vi.mock('../hooks/useListBulkActions', () => ({
   useListBulkActions: () => bulk.current,
+}));
+vi.mock('../hooks/useListItemActions', () => ({
+  useListItemActions: () => actions.current,
 }));
 /* The item sheet mints an idempotency key and `ing_` row ids; neither native module exists here. */
 vi.mock('expo-crypto', () => ({
@@ -109,6 +114,12 @@ beforeEach(() => {
     clearChecked: vi.fn(),
     uncheckAll: vi.fn(),
     archive: vi.fn(),
+  };
+  actions.current = {
+    save: vi.fn(async () => true),
+    remove: vi.fn(),
+    sourceResolves: vi.fn(async () => true),
+    isSaving: false,
   };
 });
 
@@ -261,6 +272,50 @@ describe('the bulk actions', () => {
 
     expect(screen.queryByRole('button', { name: /Clear checked/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Uncheck all' })).toBeNull();
+  });
+});
+
+/**
+ * U2 (§5.11.5, §P3-29). P3-28 shipped the control; this task owns the write behind it.
+ */
+describe('the checkbox', () => {
+  const row = () => item('AA', 'Milk');
+  const checkbox = () => screen.getByTestId(`list-item-${row().itemId}-checkbox`);
+  /* `aria-checked`, which is what a screen reader actually reads off the control. */
+  const ticked = () => checkbox().getAttribute('aria-checked');
+
+  it('sends the absolute next value, never a toggle', async () => {
+    setView({ items: [row()], itemCount: 1 });
+    mount();
+
+    fireEvent.click(checkbox());
+
+    await waitFor(() => expect(actions.current.save).toHaveBeenCalledTimes(1));
+    expect(actions.current.save).toHaveBeenCalledWith(row(), { checked: true });
+  });
+
+  /** The tick is drawn at the tap and held until the projection carries it (§5.11.5). */
+  it('draws the tick before the projection catches up, then hands over', async () => {
+    setView({ items: [row()], itemCount: 1 });
+    const { rerender } = mount();
+
+    expect(ticked()).toBe('false');
+    fireEvent.click(checkbox());
+    await waitFor(() => expect(ticked()).toBe('true'));
+
+    setView({ items: [item('AA', 'Milk', true)], itemCount: 1 });
+    rerender();
+    expect(ticked()).toBe('true');
+  });
+
+  it('puts the tick back when the write is refused', async () => {
+    setView({ items: [row()], itemCount: 1 });
+    actions.current = { ...actions.current, save: vi.fn(async () => false) };
+    mount();
+
+    fireEvent.click(checkbox());
+
+    await waitFor(() => expect(ticked()).toBe('false'));
   });
 });
 

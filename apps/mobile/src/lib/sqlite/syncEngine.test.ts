@@ -4651,6 +4651,62 @@ describe('serialized native convergence guard', () => {
         expect(await items.read(LIST_ID)).toEqual([]);
       });
 
+      /**
+       * The row checkbox is the same durable write with one field (§P3-29's amendment).
+       *
+       * §5.11.5's first row, end to end: the tick is sent as the **absolute** value, a lost
+       * connection replays the same intent rather than minting a second, and the row does not
+       * un-tick at any point on the way — including when the queue finally drains.
+       */
+      it('replays one offline tick and never un-ticks the row', async () => {
+        if (database === undefined) throw new Error('missing item tick database');
+        const built = itemHarness(database);
+        await transactions.run((transaction) =>
+          built.listService.createItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'create-milk',
+            idempotencyKey: 'create-milk',
+            input: { itemId: ITEM_ID, title: 'Milk' },
+            rank: 'm',
+          }),
+        );
+        await transactions.run((transaction) =>
+          outbox.acknowledge(transaction.database, 'create-milk'),
+        );
+        await transactions.run((transaction) =>
+          built.listService.patchItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'tick-milk',
+            idempotencyKey: 'tick-milk',
+            input: { checked: true },
+          }),
+        );
+        // Accepted and visible before any connection existed.
+        expect((await built.items.read(LIST_ID))[0]?.checked).toBe(true);
+
+        const seen: unknown[] = [];
+        let attempts = 0;
+        const patchItem = vi.fn(async (_listId, _itemId, input: unknown) => {
+          seen.push(input);
+          attempts += 1;
+          if (attempts === 1) throw new NetworkError('offline', undefined);
+          return { ...row(ITEM_ID, 'm', 'Milk'), checked: true };
+        });
+        const sync = itemEngine(built.lists, built.items, {}, { patchItem });
+
+        await expect(sync.syncNow()).rejects.toThrow();
+        expect((await built.items.read(LIST_ID))[0]?.checked).toBe(true);
+        await sync.syncNow();
+        sync.stop();
+
+        // One intent, replayed — not two writes, and never `!checked` recomputed anywhere.
+        expect(seen).toEqual([{ checked: true }, { checked: true }]);
+        expect((await built.items.read(LIST_ID))[0]?.checked).toBe(true);
+        expect(await outbox.all()).toEqual([]);
+      });
+
       /** Otherwise a background page lands between the accepted edit and its acknowledgement. */
       it('protects the edited row from a canonical page that predates it', async () => {
         if (database === undefined) throw new Error('missing item protection database');
