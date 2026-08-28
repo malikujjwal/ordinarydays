@@ -217,10 +217,17 @@ export function ItemSheet({
     setSourceResolves(false);
   }
 
-  const provenanceNavigable =
-    provenance?.sourceActivityId !== undefined &&
-    sourceResolves &&
-    onOpenSource !== undefined;
+  /**
+   * The id the provenance row would open, or `undefined` for a row that is plain text.
+   *
+   * Three reasons it can be plain text and they are all here: the label names no Activity, an
+   * attempt already met a `404`, or the caller supplied nowhere to go. Narrowing to the id
+   * rather than to a boolean is what keeps the handler below from needing a cast.
+   */
+  const navigableSource =
+    sourceResolves && onOpenSource !== undefined
+      ? provenance?.sourceActivityId
+      : undefined;
 
   return (
     <Sheet
@@ -282,13 +289,13 @@ export function ItemSheet({
        * §7.5's provenance row. Text in v1 on the row itself; here it is the one place the
        * source meal becomes navigable — while it still resolves.
        */}
-      {provenance === undefined ? null : provenanceNavigable ? (
+      {provenance === undefined ? null : navigableSource !== undefined ? (
         <Button
           label={provenanceLine(provenance)}
           variant="ghost"
           flush
           size="sm"
-          onPress={() => void openSource(provenance.sourceActivityId as string)}
+          onPress={() => void openSource(navigableSource)}
           {...id('provenance')}
         />
       ) : (
