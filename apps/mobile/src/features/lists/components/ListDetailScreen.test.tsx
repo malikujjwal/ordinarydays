@@ -26,6 +26,8 @@ vi.mock('@/hooks/useAddListItem', () => ({ useAddListItem: () => add.current }))
 vi.mock('../hooks/useListBulkActions', () => ({
   useListBulkActions: () => bulk.current,
 }));
+/* The reorder hook mints one identity per drag; the native module does not exist here. */
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'drag-list-detail-test' }));
 
 const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 
@@ -69,6 +71,7 @@ function setView(overrides: Partial<ListDetailView> = {}) {
     loadMore: vi.fn(),
     refresh: vi.fn(),
     refetch: vi.fn(),
+    applyRank: vi.fn(),
     ...overrides,
   };
   return view.current;

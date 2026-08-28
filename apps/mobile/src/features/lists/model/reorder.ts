@@ -1,0 +1,218 @@
+import {
+  compareListItems,
+  LexoRankError,
+  LexoRankOverflowError,
+  lexoRankBetween,
+} from '@od/shared/rank';
+import type { ListItemView } from '@od/shared/types';
+import type { RowList } from './listItemRow';
+
+/**
+ * Where a dragged item lands, and what that costs on the wire
+ * ([`plans-and-lists.md`](../../../../../docs/01-product/plans-and-lists.md) §5.6, §5.11.5;
+ * §P3-30; acceptance criteria 16 and 29).
+ *
+ * Pure, and separate from the gesture for the reason `listItemRow.ts` is: a drag cannot be
+ * simulated in a unit test, and the decisions that must not be got wrong here — the no-op, the
+ * watch-group guard, the `afterItemId` — are arithmetic over an ordered array. Expressed inside
+ * a gesture handler they could only be checked by dragging a real finger across a real device.
+ *
+ * ## `(rank, itemId)`, in and out, and no second comparator
+ *
+ * Every function here sorts its input with the one exported `compareListItems` before doing
+ * anything, and none of them invents an ordering of its own (acceptance criterion 29). Two
+ * items with an identical rank and different ids therefore order the same way whichever order
+ * they arrive in, which is exactly the restored-or-legacy duplicate the tie-break is defensive
+ * for.
+ *
+ * ## One logical item moves
+ *
+ * The plan names **one** item and **one** position. Nothing renumbers, and nothing else is
+ * written — criterion 16's "exactly one logical ListItem", stated on the client side of the
+ * request that causes it.
+ *
+ * ## The request carries a position; the rank is the server's
+ *
+ * `afterItemId` is the id of the item now immediately above, absent for the head, and it is
+ * the **only** position that travels. {@link ReorderPlan.rank} is a provisional local value for
+ * the optimistic row and is never sent — the same arrangement `pendingListItem.ts` records for
+ * an appended create, using the same `lexoRankBetween` the server runs, and replaced wholesale
+ * by the rank the server allocates under its own `rankVersion`.
+ */
+
+/** The list fields a reorder may read. Narrowed to one, because one is all it needs. */
+export type ReorderList = Pick<RowList, 'behaviour'>;
+
+/** What one drag asks for. */
+export interface ReorderPlan {
+  readonly itemId: string;
+  /** The id of the item now immediately above. **Absent for the head** — never `null`. */
+  readonly afterItemId?: string;
+  /**
+   * A provisional rank for the optimistic row. **Display only, never sent.**
+   *
+   * Absent when the gap cannot be split — two neighbours sharing a rank, or a gap already
+   * subdivided to the cap. Both are the repository's to repair, and neither stops the request:
+   * the row simply stays where it was until the server answers with the rank it allocated.
+   */
+  readonly rank?: string;
+}
+
+/** The insertion indices a drag may land on, both ends inclusive. */
+export interface ReorderRange {
+  readonly first: number;
+  readonly last: number;
+}
+
+/**
+ * The authoritative order, from the one comparator.
+ *
+ * Callers pass their projection through this rather than trusting arrival order: a page
+ * boundary is an artefact of paging, and a client that ordered by arrival would disagree with
+ * one that had the same list in full.
+ */
+export function orderedItems<T extends { rank: string; itemId: string }>(
+  items: readonly T[],
+): readonly T[] {
+  return [...items].sort(compareListItems);
+}
+
+/** The item's `watchStatus`, or `undefined` where it has none to read. */
+function watchGroupOf(item: ListItemView): string | undefined {
+  return item.details?.behaviour === 'watch' ? item.details.watchStatus : undefined;
+}
+
+/**
+ * Which insertion indices this drag may land on.
+ *
+ * On every behaviour but `watch`, the whole list: `0` through `length - 1` of the array with
+ * the dragged row removed, plus its end.
+ *
+ * On a `watch` list the range is the item's **own status group** — the span from the first to
+ * the last item that shares its `watchStatus`, in the same order. Dragging across a heading
+ * would change `watchStatus` by gesture, which no spec grants: status changes are the item
+ * sheet's explicit controls (§8.1, and §P3-30 records the decision). Clamping here rather than
+ * in the sections means P3-31 inherits the guard instead of restating it.
+ *
+ * `undefined` when the item is not in the list, or when a `watch` item carries no typed
+ * details — invalid data, and a range invented over it would be a guess about which group it
+ * belongs to.
+ */
+export function reorderRange(
+  list: ReorderList,
+  items: readonly ListItemView[],
+  itemId: string,
+): ReorderRange | undefined {
+  const sorted = orderedItems(items);
+  const dragged = sorted.find((candidate) => candidate.itemId === itemId);
+  if (dragged === undefined) return undefined;
+  const from = sorted.indexOf(dragged);
+  const remaining = sorted.filter((candidate) => candidate.itemId !== itemId);
+  if (list.behaviour !== 'watch') return { first: 0, last: remaining.length };
+
+  const group = watchGroupOf(dragged);
+  if (group === undefined) return undefined;
+  const positions = remaining.flatMap((candidate, at) =>
+    watchGroupOf(candidate) === group ? [at] : [],
+  );
+  const head = positions[0];
+  const tail = positions.at(-1);
+  // A group of one: the only position it may occupy is the one it is already in.
+  if (head === undefined || tail === undefined) return { first: from, last: from };
+  return { first: head, last: tail + 1 };
+}
+
+/**
+ * The plan for dropping `itemId` at `toIndex`, or `undefined` for a drop that writes nothing.
+ *
+ * `toIndex` is an insertion index **in the array with the dragged row removed**, which is what
+ * makes the no-op check exact: putting the row back at its own index is the position it came
+ * from, and §P3-30 says a drop back where it started issues no write.
+ *
+ * `undefined` also covers an unknown item and, on a `watch` list, a target outside the item's
+ * status group — {@link reorderRange}'s refusal, applied.
+ */
+export function planReorder(
+  list: ReorderList,
+  items: readonly ListItemView[],
+  itemId: string,
+  toIndex: number,
+): ReorderPlan | undefined {
+  const sorted = orderedItems(items);
+  const from = sorted.findIndex((candidate) => candidate.itemId === itemId);
+  if (from < 0) return undefined;
+  const range = reorderRange(list, sorted, itemId);
+  if (range === undefined || toIndex < range.first || toIndex > range.last) {
+    return undefined;
+  }
+  if (toIndex === from) return undefined;
+
+  const remaining = sorted.filter((candidate) => candidate.itemId !== itemId);
+  const above = remaining[toIndex - 1];
+  const below = remaining[toIndex];
+  const rank = provisionalRank(above?.rank, below?.rank);
+  return {
+    itemId,
+    ...(above === undefined ? {} : { afterItemId: above.itemId }),
+    ...(rank === undefined ? {} : { rank }),
+  };
+}
+
+/**
+ * The local rank the optimistic row takes, or `undefined` when the gap has no room.
+ *
+ * The throw is expected rather than exceptional: `lexoRankBetween` refuses equal bounds by
+ * design, and equal adjacent ranks are precisely the restored-or-legacy case `(rank, itemId)`
+ * is defensive for. Repair is the repository's (P3-03/P3-04), so the client's answer is to
+ * show no optimistic move and let the server's allocation land.
+ */
+function provisionalRank(above?: string, below?: string): string | undefined {
+  try {
+    return lexoRankBetween(above ?? null, below ?? null);
+  } catch (error) {
+    // The module's two typed errors only. Anything else is a real fault and stays one.
+    if (error instanceof LexoRankError || error instanceof LexoRankOverflowError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * The insertion index a finger has dragged to, from the row heights it passed over.
+ *
+ * Heights rather than a constant: a list row is one line or four — a title, a note, a place and
+ * a state line — so a fixed row height would put the drop in the wrong gap on any list with
+ * mixed rows. `heights` is in the same order as the sorted items.
+ *
+ * The rule is the dragged row's **centre**: the insertion index is the number of remaining rows
+ * whose own centre sits above it. That reads the same going up and going down, which a
+ * top-edge or leading-edge rule does not.
+ */
+export function dropIndex(
+  heights: readonly number[],
+  fromIndex: number,
+  translationY: number,
+): number {
+  const dragged = heights[fromIndex] ?? 0;
+  let top = 0;
+  for (let at = 0; at < fromIndex; at += 1) top += heights[at] ?? 0;
+  const centre = top + translationY + dragged / 2;
+
+  let offset = 0;
+  let index = 0;
+  for (let at = 0; at < heights.length; at += 1) {
+    if (at === fromIndex) continue;
+    const height = heights[at] ?? 0;
+    if (offset + height / 2 >= centre) break;
+    offset += height;
+    index += 1;
+  }
+  return index;
+}
+
+/** The copy §P3-30 requires, verbatim, when the connection is unavailable at drop. */
+export const REORDER_OFFLINE_MESSAGE = 'Reordering needs a connection.';
+
+/** Long-press duration before a drag engages, in milliseconds. */
+export const REORDER_LONG_PRESS_MS = 250;
