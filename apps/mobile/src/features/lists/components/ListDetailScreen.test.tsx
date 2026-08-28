@@ -408,6 +408,8 @@ describe('the watch list renders grouped', () => {
     expect(screen.getByTestId('watch-heading-watching')).toBeDefined();
     expect(screen.getByTestId('watch-heading-want')).toBeDefined();
     expect(screen.getByText('Severance')).toBeDefined();
+  });
+});
 
 /**
  * U2 (§5.11.5, §P3-29). P3-28 shipped the control; this task owns the write behind it.
@@ -450,7 +452,6 @@ describe('the checkbox', () => {
     fireEvent.click(checkbox());
 
     await waitFor(() => expect(ticked()).toBe('false'));
-
   });
 });
 
@@ -502,7 +503,6 @@ describe('the item sheet', () => {
     rerender();
 
     expect(screen.queryByTestId('item-sheet')).toBeNull();
-
   });
 });
 

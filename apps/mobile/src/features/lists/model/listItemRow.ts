@@ -119,7 +119,6 @@ export const WATCH_STATUS_LABELS = {
 /** §8.1's transition order, for a control that offers all three. Not §5.2's display order. */
 export const WATCH_STATUSES = ['want', 'watching', 'watched'] as const;
 
-
 /**
  * The ingredient count on a `meals` row.
  *
