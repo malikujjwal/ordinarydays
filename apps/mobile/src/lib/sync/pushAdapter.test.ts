@@ -93,6 +93,7 @@ describe('ActivityPushAdapter', () => {
     const listTransport: ListPushTransport = {
       create: vi.fn(async () => ({})),
       createItem: vi.fn(async () => ({})),
+      patchItem: vi.fn(async () => ({})),
       patch: vi.fn(async () => ({})),
       remove: vi.fn(async () => ({})),
       undo: vi.fn(async () => ({})),

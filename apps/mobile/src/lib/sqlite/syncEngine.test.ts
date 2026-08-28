@@ -3759,6 +3759,9 @@ describe('serialized native convergence guard', () => {
       createItem: async () => {
         throw new Error('unexpected list item POST');
       },
+      patchItem: async () => {
+        throw new Error('unexpected list item PATCH');
+      },
       patch,
       remove: async () => {
         throw new Error('unexpected List DELETE');
@@ -3847,6 +3850,9 @@ describe('serialized native convergence guard', () => {
       },
       createItem: async () => {
         throw new Error('unexpected list item POST');
+      },
+      patchItem: async () => {
+        throw new Error('unexpected list item PATCH');
       },
       patch: async () => {
         throw new Error('unexpected List PATCH');
@@ -3952,6 +3958,9 @@ describe('serialized native convergence guard', () => {
         create,
         createItem: async () => {
           throw new Error('unexpected list item POST');
+        },
+        patchItem: async () => {
+          throw new Error('unexpected list item PATCH');
         },
         patch: async () => {
           throw new Error('unexpected List PATCH');
@@ -4237,6 +4246,9 @@ describe('serialized native convergence guard', () => {
           },
           createItem: async () => {
             throw new Error('unexpected list item POST');
+          },
+          patchItem: async () => {
+            throw new Error('unexpected list item PATCH');
           },
           patch: async () => {
             throw new Error('unexpected List PATCH');

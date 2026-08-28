@@ -26,8 +26,14 @@ vi.mock('@/hooks/useAddListItem', () => ({ useAddListItem: () => add.current }))
 vi.mock('../hooks/useListBulkActions', () => ({
   useListBulkActions: () => bulk.current,
 }));
-/* The reorder hook mints one identity per drag; the native module does not exist here. */
-vi.mock('expo-crypto', () => ({ randomUUID: () => 'drag-list-detail-test' }));
+/*
+ * The reorder hook mints one identity per drag and the item sheet mints `ing_` row ids;
+ * neither native module exists here.
+ */
+vi.mock('expo-crypto', () => ({
+  randomUUID: () => 'idem-list-detail-test',
+  getRandomBytes: () => new Uint8Array(10),
+}));
 
 const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 

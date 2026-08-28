@@ -99,21 +99,26 @@ export function watchStatusLabel(item: ListItemView): string | undefined {
 export type WatchStatus = Extract<ListItemDetails, { behaviour: 'watch' }>['watchStatus'];
 
 /**
- * §5.2's three words, in the one place they live (P3-31).
+ * §5.2's three words, in the one place they live.
  *
- * The chip above and the section heading below it are the same vocabulary about the same item,
- * which is what the note on {@link watchStatusLabel} anticipated. A second copy is how one of
- * the three comes to read `Want` in a heading and `Want to watch` on a chip.
+ * The row's chip, P3-31's group headings and P3-29's any-to-any status control all say them,
+ * and a second copy is how one of the three comes to read `Want` in one place and `Want to
+ * watch` in another.
  *
- * Keyed rather than ordered: the **display** order is §5.2's `Watching · Want to watch ·
- * Watched`, which is `watchSections.ts`'s, and the stored order §8.1 lists transitions in is a
- * different sequence again. Neither belongs to a lookup table.
+ * **Keyed rather than ordered**, because there are two orders and neither belongs to a lookup
+ * table: §5.2's display order is `Watching · Want to watch · Watched`, which `watchSections.ts`
+ * states, and §8.1's transition order is `want -> watching -> watched`, which
+ * {@link WATCH_STATUSES} states for a control that has to enumerate them.
  */
 export const WATCH_STATUS_LABELS = {
   want: 'Want to watch',
   watching: 'Watching',
   watched: 'Watched',
 } as const satisfies Record<WatchStatus, string>;
+
+/** §8.1's transition order, for a control that offers all three. Not §5.2's display order. */
+export const WATCH_STATUSES = ['want', 'watching', 'watched'] as const;
+
 
 /**
  * The ingredient count on a `meals` row.
