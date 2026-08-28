@@ -51,7 +51,7 @@ export function useListIndexMutations(): ListIndexMutations {
                   void state.account.transactions
                     .run(
                       (transaction) =>
-                        service.undoArchive(
+                        service.undoSettings(
                           transaction,
                           list.listId,
                           originalIntentId,

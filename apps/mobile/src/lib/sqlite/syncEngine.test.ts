@@ -3763,6 +3763,9 @@ describe('serialized native convergence guard', () => {
         throw new Error('unexpected list item PATCH');
       },
       patch,
+      changeBehaviour: async () => {
+        throw new Error('unexpected List behaviour POST');
+      },
       remove: async () => {
         throw new Error('unexpected List DELETE');
       },
@@ -3794,6 +3797,107 @@ describe('serialized native convergence guard', () => {
     );
     expect(await lists.read()).toEqual([acknowledged]);
     expect(await outbox.all()).toEqual([]);
+  });
+
+  /**
+   * The P3-32 inventory extension, settled (§P3-09).
+   *
+   * A behaviour acknowledgement installs the **whole** canonical row rather than the settings
+   * subset: the migration moves `behaviour` and advances `rankVersion`, and `applySettings`
+   * writes neither. The Undo token is installed because an offer is waiting for one, which is
+   * the enqueue-time decision rather than a re-reading of the payload.
+   */
+  it('settles a behaviour upgrade with the canonical row and its Undo receipt', async () => {
+    if (database === undefined) throw new Error('missing List behaviour database');
+    const list: List = {
+      listId: 'lst_01J0000000000000000000000D',
+      ownerId: OWNER,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: null,
+      itemCount: 3,
+      uncheckedCount: 2,
+      memberCount: 1,
+      rankVersion: 0,
+      archived: false,
+      updatedAt: instant.parse('2026-08-19T00:00:00.000Z'),
+      lastItemActivityAt: instant.parse('2026-08-19T00:00:00.000Z'),
+    };
+    const acknowledged: List = {
+      ...list,
+      behaviour: 'watch',
+      rankVersion: 1,
+      updatedAt: instant.parse('2026-08-20T00:00:00.000Z'),
+    };
+    const lists = new ListsRepository(database, new RepositorySubscriptions());
+    const listService = new ListTransactionService(outbox, lists);
+    await transactions.run(async (transaction) => {
+      await lists.replaceCanonical(transaction, [list]);
+      await listService.changeBehaviour(
+        transaction,
+        list,
+        { behaviour: 'watch' },
+        'upgrade-intent',
+      );
+    });
+    const changeBehaviour = vi.fn(async () => ({
+      list: acknowledged,
+      undoToken: 'server-upgrade-token',
+      undoExpiresAt: '2026-08-20T00:00:06.000Z',
+    }));
+    const listPush: ListPushTransport = {
+      create: async () => {
+        throw new Error('unexpected List POST');
+      },
+      createItem: async () => {
+        throw new Error('unexpected list item POST');
+      },
+      patchItem: async () => {
+        throw new Error('unexpected list item PATCH');
+      },
+      patch: async () => {
+        throw new Error('unexpected List PATCH');
+      },
+      changeBehaviour,
+      remove: async () => {
+        throw new Error('unexpected List DELETE');
+      },
+      undo: async () => {
+        throw new Error('unexpected List Undo');
+      },
+    };
+    const sync = new SerializedNativeSyncEngine(
+      transactions,
+      outbox,
+      activities,
+      agenda,
+      pushTransport(),
+      pullAdapter(),
+      targetedTransport(),
+      anytime,
+      lists,
+      listPush,
+    );
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(changeBehaviour).toHaveBeenCalledWith(
+      list.listId,
+      { behaviour: 'watch' },
+      list.updatedAt,
+      'upgrade-intent',
+    );
+    expect(await lists.read()).toEqual([acknowledged]);
+    expect(await outbox.all()).toEqual([]);
+    expect(await outbox.listArchiveUndoOffer(database, 'upgrade-intent')).toMatchObject({
+      undoToken: 'server-upgrade-token',
+      undoExpiresAt: '2026-08-20T00:00:06.000Z',
+    });
   });
 
   it('settles an acknowledged archive Undo without re-entering the network lane', async () => {
@@ -3836,7 +3940,7 @@ describe('serialized native convergence guard', () => {
         'server-undo-token',
         '2026-08-19T00:01:06.000Z',
       );
-      await listService.undoArchive(
+      await listService.undoSettings(
         transaction,
         archived.listId,
         'acknowledged-archive',
@@ -3856,6 +3960,9 @@ describe('serialized native convergence guard', () => {
       },
       patch: async () => {
         throw new Error('unexpected List PATCH');
+      },
+      changeBehaviour: async () => {
+        throw new Error('unexpected List behaviour POST');
       },
       remove: async () => {
         throw new Error('unexpected List DELETE');
@@ -3964,6 +4071,9 @@ describe('serialized native convergence guard', () => {
         },
         patch: async () => {
           throw new Error('unexpected List PATCH');
+        },
+        changeBehaviour: async () => {
+          throw new Error('unexpected List behaviour POST');
         },
         remove: async () => {
           throw new Error('unexpected List DELETE');
@@ -4252,6 +4362,9 @@ describe('serialized native convergence guard', () => {
           },
           patch: async () => {
             throw new Error('unexpected List PATCH');
+          },
+          changeBehaviour: async () => {
+            throw new Error('unexpected List behaviour POST');
           },
           remove: async () => {
             throw new Error('unexpected List DELETE');

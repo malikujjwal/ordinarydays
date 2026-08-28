@@ -12,7 +12,7 @@ const calls = vi.hoisted(() => ({
   run: vi.fn(),
   setArchived: vi.fn(),
   sync: vi.fn(),
-  undoArchive: vi.fn(),
+  undoSettings: vi.fn(),
   uuid: vi.fn(),
 }));
 
@@ -21,7 +21,7 @@ vi.mock('expo-crypto', () => ({ randomUUID: calls.uuid }));
 vi.mock('@/lib/sqlite/listTransactions', () => ({
   ListTransactionService: class {
     setArchived = calls.setArchived;
-    undoArchive = calls.undoArchive;
+    undoSettings = calls.undoSettings;
     commitArchiveUndoOffer = calls.commit;
     remove = calls.remove;
   },
@@ -72,7 +72,7 @@ beforeEach(() => {
   calls.run.mockReturnValue(new Promise(() => undefined));
   calls.setArchived.mockReset();
   calls.sync.mockReset();
-  calls.undoArchive.mockReset();
+  calls.undoSettings.mockReset();
   calls.uuid.mockReset();
   calls.uuid.mockReturnValue('native-list-intent');
   useToast.setState({ current: undefined });
@@ -204,7 +204,7 @@ describe('native List index mutations', () => {
       .mockReturnValueOnce('native-inverse-intent')
       .mockReturnValue('new-intent');
     calls.setArchived.mockResolvedValueOnce({});
-    calls.undoArchive
+    calls.undoSettings
       .mockRejectedValueOnce(new Error('SQLite unavailable'))
       .mockResolvedValueOnce({ kind: 'queued' });
     const mounted = renderHook(() => useListIndexMutations());
@@ -219,8 +219,8 @@ describe('native List index mutations', () => {
     );
     act(retryCurrentToast);
 
-    await waitFor(() => expect(calls.undoArchive).toHaveBeenCalledTimes(2));
-    expect(calls.undoArchive.mock.calls.map((call) => call[3])).toEqual([
+    await waitFor(() => expect(calls.undoSettings).toHaveBeenCalledTimes(2));
+    expect(calls.undoSettings.mock.calls.map((call) => call[3])).toEqual([
       'native-inverse-intent',
       'native-inverse-intent',
     ]);

@@ -483,6 +483,84 @@ describe('the checkbox', () => {
 });
 
 /**
+ * §5.5's capability rule, from the screen's side (§P3-32).
+ *
+ * The flag is a **display** setting: turning it off hides the control and every count and bulk
+ * action derived from it, and retains each item's `checked` so turning it back on restores
+ * exactly what was there. Driven through the projection, because that is how the change reaches
+ * this screen — the write itself is `useListSettings.test.tsx`'s.
+ */
+describe('turning checkboxes off and on again', () => {
+  const rows = [item('AA', 'Milk', true), item('BB', 'Bread')];
+  const tick = (id: string) => screen.queryByTestId(`list-item-${id}-checkbox`);
+
+  it('hides the checkboxes and restores the previous ticks', () => {
+    setView({ items: rows, itemCount: 2 });
+    const { rerender } = mount();
+
+    expect(tick(rows[0]?.itemId ?? '')?.getAttribute('aria-checked')).toBe('true');
+
+    setView({
+      list: list({ capabilities: { checkable: false, supportsLocation: false } }),
+      items: rows,
+      itemCount: 2,
+    });
+    rerender();
+
+    expect(tick(rows[0]?.itemId ?? '')).toBeNull();
+    expect(tick(rows[1]?.itemId ?? '')).toBeNull();
+    // The rows are still there, and so is the value the checkbox was drawing.
+    expect(screen.getByText('Milk')).toBeDefined();
+
+    setView({ items: rows, itemCount: 2 });
+    rerender();
+
+    expect(tick(rows[0]?.itemId ?? '')?.getAttribute('aria-checked')).toBe('true');
+    expect(tick(rows[1]?.itemId ?? '')?.getAttribute('aria-checked')).toBe('false');
+  });
+
+  /** Both bulk rows are gated on the flag, exactly as the endpoints are (criterion 18). */
+  it('takes the checkbox-derived bulk actions away with it', () => {
+    setView({
+      list: list({ capabilities: { checkable: false, supportsLocation: false } }),
+      items: rows,
+      itemCount: 2,
+    });
+    mount();
+    fireEvent.click(screen.getByTestId('list-detail-menu'));
+
+    expect(screen.queryByTestId('list-clear-checked')).toBeNull();
+    expect(screen.queryByTestId('list-uncheck-all')).toBeNull();
+    // Settings is offered on every behaviour and every capability state.
+    expect(screen.getByTestId('list-settings-open')).toBeDefined();
+  });
+});
+
+/** §5.6: the settings sheet opens from `⋯`, and renaming is not in it (§P3-32). */
+describe('the settings sheet', () => {
+  it('opens from the ⋯ menu, which closes behind it', () => {
+    setView({ list: list({ title: 'Groceries' }) });
+    mount();
+
+    fireEvent.click(screen.getByTestId('list-detail-menu'));
+    fireEvent.click(screen.getByTestId('list-settings-open'));
+
+    expect(screen.getByTestId('list-settings')).toBeDefined();
+    expect(screen.queryByTestId('list-header-menu')).toBeNull();
+    expect(screen.queryByText(/rename/i)).toBeNull();
+  });
+
+  it('renames from the header title instead', () => {
+    setView({ list: list({ title: 'Groceries' }) });
+    mount();
+
+    fireEvent.click(screen.getByTestId('list-title'));
+
+    expect(screen.getByTestId('list-title-field')).toBeDefined();
+  });
+});
+
+/**
  * U1 (§P3-29). The body opens the sheet and mutates nothing; the sheet's own rules are
  * `ItemSheet.test.tsx`'s.
  */

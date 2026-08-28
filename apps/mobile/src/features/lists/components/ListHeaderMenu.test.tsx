@@ -30,6 +30,7 @@ function mount(options: { list?: List; checkedCount?: number } = {}) {
   const onClearChecked = vi.fn();
   const onUncheckAll = vi.fn();
   const onArchive = vi.fn();
+  const onOpenSettings = vi.fn();
   const onClose = vi.fn();
   render(
     <ThemeProvider scheme="light">
@@ -41,10 +42,11 @@ function mount(options: { list?: List; checkedCount?: number } = {}) {
         onClearChecked={onClearChecked}
         onUncheckAll={onUncheckAll}
         onArchive={onArchive}
+        onOpenSettings={onOpenSettings}
       />
     </ThemeProvider>,
   );
-  return { onClearChecked, onUncheckAll, onArchive, onClose };
+  return { onClearChecked, onUncheckAll, onArchive, onOpenSettings, onClose };
 }
 
 describe('ListHeaderMenu', () => {

@@ -149,6 +149,32 @@ export interface ListsCommittedSnapshot {
   readonly commitRevision: number;
 }
 
+/**
+ * The fields one settings write may move on a locally-held row (P3-32).
+ *
+ * `PatchListInput`'s four, plus `behaviour` — which no `PATCH` accepts, because it goes through
+ * the replay-protected behaviour route, but which the same optimistic projection has to draw.
+ * Nothing else is reachable: counts, versions and the two work markers are server-owned, and a
+ * client that could write them here would be authoring concurrency state.
+ */
+export interface LocalListSettings {
+  readonly title?: string | undefined;
+  /**
+   * Each flag is separately optional, and explicitly `| undefined`: the wire's
+   * `listCapabilitiesPatch` is a partial for the same reason, and a shape that could not carry
+   * "this half was not named" would make one switch restate the other.
+   */
+  readonly capabilities?:
+    | {
+        readonly checkable?: boolean | undefined;
+        readonly supportsLocation?: boolean | undefined;
+      }
+    | undefined;
+  readonly slot?: List['slot'] | undefined;
+  readonly archived?: boolean | undefined;
+  readonly behaviour?: List['behaviour'] | undefined;
+}
+
 export class ListsRepository {
   private readonly scope = 'lists';
 
@@ -349,6 +375,53 @@ export class ListsRepository {
     await transaction.database.run(
       'UPDATE list_rows SET archived = ? WHERE list_id = ?;',
       [archived ? 1 : 0, listId],
+    );
+    transaction.changed(this.scope);
+  }
+
+  /**
+   * The optimistic projection of one List **settings** change, committed with its intent
+   * (P3-32, `plans-and-lists.md` §5.5).
+   *
+   * Only the named columns move. That is the whole point of a partial write here: the sheet's
+   * controls are independent, so flipping `checkable` must not restate `slot`, and a rename must
+   * not restate either — the same reason `listCapabilitiesPatch` is a partial on the wire. It
+   * also never touches `updated_at`: the version this row carries is the server's, and moving it
+   * locally would make the next `If-Match` a value no server ever issued.
+   *
+   * `slot` is nullable rather than optional, exactly as it is on the wire: an absent key leaves
+   * the slot alone and an explicit `null` clears it, and a projection that could not tell them
+   * apart would make clearing a default look like not touching it.
+   *
+   * A row this device does not hold is left alone rather than inserted, for `applySettings`'
+   * reason: without a page it has no ordinal, and inventing one puts the list at an arbitrary
+   * place in an order the server owns.
+   */
+  async applyLocalSettings(
+    transaction: TransactionContext,
+    listId: string,
+    settings: LocalListSettings,
+  ): Promise<void> {
+    const assignments: string[] = [];
+    const values: (string | number | null)[] = [];
+    const set = (column: string, value: string | number | null) => {
+      assignments.push(`${column} = ?`);
+      values.push(value);
+    };
+    if (settings.title !== undefined) set('title', settings.title);
+    if (settings.behaviour !== undefined) set('behaviour', settings.behaviour);
+    if (settings.slot !== undefined) set('slot', settings.slot);
+    if (settings.archived !== undefined) set('archived', settings.archived ? 1 : 0);
+    if (settings.capabilities?.checkable !== undefined) {
+      set('checkable', settings.capabilities.checkable ? 1 : 0);
+    }
+    if (settings.capabilities?.supportsLocation !== undefined) {
+      set('supports_location', settings.capabilities.supportsLocation ? 1 : 0);
+    }
+    if (assignments.length === 0) return;
+    await transaction.database.run(
+      `UPDATE list_rows SET ${assignments.join(', ')} WHERE list_id = ?;`,
+      [...values, listId],
     );
     transaction.changed(this.scope);
   }
