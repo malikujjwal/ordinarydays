@@ -303,8 +303,18 @@ export class ListItemsRepository {
     transaction.changed(this.scope(item.listId));
   }
 
-  /** Replaces that optimistic row with the server's item once the create is acknowledged. */
-  async acceptCreated(transaction: TransactionContext, item: ListItemRow): Promise<void> {
+  /**
+   * Installs the server's row over whatever this device was showing.
+   *
+   * One method for every acknowledgement, because they are one operation: a create's real rank
+   * and provenance, a field patch's server-resolved result, and a collision recovery's adopted
+   * row all replace the optimistic copy with the same authority. Named for what it does rather
+   * than for the create that first needed it (renamed in P3-29, when the patch arrived).
+   */
+  async installAcknowledged(
+    transaction: TransactionContext,
+    item: ListItemRow,
+  ): Promise<void> {
     await writeItemRow(transaction.database, item);
     transaction.changed(this.scope(item.listId));
   }

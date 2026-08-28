@@ -1158,7 +1158,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         }
         // Server truth over the optimistic row: the rank it allocated, and the provenance
         // and revision fences only it can resolve.
-        await this.requireItems().acceptCreated(transaction, item);
+        await this.requireItems().installAcknowledged(transaction, item);
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
         return;
@@ -1820,7 +1820,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         throw new Error('Item collision recovery answered for a different item.');
       }
       await this.transactions.run(async (transaction) => {
-        await items.acceptCreated(transaction, canonical);
+        await items.installAcknowledged(transaction, canonical);
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
       });
