@@ -26,6 +26,8 @@ vi.mock('@/hooks/useAddListItem', () => ({ useAddListItem: () => add.current }))
 vi.mock('../hooks/useListBulkActions', () => ({
   useListBulkActions: () => bulk.current,
 }));
+/* The reorder hook mints one identity per drag; the native module does not exist here. */
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'drag-list-detail-test' }));
 
 const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 
@@ -69,6 +71,7 @@ function setView(overrides: Partial<ListDetailView> = {}) {
     loadMore: vi.fn(),
     refresh: vi.fn(),
     refetch: vi.fn(),
+    applyRank: vi.fn(),
     ...overrides,
   };
   return view.current;
@@ -250,6 +253,54 @@ describe('the bulk actions', () => {
 
     expect(screen.queryByRole('button', { name: /Clear checked/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Uncheck all' })).toBeNull();
+  });
+});
+
+/**
+ * Reorder, at the screen (§P3-30, acceptance criterion 29).
+ *
+ * The order is the assertion. `reorder.test.ts` covers what a drop means and
+ * `ReorderableList.test.tsx` covers the handle; what only this level can show is that the rows
+ * reach the screen in `(rank, itemId)` order however the projection handed them over.
+ */
+describe('reorder', () => {
+  const ranked = (id: string, title: string, rank: string): ListItemRow => ({
+    ...item(id, title),
+    rank,
+  });
+
+  /** Two restored or legacy rows sharing a rank; only the tie-break separates them. */
+  const DUPLICATE_A = ranked('AA', 'Milk', 'm');
+  const DUPLICATE_B = ranked('BB', 'Eggs', 'm');
+  const LATER = ranked('CC', 'Bread', 'z');
+
+  const titles = () =>
+    ['Milk', 'Eggs', 'Bread']
+      .map((title) => ({ title, at: screen.getByText(title) }))
+      .sort((left, right) =>
+        left.at.compareDocumentPosition(right.at) & Node.DOCUMENT_POSITION_FOLLOWING
+          ? -1
+          : 1,
+      )
+      .map((entry) => entry.title);
+
+  it.each([
+    ['as stored', [DUPLICATE_A, DUPLICATE_B, LATER]],
+    ['shuffled', [LATER, DUPLICATE_B, DUPLICATE_A]],
+  ])('renders duplicate ranks in compareListItems order, %s', (_name, items) => {
+    setView({ items, itemCount: items.length });
+    mount();
+
+    // `itm_…AA` before `itm_…BB` on an equal rank, and both before the later rank.
+    expect(titles()).toEqual(['Milk', 'Eggs', 'Bread']);
+  });
+
+  it('offers a drag handle on every row', () => {
+    setView({ items: [DUPLICATE_A, LATER], itemCount: 2 });
+    mount();
+
+    expect(screen.getByTestId(`list-reorder-handle-${DUPLICATE_A.itemId}`)).toBeDefined();
+    expect(screen.getByTestId(`list-reorder-handle-${LATER.itemId}`)).toBeDefined();
   });
 });
 

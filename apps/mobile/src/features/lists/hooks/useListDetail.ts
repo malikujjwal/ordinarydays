@@ -45,6 +45,19 @@ export interface ListDetailView {
   readonly refresh: () => void;
   /** The user-facing `Try again`: asks the server on both platforms. */
   readonly refetch: () => void;
+  /**
+   * Puts one row at a rank, and re-sorts the projection around it (§P3-30).
+   *
+   * One method for all three writes a drag makes — the optimistic drop, its revert, and the
+   * rank the server allocated — because they are one operation with three values. The
+   * projection owns it rather than the reorder hook, for `refresh`'s reason: native's truth is
+   * SQLite and web's is this hook's own state, and only the file that holds it can write it.
+   *
+   * The **rank** is the only thing that moves. A drag changes one item's position and nothing
+   * else, which is criterion 16's "exactly one logical ListItem" as far as a client can state
+   * it; and the order that comes back out is `compareListItems`, never the order of this call.
+   */
+  readonly applyRank: (itemId: string, rank: string) => void;
   readonly message?: string;
   readonly requestId?: string;
 }
@@ -186,6 +199,20 @@ export function useListDetail(listId: string): ListDetailView {
       });
   }, [listId, loadingMore, projection.nextCursor, restart]);
 
+  const applyRank = useCallback((itemId: string, rank: string) => {
+    setProjection((current) => ({
+      ...current,
+      /*
+       * Re-sorted by the one comparator rather than spliced into place: web's projection is
+       * an array, and an array that remembered where a drag put a row would be a second
+       * ordering beside `(rank, itemId)` (acceptance criterion 29).
+       */
+      items: mergeItemPages(
+        current.items.map((item) => (item.itemId === itemId ? { ...item, rank } : item)),
+      ),
+    }));
+  }, []);
+
   return {
     status,
     list: projection.list,
@@ -198,6 +225,7 @@ export function useListDetail(listId: string): ListDetailView {
     // Web keeps no local projection, so a re-read *is* a request.
     refresh: () => void restart(),
     refetch: () => void restart(),
+    applyRank,
     ...(failure === undefined
       ? {}
       : {

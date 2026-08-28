@@ -328,6 +328,31 @@ export class ListItemsRepository {
     transaction.changed(this.scope(listId));
   }
 
+  /**
+   * Puts one row at a rank, and touches nothing else (§P3-30, criterion 16).
+   *
+   * An `UPDATE` of one column on one row, three times over a drag: the optimistic drop, the
+   * rank the server allocated, and — if the request is refused — the rank it came from. A
+   * whole-row write would be wrong for all three, because a drag says nothing about a title
+   * another member may have changed while the finger was down.
+   *
+   * The rank it is given is never one this device authored for the server's benefit. The
+   * optimistic value is provisional and local, exactly as `pendingListItem.ts` records for an
+   * appended create, and the request that accompanies it carries `afterItemId` alone.
+   */
+  async setRankLocal(
+    transaction: TransactionContext,
+    listId: string,
+    itemId: string,
+    rank: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      'UPDATE list_items SET rank = ? WHERE item_id = ? AND list_id = ?;',
+      [rank, itemId, listId],
+    );
+    transaction.changed(this.scope(listId));
+  }
+
   async removeCanonical(
     transaction: TransactionContext,
     listId: string,

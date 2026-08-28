@@ -13,6 +13,7 @@ import { ScrollView, View } from 'react-native';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
+import { useReorderItems } from '../hooks/useReorderItems';
 import {
   checkedCount,
   ITEM_SCROLL_FETCH_RATIO,
@@ -20,9 +21,11 @@ import {
   mayShowEmptyState,
 } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
+import { orderedItems, reorderRange } from '../model/reorder';
 import { AddItemRow } from './AddItemRow';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
+import { ReorderableList } from './ReorderableList';
 
 /**
  * One list, its items and its inline add row
@@ -47,9 +50,17 @@ import { ListItemRow } from './ListItemRow';
  * ## What this screen deliberately does not do
  *
  * Rows are `ListItemRow`, the one capability-driven renderer (P3-28) — this screen hands it the
- * list's own `behaviour` and `capabilities` and nothing else. There is no reorder (P3-30), no
- * item sheet (P3-29) and no rename or settings (P3-32), so a row body tap does nothing yet
- * rather than pretending to open something.
+ * list's own `behaviour` and `capabilities` and nothing else. There is no item sheet (P3-29)
+ * and no rename or settings (P3-32), so a row body tap does nothing yet rather than pretending
+ * to open something.
+ *
+ * ## The drag is wrapped around the rows, not built into them
+ *
+ * `ReorderableList` owns the gesture — a long press on native, §7.1's hover handle on web — and
+ * calls back with an insertion index. Everything that decides what that index *means* is
+ * `reorder.ts`'s, and everything that writes it is `useReorderItems`'. The row renderer is
+ * untouched: a row does not know it can be dragged, which is what keeps P3-28's one renderer
+ * one renderer.
  */
 export interface ListDetailScreenProps {
   listId: string;
@@ -62,6 +73,18 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
+  const reorder = useReorderItems({
+    listId,
+    /*
+     * The behaviour only. A reorder reads no capability — `checkable` does not make a row
+     * un-draggable and `supportsLocation` has nothing to say about position — so handing the
+     * whole list row would be handing over fields nothing here may branch on.
+     */
+    list: { behaviour: view.list?.behaviour ?? 'collection' },
+    items: view.items,
+    applyRank: view.applyRank,
+    onMoved: view.refresh,
+  });
 
   const progress = {
     itemCount: view.itemCount,
@@ -175,22 +198,39 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
             testID="list-detail-empty"
           />
         ) : list === undefined ? null : (
-          <View testID="list-detail-items">
-            {/*
-             * The row is handed the list's own `behaviour` and `capabilities` and nothing
-             * else — not the title, not the template key. That narrowing is the whole of
-             * ADR-032 at the call site (P3-28).
-             */}
-            {view.items.map((item) => (
+          /*
+           * §5.6: reorder is offered on **every** behaviour, and a checked row reorders like
+           * any other and stays where it is put. The only thing a behaviour changes is how far
+           * a row may travel, which `reorderRange` decides and neither this screen nor the
+           * gesture second-guesses.
+           */
+          <ReorderableList
+            /*
+             * Sorted here as well as by the projection, and deliberately: `(rank, itemId)` is
+             * the order both platforms already produce, and passing it through the one exported
+             * comparator on the way to the screen means a restored, legacy or seeded duplicate
+             * rank renders identically on two devices whichever order it reached them in
+             * (acceptance criterion 29). It is a no-op on an already-ordered projection.
+             */
+            items={orderedItems(view.items)}
+            keyOf={(item) => item.itemId}
+            rangeOf={(itemId) => reorderRange(list, view.items, itemId)}
+            onDrop={reorder.drop}
+            testID="list-detail-items"
+            renderItem={(item) => (
+              /*
+               * The row is handed the list's own `behaviour` and `capabilities` and nothing
+               * else — not the title, not the template key. That narrowing is the whole of
+               * ADR-032 at the call site (P3-28).
+               */
               <ListItemRow
-                key={item.itemId}
                 list={list}
                 item={item}
                 onOpenLocation={() => void openInMaps(item.location)}
                 testID={`list-item-${item.itemId}`}
               />
-            ))}
-          </View>
+            )}
+          />
         )}
 
         {list === undefined ? null : (

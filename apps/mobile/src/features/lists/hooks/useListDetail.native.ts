@@ -172,6 +172,23 @@ export function useListDetail(listId: string): ListDetailView {
     // permission to show it is what breaks adding an item on a train.
     refresh: () => void loadCommitted(),
     refetch: () => void refetch(),
+    /*
+     * A **write**, not a render-time overlay: on a migrated native domain, accepted state is a
+     * write-time SQLite transaction and the reader is an ordinary typed repository read
+     * (`interaction-contract.md` §5.4's transition invariants, ADR-057). The subscription
+     * installed above notices the commit and re-reads, so the row arrives at its new position
+     * through the same path every other change does.
+     */
+    applyRank: (itemId, rank) => {
+      void state.account.transactions
+        .run(
+          (transaction) => items.setRankLocal(transaction, listId, itemId, rank),
+          'interactive',
+        )
+        .catch((error: unknown) => {
+          if (active.current) setFailure(describe(error));
+        });
+    },
     ...(failure === undefined
       ? {}
       : {
