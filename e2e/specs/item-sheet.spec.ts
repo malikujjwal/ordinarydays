@@ -78,7 +78,8 @@ async function planItem(
       headers: e2eHeaders(randomUUID()),
       data: {
         activityId: id,
-        creationTarget: { objectKind: 'plan', type: 'general' },
+        // The Plan kind is always an explicit choice; `custom` is this test's.
+        creationTarget: { objectKind: 'plan', type: 'custom' },
         audience: { mode: 'just_me' },
         schedule: { date, time: '19:00', timezone: ZONE },
       },
@@ -91,17 +92,24 @@ async function planItem(
   return body.data.activity;
 }
 
+/**
+ * The item as the server holds it, or its absence.
+ *
+ * Nothing is asserted inside, because every caller reads this from an `expect.poll` and a
+ * throwing poll callback fails the test instead of trying again — which turns "the undo has
+ * not landed yet" into "the undo did not work".
+ */
 async function readItem(
   request: APIRequestContext,
   listId: string,
   itemId: string,
-): Promise<{ title: string; note?: string }> {
+): Promise<{ status: number; title?: string; note?: string }> {
   const response = await request.get(`${API}/v1/lists/${listId}/items/${itemId}`, {
     headers: e2eHeaders(),
   });
-  expect(response.ok(), await response.text()).toBe(true);
+  if (!response.ok()) return { status: response.status() };
   const body = (await response.json()) as { data: { title: string; note?: string } };
-  return body.data;
+  return { status: response.status(), ...body.data };
 }
 
 test('renaming a linked item leaves its Plan title alone', async ({ page, request }) => {
@@ -145,8 +153,14 @@ test('renaming a linked item leaves its Plan title alone', async ({ page, reques
     .toBe('Ask for the counter');
 
   // ---- Open the Plan the item is linked to --------------------------------------
+  /*
+   * The Plan's title is its own inline-editable field on the detail screen, and it still holds
+   * the words it was seeded with. The renamed item is nowhere on this screen: the two have been
+   * independent since the one-time seed, and the Plan's title never travels beside the item on
+   * the wire (§6.2).
+   */
   await page.goto(`/activity/${plan.activityId}`);
-  await expect(page.getByRole('heading', { name: original })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue(original);
   await expect(page.getByText(renamed)).toHaveCount(0);
 });
 
@@ -170,12 +184,7 @@ test('deleting an item asks nothing and deletes immediately', async ({
   await expect(testId(page, 'confirm-accept')).toHaveCount(0);
   // The request went on the tap, not at the end of the window (P2-24).
   await expect
-    .poll(async () => {
-      const response = await request.get(`${API}/v1/lists/${listId}/items/${itemId}`, {
-        headers: e2eHeaders(),
-      });
-      return response.status();
-    })
+    .poll(async () => (await readItem(request, listId, itemId)).status)
     .toBe(404);
   await expect(page.getByText(`${title} deleted`)).toBeVisible();
 });

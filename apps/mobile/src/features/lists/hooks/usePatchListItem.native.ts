@@ -2,7 +2,7 @@ import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
 import { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
-import type { ItemPatchResult } from './useItemPatch';
+import type { PatchListItemResult } from './usePatchListItem';
 
 /**
  * One field of one item, on **native**: accepted into SQLite, then synced (§P3-29, ADR-057).
@@ -25,7 +25,7 @@ import type { ItemPatchResult } from './useItemPatch';
  * write survives the app being closed and replays under the same intent identity — and it is
  * why a rejection surfaces later through the recovery banner rather than here.
  */
-export function useItemPatch(): ItemPatchResult {
+export function usePatchListItem(): PatchListItemResult {
   const state = requireActiveNativeState();
   const [saving, setSaving] = useState(false);
 

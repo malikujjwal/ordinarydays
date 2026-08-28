@@ -152,14 +152,49 @@ describe('provenance (§7.5)', () => {
 
 describe('one patch per field', () => {
   it('trims a title and refuses an empty one', () => {
-    expect(titlePatch('  Tortillas  ')).toEqual({ title: 'Tortillas' });
-    expect(titlePatch('   ')).toBeUndefined();
+    expect(titlePatch(item(), '  Tortillas  ')).toEqual({ title: 'Tortillas' });
+    expect(titlePatch(item(), '   ')).toBeUndefined();
   });
 
   /** `null` clears; `''` would be a note whose content is nothing. */
   it('clears a note with null rather than an empty string', () => {
-    expect(notePatch('  eight  ')).toEqual({ note: 'eight' });
-    expect(notePatch('  ')).toEqual({ note: null });
+    expect(notePatch(item(), '  eight  ')).toEqual({ note: 'eight' });
+    expect(notePatch(item({ note: 'eight' }), '  ')).toEqual({ note: null });
+  });
+
+  /**
+   * The blur that must not write. Tapping `Delete` blurs the title, and a write fired there
+   * would race the delete it came from — and on a shared list would re-assert an untouched
+   * field over another member's edit under last-write-wins.
+   */
+  it('has nothing to send when a field is blurred unchanged', () => {
+    const stored = item({
+      title: 'Chicken',
+      note: 'eight',
+      location: { label: 'Zahav', address: '237 St James Place' },
+    });
+
+    expect(titlePatch(stored, '  Chicken  ')).toBeUndefined();
+    expect(notePatch(stored, 'eight')).toBeUndefined();
+    expect(placePatch(stored, 'Zahav', '237 St James Place')).toBeUndefined();
+    expect(notePatch(item(), '')).toBeUndefined();
+    expect(placePatch(item(), '', '')).toBeUndefined();
+  });
+
+  it('has nothing to send when a control re-states what the item already says', () => {
+    const show = item({
+      details: {
+        behaviour: 'watch',
+        mediaKind: 'show',
+        watchStatus: 'watching',
+        season: 2,
+      },
+    });
+
+    expect(watchPatch(show, { watchStatus: 'watching' })).toBeUndefined();
+    expect(watchPatch(show, { mediaKind: 'show' })).toBeUndefined();
+    expect(watchPatch(show, { season: 2 })).toBeUndefined();
+    expect(watchPatch(show, {})).toBeUndefined();
   });
 
   it('sends the place as one field and clears it when the label goes', () => {
@@ -167,7 +202,9 @@ describe('one patch per field', () => {
       location: { label: 'Zahav', address: '237 St James Place' },
     });
     expect(placePatch(item(), 'Zahav', '  ')).toEqual({ location: { label: 'Zahav' } });
-    expect(placePatch(item(), '  ', '237 St James Place')).toEqual({ location: null });
+    expect(
+      placePatch(item({ location: { label: 'Zahav' } }), '  ', '237 St James Place'),
+    ).toEqual({ location: null });
   });
 
   /** Coordinates no surface collects are still not this field's to remove. */
@@ -241,12 +278,13 @@ describe('one patch per field', () => {
         season: 2,
       },
     });
-    expect(watchPatch(show, { watchStatus: undefined })).toEqual({
+    // The required field survives a change that says nothing about it.
+    expect(watchPatch(show, { watchStatus: undefined, season: 3 })).toEqual({
       details: {
         behaviour: 'watch',
         watchStatus: 'watching',
         mediaKind: 'show',
-        season: 2,
+        season: 3,
         episode: 4,
       },
     });
@@ -293,7 +331,11 @@ describe('the ingredient rows', () => {
         quantity: '500g',
       },
     ]);
-    expect(ingredientsPatch(ingredientRows(meal))).toEqual({
+    /*
+     * Sent back onto a *different* item, so the comparison cannot report "unchanged" and hide
+     * what is actually being asserted: the shape a client is allowed to say.
+     */
+    expect(ingredientsPatch(item(), ingredientRows(meal))).toEqual({
       details: {
         behaviour: 'meals',
         ingredients: [
@@ -307,9 +349,38 @@ describe('the ingredient rows', () => {
     });
   });
 
+  /**
+   * The same rows back onto the same meal write nothing — and `addedToListId` is why this
+   * needs saying: comparing against the stored rows raw would report a change every time.
+   */
+  it('has nothing to send when the rows come back unchanged', () => {
+    const meal = item({
+      details: {
+        behaviour: 'meals',
+        ingredients: [
+          {
+            ingredientId: 'ing_01J000000000000000000000AA',
+            name: 'Chicken',
+            quantity: '500g',
+            addedToListId: LIST_ID,
+          },
+        ],
+      },
+    });
+
+    expect(ingredientsPatch(meal, ingredientRows(meal))).toBeUndefined();
+    // A blank row nobody named is dropped, so opening one and stopping writes nothing either.
+    expect(
+      ingredientsPatch(meal, [
+        ...ingredientRows(meal),
+        { ingredientId: 'ing_01J000000000000000000000BB', name: '', quantity: '' },
+      ]),
+    ).toBeUndefined();
+  });
+
   it('drops a row nobody named and omits an emptied quantity', () => {
     expect(
-      ingredientsPatch([
+      ingredientsPatch(item(), [
         {
           ingredientId: 'ing_01J000000000000000000000AA',
           name: ' Chicken ',

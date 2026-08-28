@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
-import type { ItemSheetActions } from '../hooks/useItemSheetActions';
+import type { ListItemActions } from '../hooks/useListItemActions';
 import type { RowList } from '../model/itemSheet';
 import { ItemSheet } from './ItemSheet';
 
@@ -14,14 +14,14 @@ import { ItemSheet } from './ItemSheet';
  *
  * The writes are stubbed so the sheet's **own** rules are what is under test: which fields
  * exist for which list, what each control sends, the provenance row's degradation, and the
- * dialog that must not be there. `useItemSheetActions.test.tsx` covers the delete, its undo
+ * dialog that must not be there. `useListItemActions.test.tsx` covers the delete, its undo
  * window and the compensating call; `listTransactions.test.ts` and `syncEngine.test.ts` cover
  * the durable native edit.
  */
 
-const actions = vi.hoisted(() => ({ current: {} as ItemSheetActions }));
-vi.mock('../hooks/useItemSheetActions', () => ({
-  useItemSheetActions: () => actions.current,
+const actions = vi.hoisted(() => ({ current: {} as ListItemActions }));
+vi.mock('../hooks/useListItemActions', () => ({
+  useListItemActions: () => actions.current,
 }));
 vi.mock('expo-crypto', () => ({
   randomUUID: () => 'idem-item-sheet-test',
@@ -56,7 +56,7 @@ const MEALS: RowList = {
   capabilities: { checkable: false, supportsLocation: false },
 };
 
-function setActions(overrides: Partial<ItemSheetActions> = {}) {
+function setActions(overrides: Partial<ListItemActions> = {}) {
   actions.current = {
     save: vi.fn(async () => true),
     remove: vi.fn(),
@@ -239,6 +239,39 @@ describe('one PATCH per field', () => {
 
     await waitFor(() => expect(stub.save).toHaveBeenCalledTimes(1));
     expect(stub.save).toHaveBeenCalledWith(row, { title: 'Tortillas' });
+  });
+
+  /**
+   * The blur that must not write. Web focuses the title on open (§7.3), so tapping `Delete`
+   * blurs it — and a write fired there would race the delete that caused it.
+   */
+  it('writes nothing when a field is blurred unchanged', async () => {
+    const stub = setActions();
+    mount(collection(true), item({ note: 'eight', location: { label: 'Zahav' } }));
+
+    for (const name of ['title', 'note', 'place-label', 'place-address']) {
+      fireEvent.blur(field(name));
+    }
+    fireEvent.click(field('delete'));
+
+    await waitFor(() => expect(stub.remove).toHaveBeenCalledTimes(1));
+    expect(stub.save).not.toHaveBeenCalled();
+  });
+
+  /** Same rule at a control: re-tapping the selected status is not an edit. */
+  it('writes nothing when a control re-states the current value', async () => {
+    const stub = setActions();
+    mount(
+      WATCH,
+      item({
+        details: { behaviour: 'watch', mediaKind: 'show', watchStatus: 'watching' },
+      }),
+    );
+
+    fireEvent.click(field('status-watching'));
+    fireEvent.click(field('media-show'));
+
+    await waitFor(() => expect(stub.save).not.toHaveBeenCalled());
   });
 
   it('puts a refused field back and leaves the rest of the sheet alone', async () => {

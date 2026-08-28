@@ -27,6 +27,15 @@ import type { RowList } from './listItemRow';
  * strict discriminated union on the wire, so changing `watchStatus` alone still sends the whole
  * typed object. That is one field — `details` — carrying its complete value, not a
  * read-modify-write across several.
+ *
+ * ## A builder answers `undefined` when there is nothing to write
+ *
+ * Every one of them takes the item and compares. That is not an optimisation: the sheet commits
+ * on **blur**, so opening an item and tapping `Delete` blurs the title — and a write that fired
+ * there would race the delete it came from, and on a shared list would re-assert a value over
+ * whatever another member had just changed, under last-write-wins, for a field the user never
+ * touched. Keeping the comparison in the builders means the rule holds for every control at
+ * once rather than being remembered at six call sites.
  */
 
 /** The list's own two fields, exactly as the row renderer takes them. */
@@ -151,14 +160,21 @@ export function provenanceLine(provenance: ItemProvenance): string {
 }
 
 /** The title edit. Trimmed, and refused empty — `title` carries a `min(1)` on the wire. */
-export function titlePatch(next: string): PatchListItemInput | undefined {
+export function titlePatch(
+  item: ListItemView,
+  next: string,
+): PatchListItemInput | undefined {
   const title = next.trim();
-  return title === '' ? undefined : { title };
+  return title === '' || title === item.title ? undefined : { title };
 }
 
 /** The note edit. Emptied means **cleared**, which is `null` rather than `''` or absent. */
-export function notePatch(next: string): PatchListItemInput {
+export function notePatch(
+  item: ListItemView,
+  next: string,
+): PatchListItemInput | undefined {
   const note = next.trim();
+  if (note === (item.note ?? '')) return undefined;
   return { note: note === '' ? null : note };
 }
 
@@ -176,9 +192,15 @@ export function placePatch(
   item: ListItemView,
   label: string,
   address: string,
-): PatchListItemInput {
+): PatchListItemInput | undefined {
   const trimmedLabel = label.trim();
   const trimmedAddress = address.trim();
+  if (
+    trimmedLabel === (item.location?.label ?? '') &&
+    trimmedAddress === (item.location?.address ?? '')
+  ) {
+    return undefined;
+  }
   if (trimmedLabel === '') return { location: null };
   const { lat, lng } = item.location ?? {};
   return {
@@ -221,6 +243,14 @@ export function watchPatch(
   const current = watchDetails(item);
   if (current === undefined) return undefined;
   const merged = { ...current, ...change };
+  if (
+    (merged.watchStatus ?? current.watchStatus) === current.watchStatus &&
+    merged.mediaKind === current.mediaKind &&
+    merged.season === current.season &&
+    merged.episode === current.episode
+  ) {
+    return undefined;
+  }
   return {
     details: {
       behaviour: 'watch',
@@ -244,8 +274,28 @@ export function watchPatch(
  * ingredient starts, and someone who opened one and changed their mind has not made a mistake
  * to be told about.
  */
-export function ingredientsPatch(rows: readonly IngredientRow[]): PatchListItemInput {
-  const ingredients = rows
+export function ingredientsPatch(
+  item: ListItemView,
+  rows: readonly IngredientRow[],
+): PatchListItemInput | undefined {
+  const ingredients = sendableIngredients(rows);
+  /*
+   * The baseline goes through the **same** projection, which is what makes the comparison
+   * sound: the stored rows may carry `addedToListId`, and comparing against them raw would
+   * report a change on every blur of a meal somebody has already sent to a list.
+   */
+  if (sameIngredients(ingredients, sendableIngredients(ingredientRows(item)))) {
+    return undefined;
+  }
+  return { details: { behaviour: 'meals', ingredients: [...ingredients] } };
+}
+
+type SendableIngredient = { ingredientId: string; name: string; quantity?: string };
+
+function sendableIngredients(
+  rows: readonly IngredientRow[],
+): readonly SendableIngredient[] {
+  return rows
     .map((row) => ({
       ingredientId: row.ingredientId,
       name: row.name.trim(),
@@ -257,7 +307,24 @@ export function ingredientsPatch(rows: readonly IngredientRow[]): PatchListItemI
       name: row.name,
       ...(row.quantity === '' ? {} : { quantity: row.quantity }),
     }));
-  return { details: { behaviour: 'meals', ingredients } };
+}
+
+function sameIngredients(
+  left: readonly SendableIngredient[],
+  right: readonly SendableIngredient[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((row, at) => {
+      const other = right[at];
+      return (
+        other !== undefined &&
+        row.ingredientId === other.ingredientId &&
+        row.name === other.name &&
+        row.quantity === other.quantity
+      );
+    })
+  );
 }
 
 /**
