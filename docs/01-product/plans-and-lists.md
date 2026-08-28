@@ -918,6 +918,26 @@ Rules:
    `List name, pre-filled with <title>` on the title step. Focus never skips the explicit
    style selection.
 
+> **What the frames fix, and what the sheet primitive does** — settled 2026-08-27 (founder),
+> on the divergence raised in P3-26's PR.
+>
+> The two frames above are canonical for **the flow, the controls and their copy**: two steps
+> in that order, a catalogue with nothing selected, a title step showing the style's name and
+> its exact `summary`, an editable `List name`, a way back that retains nothing, and a commit
+> reading `Create list`. Those are product decisions and the six rules restate them.
+>
+> **Where the dismissal and commit controls sit is the shared `Sheet` primitive's**, per
+> [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §6.1: a screen
+> supplies controls, the sheet decides their geometry. So `Back` and `Create list` sit in the
+> sheet's fixed footer, which keeps the commit reachable when the keyboard opens on the title
+> step, and the single `✕` the primitive already renders is the way out of step one — it is
+> the accessible route, and it is the one control that Escape, hardware Back, the scrim and
+> the drag all converge on. The frame's `Cancel` is that control drawn in an earlier idiom,
+> not a second one to add beside it.
+>
+> This is the general rule for every frame in this document, not an exception for this sheet:
+> a drawing says which controls exist and what they say; the design system says where they go.
+
 ### 5.5 Changing a list later
 
 Reached from the list header `⋯` → `List settings`. Every change here is an instance of the

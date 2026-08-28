@@ -159,6 +159,12 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-47 | The Upcoming/Past calendar navigator | mobile | P3-35, P3-20, P3-24 | no | L |
 | P3-48 | Per-type row markers in `RowLeading` | mobile | P2-44 | yes | S |
 | P3-49 | Clear `List.sourceActivityId` when its source Plan is deleted | api | P3-05, P1-14 | yes | S |
+| P3-50 | A `Sheet`-owned present/dismiss animation, so web has one at all | ui | P3-26 | yes | S |
+
+> **Added 2026-08-27 (founder).** **P3-50** owns the animation `Sheet` has never had. P3-26
+> removed react-native-web's, because RNW ties the dialog role and the focus trap to an
+> animation-end event that never arrives; native still has RNW's fade, at the wrong duration
+> and outside `useMotion()`. Nothing depends on it, so it is unblocked and unblocking.
 
 > **Added 2026-08-26 (founder).** **P3-49** carries the backend half of a cleanup that
 > §P3-38's edge cases described but no shipped task owned. P3-05 already writes
@@ -2888,6 +2894,49 @@ is deleted; a Plan with no sourced Lists writes nothing extra; the clear leaves
 `List.updatedAt`, `rankVersion` and `itemVersion` byte-identical; a delete interrupted after
 the clears and retried still completes. Unit: the conditional expression names the Plan being
 deleted, and a condition failure is swallowed rather than raised.
+
+---
+
+### P3-50 — A `Sheet`-owned present/dismiss animation, so web has one at all
+
+**Files.** `packages/ui/src/primitives/Sheet.tsx`, `packages/ui/src/primitives/Sheet.test.tsx`.
+
+**What to build.** The row
+[`../04-conventions/design-system.md`](../04-conventions/design-system.md) §4.3 already
+specifies — `Sheet` present / dismiss, `slow`, `decelerate` in and `accelerate` out — as this
+component's own animation rather than a modal library's.
+
+**Why it has no animation to inherit.** It was never `Sheet`'s: react-native-web's `Modal`
+faded its own container, at RNW's fixed 250 ms rather than `slow`, and outside `useMotion()`,
+so Reduce Motion could not switch it off. P3-26 removed even that on web, because RNW marks
+its modal *active* — and only then adds `role="dialog"` and runs its focus trap — when that
+fade's `animationend` fires, and the event never arrives: measured in Chromium against the
+built export, `role: null` two seconds after mount, which axe reports as a **critical**
+`aria-allowed-attr`. Passing no animation type makes RNW complete that lifecycle on mount.
+The accessibility fix stands; this task gives back the motion it cost, on both platforms and
+under this component's control.
+
+**Approach.** The surface already holds an `Animated.Value` for the drag. Present and dismiss
+are the same value plus an opacity on the scrim, driven from `useMotion()` so `instant` under
+Reduce Motion is not a branch this component writes. Dismissal must **wait for the exit**
+before `onClose` reaches the caller, or a sheet that unmounts with its route will still
+disappear instantly. Do not reintroduce `animationType` on web: the dialog role and the focus
+trap depend on its absence, and `Sheet.test.tsx` asserts the role under jsdom precisely so a
+change that puts it back behind an `animationend` fails.
+
+**Edge cases.**
+
+- The centred `medium`/`expanded` dialog and the `compact` bottom sheet enter differently —
+  a dialog fades and scales slightly, a bottom sheet travels. One component, two resolved
+  values, no second component.
+- A sheet dismissed by the drag is already at its final offset; the exit animates opacity only
+  from wherever the finger left it, and never snaps back first.
+- `dirty` sheets route through `onDiscardRequest` and must not animate out until the prompt
+  resolves.
+
+**Tests.** Reduce Motion resolves every duration to `instant` and the sheet still mounts and
+unmounts; `onClose` fires after the exit rather than with it; the dialog-role assertion from
+P3-26 still passes, which is what pins the accessibility fix in place.
 
 ## Acceptance criteria
 

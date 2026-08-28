@@ -449,16 +449,16 @@ sizings did not support; those are corrected here.
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **120** | ~6.0 weeks |
 | 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **16** | ~0.8 weeks |
 | 2.6 — Sync hardening | 8 (P2-48…P2-50, P2-57, P2-59 and P2-61…P2-63; P2-58 parked and P2-60 historical, uncounted) | 0 / 1 / 7 | **30** | ~1.5 weeks |
-| 3 — Plans and lists | 48 (44 minus P3-11, cut 2026-08-07; plus P3-45…P3-48 — 2026-08-25; plus P3-49 — 2026-08-26) | 6 / 27 / 15 | **121** | ~6.1 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **170** | **25 / 92 / 53** | **422** | **~21.1 weeks** |
+| 3 — Plans and lists | 49 (44 minus P3-11, cut 2026-08-07; plus P3-45…P3-48 — 2026-08-25; plus P3-49 — 2026-08-26; plus P3-50 — 2026-08-27) | 7 / 27 / 15 | **123** | ~6.2 weeks |
+| **0–3 subtotal (local, $0 AWS)** | **171** | **26 / 92 / 53** | **424** | **~21.2 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **239** | **36 / 137 / 66** | **574** | **~28.7 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **241** | **38 / 137 / 66** | **578** | **~28.9 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phases 2.5 and 2.6** | **388** | **49 / 228 / 111** | **949** | **~47.5 weeks (~11.0 months)** |
+| **Total 0–9 plus Phases 2.5 and 2.6** | **390** | **51 / 228 / 111** | **953** | **~47.7 weeks (~11.0 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -517,13 +517,25 @@ calendar navigator, L) and **P3-48** (per-type row markers in `RowLeading`, S). 
 and +9 AWU**, giving **388 tasks and 949 AWU**. Two of the four are consequences of tasks that
 had already shipped, the same as the note below.
 
+The **P3-26 review on 2026-08-27** added **P3-50** (a `Sheet`-owned present/dismiss
+animation, S). Net **+1 task and +2 AWU**. P3-26's accessibility fix removed the only sheet
+animation web had — react-native-web ties the dialog role and the focus trap to an
+animation-end event that never fires — and `design-system.md` §4.3 has specified this row
+since P2-43 without any component owning it. Forward work, not an amendment.
+
+**The two rows below Phase 3 were two behind.** P3-49 was added to the Phase 3 row and the
+0–3 subtotal on 2026-08-26 but never propagated to the 0–5 subtotal or the total, which is
+why the prose under this table read 389 tasks and 951 AWU while the table read 388 and 949.
+Every aggregate above is recomputed from the phase rows, so the two figures now agree.
+
 The **P3-18 review on 2026-08-26** added **P3-49** (clear `List.sourceActivityId` when its
 source Plan is deleted, S). Net **+1 task and +2 AWU**, giving **389 tasks and 951 AWU**. It is
 the same pattern one more time: `data-model.md` §7 and `api-contract.md` §2.3 both already
 required the clear, P3-05 had shipped the write that makes the dangling link reachable, and
 the only task describing the cleanup was **P3-38, a `mobile` task** — so no backend task owned
 it and nothing would have until a client task ran. Found by reading the contract against the
-cascade, not scope growth. P3-49 now gates P3-38.
+cascade, not scope growth. P3-49 now gates P3-38. With P3-50 above, the current figures are
+**390 tasks and 953 AWU**.
 
 The 2026-08-25 additions, continued. Two of the four are consequences of tasks that
 had already shipped — P3-02 named icons that do not exist, and the four writers that must bump
