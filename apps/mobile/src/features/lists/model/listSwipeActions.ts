@@ -1,7 +1,7 @@
 import type { List } from '@od/shared/types';
 
 /**
- * The Lists-index row's swipe actions (`interaction-contract.md` §3.2).
+ * The swipe actions a Lists surface offers (`interaction-contract.md` §3.2).
  *
  * | Row | Swipe left |
  * | --- | --- |
@@ -29,7 +29,7 @@ import type { List } from '@od/shared/types';
 
 export type ListRowRole = 'owner' | 'member';
 
-export type ListSwipeActionName = 'archive' | 'delete' | 'leave';
+export type ListSwipeActionName = 'archive' | 'delete' | 'leave' | 'mark-watched';
 
 export interface ListSwipeAction {
   readonly name: ListSwipeActionName;
@@ -45,6 +45,11 @@ const ARCHIVE: ListSwipeAction = {
 };
 const DELETE: ListSwipeAction = { name: 'delete', label: 'Delete', destructive: true };
 const LEAVE: ListSwipeAction = { name: 'leave', label: 'Leave', destructive: true };
+const MARK_WATCHED: ListSwipeAction = {
+  name: 'mark-watched',
+  label: 'Mark watched',
+  destructive: false,
+};
 
 /** The row's own role, from the viewer. Phase 6 replaces the derivation, not the callers. */
 export function roleFor(list: List, viewerUserId: string | undefined): ListRowRole {
@@ -53,6 +58,33 @@ export function roleFor(list: List, viewerUserId: string | undefined): ListRowRo
 
 export function listSwipeActions(role: ListRowRole): readonly ListSwipeAction[] {
   return role === 'owner' ? [ARCHIVE, DELETE] : [LEAVE];
+}
+
+/**
+ * A `watch` **item** row's left-swipe actions, in §3.2's order (§P3-31).
+ *
+ * `Mark watched` · `Delete`, and §3.2 gives this row the one full-swipe commit in the item
+ * table: `Mark watched` is not destructive — it is §8.1's any→any status change with a
+ * six-second undo — so an over-swipe may commit it, exactly as the agenda's positive action
+ * does. `Delete` is destructive and never commits on a swipe.
+ *
+ * A watch row's other §3.2 columns are not this task's: swipe **right** is `Plan this item`
+ * (P3-33), and the row body opens the item sheet (P3-29).
+ */
+export function watchItemSwipeActions(): readonly ListSwipeAction[] {
+  return [MARK_WATCHED, DELETE];
+}
+
+/**
+ * Whether a full swipe may commit this column's first action.
+ *
+ * The rule §3.2 already encodes and `SwipeableListCard` states in prose: a destructive first
+ * action has no shortcut, because §1a.1 puts a confirmation in front of it and a card that
+ * vanished on an over-swipe would be acting without a tap.
+ */
+export function mayCommitOnFullSwipe(actions: readonly ListSwipeAction[]): boolean {
+  const first = actions[0];
+  return first !== undefined && !first.destructive;
 }
 
 /**

@@ -1,4 +1,9 @@
-import type { List, ListItemPlanState, ListItemView } from '@od/shared/types';
+import type {
+  List,
+  ListItemDetails,
+  ListItemPlanState,
+  ListItemView,
+} from '@od/shared/types';
 
 /**
  * What a list row renders, decided from the list's own fields and the item (§P3-28, §5.7).
@@ -84,12 +89,31 @@ export function spokenWatchProgress(item: ListItemView): string | undefined {
 export function watchStatusLabel(item: ListItemView): string | undefined {
   const details = item.details;
   if (details?.behaviour !== 'watch') return undefined;
-  return {
-    want: 'Want to watch',
-    watching: 'Watching',
-    watched: 'Watched',
-  }[details.watchStatus];
+  return WATCH_STATUS_LABELS[details.watchStatus];
 }
+
+/**
+ * Derived from the shared union rather than re-declared, so a fourth status added in
+ * `packages/shared` fails the `satisfies` below instead of quietly rendering nothing.
+ */
+export type WatchStatus = Extract<ListItemDetails, { behaviour: 'watch' }>['watchStatus'];
+
+/**
+ * §5.2's three words, in the one place they live (P3-31).
+ *
+ * The chip above and the section heading below it are the same vocabulary about the same item,
+ * which is what the note on {@link watchStatusLabel} anticipated. A second copy is how one of
+ * the three comes to read `Want` in a heading and `Want to watch` on a chip.
+ *
+ * Keyed rather than ordered: the **display** order is §5.2's `Watching · Want to watch ·
+ * Watched`, which is `watchSections.ts`'s, and the stored order §8.1 lists transitions in is a
+ * different sequence again. Neither belongs to a lookup table.
+ */
+export const WATCH_STATUS_LABELS = {
+  want: 'Want to watch',
+  watching: 'Watching',
+  watched: 'Watched',
+} as const satisfies Record<WatchStatus, string>;
 
 /**
  * The ingredient count on a `meals` row.
