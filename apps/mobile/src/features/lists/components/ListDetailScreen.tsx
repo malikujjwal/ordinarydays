@@ -14,18 +14,22 @@ import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
 import { useReorderItems } from '../hooks/useReorderItems';
+import { useWatchActions } from '../hooks/useWatchActions';
 import {
   checkedCount,
   ITEM_SCROLL_FETCH_RATIO,
   mayActOnWholeList,
   mayShowEmptyState,
 } from '../model/listDetail';
+import { watchItemSwipeActions } from '../model/listSwipeActions';
 import { openInMaps } from '../model/openInMaps';
 import { orderedItems, reorderRange } from '../model/reorder';
+import { groupDropIndex } from '../model/watchSections';
 import { AddItemRow } from './AddItemRow';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
 import { ReorderableList } from './ReorderableList';
+import { WatchSections } from './WatchSections';
 
 /**
  * One list, its items and its inline add row
@@ -56,6 +60,15 @@ import { ReorderableList } from './ReorderableList';
  *
  * ## The drag is wrapped around the rows, not built into them
  *
+ * ## One behaviour renders grouped, and it is chosen off the stored field
+ *
+ * `behaviour === 'watch'` renders `WatchSections`; everything else renders flat. The choice is
+ * the **row's own stored value** and nothing else (ADR-032), so a list changed away from
+ * `watch` renders flat the moment its committed projection says so — no template key, no
+ * capability, no second condition (§P3-31's edge case).
+ *
+ * ## The drag
+ *
  * `ReorderableList` owns the gesture — a long press on native, §7.1's hover handle on web — and
  * calls back with an insertion index. Everything that decides what that index *means* is
  * `reorder.ts`'s, and everything that writes it is `useReorderItems`'. The row renderer is
@@ -73,6 +86,7 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
+  const watch = useWatchActions(view.refresh);
   const reorder = useReorderItems({
     listId,
     /*
@@ -197,7 +211,33 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
             body={list.emptyStateCopy}
             testID="list-detail-empty"
           />
-        ) : list === undefined ? null : (
+        ) : list === undefined ? null : list.behaviour === 'watch' ? (
+          /*
+           * §5.2's one grouped list. The rows are the same `ListItemRow`; only the headings and
+           * the per-section drag surface are new, and the drop index each section reports is
+           * translated back into the flat position `afterItemId` speaks.
+           */
+          <WatchSections
+            list={list}
+            items={view.items}
+            /*
+             * §3.2 gives this row `Mark watched` · `Delete`. Only the first has a handler on
+             * `main`: the item delete and its undo belong to P3-29, which has not landed, and
+             * an action nothing can perform is absent rather than present and inert.
+             */
+            actions={watchItemSwipeActions().filter(
+              (action) => action.name === 'mark-watched',
+            )}
+            onAction={(item, action) => {
+              if (action.name === 'mark-watched') watch.markWatched(listId, item);
+            }}
+            onReorder={(itemId, withinGroup) => {
+              const flat = groupDropIndex(view.items, itemId, withinGroup);
+              if (flat !== undefined) reorder.drop(itemId, flat);
+            }}
+            testID="list-detail-items"
+          />
+        ) : (
           /*
            * §5.6: reorder is offered on **every** behaviour, and a checked row reorders like
            * any other and stays where it is put. The only thing a behaviour changes is how far
