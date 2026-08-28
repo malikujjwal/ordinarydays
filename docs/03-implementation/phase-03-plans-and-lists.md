@@ -2073,7 +2073,17 @@ re-tested against a mock of the thing being asserted.
 
 ### P3-31 — Watch behaviour: grouped items and progress UI
 
-**Files.** `apps/mobile/src/features/lists/WatchSections.tsx`.
+**Files.** `apps/mobile/src/features/lists/components/WatchSections.tsx` and
+`SwipeableWatchRow{,.web}.tsx`;
+`apps/mobile/src/features/lists/model/{watchSections,watchProgress,watchUndoToast}.ts`;
+`apps/mobile/src/features/lists/hooks/useWatchActions.ts`; wiring in the list screen. The
+feature's pure models live in `model/` and its components in `components/`, as
+`listItemRow.ts` and `ListItemRow.tsx` already do.
+
+`ListItemRow.tsx` is **not** touched. A watch row's status chip, its `S2 E4` and the absence of
+a checkbox are all P3-28's and already correct; §3.2's swipe wraps the row rather than entering
+it. `listItemRow.ts` gains only the `WATCH_STATUS_LABELS` record its own comment anticipated —
+"so the chip and P3-31's group heading say the same words about the same item".
 
 **What to build.** The one grouped item list in the product
 ([`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5.2): a `watch`
@@ -2114,6 +2124,40 @@ holding P3-28 rows sorted by `(rank, itemId)` within the group.
 line; a status `PATCH` regroups while preserving rank; an empty group's heading is
 absent; unit test that the progress-update mutation applies `want → watching` only from
 `want` and touches no other field; the template-key grep.
+
+**Decisions recorded while building this (2026-08-28), each raised in its PR.**
+
+- **An empty group renders no heading**, which is the decision this section already asked to be
+  recorded. §5.2 fixes the order of the three sections and says nothing about rendering an empty
+  one, and the always-render rule that does exist is the Plans tab's, explicitly about **stages**
+  rather than list groups. Two empty headings on a two-item watchlist would be scaffolding
+  describing a state the user is not in.
+- **Each section is its own drag surface.** P3-30's `reorderRange` already clamps a watch drag to
+  the item's status group; giving each section its own `ReorderableList` makes that *structural*
+  — there is no gesture that crosses a heading, rather than one the finger discovers at the edge.
+  `groupDropIndex` translates a drop among a group's rows back into the flat position
+  `afterItemId` names a neighbour in, so ranks stay global and interleaved. That is why a status
+  change regroups a row at its existing rank: nothing was ever grouped in storage.
+- **The mutation covers both arms of `completionFollowUp`**, not only `watch_progress`. The
+  movie arm's `Update {list name} item to Watched?` is §8.4's own copy and its confirmation is a
+  tap with its own undo, not the automatic transition §8.1 forbids. Typing the input as the
+  whole union is what stops P3-43 re-deriving the other half — which is the point of typing it
+  from the payload at all.
+- **A committed watch row with no typed details is kept and left unclassified.** The response
+  schema is meant to reject it; if one arrives anyway it renders without a heading rather than
+  being filed under `Want to watch`, which is P3-28's rule for the same data one level down.
+  Dropping it would hide a row the user owns.
+- **`Delete` is listed but not wired.** §3.2 gives this row `Mark watched` · `Delete`;
+  `watchItemSwipeActions()` states both and their order, and the component renders an action
+  only where the caller supplied a handler. The item delete and its undo belong to **P3-29**,
+  which is not on `main` — see the seam below.
+
+**The P3-29 seam.** The status write here is an online-first `patchListItem`, which is what every
+merged item write on this screen does (`useReorderItems`, `useListBulkActions`). P3-29 owns the
+durable item-write path — `usePatchListItem{,.native}` and the `['list','item-patch']` intent —
+and when it lands, `useWatchActions`' two calls become that hook and native gains an offline
+`Mark watched`, and its `Delete` handler fills the second swipe action. A second durable path
+built here would be the drift the one-mutation-path rule exists to prevent.
 
 ---
 

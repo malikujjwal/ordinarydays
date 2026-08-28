@@ -79,14 +79,16 @@ function setView(overrides: Partial<ListDetailView> = {}) {
 
 function mount() {
   const onBack = vi.fn();
-  render(
+  const tree = () => (
     <SafeAreaProvider>
       <ThemeProvider scheme="light">
         <ListDetailScreen listId={LIST_ID} onBack={onBack} />
       </ThemeProvider>
-    </SafeAreaProvider>,
+    </SafeAreaProvider>
   );
-  return { onBack };
+  const rendered = render(tree());
+  /** Re-renders against whatever `setView` now returns — how a changed projection arrives. */
+  return { onBack, rerender: () => rendered.rerender(tree()) };
 }
 
 beforeEach(() => {
@@ -301,6 +303,89 @@ describe('reorder', () => {
 
     expect(screen.getByTestId(`list-reorder-handle-${DUPLICATE_A.itemId}`)).toBeDefined();
     expect(screen.getByTestId(`list-reorder-handle-${LATER.itemId}`)).toBeDefined();
+  });
+});
+
+/**
+ * §5.2's one grouped behaviour, chosen at the screen (§P3-31).
+ *
+ * `WatchSections.test.tsx` covers what the sections render. What only this level shows is
+ * **which** component a list gets, and that the choice is the row's stored `behaviour` and
+ * nothing else.
+ */
+describe('the watch list renders grouped', () => {
+  const watching = (id: string, title: string, rank: string): ListItemRow => ({
+    ...item(id, title),
+    rank,
+    details: { behaviour: 'watch', watchStatus: 'watching', mediaKind: 'show' },
+  });
+  const wanted = (id: string, title: string, rank: string): ListItemRow => ({
+    ...item(id, title),
+    rank,
+    details: { behaviour: 'watch', watchStatus: 'want' },
+  });
+
+  const watchList = () =>
+    list({
+      behaviour: 'watch',
+      templateKey: 'watchlist',
+      // Retained flags a behaviour change left behind. Neither reaches a watch row.
+      capabilities: { checkable: true, supportsLocation: true },
+    });
+
+  it('renders sections for a watch list', () => {
+    setView({
+      list: watchList(),
+      items: [watching('AA', 'Severance', 'a'), wanted('BB', 'Andor', 'b')],
+      itemCount: 2,
+    });
+    mount();
+
+    // The screen names the whole group `list-detail-items`; each section derives from it.
+    expect(screen.getByTestId('list-detail-items-watching')).toBeDefined();
+    expect(screen.getByTestId('list-detail-items-want')).toBeDefined();
+    // `Watching` is also the row's own status chip, so the heading is asserted by its id.
+    expect(screen.getByTestId('watch-heading-watching')).toBeDefined();
+  });
+
+  /**
+   * §P3-31's edge case: "a list changed away from `watch` renders flat immediately; the
+   * sections component is chosen off the row's stored `behaviour`, nothing else."
+   */
+  it('renders flat the moment the stored behaviour is no longer watch', () => {
+    const items = [watching('AA', 'Severance', 'a'), wanted('BB', 'Andor', 'b')];
+    setView({ list: watchList(), items, itemCount: 2 });
+    const { rerender } = mount();
+    expect(screen.getByTestId('list-detail-items-watching')).toBeDefined();
+
+    // The same items, retaining their typed details, on a list that is now a collection.
+    setView({ list: list({ behaviour: 'collection' }), items, itemCount: 2 });
+    rerender();
+
+    expect(screen.queryByTestId('list-detail-items-watching')).toBeNull();
+    expect(screen.queryByTestId('watch-heading-watching')).toBeNull();
+    expect(screen.getByText('Severance')).toBeDefined();
+  });
+
+  /**
+   * The migration gate. A `503` keeps the last committed projection, so the sections the user
+   * is looking at stay exactly as they were — and the refresh line appears above them (§5.3).
+   * Nothing here has to detect the migration; nothing reads anything that changes during one.
+   */
+  it('keeps the committed sections while a gate is up', () => {
+    setView({
+      list: watchList(),
+      items: [watching('AA', 'Severance', 'a'), wanted('BB', 'Andor', 'b')],
+      itemCount: 2,
+      status: 'success',
+      message: 'Something went wrong.',
+    });
+    mount();
+
+    expect(screen.getByTestId('list-detail-refresh-failed')).toBeDefined();
+    expect(screen.getByTestId('watch-heading-watching')).toBeDefined();
+    expect(screen.getByTestId('watch-heading-want')).toBeDefined();
+    expect(screen.getByText('Severance')).toBeDefined();
   });
 });
 
