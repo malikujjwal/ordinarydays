@@ -2192,17 +2192,20 @@ absent; unit test that the progress-update mutation applies `want → watching` 
   schema is meant to reject it; if one arrives anyway it renders without a heading rather than
   being filed under `Want to watch`, which is P3-28's rule for the same data one level down.
   Dropping it would hide a row the user owns.
-- **`Delete` is listed but not wired.** §3.2 gives this row `Mark watched` · `Delete`;
-  `watchItemSwipeActions()` states both and their order, and the component renders an action
-  only where the caller supplied a handler. The item delete and its undo belong to **P3-29**,
-  which is not on `main` — see the seam below.
+- **`Delete` is listed and, since P3-29 landed, wired.** §3.2 gives this row `Mark watched` ·
+  `Delete`; `watchItemSwipeActions()` states both and their order, and the component renders an
+  action only where the caller supplied a handler. Both handlers exist now.
 
-**The P3-29 seam.** The status write here is an online-first `patchListItem`, which is what every
-merged item write on this screen does (`useReorderItems`, `useListBulkActions`). P3-29 owns the
-durable item-write path — `usePatchListItem{,.native}` and the `['list','item-patch']` intent —
-and when it lands, `useWatchActions`' two calls become that hook and native gains an offline
-`Mark watched`, and its `Delete` handler fills the second swipe action. A second durable path
-built here would be the drift the one-mutation-path rule exists to prevent.
+**The P3-29 seam, closed when it landed (2026-08-28).** `Mark watched` goes through
+`usePatchListItem` — the one item-write path — so on native the row and its
+`['list','item-patch']` intent commit together and the swipe works with no signal. The row it
+names is on screen, so the committed local row that path requires is there by construction.
+
+`confirmFollowUp` stays **online-first**, and that is a precondition rather than an oversight:
+the durable path reads the committed row inside its writer transaction and refuses an item this
+device does not hold, and §8.4's follow-up is confirmed from **Today**, about a list the device
+may never have opened. Making it durable needs the intent to carry the item rather than find it.
+**That is P3-43's to answer**, with the surface that offers the question.
 
 ---
 

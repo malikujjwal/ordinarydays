@@ -394,6 +394,33 @@ describe('the watch list renders grouped', () => {
    * is looking at stay exactly as they were — and the refresh line appears above them (§5.3).
    * Nothing here has to detect the migration; nothing reads anything that changes during one.
    */
+  /**
+   * §3.2 gives a `watch` item the same body tap as every other row, and the full swipe pair.
+   * Both were open seams while P3-29 was unlanded; neither is now.
+   */
+  it('opens the item sheet from a watch row body', () => {
+    const severance = watching('AA', 'Severance', 'a');
+    setView({ list: watchList(), items: [severance], itemCount: 1 });
+    mount();
+
+    expect(screen.queryByTestId('item-sheet')).toBeNull();
+    fireEvent.click(screen.getByTestId(`list-item-${severance.itemId}-body`));
+
+    expect(screen.getByTestId('item-sheet')).toBeDefined();
+  });
+
+  it('offers both swipe actions and routes Delete to the item delete', () => {
+    const severance = watching('AA', 'Severance', 'a');
+    setView({ list: watchList(), items: [severance], itemCount: 1 });
+    mount();
+    fireEvent.pointerEnter(screen.getByTestId(`swipeable-item-${severance.itemId}`));
+
+    expect(screen.getByRole('button', { name: 'Mark watched' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(actions.current.remove).toHaveBeenCalledWith(severance);
+  });
+
   it('keeps the committed sections while a gate is up', () => {
     setView({
       list: watchList(),

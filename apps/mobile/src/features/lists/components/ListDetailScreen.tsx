@@ -262,17 +262,13 @@ export function ListDetailScreen({
           <WatchSections
             list={list}
             items={view.items}
-            /*
-             * §3.2 gives this row `Mark watched` · `Delete`. Only the first has a handler on
-             * `main`: the item delete and its undo belong to P3-29, which has not landed, and
-             * an action nothing can perform is absent rather than present and inert.
-             */
-            actions={watchItemSwipeActions().filter(
-              (action) => action.name === 'mark-watched',
-            )}
+            /* §3.2's pair for this row, both of them now that P3-29 owns the delete. */
+            actions={watchItemSwipeActions()}
             onAction={(item, action) => {
-              if (action.name === 'mark-watched') watch.markWatched(listId, item);
+              if (action.name === 'mark-watched') watch.markWatched(item);
+              if (action.name === 'delete') items.remove(item);
             }}
+            onOpen={(item) => setOpenItemId(item.itemId)}
             onReorder={(itemId, withinGroup) => {
               const flat = groupDropIndex(view.items, itemId, withinGroup);
               if (flat !== undefined) reorder.drop(itemId, flat);

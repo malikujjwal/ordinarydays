@@ -57,7 +57,7 @@ describe('Mark watched', () => {
   it('sends one PATCH carrying details and nothing else', async () => {
     const { watch, onChanged } = setup();
 
-    act(() => watch.current.markWatched(LIST_ID, SEVERANCE));
+    act(() => watch.current.markWatched(SEVERANCE));
 
     await waitFor(() => expect(calls.patch).toHaveBeenCalledTimes(1));
     expect(calls.patch.mock.calls[0]?.[1]).toBe(LIST_ID);
@@ -76,7 +76,7 @@ describe('Mark watched', () => {
   it('offers the six-second undo, naming the row', async () => {
     const { watch } = setup();
 
-    act(() => watch.current.markWatched(LIST_ID, SEVERANCE));
+    act(() => watch.current.markWatched(SEVERANCE));
 
     await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
     const toast = useToast.getState().current;
@@ -87,7 +87,7 @@ describe('Mark watched', () => {
   /** The inverse is the status the row had, sent as a compensating `PATCH` of its own. */
   it('undo puts the previous status back', async () => {
     const { watch } = setup();
-    act(() => watch.current.markWatched(LIST_ID, SEVERANCE));
+    act(() => watch.current.markWatched(SEVERANCE));
     await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
 
     act(() => useToast.getState().undo());
@@ -107,7 +107,7 @@ describe('Mark watched', () => {
   /** Letting the window close commits (§4.2): the request already went on the tap. */
   it('sends nothing more when the window closes untouched', async () => {
     const { watch } = setup();
-    act(() => watch.current.markWatched(LIST_ID, SEVERANCE));
+    act(() => watch.current.markWatched(SEVERANCE));
     await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
 
     act(() => useToast.getState().dismiss());
@@ -119,7 +119,7 @@ describe('Mark watched', () => {
     calls.patch.mockRejectedValue(new ApiError('internal', 'No.', 503, 'req-watch'));
     const { watch } = setup();
 
-    act(() => watch.current.markWatched(LIST_ID, SEVERANCE));
+    act(() => watch.current.markWatched(SEVERANCE));
 
     await waitFor(() => expect(useToast.getState().current?.kind).toBe('message'));
     const toast = useToast.getState().current;
@@ -133,7 +133,7 @@ describe('Mark watched', () => {
     const { details, ...withoutDetails } = SEVERANCE;
     void details;
 
-    act(() => watch.current.markWatched(LIST_ID, withoutDetails));
+    act(() => watch.current.markWatched(withoutDetails));
 
     expect(calls.patch).not.toHaveBeenCalled();
   });

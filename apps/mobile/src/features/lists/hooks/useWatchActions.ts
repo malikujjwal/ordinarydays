@@ -16,6 +16,7 @@ import {
   restoreStatusPatch,
 } from '../model/watchProgress';
 import { markedWatchedToast, watchProgressToast } from '../model/watchUndoToast';
+import { type ItemWriteOutcome, usePatchListItem } from './usePatchListItem';
 
 /**
  * The two watch writes, and the six seconds each of them can be taken back in
@@ -25,14 +26,17 @@ import { markedWatchedToast, watchProgressToast } from '../model/watchUndoToast'
  * carrying `details` and nothing else, applied on the tap, with a toast whose `onUndo` sends
  * the previous `details` back. What differs is only which body the model built.
  *
- * ## Online-first, and the seam that changes that
+ * ## One is durable on native, and one deliberately is not
  *
- * This calls `patchListItem` directly, which is what every merged item write on this screen
- * does today — `useReorderItems` and `useListBulkActions` both do. **P3-29 owns the durable
- * item-write path** (`usePatchListItem{,.native}` and the `['list','item-patch']` intent) and
- * has not landed on `main`; when it does, these two calls become that hook and native gains an
- * offline `Mark watched` for free. Named in this PR rather than duplicated here: a second
- * durable path would be the drift the one-mutation-path rule exists to prevent.
+ * `Mark watched` goes through `usePatchListItem` — the one item-write path — so on native the
+ * row and its `['list','item-patch']` intent commit together and the swipe works with no signal.
+ * The row it names is on screen, so the local row that path requires is there by construction.
+ *
+ * `confirmFollowUp` stays **online-first**, and that is a precondition rather than an oversight:
+ * the durable path reads the committed row inside its writer transaction and refuses an item
+ * this device does not hold, and §8.4's follow-up is confirmed from **Today**, about a list the
+ * device may never have opened. Making it durable needs the intent to carry the item rather
+ * than find it, which is P3-43's question to answer with the surface that offers it.
  *
  * ## `watching → watched` is never automatic
  *
@@ -45,10 +49,11 @@ export interface WatchActions {
   /**
    * §3.2's `Mark watched`, from the swipe or the accessibility rotor.
    *
-   * A no-op on a row with no typed details: there is no status to change, and inventing one
-   * would turn a bad response into a write.
+   * The row carries its own `listId`, so the caller passes one thing rather than two halves of
+   * it that could disagree. A no-op on a row with no typed details: there is no status to
+   * change, and inventing one would turn a bad response into a write.
    */
-  readonly markWatched: (listId: string, item: ListItemView) => void;
+  readonly markWatched: (item: ListItemView) => void;
   /**
    * §8.4 step 2, confirmed. **P3-43 calls this**; it does not build the body.
    *
@@ -85,15 +90,18 @@ function failureToast(error: unknown, message: string, retry: () => void): Toast
 export type OnWatchItemChanged = () => void;
 
 export function useWatchActions(onChanged: OnWatchItemChanged): WatchActions {
+  const durable = usePatchListItem();
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);
 
-  /** One write, one toast, one inverse — the only difference between the two actions. */
+  /**
+   * One write, one toast, one inverse — the only difference between the two actions is which
+   * transport `send` is, which is the durable/online split the header records.
+   */
   const write = useCallback(
     (
-      listId: string,
-      itemId: string,
+      transport: (body: PatchListItemInput) => Promise<ItemWriteOutcome>,
       title: string,
       forward: PatchListItemInput,
       inverse: PatchListItemInput,
@@ -102,47 +110,64 @@ export function useWatchActions(onChanged: OnWatchItemChanged): WatchActions {
       // The accepted action owns the singleton toast slot before this request can settle.
       dismiss();
       const send = (body: PatchListItemInput, offerUndo: boolean, failure: string) => {
-        void patchListItem(apiClient, listId, itemId, body)
-          .then(() => {
-            onChanged();
-            if (!offerUndo) return;
-            showUndo(
-              toast({
-                title,
-                onUndo: () => {
-                  dismiss();
-                  // Compensating, and offered no undo of its own: undoing an undo is the
-                  // original action, which the user can take again from the row.
-                  send(inverse, false, `Couldn't undo that.`);
-                },
-                onCommit: () => undefined,
-              }),
+        void transport(body).then((outcome) => {
+          if (!outcome.ok) {
+            show(
+              failureToast(outcome.error, failure, () => send(body, offerUndo, failure)),
             );
-          })
-          .catch((error: unknown) => {
-            show(failureToast(error, failure, () => send(body, offerUndo, failure)));
-          });
+            return;
+          }
+          onChanged();
+          if (!offerUndo) return;
+          showUndo(
+            toast({
+              title,
+              onUndo: () => {
+                dismiss();
+                // Compensating, and offered no undo of its own: undoing an undo is the
+                // original action, which the user can take again from the row.
+                send(inverse, false, `Couldn't undo that.`);
+              },
+              onCommit: () => undefined,
+            }),
+          );
+        });
       };
       send(forward, true, `Couldn't update "${title}."`);
     },
     [dismiss, onChanged, show, showUndo],
   );
 
+  /** The online transport, in the one shape `usePatchListItem` already answers in. */
+  const online = useCallback(
+    (listId: string, itemId: string) => (body: PatchListItemInput) =>
+      patchListItem(apiClient, listId, itemId, body).then(
+        (): ItemWriteOutcome => ({ ok: true }),
+        (error: unknown): ItemWriteOutcome => ({ ok: false, error }),
+      ),
+    [],
+  );
+
   return {
     markWatched: useCallback(
-      (listId, item) => {
+      (item) => {
         const forward = markWatchedPatch(item);
         const inverse = restoreStatusPatch(item);
         if (forward === undefined || inverse === undefined) return;
-        write(listId, item.itemId, item.title, forward, inverse, markedWatchedToast);
+        write(
+          (body) => durable.patch(item, body),
+          item.title,
+          forward,
+          inverse,
+          markedWatchedToast,
+        );
       },
-      [write],
+      [durable, write],
     ),
     confirmFollowUp: useCallback(
       (followUp) => {
         write(
-          followUp.listId,
-          followUp.itemId,
+          online(followUp.listId, followUp.itemId),
           // The list's title is what §8.4's copy names; the toast names the row that changed,
           // and the payload does not carry the item's own title. P3-43 renders the question.
           followUp.listTitle,
@@ -151,7 +176,7 @@ export function useWatchActions(onChanged: OnWatchItemChanged): WatchActions {
           watchProgressToast,
         );
       },
-      [write],
+      [online, write],
     ),
   };
 }
