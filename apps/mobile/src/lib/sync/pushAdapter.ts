@@ -7,6 +7,7 @@ import {
   createReminder,
   deleteActivityForReplay,
   deleteListForReplay,
+  deleteListItemForReplay,
   deleteReminderForReplay,
   duplicateActivity,
   patchActivityForReplay,
@@ -48,6 +49,7 @@ import {
   unsnoozeActivityInput,
 } from '@od/shared/schemas';
 import { apiClient } from '@/lib/apiClient';
+import { listMutationKeys } from '@/lib/mutationKeys';
 import type { OutboxIntent } from '@/lib/sqlite/outbox';
 import { field } from '@/lib/unknown';
 
@@ -108,6 +110,7 @@ export interface ListPushTransport {
   ): Promise<unknown>;
   /** No `Idempotency-Key`: the route is not replay-protected, per §5.11.5 (P3-29). */
   patchItem(listId: string, itemId: string, input: PatchListItemInput): Promise<unknown>;
+  removeItem(listId: string, itemId: string, idempotencyKey: string): Promise<unknown>;
   patch(
     listId: string,
     input: PatchListInput,
@@ -180,6 +183,8 @@ export const sharedListPushTransport: ListPushTransport = {
   createItem: (listId, input, idempotencyKey) =>
     createListItem(apiClient, listId, input, idempotencyKey),
   patchItem: (listId, itemId, input) => patchListItem(apiClient, listId, itemId, input),
+  removeItem: (listId, itemId, idempotencyKey) =>
+    deleteListItemForReplay(apiClient, listId, itemId, idempotencyKey),
   patch: (listId, input, ifMatch, idempotencyKey) =>
     patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
@@ -361,6 +366,32 @@ export class ActivityPushAdapter {
         listId,
         itemId,
         parsePersisted(patchListItemInput, field(value, 'input')),
+      );
+    }
+    if (name === listMutationKeys.itemDelete[1]) {
+      const itemId = requiredString(field(value, 'itemId'), 'itemId');
+      if (itemId !== intent.entityId) {
+        throw new DurableActivityIntentError(
+          'Durable list item intent entity identity does not match its payload.',
+        );
+      }
+      return this.listTransport.removeItem(
+        listId,
+        itemId,
+        requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+      );
+    }
+    if (name === listMutationKeys.itemUndo[1]) {
+      const itemId = requiredString(field(value, 'itemId'), 'itemId');
+      if (itemId !== intent.entityId) {
+        throw new DurableActivityIntentError(
+          'Durable list item intent entity identity does not match its payload.',
+        );
+      }
+      return this.listTransport.undo(
+        listId,
+        requiredString(field(field(value, 'receipt'), 'undoToken'), 'undoToken'),
+        requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
       );
     }
     if (listId !== intent.entityId) {

@@ -1061,6 +1061,27 @@ describe('fenced reads', () => {
       repository.getListItem(ALICE, LIST_ID, access, ITEM_A),
     ).rejects.toBeInstanceOf(repository.ListReadFenceError);
   });
+
+  it('reads a row corrupted by an older partial feature clear without returning a 400', async () => {
+    const current = item({ features: { place: { label: 'Library' } } });
+    vi.mocked(base.getItem).mockImplementation(async (key) => {
+      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow();
+      if (key.sk === keys.listItemLocator(LIST_ID, current.itemId).sk) {
+        return locatorRow(current);
+      }
+      if (key.sk === keys.listItem(LIST_ID, current.rank, current.itemId).sk) {
+        return {
+          ...itemRow(current),
+          features: { progress: null, place: { label: 'Library' } },
+        };
+      }
+      return undefined;
+    });
+
+    await expect(
+      repository.getListItem(ALICE, LIST_ID, access, ITEM_A),
+    ).resolves.toMatchObject({ features: { place: { label: 'Library' } } });
+  });
 });
 
 /**
@@ -1367,6 +1388,39 @@ describe('rank allocation and item mutations', () => {
       ':itemVersionIncrement': 1,
       ':lastItemActivityAt': LATER,
     });
+  });
+
+  it('merges a partial feature patch without storing nulls or dropping other features', async () => {
+    const current = item({
+      features: {
+        progress: { kind: 'text', value: 'Page 12' },
+        place: { label: 'Library' },
+        subItems: {
+          entries: [{ id: 'sub_1', title: 'Return book', rank: 'V' }],
+        },
+      },
+    });
+    mockResolvedItem(current);
+
+    const patched = await repository.patchListItemFields(
+      ALICE,
+      LIST_ID,
+      access,
+      ITEM_A,
+      { features: { progress: null } },
+      LATER,
+    );
+
+    expect(patched.features).toEqual({
+      place: { label: 'Library' },
+      subItems: {
+        entries: [{ id: 'sub_1', title: 'Return book', rank: 'V' }],
+      },
+    });
+    const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(items?.[1]?.Update?.ExpressionAttributeValues?.[':features']).toEqual(
+      patched.features,
+    );
   });
 
   it('advances itemVersion under the gates when a field patch does not change state', async () => {

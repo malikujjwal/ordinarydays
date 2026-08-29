@@ -106,17 +106,15 @@ export async function patchListItemHandler(
 export async function deleteListItemHandler(
   c: Context<AppEnv, typeof LIST_ITEM_PATH>,
 ): Promise<Response> {
-  const result = await removeItem(
-    requireUserId(c),
-    c.req.param('id'),
-    c.req.param('itemId'),
-    new Date().toISOString(),
+  return idempotentJson(c, 200, async (receiptFor) =>
+    removeItem(
+      requireUserId(c),
+      c.req.param('id'),
+      c.req.param('itemId'),
+      new Date().toISOString(),
+      (result) => receiptFor(result),
+    ),
   );
-
-  return c.json({
-    data: result,
-    meta: { requestId: c.get('requestId') },
-  });
 }
 
 /** `GET /v1/lists/:id/items?cursor=` — pattern 8's fenced page with the caller's links. */

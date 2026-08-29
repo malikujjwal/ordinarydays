@@ -2418,11 +2418,13 @@ integration, but the consequence is visible in configuration and the Plan previe
 | **Places to Visit** | checkbox | Place | — |
 | **Meal Ideas** | none | Sub-items labelled Ingredients, with `mealIngredients` | `meals` |
 
-`Blank` is first and explicit. Step one is headed `Choose a list type`, has no title field,
-nothing selected, recommended or history-ranked, and contains the sentence that Blank is the
-escape hatch. Step two alone contains the editable title. The tap stores `templateKey`; words
-typed later cannot select or change anything. `templateKey`, icon and empty guidance remain
-provenance/presentation owned by the created List. Preset changes affect future creation only.
+`Blank` is first and explicit. Step one is headed `Choose a list type`, has no title field and
+nothing selected, recommended or history-ranked. Blank is one full-width leading card; the
+other six choices are a 2-up grid in the table's left-to-right, top-to-bottom order. Each card
+shows its icon, label and one explanatory line. Step two alone contains the editable title. The
+tap stores `templateKey`; words typed later cannot select or change anything. `templateKey`,
+icon and empty guidance remain provenance/presentation owned by the created List. Preset
+changes affect future creation only.
 
 Legacy template keys remain valid migration provenance and resolve to equivalent stored
 configuration, even when they leave the creation catalogue. Do not rewrite an existing List's
@@ -2458,6 +2460,11 @@ semantic destination, not state, type or feature. The destructive behaviour sect
 disappear. Every setting writes independently, immediately and with the existing six-second
 Undo. Turning a capability off retains values, so no List setting is destructive.
 
+This sheet is the first production instance of `design-system.md` §6.3's reusable settings
+grammar. Record and reuse its section hierarchy, one-row/one-promise control semantics,
+conditional rows, focused child editor and immediate-write policy. Do **not** add an app-wide
+Settings page, settings navigation or unrelated preferences in this task.
+
 The switch must be a token-owned addition to the shared `SettingRow` family and runtime token
 gallery, not a hand-built screen control or a selected-row checkmark. The row exposes `switch`
 semantics, checked/disabled state and one 44-point target. Track, thumb, motion, focus and both
@@ -2485,6 +2492,11 @@ configured features have a quiet `Add` affordance in the sheet but no row metada
 Populated summaries are one line (`S2 E4`, `Page 143`, `8 ingredients`, a place label). Adding a
 future capability is one typed configuration/value plus registry entry and optional Plan
 adapter, not another List behaviour or screen branch.
+
+Global `+` → **List item** opens this item composer directly. In global context it includes a
+required inline `Add to` section with no List selected and a `New list` action; an open List
+supplies itself visibly. There is no separate `Which list?` step. Creating a List returns to the
+unchanged composer with it selected, and the write still requires `Add to <list name>`.
 
 **Plan adapters, not List purpose.** `Plan this item` continues to ask General / Meal / Watch /
 Event with nothing preselected. The explicit Plan kind chooses a one-time copy adapter:
@@ -2556,6 +2568,13 @@ implementation. Add a development-only Lists contract gallery that renders produ
 and deterministic fixtures for Blank, Checklist, Groceries, Watch, Books, Places, Meals and a
 generic Materials/Stops example. It must not duplicate markup or CSS from the screens.
 
+The production gallery also pins the List-specific presentation pass: varied full-card
+collection tones on the 2-up index; the Blank-first card catalogue; the compact
+`Start with one item` empty state; the direct List-item composer with inline destination and
+new-List return; and the exact List settings hierarchy. The collection tone is derived from
+`listId` presentation and never becomes stored configuration or a template branch. The small
+checkbox progress bar is retained and reports only `doneCount / itemCount`.
+
 Approve baselines from the exported production app, with pinned data, fonts, locale, timezone,
 reduced motion and viewport. Playwright screenshot assertions cover 390 × 844 compact light/dark
 and the relevant expanded layout. A path-filtered iOS job captures the same key states and image
@@ -2596,8 +2615,10 @@ No canonical example or future task may still require `ListBehaviour` afterward.
 `Add field` UI; more than one Sub-item collection; recursive/nested ListItems; Sub-item state,
 notes, dates, reminders, Plans or features; quantity/unit or generic-progress parsing; automatic
 type/feature/integration/Plan-kind/destination inference; ongoing List↔Activity sync; a new
-Activity type, tab, table or GSI; or the P3-34 Plan UI itself. This task supplies its adapter
-contract and migration, not the later screen.
+Activity type, tab, table or GSI; an app-wide Settings page or settings navigation; or the
+P3-34 Plan UI itself. This task supplies its adapter contract and migration, not the later
+screen. Reusable settings rules belong in the design system, while every UI added here remains
+List-specific.
 
 **Tests.** The acceptance suite is layered, and all layers are required:
 
@@ -2613,14 +2634,17 @@ contract and migration, not the later screen.
 4. Route/client/component tests cover create, state changes, mode changes, feature off/on
    retention, Place, text/episode Progress, Sub-item CRUD/reorder, slot changes, Undo, bulk
    checkbox semantics, grouped/flat rendering, populated-only summaries, the exact Settings
-   hierarchy, Switch roles/states, dynamic type and focus return.
+   hierarchy, Switch roles/states, stable `listId`-derived card tones across reorder/relaunch,
+   no template-driven tone branch, dynamic type and focus return.
 5. Adapter tests choose all four Plan kinds from the same item and assert only the explicit
    compatible intersection is copied once. Follow-up tests prove no automatic List write, no
    generic-text parsing, explicit confirmation/Undo and independence after copy.
 6. Existing List Playwright journeys are rewritten rather than deleted. Visual assertions cover
-   the approved create, settings, generic stages, Watch, Meals/Sub-items, empty feature and
-   populated item frames in compact light/dark plus expanded layout; axe and keyboard checks
-   remain. The path-filtered native capture is a required gate for Lists/shared-UI changes.
+   the coloured 2-up index, Blank-first card creation, direct composer destination/new-list
+   return, `Start with one item`, exact settings hierarchy, generic stages, Watch,
+   Meals/Sub-items, empty feature and populated item frames in compact light/dark plus expanded
+   layout; axe and keyboard checks remain. No app-wide Settings route or screen exists. The
+   path-filtered native capture is a required gate for Lists/shared-UI changes.
 7. A final repository grep fails if current schemas, application code, generated contracts,
    current intents or any remaining future task still depends on `ListBehaviour`, behaviour
    migration markers, watch/meals detail discriminants or behaviour-specific UI branches.

@@ -42,26 +42,45 @@ export function ListItemRow({
   const checkable = showsCheckbox(list);
   const committedChecked = checkboxChecked(item);
   const [checked, setChecked] = useState(committedChecked);
+  const committedCheckedRef = useRef(committedChecked);
+  const pendingToggles = useRef(0);
   const toggleRevision = useRef(0);
 
   useEffect(() => {
-    toggleRevision.current += 1;
-    setChecked(committedChecked);
+    committedCheckedRef.current = committedChecked;
+    /*
+     * An acknowledgement for tap one may render while tap two is still being committed.
+     * In that window the local value is newer than the prop. Replacing it here makes the
+     * next physical tap invert the intermediate acknowledgement instead of what the person
+     * can see they most recently chose (true → false → an unexpected false).
+     */
+    if (pendingToggles.current === 0) {
+      setChecked(committedChecked);
+    }
   }, [committedChecked]);
 
   const toggleChecked = (next: boolean) => {
     const revision = toggleRevision.current + 1;
     toggleRevision.current = revision;
+    pendingToggles.current += 1;
     setChecked(next);
-    if (onToggleChecked === undefined) return;
+    if (onToggleChecked === undefined) {
+      pendingToggles.current -= 1;
+      return;
+    }
     void Promise.resolve(onToggleChecked(next))
       .then((accepted) => {
         if (accepted === false && toggleRevision.current === revision) {
-          setChecked(committedChecked);
+          setChecked(committedCheckedRef.current);
         }
       })
       .catch(() => {
-        if (toggleRevision.current === revision) setChecked(committedChecked);
+        if (toggleRevision.current === revision) {
+          setChecked(committedCheckedRef.current);
+        }
+      })
+      .finally(() => {
+        pendingToggles.current = Math.max(0, pendingToggles.current - 1);
       });
   };
   const place = shownPlace(list, item);

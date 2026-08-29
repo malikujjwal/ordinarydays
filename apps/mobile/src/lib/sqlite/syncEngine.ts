@@ -20,7 +20,11 @@ import type {
   Occurrence,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
-import { changesRecurrenceTopology } from '@/lib/mutationKeys';
+import {
+  changesRecurrenceTopology,
+  isListItemProjectionMutation,
+  isListMutation,
+} from '@/lib/mutationKeys';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import {
   agendaCoverageForQuery,
@@ -38,7 +42,11 @@ import type {
 } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import { ListTransactionService } from '@/lib/sqlite/listTransactions';
-import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
+import {
+  type OutboxIntent,
+  type OutboxRepository,
+  undoOfferInverseIntentId,
+} from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 import {
   type ActivityPullAdapter,
@@ -400,6 +408,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       // A rejected item create rolled its own row back already, with no read to repeat and
       // no List index to refresh. A rejected edit may still owe one (P3-29).
       if (intent.mutationKey[1] === 'item-create') return true;
+      if (isListMutation(intent, 'itemUndo')) return true;
       if (intent.mutationKey[1] === 'item-patch') {
         return this.recoverRejectedItemPatchIntent(intent);
       }
@@ -674,7 +683,15 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const rows = await this.pullAllLists();
     await this.transactions.run(async (transaction) => {
       const protectedListIds = await this.outbox.protectedListIds(transaction.database);
-      await lists.replaceCanonical(transaction, rows, protectedListIds);
+      const protectedAggregateIds = await this.outbox.protectedListAggregateIds(
+        transaction.database,
+      );
+      await lists.replaceCanonical(
+        transaction,
+        rows,
+        protectedListIds,
+        protectedAggregateIds,
+      );
     });
     return lists.read();
   }
@@ -750,7 +767,17 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         listId,
         transaction.database,
       );
-      await lists.installCanonicalRow(transaction, detail.list);
+      const protectedListIds = await this.outbox.protectedListIds(transaction.database);
+      const protectedAggregateIds = await this.outbox.protectedListAggregateIds(
+        transaction.database,
+      );
+      if (!protectedListIds.has(listId)) {
+        await lists.installCanonicalRow(
+          transaction,
+          detail.list,
+          protectedAggregateIds.has(listId),
+        );
+      }
       await items.replaceFirstPage(
         transaction,
         listId,
@@ -918,7 +945,24 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         phase = 'settlement';
         const canonicalRows =
           intent.mutationKey[1] === 'undo' ? await this.pullAllLists() : undefined;
-        await this.settleListIntent(intent, response, canonicalRows);
+        let canonicalItem: ListItemRow | undefined;
+        if (
+          isListMutation(intent, 'itemUndo') &&
+          field(response, 'outcome') === 'applied'
+        ) {
+          const listId = field(intent.variables, 'listId');
+          const pullItem = this.pull.listItem;
+          if (typeof listId !== 'string' || pullItem === undefined) {
+            throw new Error('Native list item state is not ready.');
+          }
+          canonicalItem = await this.serialNetwork(() =>
+            pullItem(listId, intent.entityId),
+          );
+          if (canonicalItem.itemId !== intent.entityId) {
+            throw new Error('List item Undo restored a different item.');
+          }
+        }
+        await this.settleListIntent(intent, response, canonicalRows, canonicalItem);
         this.retryIndex = 0;
         return 'continue';
       }
@@ -1131,10 +1175,43 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       const collision = await this.recoverCreateCollision(intent, failure);
       if (collision === 'recovered' || collision === 'parked') return 'continue';
       if (collision === 'retry') return 'blocked';
-      this.cycleError ??= failure;
+      const supersededByDelete =
+        permanent &&
+        intent.mutationKey[0] === 'list' &&
+        intent.mutationKey[1] === 'item-patch' &&
+        (await this.transactions.run(async (transaction) =>
+          (
+            await this.outbox.laterInOrdering(
+              transaction.database,
+              intent.orderingKey,
+              intent.seq,
+            )
+          ).some(
+            (candidate) =>
+              candidate.entityId === intent.entityId &&
+              isListMutation(candidate, 'itemDelete'),
+          ),
+        ));
+      const compensatedDelete =
+        permanent &&
+        isListMutation(intent, 'itemDelete') &&
+        (await this.transactions.run(async (transaction) => {
+          const offer = await this.outbox.listItemDeleteUndoOffer(
+            transaction.database,
+            intent.intentId,
+          );
+          return offer !== undefined && undoOfferInverseIntentId(offer) !== undefined;
+        }));
       if (permanent) {
-        await this.rollbackPermanentRejection(intent, failure);
+        const resolvedByDelete = supersededByDelete
+          ? await this.rollbackPermanentItemPatchRejection(intent, failure, true)
+          : false;
+        if (!supersededByDelete) {
+          await this.rollbackPermanentRejection(intent, failure);
+        }
+        if (!resolvedByDelete && !compensatedDelete) this.cycleError ??= failure;
       } else {
+        this.cycleError ??= failure;
         await this.transactions.run(async (transaction) => {
           await this.outbox.requeue(
             transaction.database,
@@ -1153,6 +1230,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     intent: OutboxIntent,
     response: unknown,
     canonicalRows?: readonly List[],
+    canonicalItem?: ListItemRow,
   ): Promise<void> {
     const lists = this.lists;
     if (lists === undefined) throw new Error('Native Lists state is not ready.');
@@ -1180,12 +1258,109 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         const laterOwnsItem = later.some(
           (candidate) =>
             candidate.entityId === intent.entityId &&
-            (candidate.mutationKey[1] === 'item-create' ||
-              candidate.mutationKey[1] === 'item-patch'),
+            isListItemProjectionMutation(candidate),
         );
         if (!laterOwnsItem) {
           await this.requireListTransactions().installCanonicalItem(transaction, item);
         }
+        if (intent.mutationKey[1] === 'item-patch') {
+          await this.outbox.rebaseNextListItemDeleteSnapshot(
+            transaction.database,
+            intent.orderingKey,
+            intent.seq,
+            intent.entityId,
+            item,
+          );
+        }
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+        return;
+      }
+      if (isListMutation(intent, 'itemDelete')) {
+        const offer = await this.outbox.listItemDeleteUndoOffer(
+          transaction.database,
+          intent.intentId,
+        );
+        const affectedCount = field(response, 'affectedCount');
+        if (affectedCount === 0) {
+          const inverseIntentId =
+            offer === undefined ? undefined : undoOfferInverseIntentId(offer);
+          if (offer !== undefined && inverseIntentId !== undefined) {
+            await this.requireListTransactions().removeItem(
+              transaction,
+              offer.listId,
+              offer.itemId,
+            );
+            await this.outbox.acknowledge(transaction.database, inverseIntentId);
+          }
+          if (offer !== undefined) {
+            await this.outbox.clearListItemDeleteUndoOffer(
+              transaction.database,
+              offer.originalIntentId,
+            );
+          }
+          await this.outbox.acknowledge(transaction.database, intent.intentId);
+          transaction.changed('outbox');
+          return;
+        }
+        if (offer !== undefined) {
+          const undoToken = field(response, 'undoToken');
+          const undoExpiresAt = field(response, 'undoExpiresAt');
+          if (typeof undoToken !== 'string' || typeof undoExpiresAt !== 'string') {
+            throw new Error('List item delete acknowledgement omitted its Undo receipt.');
+          }
+          await this.outbox.recordListItemDeleteUndoToken(
+            transaction.database,
+            intent.intentId,
+            undoToken,
+            undoExpiresAt,
+          );
+        }
+        /* The row left SQLite when the intent was accepted; acknowledgement only retires its
+         * resurrection guard and releases an accepted dependent Undo. */
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+        return;
+      }
+      if (isListMutation(intent, 'itemUndo')) {
+        const outcome = field(response, 'outcome');
+        const originalIntentId = field(intent.variables, 'originalIntentId');
+        const listId = field(intent.variables, 'listId');
+        if (
+          (outcome !== 'applied' &&
+            outcome !== 'expired' &&
+            outcome !== 'no_longer_applicable') ||
+          typeof originalIntentId !== 'string' ||
+          typeof listId !== 'string'
+        ) {
+          throw new Error('List item Undo acknowledgement is malformed.');
+        }
+        if (outcome !== 'applied') {
+          await this.requireListTransactions().removeItem(
+            transaction,
+            listId,
+            intent.entityId,
+          );
+        } else {
+          if (canonicalItem === undefined) {
+            throw new Error('List item Undo omitted its canonical restored item.');
+          }
+          const laterOwnsItem = later.some(
+            (candidate) =>
+              candidate.entityId === intent.entityId &&
+              isListItemProjectionMutation(candidate),
+          );
+          if (!laterOwnsItem) {
+            await this.requireListTransactions().installCanonicalItem(
+              transaction,
+              canonicalItem,
+            );
+          }
+        }
+        await this.outbox.clearListItemDeleteUndoOffer(
+          transaction.database,
+          originalIntentId,
+        );
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
         return;
@@ -1481,6 +1656,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       await this.rollbackPermanentItemPatchRejection(intent, failure);
       return;
     }
+    if (isListMutation(intent, 'itemDelete')) {
+      await this.rollbackPermanentItemDeleteRejection(intent, failure);
+      return;
+    }
+    if (isListMutation(intent, 'itemUndo')) {
+      await this.rollbackPermanentItemUndoRejection(intent, failure);
+      return;
+    }
     let rows: readonly List[] | undefined;
     try {
       rows = await this.pullAllLists();
@@ -1572,7 +1755,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private async rollbackPermanentItemPatchRejection(
     intent: OutboxIntent,
     failure: Error,
-  ): Promise<void> {
+    supersededByDelete = false,
+  ): Promise<boolean> {
     const listTransactions = this.requireListTransactions();
     const listId = field(intent.variables, 'listId');
     const pullItem = this.pull.listItem;
@@ -1594,6 +1778,53 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     }
     const restored = canonical !== undefined || missing;
     await this.transactions.run(async (transaction) => {
+      if (supersededByDelete && canonical !== undefined) {
+        await this.outbox.rebaseNextListItemDeleteSnapshot(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
+          intent.entityId,
+          canonical,
+        );
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+        return;
+      }
+      if (supersededByDelete && missing && typeof listId === 'string') {
+        const successor = (
+          await this.outbox.laterInOrdering(
+            transaction.database,
+            intent.orderingKey,
+            intent.seq,
+          )
+        ).find(
+          (candidate) =>
+            candidate.entityId === intent.entityId &&
+            isListMutation(candidate, 'itemDelete'),
+        );
+        if (successor !== undefined) {
+          const offer = await this.outbox.listItemDeleteUndoOffer(
+            transaction.database,
+            successor.intentId,
+          );
+          const inverseIntentId =
+            offer === undefined ? undefined : undoOfferInverseIntentId(offer);
+          if (inverseIntentId !== undefined) {
+            await listTransactions.removeItem(transaction, listId, intent.entityId);
+            await this.outbox.acknowledge(transaction.database, inverseIntentId);
+          }
+          if (offer !== undefined) {
+            await this.outbox.clearListItemDeleteUndoOffer(
+              transaction.database,
+              offer.originalIntentId,
+            );
+          }
+          await this.outbox.acknowledge(transaction.database, successor.intentId);
+          await this.outbox.acknowledge(transaction.database, intent.intentId);
+          transaction.changed('outbox');
+          return;
+        }
+      }
       await this.outbox.needsAttention(
         transaction.database,
         intent.intentId,
@@ -1604,6 +1835,73 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         await listTransactions.installCanonicalItem(transaction, canonical);
       } else if (missing && typeof listId === 'string') {
         await listTransactions.removeItem(transaction, listId, intent.entityId);
+      }
+      transaction.changed('outbox');
+    });
+    return supersededByDelete && restored;
+  }
+
+  /** Restores the exact local snapshot when the server refuses a queued forward delete. */
+  private async rollbackPermanentItemDeleteRejection(
+    intent: OutboxIntent,
+    failure: Error,
+  ): Promise<void> {
+    const previous = listItemFromResponse(field(intent.variables, 'previous'));
+    await this.transactions.run(async (transaction) => {
+      const offer = await this.outbox.listItemDeleteUndoOffer(
+        transaction.database,
+        intent.intentId,
+      );
+      const inverseIntentId =
+        offer === undefined ? undefined : undoOfferInverseIntentId(offer);
+      if (offer !== undefined && inverseIntentId !== undefined) {
+        if (previous !== undefined) {
+          await this.requireListTransactions().installCanonicalItem(
+            transaction,
+            previous,
+          );
+        }
+        await this.outbox.acknowledge(transaction.database, inverseIntentId);
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        await this.outbox.clearListItemDeleteUndoOffer(
+          transaction.database,
+          offer.originalIntentId,
+        );
+        transaction.changed('outbox');
+        return;
+      }
+      await this.outbox.needsAttention(
+        transaction.database,
+        intent.intentId,
+        rejectedAttention(failure, false),
+        failure.message,
+      );
+      if (previous !== undefined) {
+        await this.requireListTransactions().installCanonicalItem(transaction, previous);
+      }
+      transaction.changed('outbox');
+    });
+  }
+
+  /** A refused compensation cannot leave its optimistic restored row contradicting the server. */
+  private async rollbackPermanentItemUndoRejection(
+    intent: OutboxIntent,
+    failure: Error,
+  ): Promise<void> {
+    const listId = field(intent.variables, 'listId');
+    await this.transactions.run(async (transaction) => {
+      await this.outbox.needsAttention(
+        transaction.database,
+        intent.intentId,
+        rejectedAttention(failure, false),
+        failure.message,
+      );
+      if (typeof listId === 'string') {
+        await this.requireListTransactions().removeItem(
+          transaction,
+          listId,
+          intent.entityId,
+        );
       }
       transaction.changed('outbox');
     });
@@ -1693,7 +1991,15 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         // This receipt is the authority to replace this one optimistic row. Other Lists may
         // still have unrelated queued work and retain their local fields during the refresh.
         protectedListIds.delete(intent.entityId);
-        await lists.replaceCanonical(transaction, rows, protectedListIds);
+        const protectedAggregateIds = await this.outbox.protectedListAggregateIds(
+          transaction.database,
+        );
+        await lists.replaceCanonical(
+          transaction,
+          rows,
+          protectedListIds,
+          protectedAggregateIds,
+        );
         if (
           current.recoveryRequired === true &&
           !(await this.outbox.completeAuthoritativeRecovery(

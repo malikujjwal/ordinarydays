@@ -13,7 +13,13 @@ export function recoverAbandonedOutbox(
       transaction.database,
       Date.now() - UNDO_OFFER_SECONDS * 1000,
     );
-    if (recovered > 0 || expiredOffers > 0) transaction.changed('outbox');
+    const expiredItemOffers = await outbox.expireUnacceptedListItemDeleteUndoOffers(
+      transaction.database,
+      Date.now() - UNDO_OFFER_SECONDS * 1000,
+    );
+    if (recovered > 0 || expiredOffers > 0 || expiredItemOffers > 0) {
+      transaction.changed('outbox');
+    }
     return recovered;
   });
 }

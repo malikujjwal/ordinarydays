@@ -11,6 +11,7 @@ import type {
   LegacyImportOutcome,
   LegacyImportSource,
 } from '@/lib/sqlite/legacyImporter';
+import type { PersistedMutationKey } from '@/lib/sqlite/outbox';
 
 export interface LegacyMigrationImporter {
   import(source: LegacyImportSource): Promise<LegacyImportOutcome>;
@@ -54,6 +55,14 @@ function failure(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function persistedMutationKey(value: readonly string[]): PersistedMutationKey {
+  const [domain, name, ...rest] = value;
+  if (domain === undefined || name === undefined) {
+    throw new Error('A legacy mutation key is malformed.');
+  }
+  return [domain, name, ...rest];
+}
+
 /**
  * Imports and retires the two legacy sources as one restart-safe startup step. A failure
  * deliberately returns a deferred result: SQLite can still open and sync, while query-cache
@@ -90,7 +99,7 @@ export async function migrateNativeLegacyState(
         intents: legacyIntents.map((intent) => ({
           recordKey: `intent:${intent.seq}:${intent.intentId}`,
           intentId: intent.intentId,
-          mutationKey: intent.mutationKey,
+          mutationKey: persistedMutationKey(intent.mutationKey),
           variables: intent.variables,
           entityId: intent.entityId,
           orderingKey: `activity:${intent.entityId}`,

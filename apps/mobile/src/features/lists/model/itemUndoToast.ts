@@ -15,10 +15,10 @@ import { UNDO_OFFER_DURATION_MS } from './undoOffer';
  * the app without tapping leaves the item deleted, which is the correct outcome and the reason
  * a delayed commit would be wrong.
  *
- * `onUndo` fires `POST /v1/lists/:id/undo` with the server's opaque token. **Nothing here
- * reconstructs the row**: §P3-10 restores the same item id, its previous rank, its live viewer
- * links and its Activity provenance server-side, and a client that sent rows back would be
- * offering the server data it did not record.
+ * On native, `onUndo` accepts a durable compensation and redraws the exact local snapshot while
+ * the ordered sync lane waits for the delete's opaque token. That snapshot is presentation,
+ * never server authority: §P3-10 restores the same id, rank, viewer links and provenance from
+ * the server's own inverse. Web sends that opaque compensation directly.
  *
  * ## The title, not a count
  *
@@ -39,7 +39,7 @@ export interface ItemUndoToastInput {
   readonly duration?: number;
   /** The absolute server deadline the window was measured against. */
   readonly undoExpiresAt?: Instant;
-  /** Fires the compensating undo call. Never a delayed commit. */
+  /** Accepts the compensating Undo. Never a delayed commit. */
   readonly onUndo: () => void;
   /** Fires when the window closes, or when another toast replaces this one. */
   readonly onCommit: () => void;

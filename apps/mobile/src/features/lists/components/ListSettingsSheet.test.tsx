@@ -109,7 +109,7 @@ describe('the P3-33 List settings hierarchy', () => {
     fireEvent.click(screen.getByTestId('list-settings-feature-sub-items'));
 
     expect(actions.setFeatureEnabled).toHaveBeenCalledWith('subItems', true);
-    expect(screen.getByTestId('sub-item-naming-sheet')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Sub-item naming' })).toBeTruthy();
     expect(screen.getByText('Section label')).toBeTruthy();
     expect(screen.getByText('Singular label')).toBeTruthy();
     expect(screen.getByText('Secondary field label')).toBeTruthy();
@@ -133,5 +133,27 @@ describe('the P3-33 List settings hierarchy', () => {
     expect(screen.getByText('Ingredients · Quantity')).toBeTruthy();
     expect(screen.getByText('Edit')).toBeTruthy();
     expect(screen.queryByText('Section label')).toBeNull();
+  });
+
+  it('replaces settings with the focused naming editor when Edit is pressed', () => {
+    mount(
+      list({
+        featureConfig: {
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Ingredients',
+            singularLabel: 'Ingredient',
+            integration: 'mealIngredients',
+          },
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Ingredients.*Edit/i }));
+
+    expect(screen.getByRole('dialog', { name: 'Sub-item naming' })).toBeTruthy();
+    expect(screen.getByText('Section label')).toBeTruthy();
+    expect(screen.queryByText('Item state')).toBeNull();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 });

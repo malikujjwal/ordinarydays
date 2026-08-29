@@ -5,6 +5,7 @@ import {
   type CreateListItemInput,
   createListInput,
   createListItemInput,
+  listItemView,
   listTemplate,
   type PatchListInput,
   patchListInput,
@@ -12,11 +13,17 @@ import {
 } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type { List } from '@od/shared/types';
+import { isListMutation, listMutationKeys } from '@/lib/mutationKeys';
 import { pendingListFromInput } from '@/lib/pendingList';
 import { pendingListItemFromInput } from '@/lib/pendingListItem';
 import type { ListItemRow, ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository, LocalListSettings } from '@/lib/sqlite/listsRepository';
-import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
+import {
+  type OutboxIntent,
+  type OutboxRepository,
+  undoOfferInverseIntentId,
+  undoOfferReceipt,
+} from '@/lib/sqlite/outbox';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
 /**
@@ -69,6 +76,37 @@ export interface ListItemPatchVariables {
   readonly intentId: string;
   readonly idempotencyKey: string;
   readonly input: PatchListItemInput;
+}
+
+/**
+ * One durable item delete. The previous row is a rollback snapshot only; it is never sent as
+ * server authority. The server-authored opaque Undo token remains the only inverse on the wire.
+ */
+export interface ListItemDeleteVariables {
+  readonly listId: string;
+  readonly itemId: string;
+  readonly intentId: string;
+  readonly idempotencyKey: string;
+  readonly previous: ListItemRow;
+}
+
+export type EnqueueListItemDelete = Omit<ListItemDeleteVariables, 'previous'>;
+
+function savedListItem(value: unknown): ListItemRow | undefined {
+  const parsed = listItemView.safeParse(value);
+  // The wire schema permits `undefined` while the canonical domain expresses it as absence.
+  return parsed.success ? (parsed.data as ListItemRow) : undefined;
+}
+
+export interface ListItemUndoVariables {
+  readonly listId: string;
+  readonly itemId: string;
+  readonly intentId: string;
+  readonly idempotencyKey: string;
+  readonly originalIntentId: string;
+  readonly receipt:
+    | { readonly kind: 'pending' }
+    | { readonly kind: 'ready'; readonly undoToken: string };
 }
 
 /**
@@ -344,7 +382,7 @@ export class ListTransactionService {
     const current = await items.getLocal(variables.itemId, transaction.database);
     const appended = await this.outbox.append(transaction.database, {
       intentId: variables.intentId,
-      mutationKey: ['list', 'item-create'],
+      mutationKey: listMutationKeys.itemCreate,
       variables,
       entityId: variables.itemId,
       orderingKey: `list:${variables.listId}`,
@@ -404,7 +442,7 @@ export class ListTransactionService {
     }
     const appended = await this.outbox.append(transaction.database, {
       intentId: variables.intentId,
-      mutationKey: ['list', 'item-patch'],
+      mutationKey: listMutationKeys.itemPatch,
       variables,
       entityId: variables.itemId,
       orderingKey: `list:${variables.listId}`,
@@ -414,6 +452,124 @@ export class ListTransactionService {
     }
     transaction.changed('outbox');
     return appended.intent;
+  }
+
+  /** Removes the visible row and queues the server delete in the same SQLite commit. */
+  async deleteItem(
+    transaction: TransactionContext,
+    input: EnqueueListItemDelete,
+  ): Promise<OutboxIntent> {
+    const items = this.requireItems();
+    const current = await items.getLocal(input.itemId, transaction.database);
+    if (current === undefined || current.listId !== input.listId) {
+      throw new Error('The item is no longer available locally.');
+    }
+    const variables: ListItemDeleteVariables = {
+      ...input,
+      previous: current,
+    };
+    const appended = await this.outbox.append(transaction.database, {
+      intentId: input.intentId,
+      mutationKey: listMutationKeys.itemDelete,
+      variables,
+      entityId: input.itemId,
+      orderingKey: `list:${input.listId}`,
+    });
+    if (appended.kind === 'inserted') {
+      await this.outbox.createListItemDeleteUndoOffer(transaction.database, {
+        originalIntentId: input.intentId,
+        listId: input.listId,
+        itemId: input.itemId,
+        previous: current,
+      });
+      await this.removeItem(transaction, input.listId, input.itemId);
+    }
+    transaction.changed('outbox');
+    return appended.intent;
+  }
+
+  /** Accepts item Undo locally, either cancelling an unsent delete or queuing its compensation. */
+  async undoDeletedItem(
+    transaction: TransactionContext,
+    originalIntentId: string,
+    inverseIntentId: string,
+  ): Promise<{ readonly kind: 'cancelled' | 'queued'; readonly intent?: OutboxIntent }> {
+    const offer = await this.outbox.listItemDeleteUndoOffer(
+      transaction.database,
+      originalIntentId,
+    );
+    if (offer === undefined) throw new Error('This Undo offer is no longer available.');
+    const previous = savedListItem(offer.previous);
+    if (previous === undefined || previous.itemId !== offer.itemId) {
+      throw new Error('The saved item snapshot is invalid.');
+    }
+    const original = await this.outbox.get(transaction.database, offer.currentIntentId);
+    if (original?.status === 'queued' && original.attempts === 0) {
+      if (!(await this.outbox.cancelQueued(transaction.database, original.intentId))) {
+        throw new Error('The delete started syncing before it could be cancelled.');
+      }
+      await this.outbox.clearListItemDeleteUndoOffer(
+        transaction.database,
+        originalIntentId,
+      );
+      await this.installCanonicalItem(transaction, previous);
+      transaction.changed('outbox');
+      return { kind: 'cancelled' };
+    }
+    if (original?.status === 'needs_attention') {
+      throw new Error('The delete needs recovery before it can be undone.');
+    }
+    const receipt = undoOfferReceipt(offer);
+    if (
+      receipt === undefined &&
+      original?.status !== 'in_flight' &&
+      !(original?.status === 'queued' && original.attempts > 0)
+    ) {
+      throw new Error('The delete acknowledgement did not provide an Undo token.');
+    }
+    const receiptState: ListItemUndoVariables['receipt'] =
+      receipt === undefined
+        ? { kind: 'pending' }
+        : { kind: 'ready', undoToken: receipt.undoToken };
+    const variables: ListItemUndoVariables = {
+      listId: offer.listId,
+      itemId: offer.itemId,
+      intentId: inverseIntentId,
+      idempotencyKey: inverseIntentId,
+      originalIntentId,
+      receipt: receiptState,
+    };
+    const appended = await this.outbox.append(transaction.database, {
+      intentId: inverseIntentId,
+      mutationKey: listMutationKeys.itemUndo,
+      variables,
+      entityId: offer.itemId,
+      orderingKey: `list:${offer.listId}`,
+      ...(original === undefined ? {} : { dependsOnIntentId: original.intentId }),
+      ...(original === undefined ? {} : { compensationForIntentId: original.intentId }),
+    });
+    if (appended.kind === 'inserted') {
+      await this.outbox.linkListItemDeleteUndoIntent(
+        transaction.database,
+        originalIntentId,
+        inverseIntentId,
+      );
+      await this.installCanonicalItem(transaction, previous);
+    }
+    transaction.changed('outbox');
+    return { kind: 'queued', intent: appended.intent };
+  }
+
+  async commitItemDeleteUndoOffer(
+    transaction: TransactionContext,
+    originalIntentId: string,
+  ): Promise<void> {
+    await this.outbox.clearListItemDeleteUndoOffer(
+      transaction.database,
+      originalIntentId,
+      true,
+    );
+    transaction.changed('outbox');
   }
 
   async installCanonicalItem(
@@ -488,7 +644,7 @@ export class ListTransactionService {
     }
     const appended = await this.outbox.append(transaction.database, {
       intentId: variables.intentId,
-      mutationKey: ['list', 'create'],
+      mutationKey: listMutationKeys.create,
       variables,
       entityId: variables.listId,
       orderingKey: `list:${variables.listId}`,
@@ -559,7 +715,7 @@ export class ListTransactionService {
     };
     const appended = await this.outbox.append(transaction.database, {
       intentId,
-      mutationKey: ['list', 'patch'],
+      mutationKey: listMutationKeys.patch,
       variables,
       entityId: list.listId,
       orderingKey: `list:${list.listId}`,
@@ -628,8 +784,9 @@ export class ListTransactionService {
     if (original?.status === 'needs_attention') {
       throw new Error('The change needs recovery before it can be undone.');
     }
+    const receipt = undoOfferReceipt(offer);
     if (
-      offer.undoToken === undefined &&
+      receipt === undefined &&
       original?.status !== 'in_flight' &&
       !(original?.status === 'queued' && original.attempts > 0)
     ) {
@@ -640,11 +797,11 @@ export class ListTransactionService {
       intentId: inverseIntentId,
       idempotencyKey: inverseIntentId,
       originalIntentId,
-      ...(offer.undoToken === undefined ? {} : { undoToken: offer.undoToken }),
+      ...(receipt === undefined ? {} : { undoToken: receipt.undoToken }),
     };
     const appended = await this.outbox.append(transaction.database, {
       intentId: inverseIntentId,
-      mutationKey: ['list', 'undo'],
+      mutationKey: listMutationKeys.undo,
       variables,
       entityId: listId,
       orderingKey: `list:${listId}`,
@@ -682,7 +839,7 @@ export class ListTransactionService {
     const variables: ListDeleteVariables = { listId: list.listId, intentId };
     const appended = await this.outbox.append(transaction.database, {
       intentId,
-      mutationKey: ['list', 'delete'],
+      mutationKey: listMutationKeys.delete,
       variables,
       entityId: list.listId,
       orderingKey: `list:${list.listId}`,
@@ -749,6 +906,26 @@ export class ListTransactionService {
       await this.projectItemPatch(transaction, current, parsed.input);
       return intent;
     }
+    if (isListMutation(intent, 'itemDelete')) {
+      const listId = Reflect.get(variables, 'listId');
+      if (typeof listId !== 'string') {
+        throw new Error('The saved item delete no longer names a list.');
+      }
+      await this.removeItem(transaction, listId, intent.entityId);
+      return intent;
+    }
+    if (isListMutation(intent, 'itemUndo')) {
+      const offer = await this.outbox.listItemDeleteUndoOffer(
+        transaction.database,
+        intent.intentId,
+      );
+      const previous = offer === undefined ? undefined : savedListItem(offer.previous);
+      if (previous === undefined || previous.itemId !== intent.entityId) {
+        throw new Error('The saved item Undo no longer has a valid rollback image.');
+      }
+      await this.installCanonicalItem(transaction, previous);
+      return intent;
+    }
     if (intent.mutationKey[1] === 'create') {
       /*
        * The rollback removed the row this create was showing, so the retry has to put it back
@@ -794,7 +971,9 @@ export class ListTransactionService {
       await this.lists.applyLocalSettings(
         transaction,
         intent.entityId,
-        undoOffer?.inverseIntentId === undefined ? settings : previousSettingsOf(intent),
+        undoOffer === undefined || undoOfferInverseIntentId(undoOffer) === undefined
+          ? settings
+          : previousSettingsOf(intent),
       );
       return rebased;
     }

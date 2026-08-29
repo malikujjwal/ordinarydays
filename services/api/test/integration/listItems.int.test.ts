@@ -52,7 +52,9 @@ const request = (
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(method === 'POST' || (method === 'PATCH' && /^\/v1\/lists\/[^/]+$/.test(path))
+        ...(method === 'POST' ||
+        method === 'DELETE' ||
+        (method === 'PATCH' && /^\/v1\/lists\/[^/]+$/.test(path))
           ? { 'Idempotency-Key': crypto.randomUUID() }
           : {}),
         ...headers,
@@ -688,6 +690,24 @@ describe('deleting an item', () => {
 
     expect((await request(app(), 'DELETE', path)).status).toBe(200);
     expect((await request(app(), 'DELETE', path)).status).toBe(404);
+  });
+
+  it('replays the same Undo receipt when a durable delete retries', async () => {
+    const list = await seedList();
+    const created = await (await addItem(list.listId, { title: 'Eggs' })).json();
+    const path = `/v1/lists/${list.listId}/items/${created.data.itemId}`;
+    const key = crypto.randomUUID();
+
+    const first = await request(app(), 'DELETE', path, undefined, {
+      'Idempotency-Key': key,
+    });
+    const replay = await request(app(), 'DELETE', path, undefined, {
+      'Idempotency-Key': key,
+    });
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).data).toEqual((await first.json()).data);
   });
 });
 

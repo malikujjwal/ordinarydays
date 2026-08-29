@@ -358,7 +358,7 @@ describe('list items', () => {
   });
 
   it('answers the delete with the reversible triple', async () => {
-    const { client } = makeClient([
+    const { client, calls } = makeClient([
       ok({
         affectedCount: 1,
         undoToken: 'tok',
@@ -366,11 +366,14 @@ describe('list items', () => {
       }),
     ]);
 
-    await expect(deleteListItem(client, LIST_ID, ITEM_ID)).resolves.toEqual({
-      affectedCount: 1,
-      undoToken: 'tok',
-      undoExpiresAt: '2026-08-26T10:00:06.000Z',
-    });
+    await expect(deleteListItem(client, LIST_ID, ITEM_ID, 'delete-key')).resolves.toEqual(
+      {
+        affectedCount: 1,
+        undoToken: 'tok',
+        undoExpiresAt: '2026-08-26T10:00:06.000Z',
+      },
+    );
+    expect(calls[0]?.headers['Idempotency-Key']).toBe('delete-key');
   });
 
   it.each([

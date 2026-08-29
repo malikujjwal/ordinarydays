@@ -13,6 +13,7 @@ import {
   listItem as listItemSchema,
   listMember as listMemberSchema,
   list as listSchema,
+  type PatchListItemInput,
 } from '@od/shared/schemas';
 import type { Instant } from '@od/shared/time';
 import type {
@@ -26,6 +27,9 @@ import type {
   ListItemActivityLink,
   ListItemFeatures,
   ListMember,
+  ListPlace,
+  ListSubItem,
+  ProgressValue,
 } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
@@ -375,8 +379,29 @@ function parseListIndex(value: unknown): ListIndex {
   return listIndexSchema.parse(value) as ListIndex;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * P3-33 briefly persisted nullable feature-patch members as item values. Those rows are still
+ * otherwise canonical, so remove only the impossible null members before validation. New
+ * writes never create this shape; this narrow read repair lets the affected item and its List
+ * become recoverable instead of turning every exact read into `validation_failed`.
+ */
+function withoutLegacyNullFeatures(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.features)) return value;
+  const entries = Object.entries(value.features);
+  const retained = entries.filter(([, feature]) => feature !== null);
+  if (retained.length === entries.length) return value;
+  const repaired = { ...value };
+  if (retained.length === 0) delete repaired.features;
+  else repaired.features = Object.fromEntries(retained);
+  return repaired;
+}
+
 function parseListItem(value: unknown): ListItem {
-  return listItemSchema.parse(value) as ListItem;
+  return listItemSchema.parse(withoutLegacyNullFeatures(value)) as ListItem;
 }
 
 function parseListItemActivityLink(value: unknown): ListItemActivityLink {
@@ -2465,44 +2490,91 @@ export interface ListItemFieldPatch {
   readonly title?: string;
   readonly state?: ListItem['state'];
   readonly note?: string | null;
-  readonly features?: ListItemFeatures | null;
+  readonly features?: PatchListItemInput['features'] | null;
 }
 
-/**
- * The same field assignment as {@link applyItemPatch}, applied to the **raw stored row** a
- * reorder is about to move, so a `PATCH` carrying both a position and fields is one write.
- *
- * A `null` deletes the attribute rather than storing one, which a spread cannot express —
- * hence the explicit copy.
- */
+function mergeListItemFeatures(
+  current: ListItemFeatures | undefined,
+  patch: NonNullable<PatchListItemInput['features']>,
+): ListItemFeatures | undefined {
+  const progress = (value: NonNullable<typeof patch.progress>): ProgressValue =>
+    value.kind === 'text'
+      ? { kind: 'text', value: value.value }
+      : {
+          kind: 'episode',
+          ...(value.mediaKind === undefined ? {} : { mediaKind: value.mediaKind }),
+          ...(value.season === undefined ? {} : { season: value.season }),
+          ...(value.episode === undefined ? {} : { episode: value.episode }),
+        };
+  const place = (value: NonNullable<typeof patch.place>): ListPlace => ({
+    label: value.label,
+    ...(value.address === undefined ? {} : { address: value.address }),
+    ...(value.lat === undefined ? {} : { lat: value.lat }),
+    ...(value.lng === undefined ? {} : { lng: value.lng }),
+  });
+  const subItem = (
+    value: NonNullable<NonNullable<typeof patch.subItems>['entries'][number]>,
+  ): ListSubItem => ({
+    id: value.id,
+    title: value.title,
+    rank: value.rank,
+    ...(value.secondary === undefined ? {} : { secondary: value.secondary }),
+  });
+
+  const next: ListItemFeatures = { ...current };
+  if ('progress' in patch) {
+    if (patch.progress === null || patch.progress === undefined) delete next.progress;
+    else next.progress = progress(patch.progress);
+  }
+  if ('place' in patch) {
+    if (patch.place === null || patch.place === undefined) delete next.place;
+    else next.place = place(patch.place);
+  }
+  if ('subItems' in patch) {
+    if (patch.subItems === null || patch.subItems === undefined) delete next.subItems;
+    else next.subItems = { entries: patch.subItems.entries.map(subItem) };
+  }
+  return Object.keys(next).length === 0 ? undefined : next;
+}
+
+/** Applies the one canonical item-field merge to either an ordinary PATCH or a moved row. */
+function applyItemFields(
+  row: StoredItem,
+  currentFeatures: ListItemFeatures | undefined,
+  patch: ListItemFieldPatch,
+): StoredItem {
+  const next: StoredItem = { ...row };
+  if (patch.title !== undefined) next.title = patch.title;
+  if (patch.state !== undefined) next.state = patch.state;
+  if ('note' in patch) {
+    if (patch.note === null || patch.note === undefined) delete next.note;
+    else next.note = patch.note;
+  }
+  if ('features' in patch) {
+    if (patch.features === null || patch.features === undefined) delete next.features;
+    else {
+      const features = mergeListItemFeatures(currentFeatures, patch.features);
+      if (features === undefined) delete next.features;
+      else next.features = features;
+    }
+  }
+  return next;
+}
+
+/** Applies fields to the raw row a reorder moves, so position and fields remain one write. */
 function withPatchApplied(
   row: StoredItem,
   patch: ListItemFieldPatch | undefined,
 ): StoredItem {
-  if (patch === undefined) return row;
-  const next: StoredItem = { ...row };
-  if (patch.title !== undefined) next.title = patch.title;
-  if (patch.state !== undefined) next.state = patch.state;
-  for (const field of ['note', 'features'] as const) {
-    if (!(field in patch)) continue;
-    const value = patch[field];
-    if (value === null || value === undefined) delete next[field];
-    else Object.assign(next, { [field]: value });
-  }
-  return next;
+  return patch === undefined
+    ? row
+    : applyItemFields(row, parseListItem(row).features, patch);
 }
 
 function applyItemPatch(item: ListItem, patch: ListItemFieldPatch): ListItem {
-  const next: ListItem = { ...item, itemRevision: item.itemRevision + 1 };
-  if (patch.title !== undefined) next.title = patch.title;
-  if (patch.state !== undefined) next.state = patch.state;
-  for (const field of ['note', 'features'] as const) {
-    if (!(field in patch)) continue;
-    const value = patch[field];
-    if (value === null || value === undefined) delete next[field];
-    else Object.assign(next, { [field]: value });
-  }
-  return next;
+  const next = applyItemFields({ ...item }, item.features, patch);
+  next.itemRevision = item.itemRevision + 1;
+  return parseListItem(next);
 }
 
 /** Applies only supplied fields and advances both copies of itemRevision conditionally. */
@@ -2534,7 +2606,7 @@ export async function patchListItemFields(
     for (const field of ['title', 'state', 'note', 'features'] as const) {
       if (!(field in patch)) continue;
       names[`#${field}`] = field;
-      const value = patch[field];
+      const value = field === 'features' ? next.features : patch[field];
       if (value === null || value === undefined) removes.push(`#${field}`);
       else {
         values[`:${field}`] = value;

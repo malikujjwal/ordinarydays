@@ -99,7 +99,8 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
       open={open}
       onClose={close}
       title={style === undefined ? 'Choose a list type' : style.chooserLabel}
-      detent={style === undefined ? 'large' : 'fit'}
+      /* The focused keyboard consumes half a phone; keep the title field in the body. */
+      detent="large"
       testID="new-list-sheet"
       actions={
         style === undefined ? undefined : (

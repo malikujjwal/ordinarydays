@@ -236,6 +236,7 @@ export function deleteListItem(
   client: HttpClient,
   listId: string,
   itemId: string,
+  idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<ReversibleItemMutation> {
   return client
@@ -243,9 +244,27 @@ export function deleteListItem(
       method: 'DELETE',
       path: `/v1/lists/${listId}/items/${itemId}`,
       schema: reversibleItemMutationResponse,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
+}
+
+/** A missing row is already the requested projection when replaying a durable delete. */
+export async function deleteListItemForReplay(
+  client: HttpClient,
+  listId: string,
+  itemId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ReversibleItemMutation | { readonly affectedCount: 0 }> {
+  try {
+    return await deleteListItem(client, listId, itemId, idempotencyKey, signal);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { affectedCount: 0 };
+    throw error;
+  }
 }
 
 function runBulkCheckedAction(

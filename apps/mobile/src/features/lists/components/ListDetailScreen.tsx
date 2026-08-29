@@ -105,7 +105,11 @@ export function ListDetailScreen({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
-  const items = useListItemActions({ onSaved: view.refresh, onRemoved: view.refetch });
+  const items = useListItemActions({
+    onSaved: view.refresh,
+    onRemoving: view.refresh,
+    onRemoved: view.refetch,
+  });
   /*
    * `refresh` for a change this device accepted — native re-reads SQLite, web asks the server —
    * and `refetch` for the online downgrade preview that turned out to lose nothing and was

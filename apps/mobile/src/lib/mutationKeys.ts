@@ -17,6 +17,48 @@ export const activityMutationKeys = {
 
 export type ActivityMutationName = keyof typeof activityMutationKeys;
 
+/** Persisted List mutation identifiers and the one source of truth for their wire tags. */
+export const listMutationKeys = {
+  create: ['list', 'create'],
+  patch: ['list', 'patch'],
+  delete: ['list', 'delete'],
+  undo: ['list', 'undo'],
+  itemCreate: ['list', 'item-create'],
+  itemPatch: ['list', 'item-patch'],
+  itemDelete: ['list', 'item-delete'],
+  itemUndo: ['list', 'item-undo'],
+} as const;
+
+export type ListMutationName = keyof typeof listMutationKeys;
+export type ListMutationKey = (typeof listMutationKeys)[ListMutationName];
+
+interface PersistedMutationDescriptor {
+  readonly mutationKey: readonly string[];
+}
+
+export function isListMutation(
+  intent: PersistedMutationDescriptor,
+  name: ListMutationName,
+): boolean {
+  const expected = listMutationKeys[name];
+  return intent.mutationKey[0] === expected[0] && intent.mutationKey[1] === expected[1];
+}
+
+export const listItemProjectionMutationKeys = [
+  listMutationKeys.itemCreate,
+  listMutationKeys.itemPatch,
+  listMutationKeys.itemDelete,
+  listMutationKeys.itemUndo,
+] as const;
+
+export function isListItemProjectionMutation(
+  intent: PersistedMutationDescriptor,
+): boolean {
+  return listItemProjectionMutationKeys.some(
+    (key) => intent.mutationKey[0] === key[0] && intent.mutationKey[1] === key[1],
+  );
+}
+
 /**
  * The wire tag in `['activity', <tag>]` — the discriminant every projector switches on.
  *

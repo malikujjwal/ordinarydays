@@ -1369,13 +1369,19 @@ registry.registerPath({
     'client must not send row contents back as authority. `undoExpiresAt` is the UI’s ' +
     '6-second offer deadline, not the server’s replay deadline: an Undo the user has ' +
     'already accepted stays valid for the shared retention window, so an offline inverse ' +
-    'cannot expire in transit. Restoring is `POST /v1/lists/{id}/undo`.',
+    'cannot expire in transit. Requires `Idempotency-Key`, so a native outbox replay recovers ' +
+    'the exact same opaque Undo receipt instead of issuing a second delete. Restoring is ' +
+    '`POST /v1/lists/{id}/undo`.',
   tags: ['lists'],
   request: { params: z.object({ id: listId, itemId }) },
   responses: {
     200: {
       description: 'The item is gone, and `data` carries the Undo offer.',
       content: { 'application/json': { schema: reversibleItemMutationResponse } },
+    },
+    400: {
+      description: 'A missing or malformed `Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
     },
     404: {
       description: 'No such list or item — and the answer a repeated delete gets.',

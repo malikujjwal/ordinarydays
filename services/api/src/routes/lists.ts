@@ -50,8 +50,8 @@ import {
  * settings route (P3-33); and the two bulk actions with their compensation endpoint
  * (P3-10); and the optional bridge to Activities (P3-13).
  *
- * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Only the
- * mutating `POST`s take an `Idempotency-Key`; the settings `PATCH` takes an `If-Match`.
+ * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Mutating
+ * `POST`s, settings `PATCH`, and reversible item `DELETE` take an `Idempotency-Key`.
  */
 
 /**

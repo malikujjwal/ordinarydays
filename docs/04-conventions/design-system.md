@@ -496,6 +496,26 @@ Non-task rows render a small non-interactive marker in the type's accent — out
 > it has no hit target and must not start reading as a control. On cards the same accent tints a `44 × 44` icon
 **squircle** (`radius.md`, the type's `*Surface` tint as fill, the accent as glyph).
 
+#### 5.2a Collection-card surfaces
+
+Lists use a separate, presentation-only collection palette. Unlike Activity accents, these
+tones fill the whole card: the variation is what makes the Lists index read as a shelf of
+distinct collections rather than a grid of identical controls. They never imply state, type,
+priority or completion, and they are never used to infer a List's configuration.
+
+| Tone | Light surface | Dark surface | `textPrimary` contrast (light / dark) |
+| --- | --- | --- | --- |
+| rose | `#F2DFE2` | `#593942` | 11.79:1 / 8.85:1 |
+| sand | `#EFE4D3` | `#514534` | 11.99:1 / 8.21:1 |
+| blue | `#DCE9EB` | `#374B4F` | 12.13:1 / 8.10:1 |
+| olive | `#E4EADF` | `#3B483C` | 12.30:1 / 8.48:1 |
+
+The renderer derives a stable tone from `listId`; it does not add a stored colour field and
+does not read `templateKey`. Hash collisions may repeat a tone, but a List never changes colour
+because the grid reorders or the app relaunches. The icon squircle uses a translucent neutral
+surface on top of the card rather than introducing a second category colour. Text, counts and
+progress use the paired readable ink/track treatment for the actual card surface.
+
 ### 5.3 Row subtitle format per type
 
 The `subtitle` field on `AgendaItem` (`api-contract.md` §2.2). Built server-side, one
@@ -542,7 +562,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger`), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth`, `flush` (a `ghost` whose label aligns with the text column — §0) | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
 | `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `tone` (`neutral` \| `accent`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |
-| `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `onPress?` | default, pressed, focused |
+| `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `surfaceTone?` (`neutral` \| `collectionRose` \| `collectionSand` \| `collectionBlue` \| `collectionOlive`), `onPress?` | default, pressed, focused. Collection tones resolve through §5.2a's paired surfaces; callers never pass raw colours. |
 | `IconTile` | `icon`, `tint` (a type or template accent), `size` (44) | The squircle on plan and list cards. Non-interactive; `accessibilityElementsHidden`. |
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
@@ -557,7 +577,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
 | `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
 | `SectionHeader` | `title`, `count?`, `action?` | default only. `caption` type, uppercase, wide-tracked, `accessibilityRole="header"`. |
-| `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. |
+| `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. A product anatomy may supply one compact, non-interactive `IconTile`; that is a semantic marker, not an illustration. |
 | `Toast` | `message`, `requestId?` (small, selectable API correlation id), `action?` (`{ label, onPress }`), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. The primitive accepts only the two product windows; the shell host may shorten visibility to a positive remaining server deadline, capped at the applicable window, and suppresses an expired or zero-length offer. |
 | `Skeleton` | `shape` (`row` \| `card` \| `text`), `count` | Shimmer off under Reduce Motion. Minimum display 200 ms. |
 
@@ -691,6 +711,54 @@ are never bound to one event.
 > defined only for compose; every other sheet needs the §20 contract before drag-to-dismiss
 > lands, or `✕` and swipe will diverge.
 
+### 6.3 Settings-surface grammar
+
+This section defines reusable composition rules; it does **not** define an app-wide Settings
+page, its navigation or its inventory. A feature owns which settings exist. The system owns how
+any settings surface is structured once that product decision has been made.
+
+**Choose the container from scope.** Object-scoped configuration reached from that object's
+overflow opens a `Sheet` and returns to the same object. Configuration that a product spec
+defines as app-wide uses a `ScreenShell` detail destination. Do not invent a global settings
+home merely to reuse this anatomy, and do not disguise a long hierarchy as a full-height sheet.
+
+**Order sections by consequence:** identity first when editable; then the object's primary
+mode; dependent presentation; optional features; destinations or integrations; access; and
+management last. Omit empty sections. Destructive management never sits beside ordinary
+switches, and it uses `danger` ink plus the confirmation contract rather than a red decorative
+container.
+
+**One row, one promise.** Use the control whose affordance matches the write:
+
+| Setting shape | Control | Trailing treatment |
+| --- | --- | --- |
+| One of two to four compact, mutually exclusive modes | `SegmentedControl` | Selected segment only |
+| Independent boolean applied on tap | `SettingRow` switch | Aligned switch column; no chevron or selected check |
+| Opens a focused editor or chooser | `SettingRow` | Current value in `textAction` plus chevron |
+| Commits one value immediately | Selectable `SettingRow` | Selected tint plus trailing check; no chevron |
+| Destructive action | `SettingRow` or `Button` with danger semantics | Explicit destructive verb; never a switch |
+
+A row never combines a switch and chevron. A chevron always opens another surface; a switch
+always changes the named boolean. Summaries describe the current value or effect in one quiet
+line and never restate the label.
+
+**Dependencies stay legible.** A dependent setting is absent until its parent mode makes it
+meaningful. Enabling a feature that needs secondary configuration opens one focused child
+surface once; afterwards the parent row shows the configured vocabulary or value and `Edit`.
+Do not leave a mini-form permanently expanded in the main settings surface, and do not show a
+screenful of disabled controls for unavailable configuration.
+
+**Settings are not a wizard.** Independent reversible settings apply independently and keep
+the user on the same surface; they do not acquire `Next`, `Done` or a page-wide `Save`. A fixed
+footer commit exists only when several fields intentionally form one draft. Effective writes
+follow `interaction-contract.md` §1a.1 and §4: immediate optimistic feedback, exact undo where
+the action is reversible, and a consequence-naming confirmation only where data is removed.
+
+Section headers use `SectionHeader`; rows use the 72 pt `SettingRow` minimum and one aligned
+trailing column. At large text sizes summaries wrap and trailing values move below before any
+label truncates. At compact width the surface keeps 16 pt gutters; at larger widths it follows
+the owning `Sheet` or `ScreenShell` rather than inventing a new settings breakpoint.
+
 ---
 
 ## 7. Anatomies
@@ -794,10 +862,10 @@ hairline connector, content to the right:
 The Lists index is a 2-up grid of cards at every supported width, each list one card:
 
 ```
- ┌──────────────────────────┐  radius.lg · e2 · surfaceRaised
- │  [icon squircle 44]      │  IconTile, template-family tint
+ ┌──────────────────────────┐  radius.lg · e2 · collection-card surface
+ │  [icon squircle 44]      │  neutral translucent IconTile
  │  Groceries               │  heading, textPrimary
- │  7 remaining             │  subhead, textSecondary
+ │  12 items · 5 checked    │  subhead, textSecondary
  │  ────────                │  ProgressBar (neutral) — only when the list is checkable
  │  Updated today           │  footnote, textDisabled
  └──────────────────────────┘
@@ -818,6 +886,13 @@ The Lists index is a 2-up grid of cards at every supported width, each list one 
 
 The count line is computed from the List's own stored fields, never from template copy.
 
+> **Amended 2026-08-29 (founder).** The neutral-card treatment made every collection read as
+> the same object with a different icon. The whole card now uses §5.2a's soft collection
+> surface. Cards remain one common component and one common List model; colour is varied
+> presentation, not a category, state, priority or stored setting. The checkbox progress bar
+> remains the founder-approved exception: it reports `doneCount / itemCount` and never means
+> “scheduled”, “planned” or that the List itself is an obligation to finish.
+
 `Updated today` renders **`lastItemActivityAt`**, not `updatedAt`
 (`data-model.md` §4.6). `updatedAt` backs `If-Match` and moves on a rename or a settings
 change but not on checking an item, so a card using it would say `Updated 3 days ago`
@@ -828,9 +903,13 @@ header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutat
 #### 7.2a List creation and settings contract
 
 `New list` is a two-step sheet. Step one is headed `Choose a list type`, contains no title
-field, begins with nothing selected and shows exactly Blank, Checklist, Groceries, Watch Later,
-Books to Read, Places to Visit and Meal Ideas in that order. Blank is the explicit escape
-hatch. Step two alone contains the editable title.
+field and begins with nothing selected. **Blank list is one full-width leading card**, the
+explicit escape hatch. Beneath it, a 2-up grid shows Checklist, Groceries, Watch Later, Books
+to Read, Places to Visit and Meal Ideas in that left-to-right, top-to-bottom order. Each card
+contains the stored catalogue icon, label and one explanatory line. These are choices, not
+selected states: no card is pinned, recommended, pre-tinted as a default or history-ranked.
+Step two alone contains the selected preset's name and summary plus the editable title; its
+fixed footer carries `Back` and `Create list`.
 
 The List settings sheet keeps inline title editing above this exact hierarchy:
 
@@ -848,8 +927,14 @@ Sub-items                                 [switch]
 Destination settings follow as a subordinate section. First enabling Sub-items opens a
 focused configuration sheet; its vocabulary controls never remain expanded in the main sheet.
 Rows use the 72 pt `SettingRow` rhythm, section spacing tokens and one aligned trailing switch
-column. The compact sheet uses the approved near-full-height detent rather than shrinking to its
-current content.
+column. This is the List-specific instance of §6.3's reusable settings-surface grammar, not a
+definition of an app-wide Settings page. The compact sheet uses the approved near-full-height
+detent rather than shrinking to its current content.
+
+An empty List centres one compact semantic `IconTile`, the heading `Start with one item`, the
+List's stored guidance line and one primary `Add item` action. It does not show an empty row,
+repeat `No items`, or introduce a large decorative illustration. The action opens the same item
+composer used by the persistent add row on a populated List.
 
 The canonical founder reference is
 `docs/04-conventions/visual-references/p3-33-list-settings.png`. First screenshot baselines

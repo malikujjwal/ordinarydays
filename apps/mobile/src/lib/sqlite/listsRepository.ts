@@ -159,11 +159,12 @@ export class ListsRepository {
     transaction: TransactionContext,
     lists: readonly List[],
     protectedListIds: ReadonlySet<string> = new Set(),
+    protectedAggregateIds: ReadonlySet<string> = new Set(),
   ): Promise<void> {
-    if (protectedListIds.size === 0)
-      await transaction.database.run('DELETE FROM list_rows;');
+    const retainedIds = new Set([...protectedListIds, ...protectedAggregateIds]);
+    if (retainedIds.size === 0) await transaction.database.run('DELETE FROM list_rows;');
     else {
-      const ids = [...protectedListIds];
+      const ids = [...retainedIds];
       await transaction.database.run(
         `DELETE FROM list_rows WHERE list_id NOT IN (${ids.map(() => '?').join(', ')});`,
         ids,
@@ -174,6 +175,19 @@ export class ListsRepository {
         await transaction.database.run(
           'UPDATE list_rows SET position = ? WHERE list_id = ?;',
           [position, list.listId],
+        );
+      } else if (protectedAggregateIds.has(list.listId)) {
+        const current = await this.getLocal(transaction.database, list.listId);
+        await writeListRow(
+          transaction.database,
+          current === undefined
+            ? list
+            : {
+                ...list,
+                itemCount: current.itemCount,
+                doneCount: current.doneCount,
+              },
+          position,
         );
       } else await writeListRow(transaction.database, list, position);
     }
@@ -209,10 +223,23 @@ export class ListsRepository {
     transaction.changed(this.scope);
   }
 
-  async installCanonicalRow(transaction: TransactionContext, list: List): Promise<void> {
+  async installCanonicalRow(
+    transaction: TransactionContext,
+    list: List,
+    preserveLocalAggregates = false,
+  ): Promise<void> {
+    const current = preserveLocalAggregates
+      ? await this.getLocal(transaction.database, list.listId)
+      : undefined;
     await writeListRow(
       transaction.database,
-      list,
+      current === undefined
+        ? list
+        : {
+            ...list,
+            itemCount: current.itemCount,
+            doneCount: current.doneCount,
+          },
       await this.positionOf(transaction.database, list.listId),
     );
     transaction.changed(this.scope);

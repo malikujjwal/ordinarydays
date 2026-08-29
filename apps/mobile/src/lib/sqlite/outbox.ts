@@ -1,5 +1,10 @@
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_OFFLINE_MUTATIONS } from '@od/shared';
-import { changesRecurrenceTopology } from '@/lib/mutationKeys';
+import {
+  changesRecurrenceTopology,
+  isListMutation,
+  listItemProjectionMutationKeys,
+  listMutationKeys,
+} from '@/lib/mutationKeys';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 
 export type OutboxStatus = 'queued' | 'in_flight' | 'acknowledged' | 'needs_attention';
@@ -22,9 +27,19 @@ export type OutboxAttention =
         | 'legacy_unknown';
     };
 
+export type PersistedMutationKey = readonly [string, string, ...string[]];
+
+export function isPersistedMutationKey(value: unknown): value is PersistedMutationKey {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    value.every((part) => typeof part === 'string')
+  );
+}
+
 export interface OutboxIntent {
   readonly intentId: string;
-  readonly mutationKey: readonly string[];
+  readonly mutationKey: PersistedMutationKey;
   readonly variables: unknown;
   readonly entityId: string;
   readonly orderingKey: string;
@@ -42,7 +57,7 @@ export interface OutboxIntent {
 
 export interface OutboxAppendInput {
   readonly intentId: string;
-  readonly mutationKey: readonly string[];
+  readonly mutationKey: PersistedMutationKey;
   readonly variables: unknown;
   readonly entityId: string;
   readonly orderingKey?: string;
@@ -61,13 +76,80 @@ export interface CanonicalOutboxGuards {
   readonly reconcilingActivityIds: ReadonlySet<string>;
 }
 
-export interface ListArchiveUndoOffer {
+export type UndoOfferState =
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'accepted'; readonly inverseIntentId: string }
+  | {
+      readonly kind: 'receipt_ready';
+      readonly undoToken: string;
+      readonly undoExpiresAt: string;
+    }
+  | {
+      readonly kind: 'accepted_receipt_ready';
+      readonly inverseIntentId: string;
+      readonly undoToken: string;
+      readonly undoExpiresAt: string;
+    };
+
+interface UndoOffer {
+  readonly state: UndoOfferState;
+}
+
+export function undoOfferInverseIntentId(offer: UndoOffer): string | undefined {
+  return offer.state.kind === 'accepted' || offer.state.kind === 'accepted_receipt_ready'
+    ? offer.state.inverseIntentId
+    : undefined;
+}
+
+export function undoOfferReceipt(
+  offer: UndoOffer,
+): { readonly undoToken: string; readonly undoExpiresAt: string } | undefined {
+  return offer.state.kind === 'receipt_ready' ||
+    offer.state.kind === 'accepted_receipt_ready'
+    ? {
+        undoToken: offer.state.undoToken,
+        undoExpiresAt: offer.state.undoExpiresAt,
+      }
+    : undefined;
+}
+
+function undoOfferState(
+  intentId: string,
+  inverseIntentId: string | undefined,
+  undoToken: string | undefined,
+  undoExpiresAt: string | undefined,
+): UndoOfferState {
+  if ((undoToken === undefined) !== (undoExpiresAt === undefined)) {
+    throw new OutboxInvariantError(intentId);
+  }
+  if (undoToken !== undefined && undoExpiresAt !== undefined) {
+    return inverseIntentId === undefined
+      ? { kind: 'receipt_ready', undoToken, undoExpiresAt }
+      : {
+          kind: 'accepted_receipt_ready',
+          inverseIntentId,
+          undoToken,
+          undoExpiresAt,
+        };
+  }
+  return inverseIntentId === undefined
+    ? { kind: 'pending' }
+    : { kind: 'accepted', inverseIntentId };
+}
+
+export interface ListArchiveUndoOffer extends UndoOffer {
   readonly originalIntentId: string;
   readonly currentIntentId: string;
   readonly listId: string;
-  readonly inverseIntentId?: string;
-  readonly undoToken?: string;
-  readonly undoExpiresAt?: string;
+  readonly createdAt: number;
+}
+
+export interface ListItemDeleteUndoOffer extends UndoOffer {
+  readonly originalIntentId: string;
+  readonly currentIntentId: string;
+  readonly listId: string;
+  readonly itemId: string;
+  readonly previous: unknown;
   readonly createdAt: number;
 }
 
@@ -300,8 +382,7 @@ function intentFromRow(row: SqliteRow): OutboxIntent {
   const attempts = numberValue(row, 'attempts');
   if (
     intentId === undefined ||
-    !Array.isArray(mutationKey) ||
-    !mutationKey.every((part) => typeof part === 'string') ||
+    !isPersistedMutationKey(mutationKey) ||
     entityId === undefined ||
     orderingKey === undefined ||
     (status !== 'queued' &&
@@ -438,8 +519,8 @@ export class OutboxRepository {
       kind: 'inserted',
       intent: {
         intentId: input.intentId,
-        mutationKey: JSON.parse(mutationKeyJson) as string[],
-        variables: JSON.parse(variablesJson) as unknown,
+        mutationKey: input.mutationKey,
+        variables: parseJson(variablesJson),
         entityId: input.entityId,
         orderingKey,
         status: 'queued',
@@ -503,9 +584,40 @@ export class OutboxRepository {
   }
 
   /**
+   * List aggregates projected by unresolved item writes. The item row has its own protection,
+   * but `itemCount` and `doneCount` live on the parent List and must survive the same stale
+   * pull or the progress bar contradicts the rows currently on screen.
+   */
+  async protectedListAggregateIds(
+    database: SqliteReader = this.reader,
+  ): Promise<ReadonlySet<string>> {
+    const mutationKeys = listItemProjectionMutationKeys.map((key) => JSON.stringify(key));
+    const rows = await database.all(
+      `SELECT DISTINCT json_extract(variables_json, '$.listId') AS list_id
+       FROM outbox_intents
+       WHERE mutation_key_json IN (?, ?, ?, ?)
+         AND status IN ('queued', 'in_flight', 'needs_attention')
+         AND NOT (
+           status = 'needs_attention'
+           AND (
+             attention_kind = 'rejected'
+             OR (attention_kind = 'parked' AND attention_reason = 'predecessor_rejected')
+           )
+         );`,
+      mutationKeys,
+    );
+    return new Set(
+      rows
+        .map((row) => stringValue(row, 'list_id'))
+        .filter((value): value is string => value !== undefined),
+    );
+  }
+
+  /**
    * Item rows a canonical page must not overwrite, because this device still owes a write for
-   * them: an unresolved **create**, whose row the server could not have included, or an
-   * unresolved **edit**, whose fields the page predates (P3-29).
+   * them: an unresolved **create**, whose row the server could not have included, an
+   * unresolved **edit**, whose fields the page predates, or an unresolved **delete**, whose
+   * deliberately absent row a stale page must not resurrect (P3-29).
    *
    * The edit case is what stops a background page landing between an accepted edit and its
    * acknowledgement and flickering the old value back onto the screen. The protection ends at
@@ -519,9 +631,10 @@ export class OutboxRepository {
     listId: string,
     database: SqliteReader = this.reader,
   ): Promise<ReadonlySet<string>> {
+    const mutationKeys = listItemProjectionMutationKeys.map((key) => JSON.stringify(key));
     const rows = await database.all(
       `SELECT DISTINCT entity_id FROM outbox_intents
-       WHERE mutation_key_json IN ('["list","item-create"]', '["list","item-patch"]')
+       WHERE mutation_key_json IN (?, ?, ?, ?)
          AND json_extract(variables_json, '$.listId') = ?
          AND status IN ('queued', 'in_flight', 'needs_attention')
          AND NOT (
@@ -531,7 +644,7 @@ export class OutboxRepository {
              OR (attention_kind = 'parked' AND attention_reason = 'predecessor_rejected')
            )
          );`,
-      [listId],
+      [...mutationKeys, listId],
     );
     return new Set(
       rows
@@ -584,9 +697,7 @@ export class OutboxRepository {
       currentIntentId,
       listId,
       createdAt,
-      ...(inverseIntentId === undefined ? {} : { inverseIntentId }),
-      ...(undoToken === undefined ? {} : { undoToken }),
-      ...(undoExpiresAt === undefined ? {} : { undoExpiresAt }),
+      state: undoOfferState(intentId, inverseIntentId, undoToken, undoExpiresAt),
     };
   }
 
@@ -642,14 +753,15 @@ export class OutboxRepository {
        WHERE original_intent_id = ?;`,
       [undoToken, undoExpiresAt, offer.originalIntentId],
     );
-    if (offer.inverseIntentId === undefined) return;
-    const inverse = await this.get(database, offer.inverseIntentId);
+    const inverseIntentId = undoOfferInverseIntentId(offer);
+    if (inverseIntentId === undefined) return;
+    const inverse = await this.get(database, inverseIntentId);
     if (
       inverse?.status !== 'queued' ||
       inverse.mutationKey[0] !== 'list' ||
       inverse.mutationKey[1] !== 'undo'
     ) {
-      throw new OutboxInvariantError(offer.inverseIntentId);
+      throw new OutboxInvariantError(inverseIntentId);
     }
     const variables = record(inverse.variables);
     if (variables === undefined) throw new OutboxInvariantError(inverse.intentId);
@@ -729,8 +841,9 @@ export class OutboxRepository {
   ): Promise<void> {
     const offer = await this.listArchiveUndoOffer(database, previousIntentId);
     if (offer === undefined) return;
-    if (offer.inverseIntentId !== undefined) {
-      const inverse = await this.get(database, offer.inverseIntentId);
+    const inverseIntentId = undoOfferInverseIntentId(offer);
+    if (inverseIntentId !== undefined) {
+      const inverse = await this.get(database, inverseIntentId);
       if (
         inverse === undefined ||
         inverse.mutationKey[0] !== 'list' ||
@@ -742,7 +855,7 @@ export class OutboxRepository {
             inverse.attention.reason === 'predecessor_rejected'
           ))
       ) {
-        throw new OutboxInvariantError(offer.inverseIntentId);
+        throw new OutboxInvariantError(inverseIntentId);
       }
       const variables = record(inverse.variables);
       if (variables?.originalIntentId !== offer.originalIntentId) {
@@ -772,6 +885,288 @@ export class OutboxRepository {
     const moved = await database.run(
       `UPDATE list_archive_undo_offers SET current_intent_id = ?
        WHERE current_intent_id = ?;`,
+      [freshIntentId, previousIntentId],
+    );
+    if (moved.changes !== 1) throw new OutboxInvariantError(previousIntentId);
+  }
+
+  async createListItemDeleteUndoOffer(
+    database: SqliteExecutor,
+    input: {
+      readonly originalIntentId: string;
+      readonly listId: string;
+      readonly itemId: string;
+      readonly previous: unknown;
+      readonly createdAt?: number;
+    },
+  ): Promise<void> {
+    await database.run(
+      `INSERT OR IGNORE INTO list_item_delete_undo_offers
+         (original_intent_id, current_intent_id, list_id, item_id, previous_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?);`,
+      [
+        input.originalIntentId,
+        input.originalIntentId,
+        input.listId,
+        input.itemId,
+        JSON.stringify(input.previous),
+        input.createdAt ?? Date.now(),
+      ],
+    );
+  }
+
+  async listItemDeleteUndoOffer(
+    database: SqliteReader,
+    intentId: string,
+  ): Promise<ListItemDeleteUndoOffer | undefined> {
+    const row = await database.first(
+      `SELECT * FROM list_item_delete_undo_offers
+       WHERE original_intent_id = ? OR current_intent_id = ? OR inverse_intent_id = ?
+       LIMIT 1;`,
+      [intentId, intentId, intentId],
+    );
+    if (row === undefined) return undefined;
+    const originalIntentId = stringValue(row, 'original_intent_id');
+    const currentIntentId = stringValue(row, 'current_intent_id');
+    const listId = stringValue(row, 'list_id');
+    const itemId = stringValue(row, 'item_id');
+    const previousJson = stringValue(row, 'previous_json');
+    const createdAt = numberValue(row, 'created_at');
+    if (
+      originalIntentId === undefined ||
+      currentIntentId === undefined ||
+      listId === undefined ||
+      itemId === undefined ||
+      previousJson === undefined ||
+      createdAt === undefined
+    ) {
+      throw new OutboxInvariantError(intentId);
+    }
+    const inverseIntentId = stringValue(row, 'inverse_intent_id');
+    const undoToken = stringValue(row, 'undo_token');
+    const undoExpiresAt = stringValue(row, 'undo_expires_at');
+    return {
+      originalIntentId,
+      currentIntentId,
+      listId,
+      itemId,
+      previous: parseJson(previousJson),
+      createdAt,
+      state: undoOfferState(intentId, inverseIntentId, undoToken, undoExpiresAt),
+    };
+  }
+
+  async linkListItemDeleteUndoIntent(
+    database: SqliteExecutor,
+    originalIntentId: string,
+    inverseIntentId: string,
+  ): Promise<void> {
+    const result = await database.run(
+      `UPDATE list_item_delete_undo_offers SET inverse_intent_id = ?
+       WHERE original_intent_id = ? AND inverse_intent_id IS NULL;`,
+      [inverseIntentId, originalIntentId],
+    );
+    if (result.changes !== 1) throw new OutboxInvariantError(originalIntentId);
+  }
+
+  async clearListItemDeleteUndoOffer(
+    database: SqliteExecutor,
+    originalIntentId: string,
+    onlyWhenUnaccepted = false,
+  ): Promise<void> {
+    await database.run(
+      `DELETE FROM list_item_delete_undo_offers WHERE original_intent_id = ?${
+        onlyWhenUnaccepted ? ' AND inverse_intent_id IS NULL' : ''
+      };`,
+      [originalIntentId],
+    );
+  }
+
+  async expireUnacceptedListItemDeleteUndoOffers(
+    database: SqliteExecutor,
+    createdBefore: number,
+  ): Promise<number> {
+    const result = await database.run(
+      `DELETE FROM list_item_delete_undo_offers
+       WHERE inverse_intent_id IS NULL AND created_at < ?;`,
+      [createdBefore],
+    );
+    return result.changes;
+  }
+
+  /** Supplies the dependent item compensation with the opaque token from its forward write. */
+  async recordListItemDeleteUndoToken(
+    database: SqliteExecutor,
+    currentIntentId: string,
+    undoToken: string,
+    undoExpiresAt: string,
+  ): Promise<void> {
+    const offer = await this.listItemDeleteUndoOffer(database, currentIntentId);
+    if (offer === undefined) return;
+    await database.run(
+      `UPDATE list_item_delete_undo_offers SET undo_token = ?, undo_expires_at = ?
+       WHERE original_intent_id = ?;`,
+      [undoToken, undoExpiresAt, offer.originalIntentId],
+    );
+    const inverseIntentId = undoOfferInverseIntentId(offer);
+    if (inverseIntentId === undefined) return;
+    const inverse = await this.get(database, inverseIntentId);
+    if (inverse?.status !== 'queued' || !isListMutation(inverse, 'itemUndo')) {
+      throw new OutboxInvariantError(inverseIntentId);
+    }
+    const variables = record(inverse.variables);
+    if (variables === undefined) throw new OutboxInvariantError(inverse.intentId);
+    const rebasedVariables = {
+      ...variables,
+      receipt: { kind: 'ready', undoToken },
+    };
+    const semanticKey = outboxSemanticKey({
+      intentId: inverse.intentId,
+      mutationKey: inverse.mutationKey,
+      variables: rebasedVariables,
+      entityId: inverse.entityId,
+      orderingKey: inverse.orderingKey,
+      ...(inverse.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: inverse.dependsOnIntentId }),
+      ...(inverse.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: inverse.compensationForIntentId }),
+    });
+    await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status = 'queued';`,
+      [JSON.stringify(rebasedVariables), semanticKey, inverse.intentId],
+    );
+  }
+
+  /**
+   * Replaces a later delete's optimistic rollback image with the server row that preceded it.
+   *
+   * A checkbox edit and delete can be queued in one gesture burst. The delete initially sees
+   * the optimistic checkbox value, but that value is not safe to resurrect if the earlier edit
+   * is rejected or canonicalized differently by the server. Keep the durable intent and its
+   * Undo offer on the same authoritative snapshot.
+   */
+  async rebaseNextListItemDeleteSnapshot(
+    database: SqliteExecutor,
+    orderingKey: string,
+    seq: number,
+    itemId: string,
+    previous: unknown,
+  ): Promise<boolean> {
+    const row = await database.first(
+      `SELECT * FROM outbox_intents
+       WHERE ordering_key = ? AND seq > ? AND entity_id = ? AND status = 'queued'
+         AND json_extract(mutation_key_json, '$[0]') = 'list'
+         AND json_extract(mutation_key_json, '$[1]') = ?
+       ORDER BY seq LIMIT 1;`,
+      [orderingKey, seq, itemId, listMutationKeys.itemDelete[1]],
+    );
+    if (row === undefined) return false;
+    const successor = intentFromRow(row);
+    const variables = record(successor.variables);
+    if (variables === undefined) throw new OutboxInvariantError(successor.intentId);
+    const rebasedVariables = { ...variables, previous };
+    const semanticKey = outboxSemanticKey({
+      intentId: successor.intentId,
+      mutationKey: successor.mutationKey,
+      variables: rebasedVariables,
+      entityId: successor.entityId,
+      orderingKey: successor.orderingKey,
+      ...(successor.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: successor.dependsOnIntentId }),
+      ...(successor.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: successor.compensationForIntentId }),
+    });
+    const updated = await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status = 'queued';`,
+      [JSON.stringify(rebasedVariables), semanticKey, successor.intentId],
+    );
+    const offer = await database.run(
+      `UPDATE list_item_delete_undo_offers SET previous_json = ?
+       WHERE current_intent_id = ?;`,
+      [JSON.stringify(previous), successor.intentId],
+    );
+    if (updated.changes !== 1 || offer.changes !== 1) {
+      throw new OutboxInvariantError(successor.intentId);
+    }
+    return true;
+  }
+
+  /** Moves an item-delete offer and its accepted inverse onto a user-directed Retry id. */
+  async reidentifyListItemDeleteUndoOffer(
+    database: SqliteExecutor,
+    previousIntentId: string,
+    freshIntentId: string,
+  ): Promise<void> {
+    const offer = await this.listItemDeleteUndoOffer(database, previousIntentId);
+    if (offer === undefined) return;
+    const inverseIntentId = undoOfferInverseIntentId(offer);
+    if (inverseIntentId !== undefined) {
+      const inverse = await this.get(database, inverseIntentId);
+      if (
+        inverse === undefined ||
+        !isListMutation(inverse, 'itemUndo') ||
+        (inverse.status !== 'queued' &&
+          !(
+            inverse.status === 'needs_attention' &&
+            inverse.attention?.kind === 'parked' &&
+            inverse.attention.reason === 'predecessor_rejected'
+          ))
+      ) {
+        throw new OutboxInvariantError(inverseIntentId);
+      }
+      const variables = record(inverse.variables);
+      if (variables?.originalIntentId !== offer.originalIntentId) {
+        throw new OutboxInvariantError(inverse.intentId);
+      }
+      const semanticKey = outboxSemanticKey({
+        intentId: inverse.intentId,
+        mutationKey: inverse.mutationKey,
+        variables,
+        entityId: inverse.entityId,
+        orderingKey: inverse.orderingKey,
+        dependsOnIntentId: freshIntentId,
+        compensationForIntentId: freshIntentId,
+      });
+      await database.run(
+        `UPDATE outbox_intents SET depends_on_intent_id = ?, compensation_for_intent_id = ?,
+           semantic_key = ?, status = 'queued', attempts = 0, last_error = NULL,
+           attention_kind = NULL, attention_reason = NULL, attention_status = NULL,
+           attention_code = NULL, attention_details_json = NULL
+         WHERE intent_id = ?;`,
+        [freshIntentId, freshIntentId, semanticKey, inverse.intentId],
+      );
+    }
+    const moved = await database.run(
+      `UPDATE list_item_delete_undo_offers SET current_intent_id = ?
+       WHERE current_intent_id = ?;`,
+      [freshIntentId, previousIntentId],
+    );
+    if (moved.changes !== 1) throw new OutboxInvariantError(previousIntentId);
+  }
+
+  /** Moves an explicitly retried item compensation onto its fresh durable identity. */
+  async reidentifyListItemUndoIntent(
+    database: SqliteExecutor,
+    previousIntentId: string,
+    freshIntentId: string,
+  ): Promise<void> {
+    const offer = await this.listItemDeleteUndoOffer(database, previousIntentId);
+    if (offer === undefined || undoOfferInverseIntentId(offer) !== previousIntentId) {
+      throw new OutboxInvariantError(previousIntentId);
+    }
+    const retried = await this.get(database, freshIntentId);
+    if (retried === undefined || !isListMutation(retried, 'itemUndo')) {
+      throw new OutboxInvariantError(freshIntentId);
+    }
+    const moved = await database.run(
+      `UPDATE list_item_delete_undo_offers SET inverse_intent_id = ?
+       WHERE inverse_intent_id = ?;`,
       [freshIntentId, previousIntentId],
     );
     if (moved.changes !== 1) throw new OutboxInvariantError(previousIntentId);
@@ -1309,6 +1704,7 @@ export class OutboxRepository {
   async discardAttention(database: SqliteExecutor, intentId: string): Promise<boolean> {
     const target = await this.get(database, intentId);
     if (target?.status !== 'needs_attention') return false;
+    const dependencyId = target.dependsOnIntentId;
     await database.run(
       `WITH RECURSIVE doomed(intent_id) AS (
          SELECT intent_id FROM outbox_intents WHERE intent_id = ?
@@ -1326,6 +1722,23 @@ export class OutboxRepository {
        WHERE current_intent_id = ? OR inverse_intent_id = ?;`,
       [intentId, intentId],
     );
+    await database.run(
+      `DELETE FROM list_item_delete_undo_offers
+       WHERE current_intent_id = ? OR inverse_intent_id = ?;`,
+      [intentId, intentId],
+    );
+    if (dependencyId !== undefined) {
+      await database.run(
+        `DELETE FROM outbox_intents
+         WHERE intent_id = ? AND status = 'acknowledged'
+           AND reconciliation_version IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM outbox_intents dependent
+             WHERE dependent.depends_on_intent_id = ?
+           );`,
+        [dependencyId, dependencyId],
+      );
+    }
     return true;
   }
 

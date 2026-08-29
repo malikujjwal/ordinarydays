@@ -1,6 +1,6 @@
 import { systemClock } from '@od/shared/time';
 import { textColumn } from '@/lib/sqlite/database';
-import type { OutboxAttention } from '@/lib/sqlite/outbox';
+import type { OutboxAttention, PersistedMutationKey } from '@/lib/sqlite/outbox';
 import type { RepositoryScope } from '@/lib/sqlite/subscriptions';
 import type {
   SerializedTransactionRunner,
@@ -34,7 +34,7 @@ export interface LegacyIntentImport {
   /** Source-record identity. Conflicting legacy mutation ids therefore remain distinct. */
   readonly recordKey: string;
   readonly intentId: string;
-  readonly mutationKey: readonly string[];
+  readonly mutationKey: PersistedMutationKey;
   readonly variables: unknown;
   readonly entityId: string;
   readonly orderingKey: string;

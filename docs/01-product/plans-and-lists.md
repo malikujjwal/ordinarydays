@@ -750,8 +750,9 @@ imply that any of them is.
 
 Consequences a reviewer can check:
 
-- No list-level progress bar, completion percentage, or "4 items still unscheduled" nudge
-  exists anywhere in the product.
+- A checkbox-mode card may show the small `doneCount / itemCount` progress bar approved for the
+  Lists index. No other list-level completion percentage, and no “items still unscheduled”
+  nudge, exists anywhere in the product: the bar reports checkbox state, never commitment.
 - No copy describes a list as somewhere things sit *until* something else happens (§5.9).
 - `Plan this item` is one affordance on an item among several. It is never the primary action of
   the list screen, and never a list's empty-state call to action.
@@ -812,24 +813,33 @@ template, auto-select Blank, or infer configuration from words.
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Cancel                                      │
-│                                              │
 │  Choose a list type                          │
 │                                              │
-│  Blank          No category or details     › │
-│  Checklist      Items have checkboxes      › │
-│  Groceries      A shopping checklist       › │
-│  Watch Later    Track episode progress     › │
-│  Books to Read  Track reading progress     › │
-│  Places to Visit Save places and addresses › │
-│  Meal Ideas     Ingredients inside meals   › │
+│  ┌────────────────────────────────────────┐  │
+│  │ Blank list · No category or details  › │  │
+│  └────────────────────────────────────────┘  │
+│                                              │
+│  ┌──────────────────┐  ┌──────────────────┐ │
+│  │ Checklist        │  │ Groceries        │ │
+│  │ Checkboxes       │  │ Shopping list    │ │
+│  └──────────────────┘  └──────────────────┘ │
+│  ┌──────────────────┐  ┌──────────────────┐ │
+│  │ Watch Later      │  │ Books to Read    │ │
+│  │ Stages + progress│  │ Stages + progress│ │
+│  └──────────────────┘  └──────────────────┘ │
+│  ┌──────────────────┐  ┌──────────────────┐ │
+│  │ Places to Visit  │  │ Meal Ideas       │ │
+│  │ Places           │  │ Sub-items        │ │
+│  └──────────────────┘  └──────────────────┘ │
 └──────────────────────────────────────────────┘
 ```
 
-The catalogue uses the exact seven-row order in §5.3. Blank is the explicit escape hatch for
-somebody who wants no category or item details. Nothing is selected, recommended, pinned,
-history-ranked, filtered by Plan kind or hidden behind another control. Destination selection
-may route by a slot, but never changes which creation types exist or enables a feature.
+The catalogue uses the exact seven-choice order in §5.3: Blank as one full-width leading card,
+then the other six in a 2-up grid read left-to-right and top-to-bottom. Blank is the explicit
+escape hatch for somebody who wants no category or item details. Nothing is selected,
+recommended, pinned, history-ranked, filtered by Plan kind or hidden behind another control.
+Destination selection may route by a slot, but never changes which creation types exist or
+enables a feature.
 
 Tapping a row opens the title step:
 
@@ -862,9 +872,16 @@ Rules:
 5. If this flow was opened from global **List item** because no destination existed,
    successful creation returns to the ListItem form with the new list visibly selected;
    the final item action is `Add to <new list name>`.
-6. Assistive technology announces each row as `<style>. <description>`, then announces
+6. Assistive technology announces each choice as `<style>. <description>`, then announces
    `List name, pre-filled with <title>` on the title step. Focus never skips the explicit
    style selection.
+
+Global `+` → **List item** does not put destination selection on a separate screen. It opens
+the item composer directly with title, optional note and a required inline `Add to` section.
+No List is selected in global context; an open List supplies itself visibly. Choosing
+`New list` enters the catalogue above and returns to the unchanged composer with the new List
+selected. The only commit remains `Add to <list name>`, so removing the extra `Which list?`
+step does not weaken explicit destination choice.
 
 > **What the frames fix, and what the sheet primitive does** — settled 2026-08-27 (founder),
 > on the divergence raised in P3-26's PR.
@@ -893,6 +910,9 @@ product-wide additive/destructive rule
 ([`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants) §1a.1) and
 of the change rules in
 [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists).
+The sheet is the List-specific instance of the reusable settings grammar in
+[`../04-conventions/design-system.md`](../04-conventions/design-system.md) §6.3. That grammar
+may be reused by other features; this section does not define an app-wide Settings page.
 
 | Setting | Label the user sees | Rule |
 | --- | --- | --- | --- |
@@ -931,11 +951,16 @@ Two more rules:
 | **Delete** | Header overflow → `Delete list`, confirmed. **Owner only.** Deletes items and their per-viewer `LNK#` projections. Every Plan created through `Plan this item` survives; the confirmation says how many of the owner's linked Plans survive, plus the number of other members who lose the list (§1a.1). |
 | **Rename** | Inline on the header title. Available to members as well as the owner — it changes nothing but the title (§5.5). |
 | **Item detail** | Tapping opens one item shell: title, note, exposed state and enabled typed-feature editors from the registry, plus `Plan this item` and `Delete`. |
-| **Empty list** | The List's stored `emptyStateCopy`, seeded at creation, plus the add row (§5.9). No illustration, no encouragement. |
+| **Empty list** | One compact semantic List icon, `Start with one item`, the List's stored `emptyStateCopy`, and one primary `Add item` action (§5.9). No large illustration or second empty add row. |
 | **Item cap** | 500 items per list. Beyond that, `POST` returns `validation_failed` with `List is full.` |
 
 (Moving an item between lists is not in v1 — copy the text into the other list and delete
 the original.)
+
+On the Lists index, each card uses one soft full-card collection tone from the design-system
+palette. Tone is stable presentation derived from `listId`, not stored user data, a template
+lookup, a category or status. A hash collision may repeat a tone, but sorting never recolours a
+List. All card facts, actions and accessibility labels remain identical regardless of colour.
 
 The Lists index pages access pointers that may resolve to active or archived Lists. Filtering
 is not pagination completion: if a page contributes no visible active rows but has a cursor,
@@ -1013,13 +1038,14 @@ Two rules that hold everywhere:
 ### 5.9 Empty states and copy
 
 Every empty List renders from values stored on that List, not by looking its `templateKey`
-up again. No illustration, encouragement, or exclamation mark
+up again. The one compact List icon is a semantic marker; there is no large illustration,
+congratulation, or exclamation mark
 ([`interaction-contract.md`](interaction-contract.md#52-empty) §5.2).
 
 | Surface | Copy |
 | --- | --- |
 | Lists index, no lists | `No lists yet` / `Keep things you want to remember, track, or organise together.` / `New list` |
-| Any empty List | Fixed heading `Nothing here` / the List's stored `emptyStateCopy` from the exact §5.3 record chosen at creation / its contextual add row |
+| Any empty List | Compact List icon / fixed heading `Start with one item` / the List's stored `emptyStateCopy` from the exact §5.3 record chosen at creation / `Add item` |
 
 Copy rules, checkable in review:
 

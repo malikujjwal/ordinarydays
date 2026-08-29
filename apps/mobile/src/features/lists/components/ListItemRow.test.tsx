@@ -63,6 +63,36 @@ describe('the canonical list item shell', () => {
     expect(handlers.onToggleChecked.mock.calls).toEqual([[true], [false]]);
   });
 
+  it('does not let an intermediate commit overwrite a newer rapid tap', () => {
+    const onToggleChecked = vi.fn(() => new Promise<boolean>(() => undefined));
+    const rendered = render(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list()}
+          item={item({ state: 'open' })}
+          onToggleChecked={onToggleChecked}
+          testID="row"
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, not checked' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, not checked' }));
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list()}
+          item={item({ state: 'done' })}
+          onToggleChecked={onToggleChecked}
+          testID="row"
+        />
+      </ThemeProvider>,
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, checked' }));
+
+    expect(onToggleChecked.mock.calls).toEqual([[true], [false], [true]]);
+  });
+
   it.each(['open', 'active'] as const)(
     'renders %s unchecked in checkbox mode',
     (state) => {

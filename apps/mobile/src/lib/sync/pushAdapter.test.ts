@@ -94,6 +94,7 @@ describe('ActivityPushAdapter', () => {
       create: vi.fn(async () => ({})),
       createItem: vi.fn(async () => ({})),
       patchItem: vi.fn(async () => ({})),
+      removeItem: vi.fn(async () => ({})),
       patch: vi.fn(async () => ({})),
       remove: vi.fn(async () => ({})),
       undo: vi.fn(async () => ({})),
@@ -123,6 +124,7 @@ describe('ActivityPushAdapter', () => {
         create: vi.fn(async () => ({})),
         createItem: vi.fn(async () => ({})),
         patchItem: vi.fn(async () => ({})),
+        removeItem: vi.fn(async () => ({})),
         patch: vi.fn(async () => ({})),
         remove: vi.fn(async () => ({})),
         undo: vi.fn(async () => ({})),
@@ -155,6 +157,47 @@ describe('ActivityPushAdapter', () => {
 
       expect(list.patchItem).toHaveBeenCalledWith(LIST, ITEM, { title: 'Oat milk' });
       expect(vi.mocked(list.patchItem).mock.calls[0]).toHaveLength(3);
+    });
+
+    it('sends a replay-protected delete under its durable identity', async () => {
+      const list = listTransport();
+      await new ActivityPushAdapter(
+        transport(() => undefined),
+        list,
+      ).execute(
+        itemIntent('item-delete', {
+          listId: LIST,
+          itemId: ITEM,
+          intentId: 'delete-item',
+          idempotencyKey: 'delete-item',
+          previous: {},
+        }),
+      );
+
+      expect(list.removeItem).toHaveBeenCalledWith(LIST, ITEM, 'delete-item');
+    });
+
+    it('sends an item compensation only with the server-authored opaque token', async () => {
+      const list = listTransport();
+      await new ActivityPushAdapter(
+        transport(() => undefined),
+        list,
+      ).execute(
+        itemIntent('item-undo', {
+          listId: LIST,
+          itemId: ITEM,
+          intentId: 'undo-delete-item',
+          idempotencyKey: 'undo-delete-item',
+          originalIntentId: 'delete-item',
+          receipt: { kind: 'ready', undoToken: 'opaque-item-token' },
+        }),
+      );
+
+      expect(list.undo).toHaveBeenCalledWith(
+        LIST,
+        'opaque-item-token',
+        'undo-delete-item',
+      );
     });
 
     it('refuses an edit whose payload names a different item', async () => {

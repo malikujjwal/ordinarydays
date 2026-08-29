@@ -57,6 +57,9 @@ export function ListSettingsSheet({
     setSingularLabel(list.featureConfig.subItems?.singularLabel ?? 'Sub-item');
     setSecondaryLabel(list.featureConfig.subItems?.secondaryLabel ?? '');
   }, [list.featureConfig.subItems]);
+  useEffect(() => {
+    if (!open) setNamingOpen(false);
+  }, [open]);
   const saveNaming = () => {
     settings.setSubItemLabels({
       sectionLabel: sectionLabel.trim() || 'Sub-items',
@@ -67,14 +70,41 @@ export function ListSettingsSheet({
   };
 
   return (
-    <>
-      <Sheet
-        open={open}
-        onClose={onClose}
-        title="List settings"
-        detent="large"
-        testID={testID}
-      >
+    <Sheet
+      open={open}
+      onClose={() => {
+        if (namingOpen) setNamingOpen(false);
+        else onClose();
+      }}
+      title={namingOpen ? 'Sub-item naming' : 'List settings'}
+      detent={namingOpen ? 'fit' : 'large'}
+      testID={namingOpen ? 'sub-item-naming-sheet' : testID}
+    >
+      {namingOpen ? (
+        <View style={{ gap: theme.space[3] }}>
+          <Field
+            label="Section label"
+            value={sectionLabel}
+            onChangeText={setSectionLabel}
+          />
+          <Field
+            label="Singular label"
+            value={singularLabel}
+            onChangeText={setSingularLabel}
+          />
+          <Field
+            label="Secondary field label"
+            value={secondaryLabel}
+            onChangeText={setSecondaryLabel}
+          />
+          <Button
+            label="Save naming"
+            disabled={settings.busy}
+            onPress={saveNaming}
+            testID="sub-item-naming-save"
+          />
+        </View>
+      ) : (
         <View style={{ gap: theme.space[5] }}>
           <RowGroup label="Item state" testID="list-settings-item-state">
             <SegmentedControl
@@ -183,39 +213,7 @@ export function ListSettingsSheet({
             </Text>
           </View>
         </View>
-      </Sheet>
-
-      <Sheet
-        open={namingOpen}
-        onClose={() => setNamingOpen(false)}
-        title="Sub-item naming"
-        detent="fit"
-        testID="sub-item-naming-sheet"
-      >
-        <View style={{ gap: theme.space[3] }}>
-          <Field
-            label="Section label"
-            value={sectionLabel}
-            onChangeText={setSectionLabel}
-          />
-          <Field
-            label="Singular label"
-            value={singularLabel}
-            onChangeText={setSingularLabel}
-          />
-          <Field
-            label="Secondary field label"
-            value={secondaryLabel}
-            onChangeText={setSecondaryLabel}
-          />
-          <Button
-            label="Save naming"
-            disabled={settings.busy}
-            onPress={saveNaming}
-            testID="sub-item-naming-save"
-          />
-        </View>
-      </Sheet>
-    </>
+      )}
+    </Sheet>
   );
 }

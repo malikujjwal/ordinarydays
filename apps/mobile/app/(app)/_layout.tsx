@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { View } from 'react-native';
 import { ToastHost } from '@/features/shell/components/ToastHost';
+import { NEW_LIST_ROUTE_OPTIONS } from '@/navigation/listRoutes';
 
 /**
  * The signed-in group.
@@ -30,6 +31,7 @@ export default function AppLayout() {
           name="compose"
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
+        <Stack.Screen name="lists/new" options={NEW_LIST_ROUTE_OPTIONS} />
       </Stack>
       <ToastHost />
     </View>

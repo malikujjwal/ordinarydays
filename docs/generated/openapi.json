@@ -10375,7 +10375,7 @@
       },
       "delete": {
         "summary": "Delete an item, reversibly",
-        "description": "Removes the ranked row and its identity locator, and leaves a replay-window tombstone holding the exact deletion snapshot — the item, its rank, its current viewer links and the matching Activity provenance — under a single-use Undo operation. Answers `{ affectedCount, undoToken, undoExpiresAt }` rather than the deleted row, because a client must not send row contents back as authority. `undoExpiresAt` is the UI’s 6-second offer deadline, not the server’s replay deadline: an Undo the user has already accepted stays valid for the shared retention window, so an offline inverse cannot expire in transit. Restoring is `POST /v1/lists/{id}/undo`.",
+        "description": "Removes the ranked row and its identity locator, and leaves a replay-window tombstone holding the exact deletion snapshot — the item, its rank, its current viewer links and the matching Activity provenance — under a single-use Undo operation. Answers `{ affectedCount, undoToken, undoExpiresAt }` rather than the deleted row, because a client must not send row contents back as authority. `undoExpiresAt` is the UI’s 6-second offer deadline, not the server’s replay deadline: an Undo the user has already accepted stays valid for the shared retention window, so an offline inverse cannot expire in transit. Requires `Idempotency-Key`, so a native outbox replay recovers the exact same opaque Undo receipt instead of issuing a second delete. Restoring is `POST /v1/lists/{id}/undo`.",
         "tags": [
           "lists"
         ],
@@ -10433,6 +10433,16 @@
                     "data",
                     "meta"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or malformed `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

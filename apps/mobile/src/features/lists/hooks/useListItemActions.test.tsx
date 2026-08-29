@@ -12,17 +12,21 @@ import { useListItemActions } from './useListItemActions';
  * Deleting one item, and the six seconds it can be taken back in
  * (§P3-29, §P3-10, `interaction-contract.md` §4.1, §4.2).
  *
- * What is under test is the **timing and the token**: the request goes on the tap rather than
- * at the end of the window (P2-24), the offered window comes from the server's `undoExpiresAt`,
- * and Undo is one compensating call carrying the opaque token and its own key. Nothing here
- * reconstructs a row, and the test asserts that by asserting what is sent.
+ * Web sends on the tap and uses the response deadline/token. Native commits on the tap and
+ * accepts Undo offline; its dependent compensation receives that token in the sync engine.
  */
 
 const calls = vi.hoisted(() => ({
+  useDelete: vi.fn(),
+  uuid: vi.fn(() => 'inverse-key'),
   remove: vi.fn(),
   undo: vi.fn(),
   patch: vi.fn(),
   activity: vi.fn(),
+  prepareDelete: vi.fn(),
+  undoDelete: vi.fn(),
+  commitDelete: vi.fn(),
+  requestDeleteSync: vi.fn(),
 }));
 
 vi.mock('@od/shared/client', async (importOriginal) => ({
@@ -33,7 +37,11 @@ vi.mock('@od/shared/client', async (importOriginal) => ({
   getActivity: calls.activity,
 }));
 
-vi.mock('expo-crypto', () => ({ randomUUID: () => 'inverse-key' }));
+vi.mock('expo-crypto', () => ({ randomUUID: calls.uuid }));
+
+vi.mock('./useDeleteListItem', () => ({
+  useDeleteListItem: calls.useDelete,
+}));
 
 const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const NOW = '2026-08-27T14:00:00.000Z' as Instant;
@@ -52,11 +60,13 @@ function wrapper({ children }: { children: ReactNode }) {
 
 function setup() {
   const onSaved = vi.fn();
+  const onRemoving = vi.fn();
   const onRemoved = vi.fn();
-  const { result } = renderHook(() => useListItemActions({ onSaved, onRemoved }), {
-    wrapper,
-  });
-  return { actions: result, onSaved, onRemoved };
+  const { result } = renderHook(
+    () => useListItemActions({ onSaved, onRemoving, onRemoved }),
+    { wrapper },
+  );
+  return { actions: result, onSaved, onRemoving, onRemoved };
 }
 
 const receipt = (expiresAt: string) => ({
@@ -67,8 +77,14 @@ const receipt = (expiresAt: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  calls.useDelete.mockReturnValue({ kind: 'online' });
+  calls.uuid.mockReset();
+  calls.uuid.mockReturnValue('inverse-key');
   useToast.setState({ current: undefined });
   calls.patch.mockResolvedValue(ITEM);
+  calls.prepareDelete.mockResolvedValue(undefined);
+  calls.undoDelete.mockResolvedValue(undefined);
+  calls.commitDelete.mockResolvedValue(undefined);
 });
 
 describe('delete', () => {
@@ -79,7 +95,14 @@ describe('delete', () => {
     act(() => actions.current.remove(ITEM));
 
     // On the tap, not at the end of the window (P2-24).
-    expect(calls.remove).toHaveBeenCalledWith(expect.anything(), LIST_ID, ITEM.itemId);
+    await waitFor(() =>
+      expect(calls.remove).toHaveBeenCalledWith(
+        expect.anything(),
+        LIST_ID,
+        ITEM.itemId,
+        'inverse-key',
+      ),
+    );
     await waitFor(() => expect(onRemoved).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
 
@@ -120,6 +143,67 @@ describe('delete', () => {
     const toast = useToast.getState().current;
     expect(toast?.message).toBe('Something went wrong.');
     expect(toast && 'action' in toast ? toast.action?.label : undefined).toBe('Retry');
+  });
+});
+
+describe('native durable delete', () => {
+  beforeEach(() => {
+    calls.useDelete.mockReturnValue({
+      kind: 'durable',
+      prepare: calls.prepareDelete,
+      undo: calls.undoDelete,
+      commit: calls.commitDelete,
+      requestSync: calls.requestDeleteSync,
+    });
+    calls.uuid.mockReturnValueOnce('delete-key').mockReturnValueOnce('undo-key');
+  });
+
+  it('offers Undo immediately and leaves every network write to the ordered sync lane', async () => {
+    const { actions, onRemoving } = setup();
+
+    act(() => actions.current.remove(ITEM));
+
+    await waitFor(() =>
+      expect(calls.prepareDelete).toHaveBeenCalledWith(ITEM, 'delete-key'),
+    );
+    expect(onRemoving).toHaveBeenCalledTimes(1);
+    expect(calls.requestDeleteSync).toHaveBeenCalledTimes(1);
+    expect(calls.remove).not.toHaveBeenCalled();
+    expect(useToast.getState().current).toEqual(
+      expect.objectContaining({
+        kind: 'undo',
+        message: 'Chicken deleted',
+        duration: 6000,
+      }),
+    );
+  });
+
+  it('accepts Undo locally while offline and queues the dependent compensation', async () => {
+    const { actions, onRemoving, onRemoved } = setup();
+    act(() => actions.current.remove(ITEM));
+    await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
+
+    act(() => useToast.getState().undo());
+
+    await waitFor(() =>
+      expect(calls.undoDelete).toHaveBeenCalledWith('delete-key', 'undo-key'),
+    );
+    expect(calls.undo).not.toHaveBeenCalled();
+    expect(calls.remove).not.toHaveBeenCalled();
+    expect(calls.requestDeleteSync).toHaveBeenCalledTimes(2);
+    expect(onRemoving).toHaveBeenCalledTimes(2);
+    expect(onRemoved).not.toHaveBeenCalled();
+  });
+
+  it('retires an untouched offer without delaying or repeating the delete', async () => {
+    const { actions } = setup();
+    act(() => actions.current.remove(ITEM));
+    await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
+
+    act(() => useToast.getState().dismiss());
+
+    await waitFor(() => expect(calls.commitDelete).toHaveBeenCalledWith('delete-key'));
+    expect(calls.remove).not.toHaveBeenCalled();
   });
 });
 

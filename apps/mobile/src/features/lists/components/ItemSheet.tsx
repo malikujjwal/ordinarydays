@@ -63,7 +63,11 @@ export function ItemSheet({
   testID = 'item-sheet',
 }: ItemSheetProps) {
   const theme = useTheme();
-  const actions = useListItemActions({ onSaved: onChanged, onRemoved });
+  const actions = useListItemActions({
+    onSaved: onChanged,
+    onRemoving: onChanged,
+    onRemoved,
+  });
   const provenance = itemProvenance(item);
   const progress = item.features?.progress;
   const place = item.features?.place;

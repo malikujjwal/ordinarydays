@@ -1,6 +1,6 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { ActivityOutcome } from '@od/shared/types';
-import { changesRecurrenceTopology } from '@/lib/mutationKeys';
+import { changesRecurrenceTopology, isListMutation } from '@/lib/mutationKeys';
 import type {
   ActivityCompletionVariables,
   ActivityCreateVariables,
@@ -415,6 +415,19 @@ export class NativeActivityActionCoordinator {
               intentId,
               freshIntentId,
             );
+            if (isListMutation(retried, 'itemUndo')) {
+              await this.outbox.reidentifyListItemUndoIntent(
+                transaction.database,
+                intentId,
+                freshIntentId,
+              );
+            } else {
+              await this.outbox.reidentifyListItemDeleteUndoOffer(
+                transaction.database,
+                intentId,
+                freshIntentId,
+              );
+            }
             const projected = await this.listService.reprojectRetry(
               transaction,
               this.ownerUserId,

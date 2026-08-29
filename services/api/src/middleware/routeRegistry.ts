@@ -48,12 +48,13 @@ interface RouteEntryBase {
    */
 }
 
-/** Every POST is classified; the List settings PATCH opts into replay protection as well. */
+/** Every POST is classified; selected PATCH and DELETE routes opt into replay protection. */
 export type RouteEntry =
   | (RouteEntryBase & { readonly method: 'POST'; readonly mutates: boolean })
   | (RouteEntryBase & { readonly method: 'PATCH'; readonly mutates?: boolean })
+  | (RouteEntryBase & { readonly method: 'DELETE'; readonly mutates?: boolean })
   | (RouteEntryBase & {
-      readonly method: Exclude<RouteMethod, 'POST' | 'PATCH'>;
+      readonly method: Exclude<RouteMethod, 'POST' | 'PATCH' | 'DELETE'>;
       readonly mutates?: never;
     });
 
@@ -237,7 +238,12 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   },
   { method: 'GET', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
   { method: 'PATCH', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
-  { method: 'DELETE', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
+  {
+    method: 'DELETE',
+    pattern: '/v1/lists/:id/items/:itemId',
+    auth: 'authenticated',
+    mutates: true,
+  },
   /**
    * The optional bridge to Activities (P3-13). Creating, so it takes an `Idempotency-Key`:
    * a retry whose first response was lost must not produce a second Plan.

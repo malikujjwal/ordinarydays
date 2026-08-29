@@ -1097,6 +1097,31 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
       `);
     },
   },
+  {
+    version: 15,
+    name: 'durable-list-item-delete-undo',
+    /**
+     * Keeps the optimistic snapshot and the server-authored receipt across the six-second
+     * offer. Undo may be accepted before the delete response exists, so the dependent durable
+     * intent and its token are linked here rather than held in component memory.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE list_item_delete_undo_offers (
+          original_intent_id TEXT PRIMARY KEY NOT NULL,
+          current_intent_id TEXT UNIQUE NOT NULL,
+          inverse_intent_id TEXT,
+          list_id TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          previous_json TEXT NOT NULL,
+          undo_token TEXT,
+          undo_expires_at TEXT,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX list_item_delete_undo_offers_list
+          ON list_item_delete_undo_offers (list_id, created_at);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

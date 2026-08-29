@@ -3799,6 +3799,9 @@ describe('serialized native convergence guard', () => {
       patchItem: async () => {
         throw new Error('unexpected list item PATCH');
       },
+      removeItem: async () => {
+        throw new Error('unexpected list item DELETE');
+      },
       patch,
       remove: async () => {
         throw new Error('unexpected List DELETE');
@@ -3890,6 +3893,9 @@ describe('serialized native convergence guard', () => {
       patchItem: async () => {
         throw new Error('unexpected list item PATCH');
       },
+      removeItem: async () => {
+        throw new Error('unexpected list item DELETE');
+      },
       patch: patchSettings,
       remove: async () => {
         throw new Error('unexpected List DELETE');
@@ -3923,8 +3929,11 @@ describe('serialized native convergence guard', () => {
     expect(await lists.read()).toEqual([acknowledged]);
     expect(await outbox.all()).toEqual([]);
     expect(await outbox.listArchiveUndoOffer(database, 'upgrade-intent')).toMatchObject({
-      undoToken: 'server-upgrade-token',
-      undoExpiresAt: '2026-08-20T00:00:06.000Z',
+      state: {
+        kind: 'receipt_ready',
+        undoToken: 'server-upgrade-token',
+        undoExpiresAt: '2026-08-20T00:00:06.000Z',
+      },
     });
   });
 
@@ -3986,6 +3995,9 @@ describe('serialized native convergence guard', () => {
       },
       patchItem: async () => {
         throw new Error('unexpected list item PATCH');
+      },
+      removeItem: async () => {
+        throw new Error('unexpected list item DELETE');
       },
       patch: async () => {
         throw new Error('unexpected List PATCH');
@@ -4102,6 +4114,9 @@ describe('serialized native convergence guard', () => {
         },
         patchItem: async () => {
           throw new Error('unexpected list item PATCH');
+        },
+        removeItem: async () => {
+          throw new Error('unexpected list item DELETE');
         },
         patch: async () => {
           throw new Error('unexpected List PATCH');
@@ -4391,6 +4406,9 @@ describe('serialized native convergence guard', () => {
           },
           patchItem: async () => {
             throw new Error('unexpected list item PATCH');
+          },
+          removeItem: async () => {
+            throw new Error('unexpected list item DELETE');
           },
           patch: async () => {
             throw new Error('unexpected List PATCH');
@@ -4951,6 +4969,610 @@ describe('serialized native convergence guard', () => {
         expect((await items.read(LIST_ID)).map((item) => item.title)).toEqual([
           'Oat milk',
         ]);
+      });
+
+      it('keeps the newest progress count through a stale pull after rapid taps', async () => {
+        if (database === undefined) throw new Error('missing rapid progress database');
+        const initial = itemHarness(database);
+        await transactions.run((transaction) =>
+          initial.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 0, doneCount: 0 }),
+          ]),
+        );
+        await transactions.run((transaction) =>
+          initial.listService.createItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'create-milk',
+            idempotencyKey: 'create-milk',
+            input: { itemId: ITEM_ID, title: 'Milk' },
+            rank: 'm',
+          }),
+        );
+        await transactions.run((transaction) =>
+          outbox.acknowledge(transaction.database, 'create-milk'),
+        );
+        for (const [intentId, state] of [
+          ['tick-one', 'done'],
+          ['tick-two', 'open'],
+          ['tick-three', 'done'],
+        ] as const) {
+          await transactions.run((transaction) =>
+            initial.listService.patchItem(transaction, {
+              listId: LIST_ID,
+              itemId: ITEM_ID,
+              intentId,
+              idempotencyKey: intentId,
+              input: { state },
+            }),
+          );
+        }
+        expect((await initial.lists.read())[0]?.doneCount).toBe(1);
+
+        const sync = itemEngine(initial.lists, initial.items, {
+          listDetail: async () => ({
+            list: listRow({ itemCount: 1, doneCount: 0 }),
+            items: [row(ITEM_ID, 'm', 'Milk')],
+          }),
+        });
+
+        await sync.pullListDetail(LIST_ID);
+        sync.stop();
+
+        expect((await initial.items.read(LIST_ID))[0]?.state).toBe('done');
+        expect((await initial.lists.read())[0]?.doneCount).toBe(1);
+      });
+
+      it('keeps pending list settings through a detail pull', async () => {
+        if (database === undefined) throw new Error('missing settings pull database');
+        const built = itemHarness(database);
+        const current = listRow();
+        const pendingMode = { mode: 'none' as const };
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [current]);
+          await built.listService.patchSettings(
+            transaction,
+            current,
+            { itemStateMode: pendingMode },
+            'change-state-mode',
+          );
+        });
+        expect((await built.lists.read())[0]?.itemStateMode).toEqual(pendingMode);
+
+        const sync = itemEngine(built.lists, built.items, {
+          listDetail: async () => ({ list: current, items: [] }),
+        });
+
+        await sync.pullListDetail(LIST_ID);
+        sync.stop();
+
+        expect((await built.lists.read())[0]?.itemStateMode).toEqual(pendingMode);
+      });
+
+      it('does not let an earlier checkbox acknowledgement resurrect a deleted row', async () => {
+        if (database === undefined) throw new Error('missing ordered delete database');
+        const built = await withPendingEdit(database, { state: 'done' });
+        await transactions.run((transaction) =>
+          built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-milk',
+            idempotencyKey: 'delete-milk',
+          }),
+        );
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+
+        const patchItem = vi.fn(async () => ({
+          ...row(ITEM_ID, 'm', 'Milk'),
+          state: 'done' as const,
+        }));
+        const removeItem = vi.fn(async () => ({
+          affectedCount: 1,
+          undoToken: 'undo-delete-milk',
+          undoExpiresAt: '2026-08-28T09:00:06.000Z',
+        }));
+        const sync = itemEngine(built.lists, built.items, {}, { patchItem, removeItem });
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(patchItem).toHaveBeenCalledTimes(1);
+        expect(removeItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID, 'delete-milk');
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      it('lets a later delete supersede a permanently rejected checkbox edit', async () => {
+        if (database === undefined)
+          throw new Error('missing superseding delete database');
+        const built = await withPendingEdit(database, { state: 'done' });
+        await transactions.run((transaction) =>
+          built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-after-rejected-tick',
+            idempotencyKey: 'delete-after-rejected-tick',
+          }),
+        );
+        const removeItem = vi.fn(async () => ({
+          affectedCount: 1,
+          undoToken: 'undo-after-rejected-tick',
+          undoExpiresAt: '2026-08-28T09:00:06.000Z',
+        }));
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          { listItem: async () => row(ITEM_ID, 'm', 'Milk') },
+          {
+            patchItem: async () => {
+              throw new ApiError('validation_failed', 'No.', 400, 'req-rejected-tick');
+            },
+            removeItem,
+          },
+        );
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(removeItem).toHaveBeenCalledTimes(1);
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      it('restores canonical progress when Undo follows a rejected checkbox edit and delete', async () => {
+        if (database === undefined)
+          throw new Error('missing rejected tick delete Undo database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 1, doneCount: 0 }),
+          ]);
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            { rankVersion: 3, complete: true },
+          );
+          await built.listService.patchItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'rejected-tick-before-delete',
+            idempotencyKey: 'rejected-tick-before-delete',
+            input: { state: 'done' },
+          });
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-after-rejected-progress',
+            idempotencyKey: 'delete-after-rejected-progress',
+          });
+        });
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          { listItem: async () => row(ITEM_ID, 'm', 'Milk') },
+          {
+            patchItem: async () => {
+              throw new ApiError('validation_failed', 'No.', 400, 'req-progress-tick');
+            },
+            removeItem: async () => ({
+              affectedCount: 1,
+              undoToken: 'undo-progress-delete',
+              undoExpiresAt: '2026-08-28T09:00:06.000Z',
+            }),
+            undo: async () => ({ outcome: 'applied', affectedCount: 1 }),
+          },
+        );
+
+        await sync.syncNow();
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'delete-after-rejected-progress',
+            'undo-after-rejected-progress',
+          ),
+        );
+
+        expect((await built.items.read(LIST_ID))[0]?.state).toBe('open');
+        expect((await built.lists.read())[0]?.doneCount).toBe(0);
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect((await built.items.read(LIST_ID))[0]?.state).toBe('open');
+        expect((await built.lists.read())[0]?.doneCount).toBe(0);
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      it('fills an offline accepted item Undo from the forward receipt and drains it in order', async () => {
+        if (database === undefined) throw new Error('missing durable item Undo database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 1, doneCount: 0 }),
+          ]);
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            {
+              rankVersion: 3,
+              complete: true,
+            },
+          );
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-before-offline-undo',
+            idempotencyKey: 'delete-before-offline-undo',
+          });
+        });
+        const claimed = await transactions.run((transaction) =>
+          outbox.claimNext(transaction.database),
+        );
+        expect(claimed?.status).toBe('in_flight');
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'delete-before-offline-undo',
+            'restore-after-delete',
+          ),
+        );
+        await transactions.run((transaction) =>
+          outbox.requeue(transaction.database, 'delete-before-offline-undo'),
+        );
+        expect((await built.items.read(LIST_ID))[0]?.title).toBe('Milk');
+
+        const calls: string[] = [];
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          { listItem: async () => row(ITEM_ID, 'm', 'Milk') },
+          {
+            removeItem: async () => {
+              calls.push('delete');
+              return {
+                affectedCount: 1,
+                undoToken: 'opaque-item-token',
+                undoExpiresAt: '2026-08-28T09:00:06.000Z',
+              };
+            },
+            undo: async (_listId, undoToken) => {
+              calls.push(`undo:${undoToken}`);
+              return { outcome: 'applied', affectedCount: 1 };
+            },
+          },
+        );
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(calls).toEqual(['delete', 'undo:opaque-item-token']);
+        expect((await built.items.read(LIST_ID))[0]?.title).toBe('Milk');
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      it('installs the server-restored item after a successful durable Undo', async () => {
+        if (database === undefined)
+          throw new Error('missing canonical item Undo database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 1, doneCount: 0 }),
+          ]);
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            { rankVersion: 3, complete: true },
+          );
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-before-canonical-undo',
+            idempotencyKey: 'delete-before-canonical-undo',
+          });
+        });
+        await transactions.run((transaction) => outbox.claimNext(transaction.database));
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'delete-before-canonical-undo',
+            'canonical-undo',
+          ),
+        );
+        await transactions.run((transaction) =>
+          outbox.requeue(transaction.database, 'delete-before-canonical-undo'),
+        );
+        const canonical = {
+          ...row(ITEM_ID, 'q', 'Milk from server'),
+          note: 'Restored from the server tombstone',
+        };
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          { listItem: async () => canonical },
+          {
+            removeItem: async () => ({
+              affectedCount: 1,
+              undoToken: 'canonical-item-token',
+              undoExpiresAt: '2026-08-28T09:00:06.000Z',
+            }),
+            undo: async () => ({ outcome: 'applied', affectedCount: 1 }),
+          },
+        );
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(await built.items.read(LIST_ID)).toEqual([canonical]);
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      it('retries a rejected item Undo as a fresh durable compensation', async () => {
+        if (database === undefined) throw new Error('missing item Undo Retry database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 1, doneCount: 0 }),
+          ]);
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            { rankVersion: 3, complete: true },
+          );
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-before-rejected-undo',
+            idempotencyKey: 'delete-before-rejected-undo',
+          });
+        });
+        await transactions.run((transaction) => outbox.claimNext(transaction.database));
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'delete-before-rejected-undo',
+            'rejected-item-undo',
+          ),
+        );
+        await transactions.run((transaction) =>
+          outbox.requeue(transaction.database, 'delete-before-rejected-undo'),
+        );
+        const failing = itemEngine(
+          built.lists,
+          built.items,
+          {},
+          {
+            removeItem: async () => ({
+              affectedCount: 1,
+              undoToken: 'retry-item-token',
+              undoExpiresAt: '2026-08-28T09:00:06.000Z',
+            }),
+            undo: async () => {
+              throw new ApiError('validation_failed', 'No.', 400, 'req-undo-rejected');
+            },
+          },
+        );
+
+        await expect(failing.syncNow()).rejects.toThrow('No.');
+        failing.stop();
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+        expect(await outbox.get(database, 'rejected-item-undo')).toMatchObject({
+          status: 'needs_attention',
+        });
+
+        const retrySync = itemEngine(
+          built.lists,
+          built.items,
+          { listItem: async () => row(ITEM_ID, 'm', 'Milk') },
+          { undo: async () => ({ outcome: 'applied', affectedCount: 1 }) },
+        );
+        const coordinator = new NativeActivityActionCoordinator(
+          OWNER,
+          transactions,
+          service,
+          outbox,
+          recoveryOnly(retrySync),
+          undefined,
+          built.listService,
+        );
+
+        const retried = await coordinator.retryBlocked(
+          'rejected-item-undo',
+          'retry-item-undo',
+          clock,
+        );
+
+        expect(retried.kind).toBe('accepted');
+        expect((await built.items.read(LIST_ID))[0]?.title).toBe('Milk');
+        expect(await outbox.get(database, 'retry-item-undo')).toMatchObject({
+          status: 'queued',
+          mutationKey: ['list', 'item-undo'],
+        });
+        expect(
+          await outbox.listItemDeleteUndoOffer(database, 'delete-before-rejected-undo'),
+        ).toMatchObject({
+          state: {
+            kind: 'accepted_receipt_ready',
+            inverseIntentId: 'retry-item-undo',
+          },
+        });
+
+        await retrySync.syncNow();
+        retrySync.stop();
+
+        expect(await outbox.all()).toEqual([]);
+      });
+
+      it('discards a rejected item Undo without orphaning its forward receipt', async () => {
+        if (database === undefined) throw new Error('missing item Undo Discard database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            { rankVersion: 3, complete: true },
+          );
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-before-discarded-undo',
+            idempotencyKey: 'delete-before-discarded-undo',
+          });
+        });
+        await transactions.run((transaction) => outbox.claimNext(transaction.database));
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'delete-before-discarded-undo',
+            'discarded-item-undo',
+          ),
+        );
+        await transactions.run((transaction) =>
+          outbox.requeue(transaction.database, 'delete-before-discarded-undo'),
+        );
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          {},
+          {
+            removeItem: async () => ({
+              affectedCount: 1,
+              undoToken: 'discard-item-token',
+              undoExpiresAt: '2026-08-28T09:00:06.000Z',
+            }),
+            undo: async () => {
+              throw new ApiError('validation_failed', 'No.', 400, 'req-undo-discard');
+            },
+          },
+        );
+        await expect(sync.syncNow()).rejects.toThrow('No.');
+
+        const coordinator = new NativeActivityActionCoordinator(
+          OWNER,
+          transactions,
+          service,
+          outbox,
+          recoveryOnly(sync),
+          undefined,
+          built.listService,
+        );
+
+        await expect(
+          coordinator.discardBlocked('discarded-item-undo', clock),
+        ).resolves.toBe(true);
+        sync.stop();
+
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+        expect(await outbox.all()).toEqual([]);
+        await expect(
+          outbox.listItemDeleteUndoOffer(database, 'delete-before-discarded-undo'),
+        ).resolves.toBeUndefined();
+      });
+
+      it('settles an accepted Undo when the server says the deleted item was already absent', async () => {
+        if (database === undefined)
+          throw new Error('missing already absent item Undo database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 1, doneCount: 0 }),
+          ]);
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            { rankVersion: 3, complete: true },
+          );
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-already-absent',
+            idempotencyKey: 'delete-already-absent',
+          });
+        });
+        await transactions.run((transaction) => outbox.claimNext(transaction.database));
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'delete-already-absent',
+            'undo-already-absent',
+          ),
+        );
+        await transactions.run((transaction) =>
+          outbox.requeue(transaction.database, 'delete-already-absent'),
+        );
+        const undo = vi.fn(async () => ({ outcome: 'applied', affectedCount: 1 }));
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          {},
+          { removeItem: async () => ({ affectedCount: 0 }), undo },
+        );
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(undo).not.toHaveBeenCalled();
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+        expect((await built.lists.read())[0]?.itemCount).toBe(0);
+        expect(await outbox.all()).toEqual([]);
+        await expect(
+          outbox.listItemDeleteUndoOffer(database, 'delete-already-absent'),
+        ).resolves.toBeUndefined();
+      });
+
+      it('resolves a rejected delete silently when its durable Undo was already accepted', async () => {
+        if (database === undefined)
+          throw new Error('missing compensated delete database');
+        const built = itemHarness(database);
+        await transactions.run(async (transaction) => {
+          await built.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 1, doneCount: 0 }),
+          ]);
+          await built.items.replaceFirstPage(
+            transaction,
+            LIST_ID,
+            [row(ITEM_ID, 'm', 'Milk')],
+            { rankVersion: 3, complete: true },
+          );
+          await built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'rejected-delete-with-undo',
+            idempotencyKey: 'rejected-delete-with-undo',
+          });
+        });
+        await transactions.run((transaction) => outbox.claimNext(transaction.database));
+        await transactions.run((transaction) =>
+          built.listService.undoDeletedItem(
+            transaction,
+            'rejected-delete-with-undo',
+            'accepted-undo-for-rejected-delete',
+          ),
+        );
+        await transactions.run((transaction) =>
+          outbox.requeue(transaction.database, 'rejected-delete-with-undo'),
+        );
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          {},
+          {
+            removeItem: async () => {
+              throw new ApiError('validation_failed', 'No.', 400, 'req-rejected-delete');
+            },
+          },
+        );
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect((await built.items.read(LIST_ID))[0]?.title).toBe('Milk');
+        expect(await outbox.all()).toEqual([]);
       });
     });
   });

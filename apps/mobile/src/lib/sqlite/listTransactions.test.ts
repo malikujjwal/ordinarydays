@@ -203,6 +203,86 @@ describe('native canonical List transactional outbox', () => {
     );
   });
 
+  it('derives card progress from the latest local row across rapid done and undone taps', async () => {
+    const { lists, service, transactions } = await install();
+    for (const [intentId, state] of [
+      ['intent_done_1', 'done'],
+      ['intent_open', 'open'],
+      ['intent_done_2', 'done'],
+    ] as const) {
+      await transactions.run((transaction) =>
+        service.patchItem(transaction, {
+          listId: LIST.listId,
+          itemId: ITEM.itemId,
+          intentId,
+          idempotencyKey: intentId,
+          input: { state },
+        }),
+      );
+    }
+
+    expect((await lists.read())[0]).toEqual(
+      expect.objectContaining({ itemCount: 1, doneCount: 1 }),
+    );
+  });
+
+  it('removes an item immediately and queues its delete behind rapid state writes', async () => {
+    const { items, lists, outbox, service, transactions } = await install();
+
+    await transactions.run((transaction) =>
+      service.patchItem(transaction, {
+        listId: LIST.listId,
+        itemId: ITEM.itemId,
+        intentId: 'intent_item_done_before_delete',
+        idempotencyKey: 'intent_item_done_before_delete',
+        input: { state: 'done' },
+      }),
+    );
+    await transactions.run((transaction) =>
+      service.deleteItem(transaction, {
+        listId: LIST.listId,
+        itemId: ITEM.itemId,
+        intentId: 'intent_item_delete',
+        idempotencyKey: 'intent_item_delete',
+      }),
+    );
+
+    expect(await items.read(LIST.listId)).toEqual([]);
+    expect((await lists.read())[0]).toEqual(
+      expect.objectContaining({ itemCount: 0, doneCount: 0 }),
+    );
+    expect((await outbox.all()).map((intent) => intent.mutationKey)).toEqual([
+      ['list', 'item-patch'],
+      ['list', 'item-delete'],
+    ]);
+  });
+
+  it('cancels an unsent delete and restores its exact row when Undo is accepted offline', async () => {
+    const { items, lists, outbox, service, transactions } = await install();
+    await transactions.run((transaction) =>
+      service.deleteItem(transaction, {
+        listId: LIST.listId,
+        itemId: ITEM.itemId,
+        intentId: 'intent_item_delete_then_undo',
+        idempotencyKey: 'intent_item_delete_then_undo',
+      }),
+    );
+
+    await transactions.run((transaction) =>
+      service.undoDeletedItem(
+        transaction,
+        'intent_item_delete_then_undo',
+        'intent_item_delete_inverse',
+      ),
+    );
+
+    expect(await items.read(LIST.listId)).toEqual([ITEM]);
+    expect((await lists.read())[0]).toEqual(
+      expect.objectContaining({ itemCount: 1, doneCount: 0 }),
+    );
+    expect(await outbox.all()).toEqual([]);
+  });
+
   it('refuses a queued reorder so drag can never replay against stale neighbours', async () => {
     const { service, transactions } = await install();
     await expect(

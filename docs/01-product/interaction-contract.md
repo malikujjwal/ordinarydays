@@ -157,6 +157,14 @@ Event**, also fixed and unselected; General is an explicit choice, never a hidde
 fallback. List item requires an explicit destination unless the current list already names
 it.
 
+After the user chooses **List item**, the item composer opens immediately. There is no
+intermediate `Which list?` screen. In global context the composer contains a required `Add to`
+section with no List selected plus `New list`; choosing a List updates the named commit in
+place. In an open List, that List is already visible as the destination. `New list` opens the
+ordinary unselected catalogue and returns to the same composer with the new List selected;
+title and note remain intact. The item still is not written until the user taps
+`Add to <list name>`.
+
 Text, photos, links, and AI are enabled only after those choices. They may suggest
 compatible field values but never object kind, Plan kind, people, sharing, destination,
 reminder/notification state, or the save action. A reminder is set only by its visible
@@ -166,10 +174,10 @@ Final controls name the write: `Save task`, `Save plan`, or
 unselected **Just me / Choose people** choice; membership is never copied to the Plan,
 whether the source list is private or shared.
 
-General `New list` opens the fixed style catalogue with nothing selected, then a title step
-for the chosen style. A typed destination already chosen by the user may constrain eligible
-rows—for Watch, exactly Watchlist / Movies to watch / TV shows in canonical relative order—
-but nothing is selected. There is no name-first matching, recommendation, ranking, or fallback.
+General `New list` opens the fixed seven-choice catalogue with nothing selected, then a title
+step for the chosen choice. A calling flow may return with the created List selected, but it
+never filters, reorders or preselects the catalogue from a desired destination slot. There is
+no name-first matching, recommendation, ranking or fallback.
 
 `objectKind` persists Task versus Plan. Tasks cannot gain participants or expenses; a
 coordinated to-do is explicitly **Plan → General** or another visible Plan kind. An explicit
@@ -177,6 +185,23 @@ Task → Plan conversion requires a visible Plan-kind choice. Plan → Task is b
 participants, expenses, and prep children are removed, then previews any type-specific
 field loss. A Plan-kind-only change cannot change `objectKind`; edits and capture never
 invoke conversion.
+
+### 1a.4 Settings are configuration, not a wizard
+
+A settings surface groups independent controls by consequence and keeps the user on the same
+object. A boolean switch applies the named boolean; a segmented control changes one small
+mutually exclusive mode; a row with a chevron opens one focused editor or chooser. No row
+combines a switch and chevron, and no chevron is decorative.
+
+Reversible independent settings apply immediately and optimistically, with the exact Undo
+policy in §4. They do not wait behind a page-wide `Save`, `Next` or `Done`. A footer commit is
+reserved for a real multi-field draft. A dependent setting is absent until its parent makes it
+meaningful. First enabling a feature that needs configuration may open one focused child
+surface; subsequent visits summarize the configured value on the parent row and offer `Edit`.
+
+Destructive actions are separated into a final management section and follow §1a.1; danger
+styling never substitutes for a consequence-naming confirmation. These rules apply wherever a
+product spec defines settings. They do not create or specify an app-wide Settings page.
 
 ---
 
@@ -416,7 +441,8 @@ One contract, applied identically everywhere.
 ### 5.2 Empty
 
 Every empty state is: a one-line heading stating the fact, one line of guidance, and at
-most one action. No illustrations, no congratulation, no exclamation marks.
+most one action. No large illustrations, no congratulation, no exclamation marks. A surface
+may use one compact semantic icon only where its product row below explicitly permits it.
 
 Guidance copy says what to add. It never says what the thing will turn into later, and it
 never describes a surface as somewhere things wait — `until`, `yet`, `someday`, `ready to`
@@ -432,7 +458,7 @@ and `turn into` are banned from empty-state copy for exactly that reason
 | Plans → Past, empty | `Nothing here` | `Plans that have happened show up here.` | — |
 | Plans, all three stages empty | `No plans` | `Add something you want to do, on its own or with someone.` | `Add` |
 | Lists index | `No lists yet` | `Keep things you want to remember, track, or organise together.` | `New list` |
-| A list | `Nothing here` | The List's stored `emptyStateCopy`, seeded from the explicitly selected style, says what to add ([`plans-and-lists.md`](plans-and-lists.md) §5.9) | The inline add row |
+| A list | `Start with one item` with one compact List icon tile | The List's stored `emptyStateCopy`, seeded from the explicitly selected style, says what to add ([`plans-and-lists.md`](plans-and-lists.md) §5.9) | `Add item` |
 | Search, no results | `No matches for "zahav"` | — | — |
 | People | `No one yet` | `People appear here when you share a plan or list with them.` | — |
 | Person, no shared plans, active shared lists or balance | `Nothing together yet` | — | `Plan something with Alice` |
@@ -442,7 +468,8 @@ and `turn into` are banned from empty-state copy for exactly that reason
 
 Every empty-state action labelled `Add` is the global Add action: it opens **Task / Plan /
 List item** with nothing selected. The screen the empty state appears on does not choose the
-object.
+object. `Add item` inside an open List is deliberately different: it is a contextual action,
+so it opens the List-item composer with that List visibly selected.
 
 Section-level empty states on Today are specified in
 [`today-and-tasks.md`](today-and-tasks.md#25-empty-states).

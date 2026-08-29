@@ -14,41 +14,29 @@ import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import { type ToastMessage, useToast } from '@/stores/toast';
 import { deletedItemToast } from '../model/itemUndoToast';
 import { remainingUndoOfferMs } from '../model/undoOffer';
+import { useDeleteListItem } from './useDeleteListItem';
 import { usePatchListItem } from './usePatchListItem';
 
 /**
  * Everything the item sheet writes, and the one read it makes (§P3-29).
  *
- * Shared by both platforms. Only the field PATCH differs — `usePatchListItem` resolves to the
- * durable native adapter or the online web one — so composing it here keeps the delete, its
- * Undo and the provenance probe in one file instead of two that would drift.
+ * Shared by both platforms. The field PATCH and delete projection resolve to durable native
+ * adapters or online web branches, so native network writes have one owner: the sync adapter.
  *
- * ## Delete is online-first, on both platforms
+ * ## Delete is local-first on native
  *
- * Deliberate, and the same shape as `useListBulkActions`, which is §P3-10's other half: `Clear
- * checked` and `Uncheck all` already delete items through one online call with the server's
- * opaque token. Undo **is** that token — §P3-10 restores the item id, its previous rank, its
- * live viewer links and its Activity provenance server-side, and the client is forbidden from
- * reconstructing any of it — so an offline delete would have nothing to offer Undo with until
- * its acknowledgement arrived.
- *
- * The consequence is stated rather than hidden: deleting an item needs a connection, and
- * `interaction-contract.md` §5.4's "Undo while offline: works" is not yet true for this action
- * on native. Closing that needs the item-scoped equivalent of the archive Undo offer the outbox
- * already keeps for lists, which is its own task — raised in this PR.
- *
- * The split is why the two callbacks are separate. A field edit is committed **locally** on
- * native, so its refresh is a re-read; a delete is committed on the **server**, so its refresh
- * has to be a pull. One callback for both would make an accepted offline edit ask the network
- * for permission to be displayed, which is the mistake `useListDetail`'s two methods exist to
- * prevent.
+ * Native commits the absent row and an ordered `item-delete` intent together before sending
+ * the replay-protected request. Earlier checkbox writes therefore cannot reinstall the row,
+ * navigation cannot resurrect it, and a lost response reuses the same key to recover the
+ * server's opaque Undo receipt. Undo is another durable intent: it can be accepted while the
+ * delete is offline or still in flight, then receives the opaque token at settlement. Web has
+ * no SQLite projection and keeps the online path.
  *
  * ## The request fires on the tap, never at the end of the window
  *
- * The P2-24 rule (§4.2). `deleteListItem` goes immediately, the toast carries the six seconds
- * from the server's `undoExpiresAt`, and `onUndo` is a **compensating** call. Closing the app
- * mid-window leaves the item deleted, which is the correct outcome for a window nobody acted
- * in.
+ * The P2-24 rule (§4.2). Web calls `deleteListItem` immediately; native commits the intent and
+ * requests its drain immediately. `onUndo` is always a compensation, never a delayed delete.
+ * Closing the app mid-window leaves the item deleted when nobody accepted Undo.
  */
 export interface ListItemActions {
   /**
@@ -99,16 +87,20 @@ function failureToast(error: unknown, message: string, retry: () => void): Toast
 export interface ListItemRefresh {
   /** After an accepted field edit. Native re-reads SQLite; web asks the server. */
   readonly onSaved: () => void;
-  /** After the online delete or its Undo. Both platforms ask the server. */
+  /** Re-reads the local projection after the tap has committed to SQLite. */
+  readonly onRemoving?: () => void;
+  /** After the web-only online delete or its Undo. */
   readonly onRemoved: () => void;
 }
 
 export function useListItemActions({
   onSaved,
+  onRemoving,
   onRemoved,
 }: ListItemRefresh): ListItemActions {
   const clock = useClock();
   const patch = usePatchListItem();
+  const deletion = useDeleteListItem();
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);
@@ -130,7 +122,7 @@ export function useListItemActions({
     [onSaved, patch.patch, show],
   );
 
-  const undo = useCallback(
+  const undoOnline = useCallback(
     (item: ListItemRow, undoToken: string) => {
       // Acceptance owns the singleton toast slot before this request can settle.
       dismiss();
@@ -138,8 +130,11 @@ export function useListItemActions({
       const run = () => {
         void undoListOperation(apiClient, item.listId, undoToken, idempotencyKey)
           .then((response) => {
+            if (response.data.outcome === 'applied') {
+              onRemoved();
+              return;
+            }
             onRemoved();
-            if (response.data.outcome === 'applied') return;
             /*
              * `expired` and `no_longer_applicable` are `200`s: the server was asked to apply a
              * compensation and answered with what happened to it. Saying so is honest; a
@@ -163,8 +158,60 @@ export function useListItemActions({
   const remove = useCallback(
     (item: ListItemRow) => {
       dismiss();
+      const intentId = randomUUID();
+      if (deletion.kind === 'durable') {
+        const run = () => {
+          void deletion
+            .prepare(item, intentId)
+            .then(() => {
+              onRemoving?.();
+              deletion.requestSync();
+              showUndo(
+                deletedItemToast({
+                  title: item.title,
+                  onUndo: () => {
+                    const inverseIntentId = randomUUID();
+                    const acceptUndo = () => {
+                      void deletion
+                        .undo(intentId, inverseIntentId)
+                        .then(() => {
+                          onRemoving?.();
+                          deletion.requestSync();
+                        })
+                        .catch((error: unknown) => {
+                          show(
+                            failureToast(
+                              error,
+                              `Couldn't undo deleting "${item.title}."`,
+                              acceptUndo,
+                            ),
+                          );
+                        });
+                    };
+                    acceptUndo();
+                  },
+                  onCommit: () => {
+                    void deletion.commit(intentId).catch((error: unknown) => {
+                      if (__DEV__) {
+                        console.debug('native_item_delete_offer_commit_failed', {
+                          intentId,
+                          message: error instanceof Error ? error.message : String(error),
+                        });
+                      }
+                    });
+                  },
+                }),
+              );
+            })
+            .catch((error: unknown) => {
+              show(failureToast(error, `Couldn't delete "${item.title}."`, run));
+            });
+        };
+        run();
+        return;
+      }
       const run = () => {
-        void deleteListItem(apiClient, item.listId, item.itemId)
+        void deleteListItem(apiClient, item.listId, item.itemId, intentId)
           .then((result) => {
             onRemoved();
             const duration = remainingUndoOfferMs(result.undoExpiresAt, clock);
@@ -175,7 +222,7 @@ export function useListItemActions({
                 title: item.title,
                 duration,
                 undoExpiresAt: result.undoExpiresAt,
-                onUndo: () => undo(item, result.undoToken),
+                onUndo: () => undoOnline(item, result.undoToken),
                 onCommit: () => undefined,
               }),
             );
@@ -186,7 +233,7 @@ export function useListItemActions({
       };
       run();
     },
-    [clock, dismiss, onRemoved, show, showUndo, undo],
+    [clock, deletion, dismiss, onRemoved, onRemoving, show, showUndo, undoOnline],
   );
 
   const sourceResolves = useCallback(async (activityId: string): Promise<boolean> => {

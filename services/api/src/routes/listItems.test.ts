@@ -91,7 +91,7 @@ const asUser = (userId: string) =>
   createApp({ identityProvider: { resolve: () => Promise.resolve(userId) } });
 
 /**
- * Omitting `headers` mints an `Idempotency-Key` for a `POST`; passing them **replaces** that
+ * Omitting `headers` mints an `Idempotency-Key` for a replay-protected mutation; passing them **replaces** that
  * default outright, which is the only way to send a creating request without one — spreading
  * an empty object over an already-added header cannot remove it.
  */
@@ -108,7 +108,9 @@ const send = (
       headers: {
         'Content-Type': 'application/json',
         ...(headers ??
-          (method === 'POST' ? { 'Idempotency-Key': crypto.randomUUID() } : {})),
+          (method === 'POST' || method === 'DELETE'
+            ? { 'Idempotency-Key': crypto.randomUUID() }
+            : {})),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
@@ -263,9 +265,9 @@ describe('the route registry', () => {
   /**
    * P3-13 adds a third mutating POST under this prefix — the bridge. The reads and the
    * `PATCH`/`DELETE` pair stay unmarked: `mutates` gates the idempotency middleware, and a
-   * route that does not create must not demand a key.
+   * replayable delete also requires a key so a lost Undo receipt can be recovered.
    */
-  it('classifies the three creating POSTs as mutating and nothing else', async () => {
+  it('classifies the creating routes and reversible delete as mutating', async () => {
     const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
     const itemRoutes = ROUTE_REGISTRY.filter((entry) =>
       entry.pattern.startsWith('/v1/lists/:id/items'),
@@ -287,7 +289,12 @@ describe('the route registry', () => {
       },
       { method: 'GET', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
       { method: 'PATCH', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
-      { method: 'DELETE', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
+      {
+        method: 'DELETE',
+        pattern: '/v1/lists/:id/items/:itemId',
+        auth: 'authenticated',
+        mutates: true,
+      },
       {
         method: 'POST',
         pattern: '/v1/lists/:id/items/:itemId/schedule',
