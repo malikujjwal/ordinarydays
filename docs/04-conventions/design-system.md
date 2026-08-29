@@ -791,8 +791,7 @@ hairline connector, content to the right:
 
 ### 7.2 Lists — collection cards
 
-The Lists index is a grid of cards (2-up from `medium`, 1-up at `compact`), each list one
-card:
+The Lists index is a 2-up grid of cards at every supported width, each list one card:
 
 ```
  ┌──────────────────────────┐  radius.lg · e2 · surfaceRaised
@@ -1089,9 +1088,9 @@ map onto them:
 
 | Device class | Width | Breakpoint | Layout |
 | --- | --- | --- | --- |
-| Phone | 320–429 | `compact` | Single column, 16 pt gutters, bottom tab bar. **Modal controls present as bottom sheets at the smallest detent that fits the task** (§6.1) — full-screen presentation is reserved for flows whose content requires it. List cards 1-up. Verified at 320 with no horizontal scroll and no clipping. |
+| Phone | 320–429 | `compact` | Single-column screen structure, 16 pt gutters, bottom tab bar. **Modal controls present as bottom sheets at the smallest detent that fits the task** (§6.1) — full-screen presentation is reserved for flows whose content requires it. The Lists index remains a 2-up card grid. Verified at 320 with no horizontal scroll and no clipping. |
 | Large phone | 430–767 | `compact` | Identical structure. The extra width goes to the title column, not to new elements. Avatar stack may show 4. |
-| Tablet | 768–1199 | `medium` | Single column capped at 720 pt and centred; 24 pt gutters; the tab bar becomes a left rail. List cards 2-up. Sheets present as centred cards at 480 pt wide. |
+| Tablet | 768–1199 | `medium` | Single column capped at 720 pt and centred; 24 pt gutters; the tab bar becomes a left rail. List cards remain 2-up. Sheets present as centred cards at 480 pt wide. |
 | Web, wide | ≥ 1200 | `expanded` | **Two panes.** |
 
 **The left rail** (from `medium` up) is the mock's: the `Ordinary Days` wordmark in serif

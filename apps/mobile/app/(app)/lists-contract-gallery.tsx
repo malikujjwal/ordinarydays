@@ -12,6 +12,7 @@ import { ScreenShell, Text, ThemeProvider, useTheme } from '@od/ui';
 import { useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
 import { ListItemRow } from '@/features/lists/components/ListItemRow';
 import { ListSettingsSheet } from '@/features/lists/components/ListSettingsSheet';
@@ -359,9 +360,9 @@ function OverviewFixture() {
         contentContainerStyle={{ gap: theme.space[6], paddingBottom: theme.space[10] }}
       >
         <Text variant="title">Lists contract gallery</Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[4] }}>
+        <ListCardGrid>
           {[...PRESET_LISTS, ...generic].map((list) => (
-            <View key={list.title} style={{ width: 220 }}>
+            <View key={list.title}>
               <ListIndexRow
                 list={list}
                 now={NOW}
@@ -370,7 +371,7 @@ function OverviewFixture() {
               />
             </View>
           ))}
-        </View>
+        </ListCardGrid>
       </ScrollView>
     </ScreenShell>
   );

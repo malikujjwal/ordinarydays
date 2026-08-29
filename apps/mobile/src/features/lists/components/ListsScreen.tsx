@@ -6,13 +6,14 @@ import {
   MoreHorizontal,
   SectionHeader,
   Skeleton,
+  space,
   Text,
   Touchable,
   useBreakpoint,
   useTheme,
 } from '@od/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { TabScreen } from '@/components/TabScreen';
 import { useLists } from '../hooks/useLists';
@@ -29,6 +30,7 @@ import {
   listSwipeActions,
   roleFor,
 } from '../model/listSwipeActions';
+import { ListCardGrid } from './ListCardGrid';
 import { ListIndexMenu } from './ListIndexMenu';
 import { SwipeableListCard } from './SwipeableListCard';
 
@@ -159,7 +161,6 @@ export function ListsScreen({
     [onArchive, onLeave],
   );
 
-  const columns = breakpoint === 'compact' ? 1 : 2;
   const showEmpty =
     mayShowEmptyState({
       visibleCount: active.length,
@@ -169,17 +170,7 @@ export function ListsScreen({
     }) && view.status !== 'error';
 
   const renderCard = (list: List, dimmed: boolean) => (
-    <View
-      key={list.listId}
-      style={{
-        // A 2-up grid from `medium` (§7.2). Flex basis rather than a measured width so the
-        // cards reflow with the window instead of after it.
-        // `DimensionValue` accepts a percentage string; the two literals keep it that type
-        // rather than a widened template string.
-        flexBasis: columns === 1 ? ('100%' as const) : ('50%' as const),
-        padding: theme.space[2],
-      }}
-    >
+    <View key={list.listId}>
       <SwipeableListCard
         list={list}
         now={now}
@@ -196,6 +187,20 @@ export function ListsScreen({
         }
         onAction={(action) => dispatch(list, action)}
       />
+      {dimmed ? (
+        /* One tap to restore, per §5.6. The archived card itself stays inert. */
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel={`Restore ${list.title}`}
+          onPress={() => onRestore(list)}
+          testID={`list-restore-${list.listId}`}
+          style={styles.restoreAction}
+        >
+          <Text variant="footnoteStrong" color="textAction">
+            Restore
+          </Text>
+        </Touchable>
+      ) : null}
     </View>
   );
 
@@ -229,7 +234,9 @@ export function ListsScreen({
       <ScrollView
         onScroll={onScroll}
         scrollEventThrottle={16}
-        contentContainerStyle={{ paddingHorizontal: theme.space[2] }}
+        contentContainerStyle={
+          breakpoint === 'compact' ? styles.compactContent : styles.wideContent
+        }
         testID="lists-scroll"
       >
         {view.isOffline ? (
@@ -298,33 +305,13 @@ export function ListsScreen({
             testID="lists-empty"
           />
         ) : (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-            {active.map((list) => renderCard(list, false))}
-          </View>
+          <ListCardGrid>{active.map((list) => renderCard(list, false))}</ListCardGrid>
         )}
 
         {showArchived && archived.length > 0 ? (
           <View style={{ gap: theme.space[2] }}>
             <SectionHeader title="Archived" count={archived.length} />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {archived.map((list) => (
-                <View key={list.listId} style={{ width: '100%' }}>
-                  {renderCard(list, true)}
-                  {/* One tap to restore, per §5.6. The row itself stays inert. */}
-                  <Touchable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Restore ${list.title}`}
-                    onPress={() => onRestore(list)}
-                    testID={`list-restore-${list.listId}`}
-                    style={{ paddingHorizontal: theme.space[4] }}
-                  >
-                    <Text variant="footnoteStrong" color="textAction">
-                      Restore
-                    </Text>
-                  </Touchable>
-                </View>
-              ))}
-            </View>
+            <ListCardGrid>{archived.map((list) => renderCard(list, true))}</ListCardGrid>
           </View>
         ) : null}
       </ScrollView>
@@ -366,3 +353,15 @@ export function ListsScreen({
 
 /** Re-exported for the route, which assembles the archive toast around the mutation. */
 export { archivedListToast };
+
+const styles = StyleSheet.create({
+  compactContent: {
+    paddingHorizontal: space[5],
+  },
+  wideContent: {
+    paddingHorizontal: space[7],
+  },
+  restoreAction: {
+    paddingHorizontal: space[4],
+  },
+});

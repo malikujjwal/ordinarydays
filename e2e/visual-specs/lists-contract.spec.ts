@@ -2,7 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 
 async function openFrame(
   page: Page,
-  frame: 'create' | 'settings' | 'stages' | 'items',
+  frame: 'create' | 'settings' | 'stages' | 'items' | 'overview',
   scheme: 'light' | 'dark' = 'light',
 ) {
   await page.goto(
@@ -13,6 +13,44 @@ async function openFrame(
 }
 
 test.describe('P3-33 production List contracts', () => {
+  for (const { width, gutter } of [
+    { width: 320, gutter: 16 },
+    { width: 768, gutter: undefined },
+    { width: 1200, gutter: undefined },
+  ]) {
+    test(`list cards remain two-up without clipping at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openFrame(page, 'overview');
+
+      const first = page.getByRole('button', { name: /^Untitled list\./ });
+      const second = page.getByRole('button', { name: /^Checklist\./ });
+      const heading = page.getByText('Lists contract gallery');
+      await expect(first).toBeVisible();
+      await expect(second).toBeVisible();
+
+      const [firstBox, secondBox, headingBox] = await Promise.all([
+        first.boundingBox(),
+        second.boundingBox(),
+        heading.boundingBox(),
+      ]);
+      expect(firstBox).not.toBeNull();
+      expect(secondBox).not.toBeNull();
+      expect(headingBox).not.toBeNull();
+      if (firstBox === null || secondBox === null || headingBox === null) return;
+
+      expect(Math.abs(firstBox.y - secondBox.y)).toBeLessThan(1);
+      expect(Math.abs(firstBox.width - secondBox.width)).toBeLessThan(1);
+      expect(secondBox.x - (firstBox.x + firstBox.width)).toBeCloseTo(12, 0);
+      expect(firstBox.x).toBeCloseTo(headingBox.x, 0);
+      if (gutter !== undefined) expect(firstBox.x).toBeCloseTo(gutter, 0);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    });
+  }
+
   test('creation chooser is explicit and unselected', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openFrame(page, 'create');
