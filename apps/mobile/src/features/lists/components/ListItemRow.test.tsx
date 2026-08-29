@@ -25,7 +25,7 @@ function mount(
   subject: ListItemView,
   subjectList = list(),
   handlers = {
-    onToggleChecked: vi.fn(),
+    onToggleChecked: vi.fn(async () => true),
     onOpenLocation: vi.fn(),
   },
 ) {
@@ -51,6 +51,16 @@ describe('the canonical list item shell', () => {
     expect(checkbox.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(checkbox);
     expect(handlers.onToggleChecked).toHaveBeenCalledWith(false);
+  });
+
+  it('turns two rapid presses into check then uncheck before the parent rerenders', () => {
+    const handlers = mount(item({ state: 'open' }));
+    const checkbox = screen.getByTestId('row-checkbox');
+
+    fireEvent.click(checkbox);
+    fireEvent.click(checkbox);
+
+    expect(handlers.onToggleChecked.mock.calls).toEqual([[true], [false]]);
   });
 
   it.each(['open', 'active'] as const)(

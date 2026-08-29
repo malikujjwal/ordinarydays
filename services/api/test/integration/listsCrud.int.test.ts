@@ -66,6 +66,19 @@ const post = (
 const get = (application: ReturnType<AppModule['createApp']>, path: string) =>
   application.fetch(new Request(`http://localhost${path}`));
 
+const patch = (
+  application: ReturnType<AppModule['createApp']>,
+  path: string,
+  body: unknown,
+) =>
+  application.fetch(
+    new Request(`http://localhost${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+
 const del = (application: ReturnType<AppModule['createApp']>, listId: string) =>
   application.fetch(
     new Request(`http://localhost/v1/lists/${listId}`, { method: 'DELETE' }),
@@ -228,6 +241,56 @@ describe('template resolution at creation', () => {
 
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('validation_failed');
+  });
+});
+
+describe('aggregate repair on read', () => {
+  const corruptDoneCount = (listId: string) =>
+    documents.send(
+      new UpdateCommand({
+        TableName: TEST_TABLE,
+        Key: { pk: `LIST#${listId}`, sk: 'META' },
+        UpdateExpression: 'SET #doneCount = :negative',
+        ExpressionAttributeNames: { '#doneCount': 'doneCount' },
+        ExpressionAttributeValues: { ':negative': -1 },
+      }),
+    );
+
+  it('repairs a negative doneCount before returning list detail', async () => {
+    const created = await createListVia(app(), { title: 'Repair detail' });
+    const item = await post(app(), `/v1/lists/${created.listId}/items`, {
+      title: 'Already done',
+    });
+    expect(item.status).toBe(201);
+    const itemBody = await item.json();
+    const marked = await patch(
+      app(),
+      `/v1/lists/${created.listId}/items/${itemBody.data.itemId}`,
+      { state: 'done' },
+    );
+    expect(marked.status).toBe(200);
+    await corruptDoneCount(created.listId);
+
+    const response = await get(app(), `/v1/lists/${created.listId}?includeItems=true`);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.list.doneCount).toBe(1);
+    expect((await rawItem(`LIST#${created.listId}`, 'META'))?.doneCount).toBe(1);
+  });
+
+  it('repairs a negative doneCount before returning the list index', async () => {
+    const created = await createListVia(app(), { title: 'Repair index' });
+    await corruptDoneCount(created.listId);
+
+    const response = await get(app(), '/v1/lists');
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(
+      body.data.find((list: List) => list.listId === created.listId)?.doneCount,
+    ).toBe(0);
+    expect((await rawItem(`LIST#${created.listId}`, 'META'))?.doneCount).toBe(0);
   });
 });
 

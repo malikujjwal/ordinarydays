@@ -256,11 +256,11 @@ export function ListDetailScreen({
                 list={list}
                 item={item}
                 onOpen={() => setOpenItemId(item.itemId)}
-                onToggleChecked={(next) => {
-                  void items.save(item, {
+                onToggleChecked={(next) =>
+                  items.save(item, {
                     state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
-                  });
-                }}
+                  })
+                }
                 {...(item.features?.place === undefined
                   ? {}
                   : { onOpenLocation: () => void openInMaps(item.features?.place) })}

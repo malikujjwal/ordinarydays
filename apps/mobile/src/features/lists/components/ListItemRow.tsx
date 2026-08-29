@@ -1,5 +1,6 @@
 import type { ListItemPlanState, ListItemView } from '@od/shared/types';
 import { Checkbox, Chip, Text, Touchable, useTheme } from '@od/ui';
+import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import {
   checkboxChecked,
@@ -20,7 +21,7 @@ export interface ListItemRowProps {
   viewerPlan?: ListItemPlanState;
   planStateLine?: string;
   onOpen?: () => void;
-  onToggleChecked?: (next: boolean) => void;
+  onToggleChecked?: (next: boolean) => boolean | undefined | Promise<boolean | undefined>;
   onOpenLocation?: () => void;
   onOpenPlan?: () => void;
   testID?: string;
@@ -39,7 +40,30 @@ export function ListItemRow({
 }: ListItemRowProps) {
   const theme = useTheme();
   const checkable = showsCheckbox(list);
-  const checked = checkboxChecked(item);
+  const committedChecked = checkboxChecked(item);
+  const [checked, setChecked] = useState(committedChecked);
+  const toggleRevision = useRef(0);
+
+  useEffect(() => {
+    toggleRevision.current += 1;
+    setChecked(committedChecked);
+  }, [committedChecked]);
+
+  const toggleChecked = (next: boolean) => {
+    const revision = toggleRevision.current + 1;
+    toggleRevision.current = revision;
+    setChecked(next);
+    if (onToggleChecked === undefined) return;
+    void Promise.resolve(onToggleChecked(next))
+      .then((accepted) => {
+        if (accepted === false && toggleRevision.current === revision) {
+          setChecked(committedChecked);
+        }
+      })
+      .catch(() => {
+        if (toggleRevision.current === revision) setChecked(committedChecked);
+      });
+  };
   const place = shownPlace(list, item);
   const stage = stateLabel(list, item);
   const progress = progressLabel(list, item);
@@ -65,7 +89,7 @@ export function ListItemRow({
           checked={checked}
           label={checkboxLabel(item)}
           disabled={onToggleChecked === undefined}
-          {...(onToggleChecked === undefined ? {} : { onChange: onToggleChecked })}
+          {...(onToggleChecked === undefined ? {} : { onChange: toggleChecked })}
           {...id('checkbox')}
         />
       ) : null}

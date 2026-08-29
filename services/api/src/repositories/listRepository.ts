@@ -391,6 +391,74 @@ function parseActivity(value: unknown): Activity {
   return activitySchema.parse(value) as Activity;
 }
 
+function needsAggregateRepair(row: StoredItem): boolean {
+  const itemCount = row.itemCount;
+  const doneCount = row.doneCount;
+  return (
+    typeof itemCount === 'number' &&
+    Number.isInteger(itemCount) &&
+    typeof doneCount === 'number' &&
+    Number.isInteger(doneCount) &&
+    (itemCount < 0 || doneCount < 0 || doneCount > itemCount)
+  );
+}
+
+/** Rebuilds impossible counters from the strongly read live item set before parsing META. */
+async function repairInvalidAggregates(
+  listId: string,
+  observed: StoredItem,
+): Promise<StoredItem> {
+  let current = observed;
+  for (let attempt = 0; attempt < MAX_MUTATION_ATTEMPTS; attempt += 1) {
+    if (!needsAggregateRepair(current)) return current;
+    const rows = await queryAll<StoredItem>(
+      { pk: listPartition(listId).pk },
+      { skPrefix: listItemPrefix(listId).skPrefix, consistentRead: true },
+    );
+    const items = rows.map(parseListItem);
+    const itemCount = items.length;
+    const doneCount = items.filter((item) => item.state === 'done').length;
+    const expectedItemVersion =
+      typeof current.itemVersion === 'number' && Number.isInteger(current.itemVersion)
+        ? current.itemVersion
+        : 0;
+
+    try {
+      const repaired = await updateItem<StoredItem>(listMeta(listId), {
+        expression:
+          'SET #itemCount = :itemCount, #doneCount = :doneCount ADD #itemVersion :itemVersionIncrement',
+        names: {
+          '#itemCount': 'itemCount',
+          '#doneCount': 'doneCount',
+          '#itemVersion': 'itemVersion',
+          ...GATE_NAMES,
+        },
+        values: {
+          ':itemCount': itemCount,
+          ':doneCount': doneCount,
+          ':expectedItemCount': current.itemCount,
+          ':expectedDoneCount': current.doneCount,
+          ':expectedItemVersion': expectedItemVersion,
+          ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+        },
+        condition: `#itemCount = :expectedItemCount AND #doneCount = :expectedDoneCount AND ${itemVersionCondition(expectedItemVersion)} AND ${GATES_ABSENT}`,
+      });
+      if (repaired !== undefined) return repaired;
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'ConditionalCheckFailedException')) {
+        throw error;
+      }
+    }
+
+    const reread = await getItem<StoredItem>(listMeta(listId), {
+      consistentRead: true,
+    });
+    if (reread === undefined) throw new ListNotFoundError();
+    current = reread;
+  }
+  throw new ListReadFenceError();
+}
+
 function assertListAccessGrant(
   userId: string,
   listId: string,
@@ -417,6 +485,7 @@ async function getLiveListMetaStrong(listId: string): Promise<List | undefined> 
   // before `assertSameFence` can reject the page. Only legacy-shaped META needs migration;
   // canonical-shaped META remains parseable while gated.
   if (!hasCanonicalListShape(row)) row = await migrateListAggregateOnRead(listId, row);
+  row = await repairInvalidAggregates(listId, row);
   return parseList(row);
 }
 
@@ -586,6 +655,7 @@ export async function getListMetaForDeletion(
   let row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
   if (row === undefined) return undefined;
   if (!isCanonicalListRow(row)) row = await migrateListAggregateOnRead(listId, row);
+  row = await repairInvalidAggregates(listId, row);
   return parseList(row);
 }
 
@@ -639,9 +709,13 @@ export async function listListsForUser(
   );
   const listRows = rows.filter((row) => row.entity === ENTITY.list);
   const migratedRows = await Promise.all(
-    listRows.map(async (row) =>
-      isCanonicalListRow(row) ? row : migrateListAggregateOnRead(String(row.listId), row),
-    ),
+    listRows.map(async (row) => {
+      const listId = String(row.listId);
+      const canonical = isCanonicalListRow(row)
+        ? row
+        : await migrateListAggregateOnRead(listId, row);
+      return repairInvalidAggregates(listId, canonical);
+    }),
   );
   const lists = new Map(
     migratedRows.map((row) => {
