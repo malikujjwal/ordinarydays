@@ -25,6 +25,7 @@ import { recoverAbandonedOutbox } from './sessionRecovery';
 import { RepositorySubscriptions } from './subscriptions';
 import {
   CanonicalActivityInstallDeferredError,
+  type NativeSyncEngine,
   SerializedNativeSyncEngine,
 } from './syncEngine';
 import { SerializedTransactionRunner } from './transaction';
@@ -44,11 +45,27 @@ const clock = { today: '2026-08-19', currentMinute: '08:00' };
  * `afterEach` has already closed — an unhandled rejection attributed to whichever test happens
  * to be running by then. The same shape the rejected-rollback test uses.
  */
-function recoveryOnly(engine: SerializedNativeSyncEngine): SerializedNativeSyncEngine {
+function syncStub(overrides: Partial<NativeSyncEngine> = {}): NativeSyncEngine {
   return {
     request: vi.fn(),
+    syncNow: vi.fn(async () => undefined),
+    pullActivity: vi.fn(async () => {
+      throw new Error('Activity pull is unavailable in this test.');
+    }),
+    pullAgenda: vi.fn(async () => {
+      throw new Error('Agenda pull is unavailable in this test.');
+    }),
+    pullReminderCoverage: vi.fn(async () => undefined),
+    recoverRejectedIntent: vi.fn(async () => false),
+    stop: vi.fn(),
+    ...overrides,
+  };
+}
+
+function recoveryOnly(engine: SerializedNativeSyncEngine): NativeSyncEngine {
+  return syncStub({
     recoverRejectedIntent: (intentId: string) => engine.recoverRejectedIntent(intentId),
-  } as unknown as SerializedNativeSyncEngine;
+  });
 }
 
 describe('serialized native convergence guard', () => {
@@ -3642,6 +3659,24 @@ describe('serialized native convergence guard', () => {
     ).toBeUndefined();
   });
 
+  it('treats an already-resolved Discard as complete', async () => {
+    const sync = syncStub({
+      recoverRejectedIntent: vi.fn(async () => false),
+    });
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+    );
+
+    await expect(coordinator.discardBlocked('already-resolved', clock)).resolves.toBe(
+      true,
+    );
+    expect(sync.recoverRejectedIntent).not.toHaveBeenCalled();
+  });
+
   it('restores canonical List state before Discard retires a failed rollback receipt', async () => {
     if (database === undefined) throw new Error('missing List recovery database');
     const list: List = {
@@ -4651,7 +4686,12 @@ describe('serialized native convergence guard', () => {
      * device is still holding.
      */
     describe('the durable item edit (§P3-29)', () => {
-      async function withPendingEdit(currentDatabase: SqliteDatabase) {
+      async function withPendingEdit(
+        currentDatabase: SqliteDatabase,
+        input: Parameters<ListTransactionService['patchItem']>[1]['input'] = {
+          title: 'Oat milk',
+        },
+      ) {
         const built = itemHarness(currentDatabase);
         await transactions.run((transaction) =>
           built.listService.createItem(transaction, {
@@ -4672,7 +4712,7 @@ describe('serialized native convergence guard', () => {
             itemId: ITEM_ID,
             intentId: 'patch-milk',
             idempotencyKey: 'patch-milk',
-            input: { title: 'Oat milk' },
+            input,
           }),
         );
         return built;
@@ -4721,6 +4761,36 @@ describe('serialized native convergence guard', () => {
           status: 'needs_attention',
           attention: { kind: 'rejected' },
         });
+      });
+
+      it('restores Lists card progress when a completed-state edit is rejected', async () => {
+        if (database === undefined)
+          throw new Error('missing item progress rollback database');
+        const setup = itemHarness(database);
+        await transactions.run((transaction) =>
+          setup.lists.replaceCanonical(transaction, [
+            listRow({ itemCount: 0, doneCount: 0 }),
+          ]),
+        );
+        const { lists, items } = await withPendingEdit(database, { state: 'done' });
+        expect((await lists.read())[0]?.doneCount).toBe(1);
+
+        const sync = itemEngine(
+          lists,
+          items,
+          { listItem: async () => row(ITEM_ID, 'm', 'Milk') },
+          {
+            patchItem: async () => {
+              throw new ApiError('validation_failed', 'No.', 422, 'req-reject');
+            },
+          },
+        );
+
+        await expect(sync.syncNow()).rejects.toThrow('No.');
+        sync.stop();
+
+        expect((await items.read(LIST_ID))[0]?.state).toBe('open');
+        expect((await lists.read())[0]?.doneCount).toBe(0);
       });
 
       /** `404` on the targeted read is an answer: the item is gone, so removing it is the restore. */
@@ -4812,6 +4882,56 @@ describe('serialized native convergence guard', () => {
         expect(seen).toEqual([{ state: 'done' }, { state: 'done' }]);
         expect((await built.items.read(LIST_ID))[0]?.state).toBe('done');
         expect(await outbox.all()).toEqual([]);
+      });
+
+      it('keeps a later tick visible while an earlier create acknowledgement settles', async () => {
+        if (database === undefined) throw new Error('missing rapid item update database');
+        const built = itemHarness(database);
+        await transactions.run((transaction) =>
+          built.listService.createItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'create-milk',
+            idempotencyKey: 'create-milk',
+            input: { itemId: ITEM_ID, title: 'Milk' },
+            rank: 'm',
+          }),
+        );
+        await transactions.run((transaction) =>
+          built.listService.patchItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'tick-milk',
+            idempotencyKey: 'tick-milk',
+            input: { state: 'done' },
+          }),
+        );
+
+        let releasePatch: (() => void) | undefined;
+        const patchBlocked = new Promise<void>((resolve) => {
+          releasePatch = resolve;
+        });
+        const patchItem = vi.fn(async () => {
+          await patchBlocked;
+          return { ...row(ITEM_ID, 'm', 'Milk'), state: 'done' as const };
+        });
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          {},
+          {
+            createItem: async () => row(ITEM_ID, 'm', 'Milk'),
+            patchItem,
+          },
+        );
+
+        const syncing = sync.syncNow();
+        await vi.waitFor(() => expect(patchItem).toHaveBeenCalledTimes(1));
+        expect((await built.items.read(LIST_ID))[0]?.state).toBe('done');
+
+        releasePatch?.();
+        await syncing;
+        sync.stop();
       });
 
       /** Otherwise a background page lands between the accepted edit and its acknowledgement. */

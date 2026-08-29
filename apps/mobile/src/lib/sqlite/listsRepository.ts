@@ -119,6 +119,11 @@ export interface LocalListSettings {
   readonly archived?: boolean;
 }
 
+export interface LocalListItemDelta {
+  readonly itemCount: number;
+  readonly doneCount: number;
+}
+
 export class ListsRepository {
   private readonly scope = 'lists';
 
@@ -259,6 +264,26 @@ export class ListsRepository {
     await writeListRow(
       transaction.database,
       next,
+      await this.positionOf(transaction.database, listId),
+    );
+    transaction.changed(this.scope);
+  }
+
+  async applyLocalItemDelta(
+    transaction: TransactionContext,
+    listId: string,
+    delta: LocalListItemDelta,
+  ): Promise<void> {
+    const current = await this.getLocal(transaction.database, listId);
+    if (current === undefined) return;
+    const itemCount = Math.max(0, current.itemCount + delta.itemCount);
+    const doneCount = Math.max(
+      0,
+      Math.min(itemCount, current.doneCount + delta.doneCount),
+    );
+    await writeListRow(
+      transaction.database,
+      { ...current, itemCount, doneCount },
       await this.positionOf(transaction.database, listId),
     );
     transaction.changed(this.scope);

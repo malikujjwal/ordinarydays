@@ -120,6 +120,28 @@ describe('native canonical List transactional outbox', () => {
     ]);
   });
 
+  it('updates the Lists card count in the same transaction as an item create', async () => {
+    const { lists, service, transactions } = await install();
+
+    await transactions.run((transaction) =>
+      service.createItem(transaction, {
+        listId: LIST.listId,
+        itemId: 'itm_01J000000000000000000000AB',
+        intentId: 'intent_item_create_count',
+        idempotencyKey: 'intent_item_create_count',
+        input: { itemId: 'itm_01J000000000000000000000AB', title: 'Ancillary Justice' },
+        rank: 'z',
+      }),
+    );
+
+    expect((await lists.read())[0]).toEqual(
+      expect.objectContaining({
+        itemCount: 2,
+        doneCount: 0,
+      }),
+    );
+  });
+
   it('rolls back both the projection and intent when the transaction fails', async () => {
     if (database === undefined) throw new Error('test database not open');
     const { items, outbox, service, transactions } = harness(database);
@@ -158,6 +180,27 @@ describe('native canonical List transactional outbox', () => {
       place: { label: 'Library' },
     });
     expect((await outbox.all())[0]?.mutationKey).toEqual(['list', 'item-patch']);
+  });
+
+  it('updates Lists card progress in the same transaction as an item state change', async () => {
+    const { lists, service, transactions } = await install();
+
+    await transactions.run((transaction) =>
+      service.patchItem(transaction, {
+        listId: LIST.listId,
+        itemId: ITEM.itemId,
+        intentId: 'intent_item_done',
+        idempotencyKey: 'intent_item_done',
+        input: { state: 'done' },
+      }),
+    );
+
+    expect((await lists.read())[0]).toEqual(
+      expect.objectContaining({
+        itemCount: 1,
+        doneCount: 1,
+      }),
+    );
   });
 
   it('refuses a queued reorder so drag can never replay against stale neighbours', async () => {

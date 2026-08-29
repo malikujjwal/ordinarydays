@@ -1,5 +1,5 @@
 import { Button, Card, Text, useTheme } from '@od/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -29,6 +29,21 @@ export function SyncStatusBanner() {
   const blocked = useBlockedIntents();
   const [actingOn, setActingOn] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const [resolvedIntentIds, setResolvedIntentIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+
+  useEffect(() => {
+    const blockedIds = new Set(blocked.map((intent) => intent.intentId));
+    setResolvedIntentIds((current) => {
+      const next = new Set([...current].filter((intentId) => blockedIds.has(intentId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [blocked]);
+
+  const visibleBlocked = blocked.filter(
+    (intent) => !resolvedIntentIds.has(intent.intentId),
+  );
 
   async function recover(intentId: string, action: 'retry' | 'discard') {
     setActingOn(intentId);
@@ -38,7 +53,11 @@ export function SyncStatusBanner() {
         action === 'retry'
           ? await retryBlockedIntent(intentId)
           : await discardBlockedIntent(intentId);
-      if (!succeeded) setActionError('That change is no longer waiting for recovery.');
+      if (succeeded) {
+        setResolvedIntentIds((current) => new Set(current).add(intentId));
+      } else {
+        setActionError("Couldn't refresh the latest data. Check your connection.");
+      }
     } catch {
       setActionError("Couldn't update that change. Try again.");
     } finally {
@@ -46,7 +65,11 @@ export function SyncStatusBanner() {
     }
   }
 
-  if (queueMessage === undefined && conflictChanges.length === 0 && blocked.length === 0)
+  if (
+    queueMessage === undefined &&
+    conflictChanges.length === 0 &&
+    visibleBlocked.length === 0
+  )
     return null;
 
   return (
@@ -69,14 +92,14 @@ export function SyncStatusBanner() {
               {queueMessage}
             </Text>
           )}
-          {blocked.length === 0 ? null : (
+          {visibleBlocked.length === 0 ? null : (
             <View style={{ gap: theme.space[3] }} testID="blocked-intents">
               <Text variant="subhead" color="textPrimary">
-                {blocked.length === 1
+                {visibleBlocked.length === 1
                   ? "1 change couldn't be applied."
-                  : `${blocked.length} changes couldn't be applied.`}
+                  : `${visibleBlocked.length} changes couldn't be applied.`}
               </Text>
-              {blocked.map((intent) => (
+              {visibleBlocked.map((intent) => (
                 <View key={intent.intentId} style={{ gap: theme.space[2] }}>
                   <Text variant="footnote" color="textSecondary">
                     {intent.lastError ?? intent.mutationKey.slice(1).join(' ')}

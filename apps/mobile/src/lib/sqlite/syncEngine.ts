@@ -37,6 +37,7 @@ import type {
   ListItemsRepository,
 } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
+import { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 import {
@@ -816,6 +817,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     return this.listItems;
   }
 
+  private requireListTransactions(): ListTransactionService {
+    if (this.lists === undefined) {
+      throw new Error('Native Lists state is not ready.');
+    }
+    return new ListTransactionService(this.outbox, this.lists, this.requireItems());
+  }
+
   private async pullAllLists(): Promise<readonly List[]> {
     const pullListsPage = this.pull.listsPage;
     if (pullListsPage === undefined)
@@ -1169,7 +1177,15 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
          * not touch. Later queued work for this list owns the row afterwards through its own
          * settlement, exactly as the List branches below arrange.
          */
-        await this.requireItems().installAcknowledged(transaction, item);
+        const laterOwnsItem = later.some(
+          (candidate) =>
+            candidate.entityId === intent.entityId &&
+            (candidate.mutationKey[1] === 'item-create' ||
+              candidate.mutationKey[1] === 'item-patch'),
+        );
+        if (!laterOwnsItem) {
+          await this.requireListTransactions().installCanonicalItem(transaction, item);
+        }
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
         return;
@@ -1521,7 +1537,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     intent: OutboxIntent,
     failure: Error,
   ): Promise<void> {
-    const items = this.requireItems();
+    const listTransactions = this.requireListTransactions();
     const listId = field(intent.variables, 'listId');
     await this.transactions.run(async (transaction) => {
       await this.outbox.needsAttention(
@@ -1531,7 +1547,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         failure.message,
       );
       if (typeof listId === 'string') {
-        await items.removeCanonical(transaction, listId, intent.entityId);
+        await listTransactions.removeItem(transaction, listId, intent.entityId);
       }
       transaction.changed('outbox');
     });
@@ -1557,7 +1573,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     intent: OutboxIntent,
     failure: Error,
   ): Promise<void> {
-    const items = this.requireItems();
+    const listTransactions = this.requireListTransactions();
     const listId = field(intent.variables, 'listId');
     const pullItem = this.pull.listItem;
     let canonical: ListItemRow | undefined;
@@ -1585,9 +1601,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         failure.message,
       );
       if (canonical !== undefined) {
-        await items.installAcknowledged(transaction, canonical);
+        await listTransactions.installCanonicalItem(transaction, canonical);
       } else if (missing && typeof listId === 'string') {
-        await items.removeCanonical(transaction, listId, intent.entityId);
+        await listTransactions.removeItem(transaction, listId, intent.entityId);
       }
       transaction.changed('outbox');
     });
@@ -1604,7 +1620,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private async recoverRejectedItemPatchIntent(intent: OutboxIntent): Promise<boolean> {
     if (intent.recoveryRequired !== true) return true;
     try {
-      const items = this.requireItems();
+      const listTransactions = this.requireListTransactions();
       const listId = field(intent.variables, 'listId');
       const pullItem = this.pull.listItem;
       if (pullItem === undefined || typeof listId !== 'string') {
@@ -1627,9 +1643,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           return false;
         }
         if (canonical === undefined) {
-          await items.removeCanonical(transaction, listId, intent.entityId);
+          await listTransactions.removeItem(transaction, listId, intent.entityId);
         } else {
-          await items.installAcknowledged(transaction, canonical);
+          await listTransactions.installCanonicalItem(transaction, canonical);
         }
         if (
           current.recoveryRequired === true &&
@@ -1953,7 +1969,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private async recoverListItemCreateCollision(
     intent: OutboxIntent,
   ): Promise<'recovered' | 'parked' | 'retry'> {
-    const items = this.requireItems();
+    const listTransactions = this.requireListTransactions();
     const pullItem = this.pull.listItem;
     const listId = field(intent.variables, 'listId');
     if (pullItem === undefined || typeof listId !== 'string') {
@@ -1965,7 +1981,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         throw new Error('Item collision recovery answered for a different item.');
       }
       await this.transactions.run(async (transaction) => {
-        await items.installAcknowledged(transaction, canonical);
+        await listTransactions.installCanonicalItem(transaction, canonical);
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
       });

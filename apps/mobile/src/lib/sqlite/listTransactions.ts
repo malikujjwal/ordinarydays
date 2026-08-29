@@ -14,7 +14,7 @@ import { systemClock } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { pendingListFromInput } from '@/lib/pendingList';
 import { pendingListItemFromInput } from '@/lib/pendingListItem';
-import type { ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
+import type { ListItemRow, ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository, LocalListSettings } from '@/lib/sqlite/listsRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
@@ -281,6 +281,10 @@ function recordsInverse(patch: PatchListInput): boolean {
   );
 }
 
+function doneCountForState(state: ListItemRow['state'] | undefined): number {
+  return state === 'done' ? 1 : 0;
+}
+
 /**
  * The forward intent's recorded projection, for the local half of an accepted Undo.
  *
@@ -337,6 +341,7 @@ export class ListTransactionService {
     if (variables.input.itemId !== variables.itemId) {
       throw new Error('A durable item create must carry its minted identity.');
     }
+    const current = await items.getLocal(variables.itemId, transaction.database);
     const appended = await this.outbox.append(transaction.database, {
       intentId: variables.intentId,
       mutationKey: ['list', 'item-create'],
@@ -354,6 +359,12 @@ export class ListTransactionService {
           variables.rank,
         ),
       );
+      if (current === undefined) {
+        await this.lists.applyLocalItemDelta(transaction, variables.listId, {
+          itemCount: 1,
+          doneCount: 0,
+        });
+      }
     }
     transaction.changed('outbox');
     return appended.intent;
@@ -399,18 +410,39 @@ export class ListTransactionService {
       orderingKey: `list:${variables.listId}`,
     });
     if (appended.kind === 'inserted') {
-      await items.applyLocalPatch(transaction, current, variables.input);
+      await this.projectItemPatch(transaction, current, variables.input);
     }
     transaction.changed('outbox');
     return appended.intent;
   }
 
-  /** Installs the server's item over the optimistic row once its write is acknowledged. */
-  async acceptCreatedItem(
+  async installCanonicalItem(
     transaction: TransactionContext,
-    item: Parameters<ListItemsRepository['installAcknowledged']>[1],
+    item: ListItemRow,
   ): Promise<void> {
-    await this.requireItems().installAcknowledged(transaction, item);
+    const items = this.requireItems();
+    const current = await items.getLocal(item.itemId, transaction.database);
+    await items.installAcknowledged(transaction, item);
+    await this.lists.applyLocalItemDelta(transaction, item.listId, {
+      itemCount: current === undefined ? 1 : 0,
+      doneCount: doneCountForState(item.state) - doneCountForState(current?.state),
+    });
+  }
+
+  async removeItem(
+    transaction: TransactionContext,
+    listId: string,
+    itemId: string,
+  ): Promise<void> {
+    const items = this.requireItems();
+    const current = await items.getLocal(itemId, transaction.database);
+    await items.removeCanonical(transaction, listId, itemId);
+    if (current !== undefined && current.listId === listId) {
+      await this.lists.applyLocalItemDelta(transaction, listId, {
+        itemCount: -1,
+        doneCount: -doneCountForState(current.state),
+      });
+    }
   }
 
   /** Moves one unsynced item onto a freshly minted identity after an explicit Retry. */
@@ -714,7 +746,7 @@ export class ListTransactionService {
       if (current === undefined || current.listId !== parsed.listId) {
         throw new Error('The item is no longer available locally.');
       }
-      await items.applyLocalPatch(transaction, current, parsed.input);
+      await this.projectItemPatch(transaction, current, parsed.input);
       return intent;
     }
     if (intent.mutationKey[1] === 'create') {
@@ -773,5 +805,21 @@ export class ListTransactionService {
     throw new Error(
       `Unsupported blocked List mutation: ${intent.mutationKey[1] ?? 'unknown'}.`,
     );
+  }
+
+  private async projectItemPatch(
+    transaction: TransactionContext,
+    current: ListItemRow,
+    input: PatchListItemInput,
+  ): Promise<void> {
+    await this.requireItems().applyLocalPatch(transaction, current, input);
+    const nextState = input.state ?? current.state;
+    const doneCount = doneCountForState(nextState) - doneCountForState(current.state);
+    if (doneCount !== 0) {
+      await this.lists.applyLocalItemDelta(transaction, current.listId, {
+        itemCount: 0,
+        doneCount,
+      });
+    }
   }
 }

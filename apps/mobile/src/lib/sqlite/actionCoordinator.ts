@@ -448,6 +448,18 @@ export class NativeActivityActionCoordinator {
     const recovery = await this.transactions.run((transaction) =>
       this.outbox.get(transaction.database, intentId),
     );
+    if (
+      recovery === undefined ||
+      (recovery.status !== 'needs_attention' &&
+        !(
+          recovery.status === 'queued' &&
+          recovery.lastError !== undefined &&
+          changesRecurrenceTopology(recovery)
+        ))
+    ) {
+      // Idempotent completion also clears a presentation snapshot that lost a race with SQLite.
+      return true;
+    }
     if (recovery?.mutationKey[0] === 'list' || recovery?.recoveryRequired === true) {
       if (!(await this.sync.recoverRejectedIntent(intentId))) return false;
     }
