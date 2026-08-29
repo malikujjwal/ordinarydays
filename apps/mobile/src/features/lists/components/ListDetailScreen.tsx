@@ -2,12 +2,14 @@ import type { List } from '@od/shared/types';
 import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
 import { useCallback, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
 import { useListItemActions } from '../hooks/useListItemActions';
 import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
+import { deleteListConfirmation } from '../model/deleteConfirmation';
 import {
   doneCount,
   ITEM_SCROLL_FETCH_RATIO,
@@ -103,6 +105,7 @@ export function ListDetailScreen({
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({
@@ -335,6 +338,10 @@ export function ListDetailScreen({
             // Archiving leaves the index, so it leaves this screen with it (§5.6).
             onBack();
           }}
+          onDelete={() => {
+            setMenuOpen(false);
+            setDeleteOpen(true);
+          }}
           onOpenSettings={() => {
             setMenuOpen(false);
             setSettingsOpen(true);
@@ -348,6 +355,20 @@ export function ListDetailScreen({
           onClose={() => setSettingsOpen(false)}
           list={list}
           settings={settings}
+        />
+      )}
+
+      {list === undefined ? null : (
+        <ConfirmDialog
+          open={deleteOpen}
+          confirmation={deleteListConfirmation(list)}
+          onCancel={() => setDeleteOpen(false)}
+          onConfirm={() => {
+            setDeleteOpen(false);
+            bulk.remove(list);
+            onBack();
+          }}
+          testID="list-delete-confirm"
         />
       )}
     </ScreenShell>

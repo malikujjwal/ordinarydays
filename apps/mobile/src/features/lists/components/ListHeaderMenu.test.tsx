@@ -32,6 +32,7 @@ function mount(subject = list(), checkedCount = 7) {
     onClearDone: vi.fn(),
     onUncheckAll: vi.fn(),
     onArchive: vi.fn(),
+    onDelete: vi.fn(),
     onOpenSettings: vi.fn(),
   };
   render(
@@ -81,5 +82,13 @@ describe('ListHeaderMenu', () => {
 
     expect(actions.onOpenSettings).toHaveBeenCalledOnce();
     expect(actions.onArchive).toHaveBeenCalledOnce();
+  });
+
+  it('makes list deletion discoverable from the detail overflow menu', () => {
+    const actions = mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete list' }));
+
+    expect(actions.onDelete).toHaveBeenCalledOnce();
   });
 });

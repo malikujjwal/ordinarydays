@@ -39,6 +39,8 @@ export interface ListHeaderMenuProps {
   onUncheckAll: () => void;
   /** `PATCH { archived: true }`; the caller shows the 6-second settings undo. */
   onArchive: () => void;
+  /** Opens the owner-only destructive confirmation; the menu never deletes directly. */
+  onDelete: () => void;
   /**
    * Opens `List settings` — state presentation, features and the default slot (§5.5, §P3-33).
    *
@@ -61,6 +63,7 @@ export function ListHeaderMenu({
   onClearDone,
   onUncheckAll,
   onArchive,
+  onDelete,
   onOpenSettings,
 }: ListHeaderMenuProps) {
   const theme = useTheme();
@@ -101,6 +104,12 @@ export function ListHeaderMenu({
         <Text color="textMuted">
           Archived lists keep their items and are reachable from Lists.
         </Text>
+        <Button
+          variant="danger"
+          label="Delete list"
+          onPress={onDelete}
+          testID="list-delete"
+        />
       </View>
     </Sheet>
   );

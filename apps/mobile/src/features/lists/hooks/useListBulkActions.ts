@@ -37,13 +37,14 @@ export interface ListBulkActions {
   clearDone: (listId: string) => void;
   uncheckAll: (listId: string) => void;
   archive: (list: List) => void;
+  remove: (list: List) => void;
 }
 
 export function useListBulkActions(onChanged: () => void): ListBulkActions {
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);
-  const { onArchive } = useListIndexMutations();
+  const { onArchive, onDelete } = useListIndexMutations();
 
   const run = useCallback(
     (listId: string, action: 'clear-done' | 'uncheck-all', idempotencyKey: string) => {
@@ -85,5 +86,6 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
     clearDone: (listId) => run(listId, 'clear-done', randomUUID()),
     uncheckAll: (listId) => run(listId, 'uncheck-all', randomUUID()),
     archive: onArchive,
+    remove: onDelete,
   };
 }

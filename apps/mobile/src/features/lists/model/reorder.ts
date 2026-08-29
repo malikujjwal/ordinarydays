@@ -196,6 +196,7 @@ export function dropIndex(
   fromIndex: number,
   translationY: number,
 ): number {
+  'worklet';
   let top = 0;
   for (let at = 0; at < fromIndex; at += 1) top += heights[at] ?? 0;
   const centre = top + translationY + (heights[fromIndex] ?? 0) / 2;

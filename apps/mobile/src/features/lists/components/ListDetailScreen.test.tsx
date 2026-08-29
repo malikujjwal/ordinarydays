@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   uncheckAll: vi.fn(),
   clearDone: vi.fn(),
   archive: vi.fn(),
+  removeList: vi.fn(),
+  back: vi.fn(),
   drop: vi.fn(),
   add: vi.fn(),
 }));
@@ -31,6 +33,7 @@ vi.mock('../hooks/useListBulkActions', () => ({
     clearDone: mocks.clearDone,
     uncheckAll: mocks.uncheckAll,
     archive: mocks.archive,
+    remove: mocks.removeList,
   }),
 }));
 vi.mock('../hooks/useReorderItems', () => ({
@@ -109,7 +112,7 @@ function setView(overrides: Partial<ListDetailView> = {}) {
 function mount() {
   render(
     <ThemeProvider scheme="light">
-      <ListDetailScreen listId={LIST.listId} onBack={vi.fn()} />
+      <ListDetailScreen listId={LIST.listId} onBack={mocks.back} />
     </ThemeProvider>,
   );
 }
@@ -120,6 +123,8 @@ beforeEach(() => {
     mocks.clearDone,
     mocks.uncheckAll,
     mocks.archive,
+    mocks.removeList,
+    mocks.back,
     mocks.drop,
     mocks.add,
   ])
@@ -190,5 +195,20 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByText('Nothing here')).toBeTruthy();
     expect(screen.getByText('Add a task.')).toBeTruthy();
     expect(screen.getByText('Add to Launch')).toBeTruthy();
+  });
+
+  it('confirms list deletion from the detail menu before deleting and leaving', () => {
+    mount();
+
+    fireEvent.click(screen.getByTestId('list-detail-menu'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete list' }));
+
+    expect(mocks.removeList).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete "Launch"?')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete list' }));
+
+    expect(mocks.removeList).toHaveBeenCalledWith(LIST);
+    expect(mocks.back).toHaveBeenCalledOnce();
   });
 });
