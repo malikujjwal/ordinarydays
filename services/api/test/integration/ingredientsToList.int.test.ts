@@ -1,5 +1,6 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { MAX_INGREDIENTS_PER_ADD } from '@od/shared';
+import { MAX_INGREDIENTS_PER_ADD, systemClock, timeZone } from '@od/shared';
+import { addWallDays } from '@od/shared/recurrence';
 import type { List, ListItem } from '@od/shared/types';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
@@ -57,7 +58,9 @@ const request = (
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(method === 'POST' ? { 'Idempotency-Key': crypto.randomUUID() } : {}),
+        ...(method === 'POST' || method === 'DELETE'
+          ? { 'Idempotency-Key': crypto.randomUUID() }
+          : {}),
         ...headers,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -119,9 +122,9 @@ const INGREDIENTS = [
 const SUNDAY = nextSunday();
 
 function nextSunday(): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + ((7 - date.getUTCDay()) % 7 || 7));
-  return date.toISOString().slice(0, 10);
+  const today = systemClock.todayIn(timeZone.parse('America/New_York'));
+  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
+  return addWallDays(today, (7 - weekday) % 7 || 7);
 }
 
 const createMeal = async (overrides: Json = {}, activityId = MEAL) => {

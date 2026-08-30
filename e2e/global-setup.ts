@@ -90,19 +90,47 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   /**
    * Own both servers in this process. Playwright's Windows child cleanup stops the `pnpm`
-   * wrapper but can leave the `tsx` grandchild serving forever; importing the same local entry
+   * wrapper but can leave the `tsx` grandchild serving forever; starting the Hono adapter here
    * gives teardown the actual Node server and makes process ownership unambiguous.
    *
    * Set the complete environment before importing: API config is intentionally read once at
    * module evaluation, and the developer's `.env.local` must never select `od-main-local` here.
    */
   Object.assign(process.env, API_ENV);
-  // Keep the specifier dynamic so this CommonJS harness does not re-typecheck the API under
-  // its intentionally different module-resolution settings; the API has its own typecheck.
-  const apiEntry = '../services/api/src/local.ts';
-  const { server: apiServer } = (await import(apiEntry)) as {
-    server: import('node:http').Server;
+  // Keep the specifiers dynamic so this CommonJS harness does not re-typecheck ESM API code
+  // or the API package's dev-only adapter under the harness's intentionally different module
+  // resolution settings. Both have their own package typecheck.
+  const appEntry = '../services/api/src/app.ts';
+  const nodeServerEntry = '../services/api/node_modules/@hono/node-server/dist/index.js';
+  const { createApp } = (await import(appEntry)) as {
+    createApp: (overrides: { rateLimitNow: () => number }) => {
+      fetch: (request: Request) => Response | Promise<Response>;
+    };
   };
+  const { serve } = (await import(nodeServerEntry)) as {
+    serve: (options: {
+      fetch: (request: Request) => Response | Promise<Response>;
+      port: number;
+      hostname: string;
+    }) => import('node:http').Server;
+  };
+
+  /**
+   * Every spec uses the one deliberately fixed local identity. A full suite is not one user's
+   * traffic session, so allowing its requests to accumulate in one real-time fixed window
+   * makes the last spec pass or fail according to the second the runner started. Keep every
+   * request in the real limiter while rolling the injected clock before its 120-request cap.
+   */
+  const rateLimitEpoch = Date.now();
+  let rateLimitedRequests = 0;
+  const api = createApp({
+    rateLimitNow: () => rateLimitEpoch + Math.floor(rateLimitedRequests++ / 100) * 60_000,
+  });
+  const apiServer = serve({
+    fetch: api.fetch,
+    port: Number(API_PORT),
+    hostname: '0.0.0.0',
+  });
   if (!apiServer.listening) await once(apiServer, 'listening');
 
   /**

@@ -60,7 +60,9 @@ const request = async (
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(method === 'POST' || (method === 'PATCH' && /^\/v1\/lists\/[^/]+$/.test(path))
+        ...(method === 'POST' ||
+        method === 'DELETE' ||
+        (method === 'PATCH' && /^\/v1\/lists\/[^/]+$/.test(path))
           ? { 'Idempotency-Key': crypto.randomUUID() }
           : {}),
         ...headers,

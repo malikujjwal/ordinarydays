@@ -11,7 +11,7 @@ import {
   identity,
 } from './middleware/identity.js';
 import { requestLogger } from './middleware/logger.js';
-import { rateLimit } from './middleware/rateLimit.js';
+import { createRateLimit, rateLimit } from './middleware/rateLimit.js';
 import { requestId } from './middleware/requestId.js';
 import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit.js';
 import { securityHeaders } from './middleware/securityHeaders.js';
@@ -66,6 +66,11 @@ export interface AppOverrides {
    * `index.ts` and `local.ts` get by calling this with no arguments.
    */
   readonly identityProvider?: IdentityProvider;
+  /**
+   * Injects the limiter clock for deterministic multi-journey harnesses. Production omits it
+   * and therefore uses the module-scope limiter with the real wall clock.
+   */
+  readonly rateLimitNow?: () => number;
 }
 
 export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
@@ -90,7 +95,12 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   // Position 9. After `identity`, because an authenticated route's counter is keyed on the
   // user it just resolved. It limits `authenticated` routes only, so `/v1/health` — which
   // every smoke test and alarm calls — reaches its handler without touching DynamoDB.
-  app.use('*', rateLimit);
+  app.use(
+    '*',
+    overrides.rateLimitNow === undefined
+      ? rateLimit
+      : createRateLimit({ now: overrides.rateLimitNow }),
+  );
   // Position 10. After `rateLimit` by design, and it acts only on routes whose registry
   // entry says they create — so nothing in Phase 1 reaches its DynamoDB calls.
   app.use('*', createIdempotency({ drainCleanup: drainScheduleCleanup }));

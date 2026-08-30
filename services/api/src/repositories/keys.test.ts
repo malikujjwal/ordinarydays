@@ -192,6 +192,13 @@ describe('§3.3 the list partition', () => {
     ).toBe(false);
   });
 
+  it('bounds the all-viewer link scan to link rows in one List partition', () => {
+    expect(keys.listItemActivityLinkAllPrefix(LST)).toEqual({
+      pk: `LIST#${LST}`,
+      skPrefix: 'LNK#',
+    });
+  });
+
   /** Items sort by `(rank, itemId)` — the tie-break is not optional. */
   it('breaks a rank tie by item id', () => {
     const a = keys.listItem(LST, '0|hzzzzz', 'itm_a').sk;
