@@ -22,6 +22,8 @@ export interface FieldProps {
   error?: string;
   hint?: string;
   required?: boolean;
+  /** Draws `Optional` opposite the visible label; placeholder text never carries optionality. */
+  optional?: boolean;
   multiline?: boolean;
   keyboardType?: 'default' | 'email-address' | 'number-pad' | 'url';
   /** Connects an iOS keyboard toolbar to inputs such as the number pad, which has no Return. */
@@ -96,6 +98,7 @@ export function Field({
   error,
   hint,
   required = false,
+  optional = false,
   multiline = false,
   keyboardType = 'default',
   inputAccessoryViewID,
@@ -114,9 +117,23 @@ export function Field({
   return (
     <View style={{ gap: theme.space[2] }}>
       {hideLabel ? null : (
-        <Text variant="footnoteStrong" color="textSecondary">
-          {required ? `${label} *` : label}
-        </Text>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: theme.space[3],
+          }}
+        >
+          <Text variant="footnoteStrong" color="textSecondary">
+            {required ? `${label} *` : label}
+          </Text>
+          {optional ? (
+            <Text variant="footnote" color="textSecondary">
+              Optional
+            </Text>
+          ) : null}
+        </View>
       )}
 
       <TextInput

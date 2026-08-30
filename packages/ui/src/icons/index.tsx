@@ -117,6 +117,17 @@ export const Plus = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/** Neutral drag affordance: two columns of three dots. */
+export const GripVertical = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M9 6.5h.01M15 6.5h.01M9 12h.01M15 12h.01M9 17.5h.01M15 17.5h.01"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
 export const Close = ({ size, color }: IconProps) => (
   <Frame size={size}>
     <Path d="M6 6l12 12M18 6L6 18" stroke={color} {...stroke} />

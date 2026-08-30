@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
+import type { ListDestination } from '@/features/compose/components/ListDestinationChooser';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useLists } from '@/features/lists/hooks/useLists';
 import { apiClient } from '@/lib/apiClient';
@@ -40,6 +41,15 @@ export default function ComposeRoute() {
   const lists = useLists();
   const chooseList = useComposeDraft((state) => state.chooseList);
   const [creatingList, setCreatingList] = useState(false);
+  const [createdDestination, setCreatedDestination] = useState<ListDestination>();
+  const availableDestinations = lists.lists
+    .filter((list) => !list.archived)
+    .map((list) => ({ listId: list.listId, title: list.title }));
+  const listDestinations =
+    createdDestination === undefined ||
+    availableDestinations.some((list) => list.listId === createdDestination.listId)
+      ? availableDestinations
+      : [...availableDestinations, createdDestination];
 
   return (
     <>
@@ -54,9 +64,7 @@ export default function ComposeRoute() {
         listDestinations={{
           // Archived lists are not destinations: they have left the index, and adding to one
           // would put the item somewhere the user would have to go looking for.
-          lists: lists.lists
-            .filter((list) => !list.archived)
-            .map((list) => ({ listId: list.listId, title: list.title })),
+          lists: listDestinations,
           status: lists.status,
           refetch: lists.refetch,
         }}
@@ -65,9 +73,10 @@ export default function ComposeRoute() {
       <NewListSheet
         open={creatingList}
         onClose={() => setCreatingList(false)}
-        onCreated={(listId) => {
+        onCreated={(created) => {
           setCreatingList(false);
-          chooseList(listId);
+          setCreatedDestination(created);
+          chooseList(created.listId);
         }}
       />
     </>

@@ -18,7 +18,7 @@ export interface ItemPageProgress {
 }
 
 /**
- * Whether `Nothing here` may be shown.
+ * Whether the List empty state may be shown.
  *
  * **Both halves, and they are not redundant.** `itemCount === 0` is the server's own answer,
  * so a list whose first page has not arrived is never called empty. `loadedCount === 0` covers

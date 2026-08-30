@@ -73,34 +73,34 @@ describe('nothing is selected until the user taps', () => {
     expect(draft().target).toEqual({ objectKind: 'plan', type: 'custom' });
   });
 
-  /**
-   * `List item` advances to its own required chooser, exactly as `plan` does, and fixes no
-   * destination on the way (P3-27, criterion 33).
-   */
-  it('choosing List item reaches the list picker with no target', () => {
+  /** The global composer opens before its required destination has been chosen. */
+  it('choosing List item reaches the item composer with no target', () => {
     draft().chooseObject('listItem');
-    expect(draft().step).toBe('listPicker');
+    expect(draft().step).toBe('listItemForm');
     expect(draft().target).toBeUndefined();
   });
 
-  it('fixes the list the user tapped, and only that', () => {
+  it('fixes the list in the same composer and preserves its title and note', () => {
     draft().chooseObject('listItem');
+    draft().setTitle('Try Zahav');
+    draft().setNotes('Ask about the tasting menu');
     draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
 
-    expect(draft().step).toBe('form');
+    expect(draft().step).toBe('listItemForm');
     expect(draft().target).toEqual({
       objectKind: 'listItem',
       listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
     });
+    expect(draft().title).toBe('Try Zahav');
+    expect(draft().notes).toBe('Ask about the tasting menu');
   });
 
-  /** Back drops the destination: returning to a picker pre-selected is still a selection. */
-  it('returns to the picker with no destination retained', () => {
+  it('returns from the List item composer with no destination retained', () => {
     draft().chooseObject('listItem');
     draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
     draft().back();
 
-    expect(draft().step).toBe('listPicker');
+    expect(draft().step).toBe('object');
     expect(draft().target).toBeUndefined();
   });
 });

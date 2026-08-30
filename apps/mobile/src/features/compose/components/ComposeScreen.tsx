@@ -1,14 +1,10 @@
-import { MAX_NOTES_LEN } from '@od/shared/constants';
-import { Button, Close, Field, IconButton, ScreenShell, useTheme } from '@od/ui';
+import { Button, Close, IconButton, ScreenShell, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
-import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
 import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
-import {
-  type ListDestination,
-  ListDestinationChooser,
-} from '@/features/compose/components/ListDestinationChooser';
+import { GlobalListItemComposer } from '@/features/compose/components/GlobalListItemComposer';
+import type { ListDestination } from '@/features/compose/components/ListDestinationChooser';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
@@ -26,11 +22,11 @@ import { useToast } from '@/stores/toast';
 /**
  * The modal Add flow, end to end (P1-24).
  *
- * `object` → (`planKind`) → `form`, and **the sequence is the product rule**: there is no
- * branch here that reaches `form` with a target the user did not tap for, and no branch that
- * reaches a writable title field before one. The store holds `target` as `undefined` until a
- * tap sets it, so "not chosen yet" is a state this component can render rather than a state
- * it has to avoid producing.
+ * `object` → (`planKind`) → `form`, with List item using one form that keeps its required
+ * destination inline. **The sequence is the product rule**: there is no branch here that
+ * invents a target the user did not tap. A List-item title and note may be drafted before the
+ * destination is explicit, but the store holds `target` as `undefined` and the commit stays
+ * disabled until the user chooses a visible List.
  *
  * Nothing is written to the server before the named write button. `onSave` is the only call
  * site of the mutation in this feature.
@@ -159,7 +155,30 @@ export function ComposeScreen({
     draft.step === 'form' &&
     draft.target !== undefined &&
     draft.target.objectKind !== 'listItem';
-  const itemForm = draft.step === 'form' && draft.target?.objectKind === 'listItem';
+  const itemForm = draft.step === 'listItemForm';
+  const writeEnabled = canSave({ title: draft.title, notes: draft.notes });
+  const footer = itemForm ? (
+    itemTarget === undefined ? (
+      <Button label="Choose a list" size="lg" fullWidth disabled testID="compose-save" />
+    ) : (
+      <ComposeSaveBar
+        target={itemTarget}
+        saveEnabled={writeEnabled}
+        attachmentUri={draft.attachmentUri}
+        onSave={() => void addToList()}
+        isSaving={addItem.isAdding}
+        {...(destinationTitle === undefined ? {} : { listName: destinationTitle })}
+      />
+    )
+  ) : activityForm && draft.target !== undefined ? (
+    <ComposeSaveBar
+      target={draft.target}
+      saveEnabled={writeEnabled}
+      attachmentUri={draft.attachmentUri}
+      onSave={() => void save()}
+      isSaving={create.isSaving}
+    />
+  ) : undefined;
 
   const header = (
     <View
@@ -213,79 +232,36 @@ export function ComposeScreen({
       <ScreenShell
         header={header}
         measure="reading"
-        {...(draft.target !== undefined && (activityForm || itemForm)
-          ? {
-              footer: (
-                <ComposeSaveBar
-                  target={draft.target}
-                  saveEnabled={canSave({ title: draft.title, notes: draft.notes })}
-                  attachmentUri={draft.attachmentUri}
-                  onSave={() => void (itemForm ? addToList() : save())}
-                  isSaving={itemForm ? addItem.isAdding : create.isSaving}
-                  {...(destinationTitle === undefined
-                    ? {}
-                    : { listName: destinationTitle })}
-                />
-              ),
-            }
-          : {})}
+        {...(footer === undefined ? {} : { footer })}
       >
         <View style={{ gap: theme.space[5] }}>
           {draft.step === 'object' ? (
             <ObjectChooser onChoose={draft.chooseObject} />
           ) : draft.step === 'planKind' ? (
             <PlanKindChooser onChoose={choosePlanKind} />
-          ) : draft.step === 'listPicker' ? (
-            /*
-             * `List item`'s required destination, before any field exists (criterion 33).
-             * With no injected source there is nothing to choose from, so the step says so
-             * rather than inventing one.
-             */
-            <ListDestinationChooser
-              lists={listDestinations?.lists ?? []}
-              status={listDestinations?.status ?? 'pending'}
-              onChoose={draft.chooseList}
-              onCreateList={() => onCreateList?.()}
-              onRetry={() => listDestinations?.refetch()}
-            />
-          ) : draft.target === undefined ? null : draft.target.objectKind ===
-            'listItem' ? (
-            /*
-             * The item form: title, note and the capture stubs — which receive the chosen
-             * `listId` and can never return a different one (`activities.md` §2.3).
-             * Location and the typed per-behaviour fields are P3-29's.
-             */
-            <ComposeForm
-              target={draft.target}
-              fields={{ title: draft.title, notes: draft.notes }}
-              titleLabel="Item"
-              typedFields={
-                <View style={{ gap: theme.space[6] }}>
-                  {/* §5.7's one optional field for every behaviour. */}
-                  <Field
-                    label="Note"
-                    value={draft.notes}
-                    onChangeText={draft.setNotes}
-                    multiline
-                    maxLength={MAX_NOTES_LEN}
-                    testID="compose-item-note"
-                  />
-                  <CaptureRow
-                    sourceUrl={draft.sourceUrl}
-                    onSourceUrlChange={draft.setSourceUrl}
-                    attachmentUri={draft.attachmentUri}
-                    onAttach={draft.attachImage}
-                    onClearAttachment={draft.clearAttachment}
-                  />
-                </View>
-              }
+          ) : draft.step === 'listItemForm' ? (
+            <GlobalListItemComposer
+              title={draft.title}
+              note={draft.notes}
+              {...(itemTarget === undefined ? {} : { selectedListId: itemTarget.listId })}
+              destinations={listDestinations?.lists ?? []}
+              destinationStatus={listDestinations?.status ?? 'pending'}
+              sourceUrl={draft.sourceUrl}
+              attachmentUri={draft.attachmentUri}
+              {...(addItem.errorMessage === undefined
+                ? {}
+                : { errorMessage: addItem.errorMessage })}
               onTitleChange={draft.setTitle}
-              onChangeTarget={() => draft.back()}
-              errorMessage={addItem.errorMessage}
-              errorRequestId={undefined}
-              fieldErrors={{}}
+              onNoteChange={draft.setNotes}
+              onChooseList={draft.chooseList}
+              onCreateList={() => onCreateList?.()}
+              onRetryDestinations={() => listDestinations?.refetch()}
+              onSourceUrlChange={draft.setSourceUrl}
+              onAttach={draft.attachImage}
+              onClearAttachment={draft.clearAttachment}
             />
-          ) : (
+          ) : draft.target === undefined ||
+            draft.target.objectKind === 'listItem' ? null : (
             <ComposeForm
               target={draft.target}
               fields={{

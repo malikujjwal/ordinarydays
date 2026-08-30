@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { AccessibilityInfo, Animated } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,7 @@ import { ProgressBar } from './ProgressBar';
 import { Row } from './Row';
 import { SegmentedControl } from './SegmentedControl';
 import { Text } from './Text';
+import { Touchable } from './Touchable';
 
 /**
  * `definition-of-done.md` §3 sets the bar for `packages/ui` in behaviour rather than
@@ -53,6 +54,23 @@ describe('every primitive renders', () => {
     expect(screen.getByRole('button', { name: 'Snooze until 3:25 PM' })).toBeDefined();
   });
 
+  it('Touchable preserves its focus ring while forwarding focus callbacks', () => {
+    const onFocus = vi.fn();
+    const onBlur = vi.fn();
+    wrap(
+      <Touchable accessibilityRole="button" onFocus={onFocus} onBlur={onBlur}>
+        <Text>Move</Text>
+      </Touchable>,
+    );
+    const control = screen.getByRole('button', { name: 'Move' });
+
+    fireEvent.focus(control);
+    expect(onFocus).toHaveBeenCalledOnce();
+    expect(control.getAttribute('style')).toContain('outline-width: 2px');
+    fireEvent.blur(control);
+    expect(onBlur).toHaveBeenCalledOnce();
+  });
+
   it('IconButton', () => {
     wrap(<IconButton icon={Plus} label="Add" onPress={() => {}} />);
     expect(screen.getByRole('button', { name: 'Add' })).toBeDefined();
@@ -76,6 +94,17 @@ describe('every primitive renders', () => {
       </Card>,
     );
     expect(screen.getByText('Dinner at Zahav')).toBeDefined();
+  });
+
+  it('Card resolves a collection surface through the theme', () => {
+    wrap(
+      <Card surfaceTone="collectionRose" testID="collection-card">
+        <Text>Groceries</Text>
+      </Card>,
+    );
+    expect(screen.getByTestId('collection-card').getAttribute('style')).toContain(
+      'background-color: rgb(242, 223, 226)',
+    );
   });
 
   it('IconTile', () => {
@@ -106,6 +135,13 @@ describe('every primitive renders', () => {
   it('Field', () => {
     wrap(<Field label="Title" value="" onChangeText={() => {}} />);
     expect(screen.getByLabelText('Title')).toBeDefined();
+  });
+
+  it('keeps optionality in the label row instead of the placeholder', () => {
+    wrap(<Field label="Note" value="" optional multiline />);
+
+    expect(screen.getByLabelText('Note').getAttribute('placeholder')).toBeNull();
+    expect(screen.getByText('Optional')).toBeDefined();
   });
 
   it('keeps bare multiline content compact without shrinking boxed form fields', () => {

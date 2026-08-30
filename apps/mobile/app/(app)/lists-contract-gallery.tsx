@@ -10,15 +10,24 @@ import type {
 } from '@od/shared/types';
 import { ScreenShell, Text, ThemeProvider, useTheme } from '@od/ui';
 import { useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
+import { ContextualListItemComposer } from '@/features/lists/components/ContextualListItemComposer';
+import { ListAddRow } from '@/features/lists/components/ListAddRow';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
+import { ListEmptyState } from '@/features/lists/components/ListEmptyState';
+import { ListHeader } from '@/features/lists/components/ListHeader';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
 import { ListItemRow } from '@/features/lists/components/ListItemRow';
+import { ListOverview } from '@/features/lists/components/ListOverview';
 import { ListSettingsSheet } from '@/features/lists/components/ListSettingsSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
+import { ReorderableList } from '@/features/lists/components/ReorderableList';
 import { StateSections } from '@/features/lists/components/StateSections';
 import type { ListSettings } from '@/features/lists/hooks/useListSettings';
+import { countLine } from '@/features/lists/model/listCard';
+import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
  * Production-component contract gallery for P3-33.
@@ -48,7 +57,7 @@ type ListFixtureSeed = Pick<
 function listFixture(seed: ListFixtureSeed, index: number): List {
   return {
     schemaVersion: 2,
-    listId: LIST_ID,
+    listId: `${LIST_ID.slice(0, -1)}${String(index)}`,
     ownerId: OWNER,
     ...seed,
     itemCount: index + 2,
@@ -410,44 +419,149 @@ function ItemsFixture() {
   );
 }
 
-function StagesFixture() {
+const CHECKLIST_ITEMS: readonly ListItemView[] = [
+  {
+    itemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B1',
+    listId: LIST_ID,
+    rank: 'a0',
+    title: 'Paper towels',
+    note: 'Large pack',
+    state: 'open',
+  },
+  {
+    itemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B2',
+    listId: LIST_ID,
+    rank: 'a1',
+    title: 'Yogurt',
+    note: '1 cup',
+    state: 'done',
+  },
+  {
+    itemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B3',
+    listId: LIST_ID,
+    rank: 'a2',
+    title: 'Coffee filters',
+    state: 'open',
+  },
+];
+
+function checklistItem(index: number): ListItemView {
+  const item = CHECKLIST_ITEMS[index];
+  if (item === undefined) throw new Error(`Missing checklist fixture ${String(index)}`);
+  return item;
+}
+
+function OpenListFixture({
+  state,
+}: {
+  state: 'empty' | 'checklist' | 'stages' | 'context-add';
+}) {
   const theme = useTheme();
-  const rows: readonly ListItemView[] = [
-    {
-      ...(ITEMS[4] as ListItemView),
-      title: 'Sketch the frame',
-      state: 'open',
-      rank: 'a0',
-    },
-    {
-      ...(ITEMS[4] as ListItemView),
-      itemId: ITEMS[1]?.itemId ?? '',
-      title: 'Build the switch',
-      state: 'active',
-      rank: 'a1',
-    },
-    {
-      ...(ITEMS[4] as ListItemView),
-      itemId: ITEMS[2]?.itemId ?? '',
-      title: 'Review the spacing',
-      state: 'done',
-      rank: 'a2',
-    },
+  const checklist: List = {
+    ...preset(1),
+    title: 'Weekend packing',
+    itemCount: CHECKLIST_ITEMS.length,
+    doneCount: 1,
+  };
+  const list = state === 'stages' ? { ...STAGED_LIST, itemCount: 3 } : checklist;
+  const empty = state === 'empty';
+  const stagedItems: readonly ListItemView[] = [
+    { ...checklistItem(0), state: 'open', title: 'Sketch the frame' },
+    { ...checklistItem(1), state: 'active', title: 'Build the switch' },
+    { ...checklistItem(2), state: 'done', title: 'Review the spacing' },
   ];
+
   return (
-    <ScreenShell measure="reading">
-      <ScrollView
-        contentContainerStyle={{ gap: theme.space[5], paddingBottom: theme.space[10] }}
+    <View style={{ flex: 1 }}>
+      <ScreenShell
+        header={
+          <ListHeader
+            list={empty ? { ...list, itemCount: 0, doneCount: 0 } : list}
+            onBack={() => {}}
+            onOpenMenu={() => {}}
+            onRename={() => {}}
+          />
+        }
+        scroll={false}
+        bodySpacing="compact"
+        measure="reading"
       >
-        <Text variant="title">{STAGED_LIST.title}</Text>
-        <StateSections
-          list={STAGED_LIST}
-          items={rows}
-          onOpen={() => {}}
-          onDrop={() => {}}
+        <ScrollView contentContainerStyle={{ gap: theme.space[3] }}>
+          {empty ? (
+            <ListEmptyState body={list.emptyStateCopy} onAdd={() => {}} />
+          ) : (
+            <>
+              <ListOverview count={countLine(list)} />
+              {state === 'stages' ? (
+                <StateSections
+                  list={
+                    list as List & {
+                      itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
+                    }
+                  }
+                  items={stagedItems}
+                  onOpen={() => {}}
+                  onDrop={() => {}}
+                />
+              ) : (
+                <ReorderableList
+                  items={CHECKLIST_ITEMS}
+                  keyOf={(item) => item.itemId}
+                  labelOf={(item) => item.title}
+                  rangeOf={() => ({ first: 0, last: CHECKLIST_ITEMS.length - 1 })}
+                  onDrop={() => {}}
+                  renderItem={(item) => (
+                    <ListItemRow list={list} item={item} onOpen={() => {}} />
+                  )}
+                />
+              )}
+              <ListAddRow listName={list.title} onPress={() => {}} />
+            </>
+          )}
+        </ScrollView>
+      </ScreenShell>
+      {state === 'context-add' ? (
+        <ContextualListItemComposer
+          open
+          listName={list.title}
+          isAdding={false}
+          onClose={() => {}}
+          onAdd={async () => undefined}
         />
-      </ScrollView>
-    </ScreenShell>
+      ) : null}
+    </View>
+  );
+}
+
+function GlobalComposerFixture() {
+  const destinations = [
+    { listId: 'lst_gallery_groceries', title: 'Groceries' },
+    { listId: 'lst_gallery_restaurants', title: 'Restaurants to try' },
+  ];
+  const openDraft = useComposeDraft((state) => state.open);
+  const chooseObject = useComposeDraft((state) => state.chooseObject);
+  const setTitle = useComposeDraft((state) => state.setTitle);
+  const setNotes = useComposeDraft((state) => state.setNotes);
+
+  useEffect(() => {
+    openDraft();
+    chooseObject('listItem');
+    setTitle('Try Zahav');
+    setNotes('Ask about the tasting menu');
+  }, [chooseObject, openDraft, setNotes, setTitle]);
+
+  return (
+    <ComposeScreen
+      onClose={() => {}}
+      today="2026-08-28"
+      timezone="America/New_York"
+      listDestinations={{
+        lists: destinations,
+        status: 'success',
+        refetch: () => {},
+      }}
+      onCreateList={() => {}}
+    />
   );
 }
 
@@ -455,7 +569,11 @@ function ContractFrame({ frame }: { frame: string }) {
   if (frame === 'settings') return <SettingsFixture />;
   if (frame === 'create') return <NewListSheet open onClose={() => {}} />;
   if (frame === 'items') return <ItemsFixture />;
-  if (frame === 'stages') return <StagesFixture />;
+  if (frame === 'stages') return <OpenListFixture state="stages" />;
+  if (frame === 'empty') return <OpenListFixture state="empty" />;
+  if (frame === 'checklist') return <OpenListFixture state="checklist" />;
+  if (frame === 'context-add') return <OpenListFixture state="context-add" />;
+  if (frame === 'global-add') return <GlobalComposerFixture />;
   return <OverviewFixture />;
 }
 

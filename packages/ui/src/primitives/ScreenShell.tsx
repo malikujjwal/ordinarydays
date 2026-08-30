@@ -37,6 +37,8 @@ export interface ScreenShellProps {
    * a deliberate choice per screen, not a per-screen invention: those are the only two.
    */
   measure?: 'standard' | 'reading';
+  /** Tight bridge from a standard header to immediately useful content (§7.2b). */
+  bodySpacing?: 'standard' | 'compact';
   testID?: string;
 }
 
@@ -64,6 +66,7 @@ export function ScreenShell({
   footer,
   scroll = true,
   measure = 'standard',
+  bodySpacing = 'standard',
   testID,
 }: ScreenShellProps) {
   const theme = useTheme();
@@ -133,7 +136,10 @@ export function ScreenShell({
         </ScrollView>
       ) : (
         <View
-          style={{ flex: 1, paddingTop: theme.space[6] }}
+          style={{
+            flex: 1,
+            paddingTop: bodySpacing === 'compact' ? theme.space[3] : theme.space[6],
+          }}
           testID={testID === undefined ? undefined : `${testID}-body`}
         >
           {body}

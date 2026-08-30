@@ -80,12 +80,23 @@ describe('the style chooser comes first', () => {
     expect(screen.getByTestId('list-style-blank')).toBeDefined();
   });
 
+  it('leads with one full-width Blank list card above the six-card grid', () => {
+    mount();
+    expect(screen.getByTestId('list-style-blank').textContent).toContain('Blank list');
+    expect(
+      screen
+        .getByTestId('list-style-leading')
+        .contains(screen.getByTestId('list-style-blank')),
+    ).toBe(true);
+    expect(screen.getByTestId('list-style-grid').children).toHaveLength(6);
+  });
+
   /** §5.4 rule 6, exactly: `<style>. <description>`. */
   it('announces each row as its style and its description', () => {
     mount();
 
     expect(screen.getByTestId('list-style-blank').getAttribute('aria-label')).toBe(
-      'Blank. Start without a category or item details',
+      'Blank list. Start without a category or item details',
     );
     expect(screen.getByTestId('list-style-groceries').getAttribute('aria-label')).toBe(
       'Groceries. A shopping checklist',
@@ -153,7 +164,10 @@ describe('the title step', () => {
     await vi.waitFor(() => expect(create).toHaveBeenCalled());
 
     expect(create).toHaveBeenCalledWith('groceries', 'Costco run');
-    expect(onCreated).toHaveBeenCalledWith('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
+    expect(onCreated).toHaveBeenCalledWith({
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      title: 'Costco run',
+    });
     expect(onClose).toHaveBeenCalled();
   });
 

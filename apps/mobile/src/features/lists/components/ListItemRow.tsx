@@ -154,7 +154,12 @@ export function ListItemRow({
         progress === undefined &&
         subItems === undefined ? null : (
           <View
-            style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[2] }}
+            style={{
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: theme.space[2],
+            }}
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
             aria-hidden

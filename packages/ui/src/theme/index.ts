@@ -8,6 +8,7 @@
 export {
   type ActivityTypeName,
   avatarTint,
+  type CollectionSurfaceTone,
   type ColorScheme,
   colors,
   type SemanticColors,

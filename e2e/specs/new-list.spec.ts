@@ -1,6 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
-import { API, e2eHeaders } from '../support/api';
+import { expect, type Page, type Response, test } from '@playwright/test';
 
 /**
  * Make a list by tapping a style, then naming it (P3-26, `plans-and-lists.md` §5.4).
@@ -47,35 +46,31 @@ async function expectNoSeriousA11yViolations(page: Page, where: string): Promise
   ).toEqual([]);
 }
 
-/** The stored row, read back through the API rather than off the card the client drew. */
-async function storedList(
-  request: APIRequestContext,
-  title: string,
-): Promise<{
+type CreatedList = {
   templateKey: string;
   title: string;
   itemStateMode: { mode: string };
   slot: string | null;
-}> {
-  const response = await request.get(`${API}/v1/lists`, { headers: e2eHeaders() });
+};
+
+/** The canonical row returned by the UI's own create request. */
+async function createdList(responsePromise: Promise<Response>): Promise<CreatedList> {
+  const response = await responsePromise;
   expect(response.ok(), await response.text()).toBe(true);
-  const body = (await response.json()) as {
-    data: {
-      title: string;
-      templateKey: string;
-      itemStateMode: { mode: string };
-      slot: string | null;
-    }[];
-  };
-  const match = body.data.find((list) => list.title === title);
-  expect(match, `no stored list titled "${title}"`).toBeDefined();
-  if (match === undefined) throw new Error(`No stored list titled "${title}".`);
-  return match;
+  const body = (await response.json()) as { data: CreatedList };
+  return body.data;
+}
+
+function nextListCreate(page: Page): Promise<Response> {
+  return page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/v1/lists',
+  );
 }
 
 test('creates a list from an explicit style, and the typed title never changes it', async ({
   page,
-  request,
 }) => {
   /**
    * Unique per run so the row this flow asserts on is unambiguously its own — the seed
@@ -106,7 +101,7 @@ test('creates a list from an explicit style, and the typed title never changes i
   await expect(testId(page, 'new-list-create')).toHaveCount(0);
   await expect(
     page.getByRole('button', {
-      name: 'Blank. Start without a category or item details',
+      name: 'Blank list. Start without a category or item details',
     }),
   ).toBeVisible();
   await expectNoSeriousA11yViolations(page, '/lists/new (style chooser)');
@@ -131,6 +126,7 @@ test('creates a list from an explicit style, and the typed title never changes i
   expect(templateOrModelRequests()).toEqual([]);
   expect(duringTyping.filter(({ method }) => method !== 'GET')).toEqual([]);
 
+  const groceriesResponse = nextListCreate(page);
   await testId(page, 'new-list-create').click();
 
   // Back on the index, with the list in it.
@@ -138,10 +134,13 @@ test('creates a list from an explicit style, and the typed title never changes i
   await expect(page.getByText(groceriesTitle)).toBeVisible();
 
   // Assertion 3: the tap chose the style, and `Costco run` did not change it.
-  const groceries = await storedList(request, groceriesTitle);
-  expect(groceries.templateKey).toBe('groceries');
-  expect(groceries.itemStateMode).toEqual({ mode: 'checkbox' });
-  expect(groceries.slot).toBe('groceries');
+  const groceries = await createdList(groceriesResponse);
+  expect(groceries).toMatchObject({
+    title: groceriesTitle,
+    templateKey: 'groceries',
+    itemStateMode: { mode: 'checkbox' },
+    slot: 'groceries',
+  });
 
   /**
    * Assertion 4: the other direction. `Blank` is an explicit tap that stores `blank` with
@@ -153,11 +152,18 @@ test('creates a list from an explicit style, and the typed title never changes i
   await testId(page, 'list-style-blank').click();
   await expect(testId(page, 'new-list-title')).toHaveValue('Untitled list');
   await testId(page, 'new-list-title').fill(blankTitle);
+  const blankResponse = nextListCreate(page);
   await testId(page, 'new-list-create').click();
 
   await expect(testId(page, 'lists-screen')).toBeVisible();
-  const blank = await storedList(request, blankTitle);
-  expect(blank.templateKey).toBe('blank');
+  await expect(page.getByText(blankTitle)).toBeVisible();
+  const blank = await createdList(blankResponse);
+  expect(blank).toMatchObject({
+    title: blankTitle,
+    templateKey: 'blank',
+    itemStateMode: { mode: 'none' },
+    slot: null,
+  });
 
   // Assertion 5: across the whole flow, the sheet never fetched the templates route.
   expect(templateOrModelRequests()).toEqual([]);

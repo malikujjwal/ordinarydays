@@ -1,4 +1,4 @@
-import { Text, Touchable, useTheme } from '@od/ui';
+import { GripVertical, Touchable, useTheme } from '@od/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { dropIndex, type ReorderRange } from '../model/reorder';
@@ -58,6 +58,7 @@ function travel(heights: readonly number[], from: number, to: number): number {
 export function ReorderableList<T>({
   items,
   keyOf,
+  labelOf,
   rangeOf,
   onDrop,
   renderItem,
@@ -65,6 +66,7 @@ export function ReorderableList<T>({
 }: ReorderableListProps<T>) {
   const theme = useTheme();
   const [hovered, setHovered] = useState<string>();
+  const [focused, setFocused] = useState<string>();
   const [held, setHeld] = useState<RowState>();
   const heights = useRef<number[]>([]);
   /** The live row, for window listeners that must not close over a stale render. */
@@ -155,8 +157,13 @@ export function ReorderableList<T>({
     <View testID={testID}>
       {items.map((item, index) => {
         const itemId = keyOf(item);
+        const itemLabel = labelOf(item);
         const range = rangeOf(itemId);
         const grabbed = held?.itemId === itemId ? held : undefined;
+        const handleDescription =
+          grabbed === undefined
+            ? `Position ${String(index + 1)} of ${String(items.length)}. Move up and Move down actions available.`
+            : `Moving, position ${String(grabbed.toIndex + 1)} of ${String(items.length)}. Arrow keys to move, Return to drop, Escape to cancel.`;
         const shift =
           grabbed !== undefined
             ? travel(heights.current, grabbed.index, grabbed.toIndex)
@@ -181,6 +188,7 @@ export function ReorderableList<T>({
             }
             style={{
               position: 'relative',
+              ...(range === undefined ? {} : { paddingRight: theme.layout.hitTarget }),
               backgroundColor: theme.colors.surface,
               transform: [{ translateY: shift }],
               zIndex: grabbed === undefined ? 0 : 2,
@@ -194,7 +202,10 @@ export function ReorderableList<T>({
                   position: 'absolute',
                   top: theme.space[2],
                   right: 0,
-                  opacity: hovered === itemId || grabbed !== undefined ? 1 : 0,
+                  opacity:
+                    hovered === itemId || focused === itemId || grabbed !== undefined
+                      ? 1
+                      : 0,
                   /*
                    * Never `display: none` and never removed: the handle stays in the tab order
                    * so a keyboard user can reach a control a pointer user reveals by hovering.
@@ -206,12 +217,23 @@ export function ReorderableList<T>({
                 <Touchable
                   square
                   accessibilityRole="button"
-                  accessibilityLabel={
-                    grabbed === undefined
-                      ? `Reorder, position ${String(index + 1)} of ${String(items.length)}`
-                      : `Moving, position ${String(grabbed.toIndex + 1)} of ${String(items.length)}. Arrow keys to move, Return to drop, Escape to cancel.`
-                  }
+                  accessibilityLabel={`Reorder ${itemLabel}`}
+                  accessibilityHint={handleDescription}
+                  dataSet={{ reorderDescription: handleDescription }}
                   accessibilityState={{ selected: grabbed !== undefined }}
+                  accessibilityActions={[
+                    { name: 'decrement', label: 'Move up' },
+                    { name: 'increment', label: 'Move down' },
+                  ]}
+                  onAccessibilityAction={(event) => {
+                    const delta = event.nativeEvent.actionName === 'decrement' ? -1 : 1;
+                    const next = clamp(index + delta, range);
+                    if (next !== index) onDrop(itemId, next);
+                  }}
+                  onFocus={() => setFocused(itemId)}
+                  onBlur={() =>
+                    setFocused((current) => (current === itemId ? undefined : current))
+                  }
                   /*
                    * `onPressIn` rather than `onPointerDown`: it is the prop React Native
                    * actually declares, it fires on pointer down on the web build, and its
@@ -240,10 +262,7 @@ export function ReorderableList<T>({
                     backgroundColor: theme.colors.surfaceRaised,
                   }}
                 >
-                  {/* Two rows of dots, the conventional grab affordance. Decorative. */}
-                  <Text variant="footnoteStrong" color="textSecondary">
-                    ⠿
-                  </Text>
+                  <GripVertical size={20} color={theme.colors.textSecondary} />
                 </Touchable>
               </View>
             )}

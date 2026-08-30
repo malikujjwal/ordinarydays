@@ -4,6 +4,7 @@ import { Card, IconTile, ProgressBar, Text, templateIcons, useTheme } from '@od/
 import { View } from 'react-native';
 import {
   checkedProgress,
+  collectionToneForListId,
   countLine,
   listTint,
   showsCheckedCount,
@@ -75,6 +76,7 @@ export function ListIndexRow({
     <Card
       elevation="e2"
       radius="lg"
+      surfaceTone={collectionToneForListId(list.listId)}
       onPress={onPress}
       /**
        * One accessible element carrying the whole card, per `interaction-contract.md` §6: the
@@ -85,7 +87,7 @@ export function ListIndexRow({
       {...(testID === undefined ? {} : { testID })}
     >
       <View style={{ gap: theme.space[2], opacity: dimmed ? 0.6 : 1 }}>
-        <IconTile icon={glyph} tint={listTint()} />
+        <IconTile icon={glyph} tint={listTint()} treatment="collection" />
         <Text variant="heading" numberOfLines={2}>
           {list.title}
         </Text>

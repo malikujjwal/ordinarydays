@@ -1,7 +1,7 @@
 import { instant } from '@od/shared/schemas';
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   back: vi.fn(),
   drop: vi.fn(),
   add: vi.fn(),
+  addError: undefined as string | undefined,
 }));
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'list-detail-test-intent' }));
@@ -43,7 +44,7 @@ vi.mock('@/hooks/useAddListItem', () => ({
   useAddListItem: () => ({
     add: mocks.add,
     isAdding: false,
-    errorMessage: undefined,
+    errorMessage: mocks.addError,
     dismissError: vi.fn(),
   }),
 }));
@@ -130,6 +131,8 @@ beforeEach(() => {
   ])
     mock.mockReset();
   setView();
+  mocks.addError = undefined;
+  mocks.add.mockResolvedValue('itm_01J8XKQ2M4N5P6R7S8T9V0W1X6');
 });
 
 describe('the configuration-driven List detail', () => {
@@ -189,12 +192,108 @@ describe('the configuration-driven List detail', () => {
     expect(mocks.uncheckAll).toHaveBeenCalledWith(LIST.listId);
   });
 
-  it('uses stored empty guidance and keeps the persistent add row', () => {
+  it('shows only the compact empty action and stored guidance when there are no items', () => {
     setView({ items: [], itemCount: 0 });
     mount();
-    expect(screen.getByText('Nothing here')).toBeTruthy();
+
+    expect(screen.getByText('Start with one item')).toBeTruthy();
     expect(screen.getByText('Add a task.')).toBeTruthy();
-    expect(screen.getByText('Add to Launch')).toBeTruthy();
+    expect(screen.getByTestId('list-detail-empty-icon')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Add item' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
+  });
+
+  it('puts the reorder overview above rows and the contextual Add row last', () => {
+    mount();
+
+    expect(screen.getByTestId('list-detail-body').getAttribute('style')).toContain(
+      'padding-top: 8px',
+    );
+    expect(screen.getByText('3 items · 1 checked')).toBeTruthy();
+    expect(screen.getByText('Drag handles to reorder')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add an item' })).toBeTruthy();
+    expect(screen.getByText('to Launch')).toBeTruthy();
+  });
+
+  it('opens one contextual composer over the still-mounted List without a destination chooser', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
+
+    expect(screen.getByTestId('list-detail')).toBeTruthy();
+    expect(screen.getByTestId('list-contextual-add')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Add item to Launch' })).toBeTruthy();
+    expect(screen.getByLabelText('Title')).toBeTruthy();
+    expect(screen.getByLabelText('Note')).toBeTruthy();
+    expect(screen.getByText('Optional')).toBeTruthy();
+    expect(screen.queryByText('Add to')).toBeNull();
+    expect(screen.queryByText('New list')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add to Launch' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
+  });
+
+  it('opens the same contextual composer from the sole empty-state action', () => {
+    setView({ items: [], itemCount: 0 });
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    expect(screen.getByTestId('list-contextual-add')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
+  });
+
+  it('persists Title and optional Note as exactly one item, then refreshes once', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Book venue' } });
+    fireEvent.change(screen.getByLabelText('Note'), {
+      target: { value: 'Ask about the courtyard' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Launch' }));
+
+    await waitFor(() => {
+      expect(mocks.add).toHaveBeenCalledOnce();
+      expect(mocks.view.refresh).toHaveBeenCalledOnce();
+    });
+    expect(mocks.add).toHaveBeenCalledWith(LIST.listId, {
+      title: 'Book venue',
+      note: 'Ask about the courtyard',
+    });
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('submits with Return and keeps Title focused for rapid entry', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
+    const title = screen.getByLabelText('Title') as HTMLInputElement;
+    fireEvent.change(title, { target: { value: 'Pack chargers' } });
+    title.focus();
+    fireEvent.keyDown(title, { key: 'Enter' });
+
+    await waitFor(() => expect(mocks.add).toHaveBeenCalledOnce());
+    expect(mocks.add).toHaveBeenCalledWith(LIST.listId, { title: 'Pack chargers' });
+    expect(document.activeElement).toBe(title);
+    expect(title.value).toBe('');
+  });
+
+  it('retains both fields and shows the contracted error when the write fails', async () => {
+    mocks.addError = "Couldn't save this.";
+    mocks.add.mockResolvedValue(undefined);
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Book venue' } });
+    fireEvent.change(screen.getByLabelText('Note'), {
+      target: { value: 'Ask about the courtyard' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Launch' }));
+
+    await waitFor(() => expect(mocks.add).toHaveBeenCalledOnce());
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Book venue');
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe(
+      'Ask about the courtyard',
+    );
+    expect(screen.getByRole('alert').textContent).toBe("Couldn't save this.");
+    expect(mocks.view.refresh).not.toHaveBeenCalled();
   });
 
   it('confirms list deletion from the detail menu before deleting and leaving', () => {

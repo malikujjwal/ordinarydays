@@ -1,7 +1,7 @@
 import type { WallDate } from '@od/shared/time';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -273,16 +273,11 @@ describe('the pinned named write', () => {
     },
   );
 
-  /**
-   * A List item has no Activity to write in Phase 2, so it has no write button at all — the
-   * destination its label would have to name does not exist yet (`saveLabel`'s third arm is
-   * pinned in `targets.test.ts`). A `Save` with nothing behind it would be the generic button
-   * §2.5 bans.
-   */
-  it('offers no write on the List item step', () => {
+  it('keeps the List item commit disabled until its destination is named', () => {
     mount();
     tapChoice('List item');
-    expect(screen.queryByTestId('compose-save')).toBeNull();
+    const commit = screen.getByRole('button', { name: 'Choose a list' });
+    expect(commit.getAttribute('aria-disabled')).toBe('true');
   });
 
   /** Pinned, so it is reachable without scrolling the form it commits. */
@@ -508,10 +503,7 @@ describe('Plan', () => {
   });
 });
 
-/**
- * `List item` requires a visible destination before any field or capture exists, and the final
- * action names it (criterion 33, §P3-27). Both halves are asserted from the chooser inward.
- */
+/** The global List-item composer keeps its fields and explicit destination in one surface. */
 describe('List item', () => {
   const destinations = {
     lists: [
@@ -522,14 +514,19 @@ describe('List item', () => {
     refetch: vi.fn(),
   };
 
-  it('asks which list before there is a field to type into', () => {
+  it('renders Title, optional Note and an unselected Add to section together', () => {
     mount(() => {}, { listDestinations: destinations });
     tapChoice('List item');
 
     expect(screen.getByTestId('list-destination-chooser')).toBeDefined();
-    // No title field, so there is no text for anything to classify.
-    expect(screen.queryByLabelText('Item')).toBeNull();
-    expect(screen.queryByTestId('compose-form')).toBeNull();
+    expect(screen.getByLabelText('Title')).toBeDefined();
+    expect(screen.getByLabelText('Note')).toBeDefined();
+    expect(screen.getByText('Optional')).toBeDefined();
+    expect(screen.getByText('Add to')).toBeDefined();
+    expect(screen.getByText('Required')).toBeDefined();
+    expect(screen.queryByText('Which list?')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Photos' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add a link' })).toBeNull();
     expect(sent).toHaveLength(0);
   });
 
@@ -539,20 +536,60 @@ describe('List item', () => {
 
     for (const list of destinations.lists) {
       const row = screen.getByTestId(`list-destination-${list.listId}`);
-      expect(row.getAttribute('aria-selected')).toBeNull();
-      expect(row.getAttribute('aria-pressed')).toBeNull();
+      expect(row.getAttribute('aria-pressed')).toBe('false');
     }
   });
 
-  it('opens the form only after a list is chosen, and names it on the write', () => {
+  it('selects in place, preserves Title and Note, and names the write', () => {
     mount(() => {}, { listDestinations: destinations });
     tapChoice('List item');
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Try Zahav' },
+    });
+    fireEvent.change(screen.getByLabelText('Note'), {
+      target: { value: 'Ask about the tasting menu' },
+    });
     fireEvent.click(
       screen.getByTestId('list-destination-lst_01J0000000000000000000000B'),
     );
 
-    expect(screen.getByTestId('compose-form')).toBeDefined();
-    expect(screen.getByTestId('compose-target-heading').textContent).toBe('List item');
+    expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe(
+      'Ask about the tasting menu',
+    );
+    expect(
+      screen
+        .getByTestId('list-destination-lst_01J0000000000000000000000B')
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('button', { name: 'Add to Restaurants to try' }),
+    ).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Photos' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Add a link' })).toBeDefined();
+  });
+
+  it('keeps Title and Note when a newly created List is returned selected', () => {
+    const onCreateList = vi.fn();
+    mount(() => {}, { listDestinations: destinations, onCreateList });
+    tapChoice('List item');
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Try Zahav' },
+    });
+    fireEvent.change(screen.getByLabelText('Note'), {
+      target: { value: 'Patio if possible' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^New list/ }));
+    expect(onCreateList).toHaveBeenCalledOnce();
+    act(() => {
+      useComposeDraft.getState().chooseList('lst_01J0000000000000000000000B');
+    });
+
+    expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe(
+      'Patio if possible',
+    );
     expect(
       screen.getByRole('button', { name: 'Add to Restaurants to try' }),
     ).toBeDefined();
@@ -565,8 +602,8 @@ describe('List item', () => {
     const rows = screen
       .getAllByRole('button')
       .map((button) => button.getAttribute('aria-label'));
-    expect(rows.indexOf('New list, Choose a style, then name it')).toBeGreaterThan(
-      rows.indexOf('Groceries, Add this item to this list'),
+    expect(rows.indexOf('New list, Choose a type, then name it')).toBeGreaterThan(
+      rows.indexOf('Groceries, select as destination'),
     );
   });
 });

@@ -18,4 +18,22 @@ describe('the native reorder gesture worklet boundary', () => {
 
     expect(compiled).toContain('dropIndex.__workletHash');
   });
+
+  it('compiles the wrapper-owned grip with long press and bounded accessibility actions', () => {
+    const filename = resolve(
+      process.cwd(),
+      'src/features/lists/components/ReorderableList.tsx',
+    );
+    const configFile = resolve(process.cwd(), 'babel.config.js');
+    const compiled = transformFileSync(filename, { configFile }).code ?? '';
+
+    expect(compiled).toContain('activateAfterLongPress');
+    expect(compiled).toContain('GestureDetector');
+    expect(compiled).toContain('accessibilityActions');
+    expect(compiled).toContain('Move up');
+    expect(compiled).toContain('Move down');
+    expect(compiled).toContain('accessibilityLabel');
+    expect(compiled).toContain('Reorder ');
+    expect(compiled).toContain('theme.layout.hitTarget');
+  });
 });

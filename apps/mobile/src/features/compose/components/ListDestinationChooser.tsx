@@ -1,38 +1,11 @@
-import { EmptyState, Skeleton, Text, useTheme } from '@od/ui';
+import { EmptyState, SettingRow, Skeleton, Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
-import { ChooserRow } from '@/features/compose/components/ChooserRow';
 
 /**
- * `List item`'s required second choice: **which list** (`activities.md` §2.2, §P3-27,
- * criterion 33).
+ * Required inline destination section for the global List-item composer (§P3-33).
  *
- * ```
- * Which list?
- *
- * Groceries                     ›
- * Packing                       ›
- * Restaurants to try            ›
- *
- * New list                      ›
- * ```
- *
- * ## Nothing chooses for the user, and there is no prop through which anything could
- *
- * The rows are the lists in the **server's own pointer order**, unfiltered and unsorted.
- * No `defaultLists`, no most-recently-used, no behaviour or template metadata, and no title —
- * the title does not exist yet, because this step comes before any field (ADR-033, ADR-046).
- * `defaultLists` belongs to named flows like `Add ingredients to:` and is not reachable from
- * here.
- *
- * The component takes `lists` and calls back. It has no hook, no query and no store, which is
- * also what keeps `no-cross-feature-imports` satisfied: the compose feature cannot read the
- * lists feature's data, so the **route** — the one place allowed to see both — supplies it.
- *
- * ## `New list` is a row, not a fallback
- *
- * §5.4 rule 5: creating from here returns to this form with the new list visibly selected. It
- * sits after the lists rather than before them, because it is the answer to "none of these"
- * and putting it first would make the common case scroll.
+ * The rows stay in server pointer order and nothing is inferred or preselected. `New list`
+ * remains last so returning from creation can visibly select the explicit new destination.
  */
 export interface ListDestination {
   readonly listId: string;
@@ -42,6 +15,7 @@ export interface ListDestination {
 export interface ListDestinationChooserProps {
   lists: readonly ListDestination[];
   status: 'pending' | 'success' | 'error';
+  selectedListId?: string;
   onChoose: (listId: string) => void;
   onCreateList: () => void;
   onRetry: () => void;
@@ -50,6 +24,7 @@ export interface ListDestinationChooserProps {
 export function ListDestinationChooser({
   lists,
   status,
+  selectedListId,
   onChoose,
   onCreateList,
   onRetry,
@@ -57,10 +32,22 @@ export function ListDestinationChooser({
   const theme = useTheme();
 
   return (
-    <View testID="list-destination-chooser" style={{ gap: theme.space[5] }}>
-      <Text variant="title" color="textDisplay" accessibilityRole="header">
-        Which list?
-      </Text>
+    <View testID="list-destination-chooser" style={{ gap: theme.space[3] }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: theme.space[3],
+        }}
+      >
+        <Text variant="bodyStrong" accessibilityRole="header">
+          Add to
+        </Text>
+        <Text variant="footnote" color="textSecondary">
+          Required
+        </Text>
+      </View>
 
       {status === 'pending' ? (
         <View testID="list-destination-loading">
@@ -75,17 +62,21 @@ export function ListDestinationChooser({
       ) : (
         <View>
           {lists.map((list) => (
-            <ChooserRow
+            <SettingRow
               key={list.listId}
               label={list.title}
-              subtitle="Add this item to this list"
+              summary="Add this item to this list"
+              selected={selectedListId === list.listId}
+              accessibilityLabel={`${list.title}, select as destination`}
               onPress={() => onChoose(list.listId)}
               testID={`list-destination-${list.listId}`}
             />
           ))}
-          <ChooserRow
+          <SettingRow
             label="New list"
-            subtitle="Choose a style, then name it"
+            summary="Choose a type, then name it"
+            accessibilityLabel="New list, Choose a type, then name it"
+            opens
             onPress={onCreateList}
             testID="list-destination-new"
           />

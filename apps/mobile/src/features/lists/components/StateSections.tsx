@@ -62,6 +62,7 @@ export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProp
             <ReorderableList
               items={section}
               keyOf={(item) => item.itemId}
+              labelOf={(item) => item.title}
               rangeOf={(itemId) => stateGroupReorderRange(items, itemId)}
               onDrop={(itemId, within) => {
                 const flat = stateGroupDropIndex(items, itemId, within);

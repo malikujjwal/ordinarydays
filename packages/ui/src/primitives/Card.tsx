@@ -1,4 +1,5 @@
 import { View } from 'react-native';
+import type { CollectionSurfaceTone } from '../theme/colors';
 import type { ElevationToken } from '../theme/elevation';
 import { upNextShadow } from '../theme/elevation';
 import { useTheme } from '../theme/index';
@@ -29,6 +30,8 @@ export interface CardProps {
   onPress?: () => void;
   /** The UP NEXT card's mulberry-tinted shadow. The one surface that gets it. */
   hero?: boolean;
+  /** Shared collection fill; callers choose a semantic tone, never a raw colour. */
+  surfaceTone?: CollectionSurfaceTone;
   accessibilityLabel?: string;
   testID?: string;
 }
@@ -41,6 +44,7 @@ export function Card({
   paddingBottom,
   onPress,
   hero = false,
+  surfaceTone = 'neutral',
   accessibilityLabel,
   testID,
 }: CardProps) {
@@ -48,7 +52,9 @@ export function Card({
 
   const style = [
     {
-      backgroundColor: hero ? theme.colors.upNextSurface : theme.colors.surfaceRaised,
+      backgroundColor: hero
+        ? theme.colors.upNextSurface
+        : theme.collectionSurface(surfaceTone),
       borderRadius: theme.radius[radius],
       padding: theme.space[padding],
       ...(paddingBottom === undefined

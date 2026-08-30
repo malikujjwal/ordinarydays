@@ -13,7 +13,9 @@ import {
 } from 'react-native';
 import {
   type ActivityTypeName,
+  type CollectionSurfaceTone,
   type ColorScheme,
+  collectionSurfaces,
   colors,
   type SemanticColors,
   type TypeAccent,
@@ -74,6 +76,8 @@ export interface Theme {
   elevation: (token: ElevationToken) => ReturnType<typeof elevation>;
   /** One accent per stored activity type. */
   typeAccent: (name: ActivityTypeName) => TypeAccent;
+  /** Resolves §5.2a's presentation-only List-card fill. */
+  collectionSurface: (tone: CollectionSurfaceTone) => string;
 }
 
 const ThemeContext = createContext<Theme | undefined>(undefined);
@@ -127,6 +131,8 @@ export function ThemeProvider({ children, scheme, serifFamily }: ThemeProviderPr
       },
       elevation: (token) => elevation(token, active, palette),
       typeAccent: (name) => typeAccents[active][name],
+      collectionSurface: (tone) =>
+        tone === 'neutral' ? palette.surfaceRaised : collectionSurfaces[active][tone],
     };
   }, [active, serifFamily]);
 

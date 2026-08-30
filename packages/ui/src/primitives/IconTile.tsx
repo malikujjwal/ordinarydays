@@ -14,10 +14,18 @@ export interface IconTileProps {
   icon: (props: IconProps) => React.ReactElement;
   tint: ActivityTypeName;
   size?: number;
+  /** `dashed` is the small contextual-create affordance from §7.2b. */
+  treatment?: 'filled' | 'dashed' | 'collection';
   testID?: string;
 }
 
-export function IconTile({ icon: Icon, tint, size = 44, testID }: IconTileProps) {
+export function IconTile({
+  icon: Icon,
+  tint,
+  size = 44,
+  treatment = 'filled',
+  testID,
+}: IconTileProps) {
   const theme = useTheme();
   const accent = theme.typeAccent(tint);
 
@@ -36,12 +44,32 @@ export function IconTile({ icon: Icon, tint, size = 44, testID }: IconTileProps)
         width: size,
         height: size,
         borderRadius: theme.radius.md,
-        backgroundColor: accent.surface,
+        ...(treatment === 'dashed'
+          ? {
+              borderWidth: 1,
+              borderStyle: 'dashed' as const,
+              borderColor: theme.colors.borderStrong,
+            }
+          : {
+              backgroundColor:
+                treatment === 'collection'
+                  ? theme.colors.collectionIconSurface
+                  : accent.surface,
+            }),
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Icon size={Math.round(size * 0.55)} color={accent.accent} />
+      <Icon
+        size={Math.round(size * 0.55)}
+        color={
+          treatment === 'dashed'
+            ? theme.colors.textAction
+            : treatment === 'collection'
+              ? theme.colors.textPrimary
+              : accent.accent
+        }
+      />
     </View>
   );
 }

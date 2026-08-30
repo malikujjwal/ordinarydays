@@ -22,6 +22,13 @@
 /** The scheme a surface is rendered in. */
 export type ColorScheme = 'light' | 'dark';
 
+export type CollectionSurfaceTone =
+  | 'neutral'
+  | 'collectionRose'
+  | 'collectionSand'
+  | 'collectionBlue'
+  | 'collectionOlive';
+
 export interface SemanticColors {
   surface: string;
   surfaceRaised: string;
@@ -30,6 +37,8 @@ export interface SemanticColors {
   /** Fields, selects and native/web picker surfaces. */
   surfaceInput: string;
   surfaceSunken: string;
+  /** Translucent neutral squircle layered on a collection-card surface. */
+  collectionIconSurface: string;
   scrim: string;
 
   textDisplay: string;
@@ -87,6 +96,7 @@ const light: SemanticColors = {
   surfaceOverlay: '#FCFAF6',
   surfaceInput: '#F0EBE3',
   surfaceSunken: '#ECE7DE',
+  collectionIconSurface: 'rgba(255,255,255,0.46)',
   scrim: 'rgba(38,42,40,0.40)',
 
   textDisplay: '#292621',
@@ -139,6 +149,7 @@ const dark: SemanticColors = {
   surfaceOverlay: '#292620',
   surfaceInput: '#1C1B18',
   surfaceSunken: '#1C1B18',
+  collectionIconSurface: 'rgba(255,255,255,0.10)',
   scrim: 'rgba(0,0,0,0.60)',
 
   textDisplay: '#F4F0E8',
@@ -194,6 +205,25 @@ const dark: SemanticColors = {
 };
 
 export const colors: Record<ColorScheme, SemanticColors> = { light, dark };
+
+/** Presentation-only List-card surfaces (§5.2a); they never encode List semantics. */
+export const collectionSurfaces: Record<
+  ColorScheme,
+  Record<Exclude<CollectionSurfaceTone, 'neutral'>, string>
+> = {
+  light: {
+    collectionRose: '#F2DFE2',
+    collectionSand: '#EFE4D3',
+    collectionBlue: '#DCE9EB',
+    collectionOlive: '#E4EADF',
+  },
+  dark: {
+    collectionRose: '#593942',
+    collectionSand: '#514534',
+    collectionBlue: '#374B4F',
+    collectionOlive: '#3B483C',
+  },
+};
 
 /**
  * One accent per stored activity type (`design-system.md` §5.2).

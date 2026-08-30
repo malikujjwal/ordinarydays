@@ -1,22 +1,23 @@
 import { MAX_TITLE_LEN } from '@od/shared/constants';
 import { type ListTemplateChoice, listTemplateChoices } from '@od/shared/lists';
-import { Button, ChevronRight, Field, Row, Sheet, Text, useTheme } from '@od/ui';
+import { Button, Field, Sheet, Text, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { useCreateList } from '../hooks/useCreateList';
+import { ListTypeCard } from './ListTypeCard';
 
 /**
- * `New list` — style first, title second (§P3-26,
+ * `New list` — type first, title second (§P3-26,
  * [`plans-and-lists.md`](../../../../../docs/01-product/plans-and-lists.md) §5.4, ADR-032).
  *
  * ```
  * ┌──────────────────────────────────────────┐   ┌──────────────────────────────────────────┐
- * │  Choose a list style                 ✕   │   │  Movies to watch                     ✕   │
+ * │  Choose a list type                  ✕   │   │  Movies to watch                     ✕   │
  * │                                          │   │  Status for movies                       │
- * │  Blank        A plain list             › │ → │                                          │
- * │  Checklist    Items have checkboxes    › │   │  List name                               │
- * │  Groceries    Checkboxes for shopping  › │   │  ┌────────────────────────────────────┐  │
- * │  …                                       │   │  │ Movies to watch                    │  │
+ * │  Blank list — full-width leading card  › │ → │                                          │
+ * │  Checklist        Groceries             │   │  List name                               │
+ * │  Watch Later      Books to Read         │   │  ┌────────────────────────────────────┐  │
+ * │  Places to Visit  Meal Ideas            │   │  │ Movies to watch                    │  │
  * │                                          │   │  └────────────────────────────────────┘  │
  * │                                          │   │  Back                      Create list   │
  * └──────────────────────────────────────────┘   └──────────────────────────────────────────┘
@@ -26,7 +27,7 @@ import { useCreateList } from '../hooks/useCreateList';
  *
  * Step one has **no title field at all**, so there is no text for anything to classify, and
  * `CLAUDE.md` rule 2 holds by construction rather than by a classifier being told not to run.
- * The user's tap on a visible style is the only input that sets `templateKey`; the title typed
+ * The user's tap on a visible type is the only input that sets `templateKey`; the title typed
  * on step two is data, and editing `Movies to watch` to `Watch repairs` changes nothing about
  * what was made. There is no matcher, ranking, debounce, `/suggest-template` call or model
  * call anywhere in this file — `check-forbidden.mjs`'s `no-template-suggester` fails the build
@@ -34,8 +35,8 @@ import { useCreateList } from '../hooks/useCreateList';
  *
  * Nothing is selected, recommended, pinned, reordered from history or hidden. The catalogue is
  * `listTemplateChoices()` rendered in its own fixed order, and this component has no prop
- * through which a suggestion could arrive. `Blank` is a tap like every other style: there is no
- * no-selection fallback to `simple-list`.
+ * through which a suggestion could arrive. `Blank list` is a tap like every other type: there
+ * is no no-selection fallback to `simple-list`.
  *
  * ## It ships with the app
  *
@@ -54,13 +55,13 @@ export interface NewListSheetProps {
   /** Dismisses without writing. Supplied by the caller; this component never navigates. */
   onClose: () => void;
   /**
-   * The list that was made, by id.
+   * The List that was made, including the title needed to select it before refetch completes.
    *
    * P3-27's no-destination flow (§5.4 rule 5) returns to the ListItem form with this list
    * visibly selected, and P3-39 opens the same sheet from a Plan. Both need the identity the
    * moment it exists, which on native is before the server has seen it.
    */
-  onCreated?: (listId: string) => void;
+  onCreated?: (created: { listId: string; title: string }) => void;
 }
 
 export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
@@ -72,6 +73,9 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
    */
   const [style, setStyle] = useState<ListTemplateChoice>();
   const [title, setTitle] = useState('');
+  const choices = listTemplateChoices();
+  const blank = choices[0];
+  const typedChoices = choices.slice(1);
 
   /** §5.4 rule 1: `Back` retains nothing, so the chooser is never returned to pre-selected. */
   function back() {
@@ -87,10 +91,11 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
 
   async function confirm() {
     if (style === undefined) return;
-    const listId = await create.create(style.templateKey, title.trim());
+    const createdTitle = title.trim();
+    const listId = await create.create(style.templateKey, createdTitle);
     if (listId === undefined) return; // The banner is showing; the step stays put.
     back();
-    onCreated?.(listId);
+    onCreated?.({ listId, title: createdTitle });
     onClose();
   }
 
@@ -136,42 +141,38 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
       )}
 
       {style === undefined ? (
-        <View testID="list-style-chooser">
+        <View testID="list-style-chooser" style={{ gap: theme.space[4] }}>
           <Text variant="subhead" color="textSecondary">
             Choose Blank when you want a list without a category or item details.
           </Text>
-          {listTemplateChoices().map((choice) => (
-            <Row
-              key={choice.templateKey}
-              title={choice.chooserLabel}
-              subtitle={choice.summary}
-              subtitleTone="explanatory"
-              /*
-               * §5.4 rule 6's exact announcement, `<style>. <description>`. It is spelled into
-               * the name rather than left to `accessibilityHint`, which React Native Web drops
-               * — a sentence only iOS users hear is not the sentence the rule asks for.
-               *
-               * No row carries a selected state, in ARIA or otherwise: a chooser row navigates
-               * to the next step, and none of them is ever chosen here.
-               */
-              accessibilityLabel={`${choice.chooserLabel}. ${choice.summary}`}
-              onPress={() => {
-                setStyle(choice);
-                // §5.4 rule 2: the prefill is the record's own editable default title, which
-                // is a different field from the label that was just tapped.
-                setTitle(choice.defaultTitle);
-              }}
-              trailing={
-                <View
-                  accessibilityElementsHidden
-                  importantForAccessibility="no-hide-descendants"
-                >
-                  <ChevronRight size={20} color={theme.colors.textSecondary} />
-                </View>
-              }
-              testID={`list-style-${choice.templateKey}`}
-            />
-          ))}
+          {blank === undefined ? null : (
+            <View testID="list-style-leading">
+              <ListTypeCard
+                choice={blank}
+                leading
+                onPress={() => {
+                  setStyle(blank);
+                  setTitle(blank.defaultTitle);
+                }}
+              />
+            </View>
+          )}
+          <View
+            testID="list-style-grid"
+            style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}
+          >
+            {typedChoices.map((choice) => (
+              <View key={choice.templateKey} style={{ flexBasis: '47%', flexGrow: 1 }}>
+                <ListTypeCard
+                  choice={choice}
+                  onPress={() => {
+                    setStyle(choice);
+                    setTitle(choice.defaultTitle);
+                  }}
+                />
+              </View>
+            ))}
+          </View>
         </View>
       ) : (
         <View style={{ gap: theme.space[5] }} testID="new-list-title-step">

@@ -38,10 +38,10 @@ import { nextCanonicalId } from '@/lib/canonicalIds';
 /**
  * Which screen of the modal is showing. `object` is always where it opens.
  *
- * `listPicker` is `List item`'s required second choice, the same shape `planKind` is: a
- * destination the user names before any field exists (`activities.md` §2.2, criterion 33).
+ * `listItemForm` keeps Title, Note and the required inline destination together. Its target
+ * remains absent until the user names a List.
  */
-export type ComposeStep = 'object' | 'planKind' | 'listPicker' | 'form';
+export type ComposeStep = 'object' | 'planKind' | 'listItemForm' | 'form';
 
 /** Profile-backed values that belong to a newly chosen Event draft. */
 export interface EventDraftDefaults {
@@ -234,12 +234,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       set({ step: 'planKind', target: undefined });
       return;
     }
-    /*
-     * `List item` advances to its own required chooser and leaves the target unfixed, exactly
-     * as `plan` does. There is no destination until the user names one — no default, no
-     * recent, no `defaultLists` (criterion 33, ADR-033).
-     */
-    set({ step: 'listPicker', target: undefined });
+    set({ step: 'listItemForm', target: undefined });
   },
 
   /**
@@ -249,7 +244,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    * is no parameter through which a remembered or default destination could.
    */
   chooseList: (listId) =>
-    set({ step: 'form', target: { objectKind: 'listItem', listId } }),
+    set({ step: 'listItemForm', target: { objectKind: 'listItem', listId } }),
 
   /**
    * The one place `target` can become a Plan, and where re-choosing a kind runs **P1-17's
@@ -317,7 +312,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    */
   back: () => {
     const { step, target } = get();
-    if (step === 'planKind' || step === 'listPicker') {
+    if (step === 'planKind' || step === 'listItemForm') {
       set({ step: 'object', target: undefined });
       return;
     }
@@ -325,12 +320,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       // Back to the chooser that produced this target, and the target is dropped: returning
       // to a picker with the previous destination still fixed would be a pre-selection.
       set({
-        step:
-          target?.objectKind === 'plan'
-            ? 'planKind'
-            : target?.objectKind === 'listItem'
-              ? 'listPicker'
-              : 'object',
+        step: target?.objectKind === 'plan' ? 'planKind' : 'object',
         target: undefined,
       });
     }

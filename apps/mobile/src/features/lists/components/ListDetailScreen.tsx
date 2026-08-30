@@ -10,6 +10,7 @@ import { useListItemActions } from '../hooks/useListItemActions';
 import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
+import { countLine } from '../model/listCard';
 import {
   doneCount,
   ITEM_SCROLL_FETCH_RATIO,
@@ -18,31 +19,34 @@ import {
 } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
 import { orderedItems, reorderRange } from '../model/reorder';
-import { AddItemRow } from './AddItemRow';
+import { ContextualListItemComposer } from './ContextualListItemComposer';
 import { ItemSheet } from './ItemSheet';
+import { ListAddRow } from './ListAddRow';
+import { ListEmptyState } from './ListEmptyState';
 import { ListHeader } from './ListHeader';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
+import { ListOverview } from './ListOverview';
 import { ListSettingsSheet } from './ListSettingsSheet';
 import { ReorderableList } from './ReorderableList';
 import { StateSections } from './StateSections';
 
 /**
- * One list, its items and its inline add row
+ * One list, its items and its contextual composer
  * ([`plans-and-lists.md`](../../../../../docs/01-product/plans-and-lists.md) §5.6, §5.9,
  * §P3-27).
  *
  * ## The empty state is the list's own words
  *
- * Fixed heading `Nothing here`, then the `emptyStateCopy` **stored on the row** at creation —
- * never a `templateKey` lookup, never guidance regenerated from behaviour or capabilities
- * (ADR-032, and the feature's grep test covers this file). A template edited a year later
- * cannot change what a list somebody already has says about itself.
+ * Fixed heading `Start with one item`, then the `emptyStateCopy` **stored on the row** at
+ * creation — never a `templateKey` lookup, never guidance regenerated from behaviour or
+ * capabilities (ADR-032, and the feature's grep test covers this file). A template edited a
+ * year later cannot change what a list somebody already has says about itself.
  *
  * ## A loaded page is not the list
  *
  * Both decisions that could get this wrong read META's `itemCount` rather than `items.length`:
- * `Nothing here` needs the server's zero **and** no visible row, and the bulk actions are
+ * the empty state needs the server's zero **and** no visible row, and the bulk actions are
  * offered only once every page has landed — a menu reading `Clear checked (3)` on a list with
  * forty checked rows further down would be lying about the write it is about to make
  * (criterion 36).
@@ -69,11 +73,11 @@ import { StateSections } from './StateSections';
  *
  * ## The drag
  *
- * `ReorderableList` owns the gesture — a long press on native, §7.1's hover handle on web — and
- * calls back with an insertion index. Everything that decides what that index *means* is
- * `reorder.ts`'s, and everything that writes it is `useReorderItems`'. The row renderer is
- * untouched: a row does not know it can be dragged, which is what keeps P3-28's one renderer
- * one renderer.
+ * `ReorderableList` owns the gesture and its 44-point handle — persistent on touch and revealed
+ * by hover or focus on pointer layouts — and calls back with an insertion index. Everything
+ * that decides what that index *means* is `reorder.ts`'s, and everything that writes it is
+ * `useReorderItems`'. The row renderer is untouched: a row does not know it can be dragged,
+ * which is what keeps P3-28's one renderer one renderer.
  *
  * ## The open row is held by id, not by value
  *
@@ -106,6 +110,7 @@ export function ListDetailScreen({
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({
@@ -177,7 +182,12 @@ export function ListDetailScreen({
   );
 
   return (
-    <ScreenShell header={header} scroll={false} testID="list-detail">
+    <ScreenShell
+      header={header}
+      scroll={false}
+      bodySpacing="compact"
+      testID="list-detail"
+    >
       <ScrollView
         onScroll={onScroll}
         scrollEventThrottle={16}
@@ -225,75 +235,83 @@ export function ListDetailScreen({
            * carries no action — the persistent add row below is §5.6's contextual action, and
            * a second one would be two controls for one thing.
            */
-          <EmptyState
-            heading="Nothing here"
-            body={list.emptyStateCopy}
-            testID="list-detail-empty"
-          />
+          <ListEmptyState body={list.emptyStateCopy} onAdd={() => setAddOpen(true)} />
         ) : list === undefined ? null : list.itemStateMode.mode === 'stages' &&
           list.itemStateMode.groupByState ? (
-          <StateSections
-            list={
-              list as List & {
-                itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
-              }
-            }
-            items={view.items}
-            onOpen={(item) => setOpenItemId(item.itemId)}
-            onDrop={reorder.drop}
-          />
-        ) : (
-          /* Reorder is offered in every mode and never mutates item state. */
-          <ReorderableList
-            /*
-             * Sorted here as well as by the projection, and deliberately: `(rank, itemId)` is
-             * the order both platforms already produce, and passing it through the one exported
-             * comparator on the way to the screen means a restored, legacy or seeded duplicate
-             * rank renders identically on two devices whichever order it reached them in
-             * (acceptance criterion 29). It is a no-op on an already-ordered projection.
-             */
-            items={orderedItems(view.items)}
-            keyOf={(item) => item.itemId}
-            rangeOf={(itemId) => reorderRange(list, view.items, itemId)}
-            onDrop={reorder.drop}
-            testID="list-detail-items"
-            renderItem={(item) => (
-              /* The renderer reads stored configuration, never creation provenance. */
-              <ListItemRow
-                list={list}
-                item={item}
-                onOpen={() => setOpenItemId(item.itemId)}
-                onToggleChecked={(next) =>
-                  items.save(item, {
-                    state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
-                  })
+          <View style={{ gap: theme.space[3] }}>
+            <ListOverview count={countLine(list)} />
+            <StateSections
+              list={
+                list as List & {
+                  itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
                 }
-                {...(item.features?.place === undefined
-                  ? {}
-                  : { onOpenLocation: () => void openInMaps(item.features?.place) })}
-                testID={`list-item-${item.itemId}`}
-              />
-            )}
-          />
+              }
+              items={view.items}
+              onOpen={(item) => setOpenItemId(item.itemId)}
+              onDrop={reorder.drop}
+            />
+          </View>
+        ) : (
+          <View style={{ gap: theme.space[2] }}>
+            <ListOverview count={countLine(list)} />
+            {/* Reorder is offered in every mode and never mutates item state. */}
+            <ReorderableList
+              /*
+               * Sorted here as well as by the projection, and deliberately: `(rank, itemId)` is
+               * the order both platforms already produce, and passing it through the one exported
+               * comparator on the way to the screen means a restored, legacy or seeded duplicate
+               * rank renders identically on two devices whichever order it reached them in
+               * (acceptance criterion 29). It is a no-op on an already-ordered projection.
+               */
+              items={orderedItems(view.items)}
+              keyOf={(item) => item.itemId}
+              labelOf={(item) => item.title}
+              rangeOf={(itemId) => reorderRange(list, view.items, itemId)}
+              onDrop={reorder.drop}
+              testID="list-detail-items"
+              renderItem={(item) => (
+                /* The renderer reads stored configuration, never creation provenance. */
+                <ListItemRow
+                  list={list}
+                  item={item}
+                  onOpen={() => setOpenItemId(item.itemId)}
+                  onToggleChecked={(next) =>
+                    items.save(item, {
+                      state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
+                    })
+                  }
+                  {...(item.features?.place === undefined
+                    ? {}
+                    : { onOpenLocation: () => void openInMaps(item.features?.place) })}
+                  testID={`list-item-${item.itemId}`}
+                />
+              )}
+            />
+          </View>
         )}
 
-        {list === undefined ? null : (
-          <AddItemRow
-            listName={list.title}
-            onAdd={async (title) => {
-              const itemId = await add.add(listId, { title });
-              // Re-read from wherever this platform's truth is; the hook decides which.
-              if (itemId !== undefined) view.refresh();
-              return itemId;
-            }}
-            isAdding={add.isAdding}
-            autoFocus={showEmpty}
-            {...(add.errorMessage === undefined
-              ? {}
-              : { errorMessage: add.errorMessage })}
-          />
+        {list === undefined || view.itemCount === 0 ? null : (
+          <ListAddRow listName={list.title} onPress={() => setAddOpen(true)} />
         )}
       </ScrollView>
+
+      {list === undefined ? null : (
+        <ContextualListItemComposer
+          open={addOpen}
+          listName={list.title}
+          isAdding={add.isAdding}
+          {...(add.errorMessage === undefined ? {} : { errorMessage: add.errorMessage })}
+          onClose={() => {
+            add.dismissError();
+            setAddOpen(false);
+          }}
+          onAdd={async (fields) => {
+            const itemId = await add.add(listId, fields);
+            if (itemId !== undefined) view.refresh();
+            return itemId;
+          }}
+        />
+      )}
 
       {list === undefined || openItem === undefined ? null : (
         <ItemSheet

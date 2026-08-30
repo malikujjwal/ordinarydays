@@ -72,6 +72,7 @@ test('a list item lands in the list the user named, from either route', async ({
   const stamp = Date.now();
   const restaurants = `Restaurants to try ${stamp}`;
   const groceries = `Groceries ${stamp}`;
+  const quickList = `Quick list ${stamp}`;
   const title = `Try Zahav ${stamp}`;
 
   /**
@@ -92,26 +93,44 @@ test('a list item lands in the list the user named, from either route', async ({
   await testId(page, 'global-add').click();
   await page.getByRole('button', { name: /^List item,/ }).click();
 
-  // Assertion 1: the destination is asked for **before** any field or capture exists.
+  // Assertion 1: fields and the required unselected destination share one composer.
   await expect(testId(page, 'list-destination-chooser')).toBeVisible();
   await expect(testId(page, 'compose-form')).toHaveCount(0);
-  await expect(testId(page, 'compose-title')).toHaveCount(0);
+  await expect(testId(page, 'compose-title')).toBeVisible();
+  await expect(testId(page, 'compose-item-note')).toBeVisible();
+  await expect(page.getByText('Which list?')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Photos' })).toHaveCount(0);
   expect(requests.filter((line) => /capture/.test(line))).toEqual([]);
-  await expectNoSeriousA11yViolations(page, '/compose (list picker)');
+  await expectNoSeriousA11yViolations(page, '/compose (global list item)');
 
   // Assertion 2: nothing is pre-selected — not the slot-carrying list, not the recent one.
   for (const listId of [groceriesId, restaurantsId]) {
     const row = testId(page, `list-destination-${listId}`);
     await expect(row).toBeVisible();
     await expect(row).not.toHaveAttribute('aria-selected', /.*/);
-    await expect(row).not.toHaveAttribute('aria-pressed', /.*/);
+    await expect(row).toHaveAttribute('aria-pressed', 'false');
   }
+
+  await testId(page, 'compose-title').fill(title);
+  await testId(page, 'compose-item-note').fill('Dinner shortlist');
+
+  // Creating a destination uses the ordinary unselected catalogue, then returns here intact.
+  await testId(page, 'list-destination-new').click();
+  await expect(testId(page, 'list-style-chooser')).toBeVisible();
+  await expect(testId(page, 'new-list-title')).toHaveCount(0);
+  await testId(page, 'list-style-blank').click();
+  await testId(page, 'new-list-title').fill(quickList);
+  await testId(page, 'new-list-create').click();
+  await expect(testId(page, 'compose-title')).toHaveValue(title);
+  await expect(testId(page, 'compose-item-note')).toHaveValue('Dinner shortlist');
+  await expect(page.getByRole('button', { name: `Add to ${quickList}` })).toBeVisible();
 
   await testId(page, `list-destination-${restaurantsId}`).click();
 
-  // Assertion 3: only now does the form exist, and the write names the list.
-  await expect(testId(page, 'compose-form')).toBeVisible();
-  await testId(page, 'compose-title').fill(title);
+  // Assertion 3: selection stays in place, preserves fields, and unlocks capture plus commit.
+  await expect(testId(page, 'compose-title')).toHaveValue(title);
+  await expect(testId(page, 'compose-item-note')).toHaveValue('Dinner shortlist');
+  await expect(page.getByRole('button', { name: 'Photos' })).toBeVisible();
   await expectNoSeriousA11yViolations(page, '/compose (item form)');
   await page.getByRole('button', { name: `Add to ${restaurants}` }).click();
 
@@ -124,14 +143,20 @@ test('a list item lands in the list the user named, from either route', async ({
   await page.goto(`/lists/${groceriesId}`);
   await expect(testId(page, 'list-detail')).toBeVisible();
 
-  // §5.9 verbatim: the fixed heading and this list's own stored guidance.
-  await expect(page.getByText('Nothing here')).toBeVisible();
+  // The compact empty state: stored guidance and one primary contextual action.
+  await expect(page.getByText('Start with one item')).toBeVisible();
   await expect(page.getByText('Add something to buy.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add item' })).toBeVisible();
   await expectNoSeriousA11yViolations(page, '/lists/:id (empty)');
 
-  const field = testId(page, 'list-add-item-title');
+  await page.getByRole('button', { name: 'Add item' }).click();
+  await expect(testId(page, 'list-contextual-add')).toBeVisible();
+  await expect(testId(page, 'list-detail')).toBeAttached();
+  await expect(testId(page, 'list-destination-chooser')).toHaveCount(0);
+  const field = testId(page, 'list-contextual-add-title');
   await expect(field).toBeVisible();
   await field.fill(title);
+  await testId(page, 'list-contextual-add-note').fill('Buy two');
   await page.getByRole('button', { name: `Add to ${groceries}` }).click();
 
   // Assertion 4: the same words, entered in a different list, stay in that list.

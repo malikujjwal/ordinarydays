@@ -1,4 +1,4 @@
-import { useTheme } from '@od/ui';
+import { GripVertical, useTheme } from '@od/ui';
 import type { ReactNode } from 'react';
 import { useCallback, useRef } from 'react';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -45,6 +45,8 @@ import { dropIndex, REORDER_LONG_PRESS_MS, type ReorderRange } from '../model/re
 export interface ReorderableListProps<T> {
   items: readonly T[];
   keyOf: (item: T) => string;
+  /** Human title used by the wrapper-owned handle: `Reorder <title>`. */
+  labelOf: (item: T) => string;
   /**
    * The insertion indices this row may be dropped at, or `undefined` when it may not be
    * dragged at all.
@@ -62,6 +64,7 @@ export interface ReorderableListProps<T> {
 interface RowProps {
   index: number;
   itemId: string;
+  itemLabel: string;
   range: ReorderRange | undefined;
   heights: SharedValue<number[]>;
   activeIndex: SharedValue<number>;
@@ -82,6 +85,7 @@ const SETTLE = {
 function ReorderableRow({
   index,
   itemId,
+  itemLabel,
   range,
   heights,
   activeIndex,
@@ -147,9 +151,46 @@ function ReorderableRow({
     <GestureDetector gesture={gesture}>
       <Animated.View
         onLayout={(event) => onMeasured(index, event.nativeEvent.layout.height)}
-        style={[style, { backgroundColor: theme.colors.surface }]}
+        style={[
+          style,
+          {
+            position: 'relative',
+            paddingRight: theme.layout.hitTarget,
+            backgroundColor: theme.colors.surface,
+          },
+        ]}
       >
         {children}
+        {range === undefined ? null : (
+          <Animated.View
+            accessible
+            focusable
+            accessibilityRole="button"
+            accessibilityLabel={`Reorder ${itemLabel}`}
+            accessibilityHint={`Position ${String(index + 1)}. Move up and Move down actions available.`}
+            accessibilityActions={[
+              { name: 'decrement', label: 'Move up' },
+              { name: 'increment', label: 'Move down' },
+            ]}
+            onAccessibilityAction={(event) => {
+              const delta = event.nativeEvent.actionName === 'decrement' ? -1 : 1;
+              const next = Math.min(Math.max(index + delta, first), last);
+              if (next !== index) onDrop(itemId, next);
+            }}
+            testID={`list-reorder-handle-${itemId}`}
+            style={{
+              position: 'absolute',
+              top: theme.space[2],
+              right: 0,
+              width: theme.layout.hitTarget,
+              height: theme.layout.hitTarget,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <GripVertical size={20} color={theme.colors.textSecondary} />
+          </Animated.View>
+        )}
       </Animated.View>
     </GestureDetector>
   );
@@ -158,6 +199,7 @@ function ReorderableRow({
 export function ReorderableList<T>({
   items,
   keyOf,
+  labelOf,
   rangeOf,
   onDrop,
   renderItem,
@@ -188,6 +230,7 @@ export function ReorderableList<T>({
             key={itemId}
             index={index}
             itemId={itemId}
+            itemLabel={labelOf(item)}
             range={rangeOf(itemId)}
             heights={heights}
             activeIndex={activeIndex}

@@ -11,7 +11,13 @@ import {
 } from './archiveUndoToast';
 import { deleteListConfirmation } from './deleteConfirmation';
 import { mayShowEmptyState, partitionByArchived, shouldDrainMore } from './indexDrain';
-import { checkedProgress, countLine, listTint, showsCheckedCount } from './listCard';
+import {
+  checkedProgress,
+  collectionToneForListId,
+  countLine,
+  listTint,
+  showsCheckedCount,
+} from './listCard';
 import { listSwipeActions, roleFor } from './listSwipeActions';
 import { updatedLine } from './updatedLine';
 
@@ -100,6 +106,30 @@ describe('the progress bar', () => {
 describe('the icon tint', () => {
   it('is presentation-only and independent of creation provenance', () => {
     expect(listTint()).toBe('task');
+  });
+});
+
+describe('the collection-card tone', () => {
+  it('is stable for an identity and independent of catalogue provenance', () => {
+    const listId = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+    expect(collectionToneForListId(listId)).toBe(collectionToneForListId(listId));
+    expect(collectionToneForListId(list({ templateKey: 'blank' }).listId)).toBe(
+      collectionToneForListId(list({ templateKey: 'watch-later' }).listId),
+    );
+  });
+
+  it('varies a production shelf without depending on grid position', () => {
+    const ids = [
+      'lst_01J8XKQ2M4N5P6R7S8T9V0W1X1',
+      'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      'lst_01J8XKQ2M4N5P6R7S8T9V0W1X4',
+    ];
+    const forward = ids.map(collectionToneForListId);
+    const reversed = [...ids].reverse().map(collectionToneForListId).reverse();
+
+    expect(new Set(forward).size).toBeGreaterThan(1);
+    expect(reversed).toEqual(forward);
   });
 });
 

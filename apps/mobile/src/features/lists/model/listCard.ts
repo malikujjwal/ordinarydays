@@ -1,4 +1,5 @@
 import type { ItemStateMode } from '@od/shared/types';
+import type { CollectionSurfaceTone } from '@od/ui';
 
 /**
  * What a Lists-index card says about a list, computed from the list's **own stored fields**
@@ -72,4 +73,21 @@ export function checkedProgress(list: ListCardSource): number | undefined {
  */
 export function listTint(): 'task' {
   return 'task';
+}
+
+const COLLECTION_TONES = [
+  'collectionRose',
+  'collectionSand',
+  'collectionBlue',
+  'collectionOlive',
+] as const satisfies readonly CollectionSurfaceTone[];
+
+/** Stable identity hash for §5.2a's presentation-only collection surface. */
+export function collectionToneForListId(listId: string): CollectionSurfaceTone {
+  let hash = 2166136261;
+  for (let index = 0; index < listId.length; index += 1) {
+    hash ^= listId.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return COLLECTION_TONES[(hash >>> 0) % COLLECTION_TONES.length] ?? 'collectionRose';
 }

@@ -27,6 +27,8 @@ import { useTheme } from '../theme/index';
 export interface TouchableProps extends Omit<PressableProps, 'style' | 'children'> {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
+  /** React Native Web forwards these as `data-*`; native safely ignores them. */
+  dataSet?: Record<string, string>;
   /** Visual size below 44; the difference is made up with `hitSlop`. */
   visualSize?: number;
   /** Set `false` for a full-width or row-shaped target that should not be forced square. */
@@ -39,6 +41,8 @@ export function Touchable({
   visualSize,
   square = false,
   disabled,
+  onFocus,
+  onBlur,
   ...rest
 }: TouchableProps) {
   const theme = useTheme();
@@ -55,8 +59,14 @@ export function Touchable({
       accessibilityState={{ disabled: disabled === true }}
       disabled={disabled}
       hitSlop={slop}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
+      onFocus={(event) => {
+        setFocused(true);
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        setFocused(false);
+        onBlur?.(event);
+      }}
       style={({ pressed }) => [
         {
           minHeight: target,

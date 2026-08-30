@@ -37,6 +37,7 @@ function mount(rangeOf: (itemId: string) => { first: number; last: number } | un
       <ReorderableList
         items={rows}
         keyOf={(row) => row.itemId}
+        labelOf={(row) => row.title}
         rangeOf={rangeOf}
         onDrop={onDrop}
         testID="reorderable"
@@ -79,15 +80,38 @@ describe('the handle', () => {
     expect(handle('itm_a')).toBeDefined();
   });
 
-  it('names its position, and says what to do once it is held', () => {
+  it('names the item exactly and keeps moving instructions in its description', () => {
     mount(anywhere);
 
-    expect(handle('itm_b').getAttribute('aria-label')).toBe('Reorder, position 2 of 4');
+    expect(handle('itm_b').getAttribute('aria-label')).toBe('Reorder Eggs');
     press('itm_b', 'Enter');
-    expect(handle('itm_b').getAttribute('aria-label')).toContain(
+    expect(handle('itm_b').getAttribute('data-reorder-description')).toContain(
       'Moving, position 2 of 4',
     );
-    expect(handle('itm_b').getAttribute('aria-label')).toContain('Escape to cancel');
+    expect(handle('itm_b').getAttribute('data-reorder-description')).toContain(
+      'Escape to cancel',
+    );
+  });
+
+  it('reveals on keyboard focus as well as pointer hover', () => {
+    mount(anywhere);
+    const control = handle('itm_b');
+    const reveal = control.parentElement;
+    expect(reveal?.style.opacity).toBe('0');
+
+    fireEvent.focus(control);
+    expect(reveal?.style.opacity).toBe('1');
+    fireEvent.blur(control);
+    expect(reveal?.style.opacity).toBe('0');
+  });
+
+  it('exposes bounded Move up and Move down accessibility actions', () => {
+    mount(anywhere);
+
+    expect(handle('itm_b').getAttribute('data-reorder-description')).toContain('Move up');
+    expect(handle('itm_b').getAttribute('data-reorder-description')).toContain(
+      'Move down',
+    );
   });
 });
 
@@ -122,7 +146,7 @@ describe('one grab, one drop', () => {
     press('itm_a', 'Escape');
 
     expect(onDrop).not.toHaveBeenCalled();
-    expect(handle('itm_a').getAttribute('aria-label')).toBe('Reorder, position 1 of 4');
+    expect(handle('itm_a').getAttribute('aria-label')).toBe('Reorder Milk');
   });
 
   /** A drop back where it started still reaches the hook, which is where the no-op is decided. */
@@ -160,7 +184,9 @@ describe('the watch group guard', () => {
 
     press('itm_a', 'Enter');
     for (let at = 0; at < 6; at += 1) press('itm_a', 'ArrowDown');
-    expect(handle('itm_a').getAttribute('aria-label')).toContain('position 2 of 4');
+    expect(handle('itm_a').getAttribute('data-reorder-description')).toContain(
+      'position 2 of 4',
+    );
     press('itm_a', 'Enter');
 
     expect(onDrop).toHaveBeenCalledWith('itm_a', 1);
