@@ -1,0 +1,179 @@
+import type { List, ListItemView } from '@od/shared/types';
+import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
+import { useCallback } from 'react';
+import { ScrollView, View } from 'react-native';
+import { countLine } from '../model/listCard';
+import { ITEM_SCROLL_FETCH_RATIO, mayShowEmptyState } from '../model/listDetail';
+import { openInMaps } from '../model/openInMaps';
+import { orderedItems, reorderRange } from '../model/reorder';
+import { ListAddRow } from './ListAddRow';
+import { ListEmptyState } from './ListEmptyState';
+import { ListHeader } from './ListHeader';
+import { ListItemRow } from './ListItemRow';
+import { ListOverview } from './ListOverview';
+import { ReorderableList } from './ReorderableList';
+import { isGroupedStageList, StateSections } from './StateSections';
+
+export interface ListDetailSurfaceProps {
+  list: List | undefined;
+  items: readonly ListItemView[];
+  itemCount: number;
+  complete: boolean;
+  status: 'pending' | 'success' | 'error';
+  isOffline: boolean;
+  message?: string;
+  requestId?: string;
+  onBack: () => void;
+  onOpenMenu: () => void;
+  onRename: (title: string) => void;
+  onRetry: () => void;
+  onLoadMore: () => void;
+  onAdd: () => void;
+  onOpenItem: (item: ListItemView) => void;
+  onToggleChecked: (
+    item: ListItemView,
+    checked: boolean,
+  ) => boolean | Promise<boolean | undefined> | undefined;
+  onDrop: (itemId: string, toIndex: number) => void;
+}
+
+/** Production List-detail layout, shared by the live screen and its deterministic gallery. */
+export function ListDetailSurface({
+  list,
+  items,
+  itemCount,
+  complete,
+  status,
+  isOffline,
+  message,
+  requestId,
+  onBack,
+  onOpenMenu,
+  onRename,
+  onRetry,
+  onLoadMore,
+  onAdd,
+  onOpenItem,
+  onToggleChecked,
+  onDrop,
+}: ListDetailSurfaceProps) {
+  const theme = useTheme();
+  const showEmpty = mayShowEmptyState(
+    { itemCount, loadedCount: items.length, complete },
+    status !== 'pending',
+  );
+  const onScroll = useCallback(
+    (event: {
+      nativeEvent: {
+        contentOffset: { y: number };
+        contentSize: { height: number };
+        layoutMeasurement: { height: number };
+      };
+    }) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const depth =
+        (contentOffset.y + layoutMeasurement.height) / Math.max(1, contentSize.height);
+      if (depth >= ITEM_SCROLL_FETCH_RATIO) onLoadMore();
+    },
+    [onLoadMore],
+  );
+
+  return (
+    <ScreenShell
+      header={
+        <ListHeader
+          list={list}
+          onBack={onBack}
+          onOpenMenu={onOpenMenu}
+          onRename={onRename}
+        />
+      }
+      scroll={false}
+      bodySpacing="compact"
+      testID="list-detail"
+    >
+      <ScrollView
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ gap: theme.space[3] }}
+        testID="list-detail-scroll"
+      >
+        {isOffline ? (
+          <Text variant="footnote" color="textSecondary">
+            You're offline. Showing saved data.
+          </Text>
+        ) : null}
+
+        {status === 'error' && items.length === 0 ? (
+          <View testID="list-detail-error">
+            <EmptyState
+              heading="Couldn't load this."
+              action={{ label: 'Try again', onPress: onRetry }}
+            />
+            {requestId === undefined ? null : (
+              <Text
+                variant="footnote"
+                color="textSecondary"
+                align="center"
+                selectable
+                testID="list-detail-request-id"
+              >
+                {requestId}
+              </Text>
+            )}
+          </View>
+        ) : message === undefined ? null : (
+          <Text variant="footnote" color="danger" testID="list-detail-refresh-failed">
+            Couldn't refresh. Try again.
+          </Text>
+        )}
+
+        {status === 'pending' ? (
+          <View testID="list-detail-loading">
+            <Skeleton shape="row" count={5} />
+          </View>
+        ) : showEmpty && list !== undefined ? (
+          <ListEmptyState body={list.emptyStateCopy} onAdd={onAdd} />
+        ) : list === undefined ? null : isGroupedStageList(list) ? (
+          <View style={{ gap: theme.space[3] }}>
+            <ListOverview count={countLine(list)} />
+            <StateSections
+              list={list}
+              items={items}
+              onOpen={onOpenItem}
+              onDrop={onDrop}
+            />
+          </View>
+        ) : (
+          <View style={{ gap: theme.space[2] }}>
+            <ListOverview count={countLine(list)} />
+            <ReorderableList
+              items={orderedItems(items)}
+              keyOf={(item) => item.itemId}
+              labelOf={(item) => item.title}
+              rangeOf={(itemId) => reorderRange(list, items, itemId)}
+              onDrop={onDrop}
+              testID="list-detail-items"
+              renderItem={(item) => (
+                <ListItemRow
+                  list={list}
+                  item={item}
+                  onOpen={() => onOpenItem(item)}
+                  onToggleChecked={(next) => onToggleChecked(item, next)}
+                  {...(item.features?.place === undefined
+                    ? {}
+                    : { onOpenLocation: () => void openInMaps(item.features?.place) })}
+                  testID={`list-item-${item.itemId}`}
+                />
+              )}
+            />
+          </View>
+        )}
+
+        {list === undefined || itemCount === 0 ? null : (
+          <ListAddRow listName={list.title} onPress={onAdd} />
+        )}
+      </ScrollView>
+    </ScreenShell>
+  );
+}

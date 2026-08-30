@@ -52,9 +52,7 @@ export function Card({
 
   const style = [
     {
-      backgroundColor: hero
-        ? theme.colors.upNextSurface
-        : theme.collectionSurface(surfaceTone),
+      backgroundColor: theme.collectionSurface('neutral'),
       borderRadius: theme.radius[radius],
       padding: theme.space[padding],
       ...(paddingBottom === undefined
@@ -62,6 +60,10 @@ export function Card({
         : { paddingBottom: theme.space[paddingBottom] }),
     },
     theme.elevation(elevation),
+    surfaceTone === 'neutral'
+      ? null
+      : { backgroundColor: theme.collectionSurface(surfaceTone) },
+    hero ? { backgroundColor: theme.colors.upNextSurface } : null,
     hero && theme.scheme === 'light' ? ({ boxShadow: upNextShadow } as object) : null,
     /**
      * **A left edge, not a rim** — corrected 2026-08-17 against `design-system.md` §7.1, which

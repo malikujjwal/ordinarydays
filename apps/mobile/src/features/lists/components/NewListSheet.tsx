@@ -128,7 +128,12 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
       }
     >
       {create.errorMessage === undefined ? null : (
-        <View style={{ gap: theme.space[1] }} testID="new-list-error">
+        <View
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          style={{ gap: theme.space[1] }}
+          testID="new-list-error"
+        >
           <Text variant="footnote" color="danger">
             {create.errorMessage}
           </Text>

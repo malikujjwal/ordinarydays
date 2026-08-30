@@ -1,6 +1,6 @@
 import { Text, ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReorderableList } from './ReorderableList';
 
 /**
@@ -61,6 +61,11 @@ beforeEach(() => {
   onDrop.mockClear();
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
 describe('the handle', () => {
   it('is on every draggable row and reachable without a pointer', () => {
     mount(anywhere);
@@ -105,6 +110,20 @@ describe('the handle', () => {
     expect(reveal?.style.opacity).toBe('0');
   });
 
+  it('stays visible on a touch layout before focus or hover', () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    mount(anywhere);
+
+    expect(handle('itm_b').parentElement?.style.opacity).toBe('1');
+  });
+
   it('exposes bounded Move up and Move down accessibility actions', () => {
     mount(anywhere);
 
@@ -112,6 +131,32 @@ describe('the handle', () => {
     expect(handle('itm_b').getAttribute('data-reorder-description')).toContain(
       'Move down',
     );
+  });
+});
+
+describe('touch long press', () => {
+  it('starts the same drag from the row body and commits once on release', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    mount(anywhere);
+
+    fireEvent.pointerDown(screen.getByText('Eggs'), {
+      pointerType: 'touch',
+      pageY: 60,
+    });
+    vi.advanceTimersByTime(250);
+    fireEvent.pointerMove(window, { pointerType: 'touch', pageY: 180 });
+    fireEvent.pointerUp(window, { pointerType: 'touch', pageY: 180 });
+
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop).toHaveBeenCalledWith('itm_b', expect.any(Number));
   });
 });
 

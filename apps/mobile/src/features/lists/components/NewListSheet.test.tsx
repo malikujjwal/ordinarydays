@@ -40,11 +40,19 @@ function mount() {
   return { onClose, onCreated };
 }
 
-const choose = (templateKey: string) =>
-  fireEvent.click(screen.getByTestId(`list-style-${templateKey}`));
+function choiceControl(templateKey: string) {
+  const choice = listTemplateChoices().find(
+    (candidate) => candidate.templateKey === templateKey,
+  );
+  if (choice === undefined) throw new Error(`Missing List choice ${templateKey}`);
+  const label = choice.templateKey === 'blank' ? 'Blank list' : choice.chooserLabel;
+  return screen.getByRole('button', { name: `${label}. ${choice.summary}` });
+}
 
-const titleField = () => screen.getByTestId('new-list-title');
-const createButton = () => screen.getByTestId('new-list-create');
+const choose = (templateKey: string) => fireEvent.click(choiceControl(templateKey));
+
+const titleField = () => screen.getByRole('textbox');
+const createButton = () => screen.getByRole('button', { name: /^Create list/ });
 
 beforeEach(() => {
   setHook();
@@ -62,31 +70,30 @@ describe('the style chooser comes first', () => {
     ).toBeDefined();
     expect(screen.getByTestId('list-style-chooser')).toBeDefined();
     // There is no text on the screen for anything to classify, and no write to enable.
-    expect(screen.queryByTestId('new-list-title')).toBeNull();
-    expect(screen.queryByTestId('new-list-create')).toBeNull();
-    expect(screen.queryByTestId('new-list-back')).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create list' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
   });
 
   it('renders every style exactly once, in the catalogue order', () => {
     mount();
     const choices = listTemplateChoices();
 
-    const rendered = choices.filter((choice) =>
-      screen.queryByTestId(`list-style-${choice.templateKey}`),
-    );
+    const rendered = choices.filter((choice) => {
+      const label = choice.templateKey === 'blank' ? 'Blank list' : choice.chooserLabel;
+      return screen.queryByRole('button', { name: `${label}. ${choice.summary}` });
+    });
     expect(rendered.map((choice) => choice.templateKey)).toEqual(
       choices.map((choice) => choice.templateKey),
     );
-    expect(screen.getByTestId('list-style-blank')).toBeDefined();
+    expect(choiceControl('blank')).toBeDefined();
   });
 
   it('leads with one full-width Blank list card above the six-card grid', () => {
     mount();
-    expect(screen.getByTestId('list-style-blank').textContent).toContain('Blank list');
+    expect(choiceControl('blank').textContent).toContain('Blank list');
     expect(
-      screen
-        .getByTestId('list-style-leading')
-        .contains(screen.getByTestId('list-style-blank')),
+      screen.getByTestId('list-style-leading').contains(choiceControl('blank')),
     ).toBe(true);
     expect(screen.getByTestId('list-style-grid').children).toHaveLength(6);
   });
@@ -95,12 +102,14 @@ describe('the style chooser comes first', () => {
   it('announces each row as its style and its description', () => {
     mount();
 
-    expect(screen.getByTestId('list-style-blank').getAttribute('aria-label')).toBe(
-      'Blank list. Start without a category or item details',
-    );
-    expect(screen.getByTestId('list-style-groceries').getAttribute('aria-label')).toBe(
-      'Groceries. A shopping checklist',
-    );
+    expect(
+      screen.getByRole('button', {
+        name: 'Blank list. Start without a category or item details',
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole('button', { name: 'Groceries. A shopping checklist' }),
+    ).toBeDefined();
   });
 
   /** A chooser row navigates; it is neither selected nor unselected, and says neither. */
@@ -108,7 +117,7 @@ describe('the style chooser comes first', () => {
     mount();
 
     for (const choice of listTemplateChoices()) {
-      const row = screen.getByTestId(`list-style-${choice.templateKey}`);
+      const row = choiceControl(choice.templateKey);
       expect(row.getAttribute('aria-selected'), choice.templateKey).toBeNull();
       expect(row.getAttribute('aria-pressed'), choice.templateKey).toBeNull();
       expect(row.getAttribute('aria-checked'), choice.templateKey).toBeNull();
@@ -123,9 +132,7 @@ describe('the title step', () => {
     choose('watch-later');
 
     expect(screen.getByRole('heading', { name: 'Watch Later' })).toBeDefined();
-    expect(screen.getByTestId('new-list-style-summary').textContent).toBe(
-      'Track what to watch and episode progress',
-    );
+    expect(screen.getByText('Track what to watch and episode progress')).toBeDefined();
     expect(titleField().getAttribute('value')).toBe('Watch Later');
     // §5.4 rule 6's second announcement.
     expect(titleField().getAttribute('aria-label')).toBe(
@@ -210,10 +217,10 @@ describe('the title step', () => {
 
     choose('groceries');
     fireEvent.change(titleField(), { target: { value: 'Costco run' } });
-    fireEvent.click(screen.getByTestId('new-list-back'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
     expect(screen.getByTestId('list-style-chooser')).toBeDefined();
-    expect(screen.queryByTestId('new-list-title')).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
 
     choose('groceries');
     expect(titleField().getAttribute('value')).toBe('Groceries');
@@ -228,9 +235,7 @@ describe('the title step', () => {
     fireEvent.click(createButton());
     await vi.waitFor(() => expect(create).toHaveBeenCalled());
 
-    expect(screen.getByTestId('new-list-error').textContent).toContain(
-      'Something went wrong.',
-    );
+    expect(screen.getByRole('alert').textContent).toContain('Something went wrong.');
     expect(titleField()).toBeDefined();
     expect(onCreated).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

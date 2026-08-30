@@ -535,7 +535,9 @@ describe('List item', () => {
     tapChoice('List item');
 
     for (const list of destinations.lists) {
-      const row = screen.getByTestId(`list-destination-${list.listId}`);
+      const row = screen.getByRole('button', {
+        name: `${list.title}, select as destination`,
+      });
       expect(row.getAttribute('aria-pressed')).toBe('false');
     }
   });
@@ -550,16 +552,21 @@ describe('List item', () => {
       target: { value: 'Ask about the tasting menu' },
     });
     fireEvent.click(
-      screen.getByTestId('list-destination-lst_01J0000000000000000000000B'),
+      screen.getByRole('button', {
+        name: 'Restaurants to try, select as destination',
+      }),
     );
 
     expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
-    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe(
+    expect(screen.getByLabelText('Note')).toHaveProperty(
+      'value',
       'Ask about the tasting menu',
     );
     expect(
       screen
-        .getByTestId('list-destination-lst_01J0000000000000000000000B')
+        .getByRole('button', {
+          name: 'Restaurants to try, select as destination',
+        })
         .getAttribute('aria-pressed'),
     ).toBe('true');
     expect(
@@ -587,9 +594,7 @@ describe('List item', () => {
     });
 
     expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
-    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe(
-      'Patio if possible',
-    );
+    expect(screen.getByLabelText('Note')).toHaveProperty('value', 'Patio if possible');
     expect(
       screen.getByRole('button', { name: 'Add to Restaurants to try' }),
     ).toBeDefined();
@@ -605,6 +610,46 @@ describe('List item', () => {
     expect(rows.indexOf('New list, Choose a type, then name it')).toBeGreaterThan(
       rows.indexOf('Groceries, select as destination'),
     );
+  });
+
+  it('retains the draft and shows the API request id when the add fails', async () => {
+    stubFetch({
+      status: 500,
+      body: {
+        error: {
+          code: 'internal',
+          message: 'Database exploded',
+          requestId: 'req_global_add_9',
+        },
+      },
+    });
+    const onClose = vi.fn();
+    mount(onClose, { listDestinations: destinations });
+    tapChoice('List item');
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Try Zahav' },
+    });
+    fireEvent.change(screen.getByLabelText('Note'), {
+      target: { value: 'Patio if possible' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Restaurants to try, select as destination' }),
+    );
+    tap('Add to Restaurants to try');
+
+    /**
+     * A 500 is retryable, so the real transport exhausts its jittered backoff before the
+     * composer receives the failure. Match the established detail-screen test budget rather
+     * than racing Testing Library's one-second default under coverage load.
+     */
+    await waitFor(() => expect(screen.getByRole('alert')).toBeDefined(), {
+      timeout: 10_000,
+    });
+    expect(screen.getByRole('alert').textContent).toContain('Something went wrong.');
+    expect(screen.getByRole('alert').textContent).toContain('req_global_add_9');
+    expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
+    expect(screen.getByLabelText('Note')).toHaveProperty('value', 'Patio if possible');
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

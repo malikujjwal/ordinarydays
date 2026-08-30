@@ -66,6 +66,7 @@ export function useAddListItem(): AddListItemResult {
     },
     isAdding: adding,
     errorMessage: error,
+    errorRequestId: undefined,
     dismissError: () => setError(undefined),
   };
 }

@@ -12,10 +12,17 @@ const actualDir = fromRoot(environment('ACTUAL_DIR') ?? 'test-results/lists-ios-
 const diffDir = fromRoot(environment('DIFF_DIR') ?? 'test-results/lists-ios-diff');
 const simulatorName = environment('SIMULATOR_NAME') ?? 'iPhone 16 Pro';
 const frames = [
+  ['overview-light', 'frame=overview&scheme=light'],
+  ['overview-dark', 'frame=overview&scheme=dark'],
   ['create', 'frame=create&scheme=light'],
+  ['empty', 'frame=empty&scheme=light'],
+  ['checklist-light', 'frame=checklist&scheme=light'],
+  ['checklist-dark', 'frame=checklist&scheme=dark'],
+  ['stages', 'frame=stages&scheme=light'],
+  ['context-add', 'frame=context-add&scheme=light'],
+  ['global-add', 'frame=global-add&scheme=light'],
   ['settings-light', 'frame=settings&scheme=light'],
   ['settings-dark', 'frame=settings&scheme=dark'],
-  ['stages', 'frame=stages&scheme=light'],
   ['items', 'frame=items&scheme=light'],
 ];
 

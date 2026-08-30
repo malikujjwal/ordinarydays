@@ -7,8 +7,16 @@ import { ReorderableList } from './ReorderableList';
 
 const ORDER: readonly ListItemState[] = ['open', 'active', 'done'];
 
+export type GroupedStageList = List & {
+  itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
+};
+
+export function isGroupedStageList(list: List): list is GroupedStageList {
+  return list.itemStateMode.mode === 'stages' && list.itemStateMode.groupByState;
+}
+
 export interface StateSectionsProps {
-  list: List & { itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }> };
+  list: GroupedStageList;
   items: readonly ListItemView[];
   onOpen: (item: ListItemView) => void;
   onDrop: (itemId: string, toIndex: number) => void;

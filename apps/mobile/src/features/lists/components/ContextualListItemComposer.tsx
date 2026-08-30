@@ -1,13 +1,13 @@
-import { MAX_NOTES_LEN, MAX_TITLE_LEN } from '@od/shared/constants';
-import { Button, Field, Sheet, Text, useTheme } from '@od/ui';
+import { Button, Sheet } from '@od/ui';
 import { useState } from 'react';
-import { View } from 'react-native';
+import { ListItemComposerFields } from '@/components/ListItemComposerFields';
 
 export interface ContextualListItemComposerProps {
   open: boolean;
   listName: string;
   isAdding: boolean;
   errorMessage?: string;
+  errorRequestId?: string;
   onClose: () => void;
   onAdd: (fields: { title: string; note?: string }) => Promise<string | undefined>;
 }
@@ -18,10 +18,10 @@ export function ContextualListItemComposer({
   listName,
   isAdding,
   errorMessage,
+  errorRequestId,
   onClose,
   onAdd,
 }: ContextualListItemComposerProps) {
-  const theme = useTheme();
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
   const action = `Add to ${listName}`;
@@ -59,31 +59,18 @@ export function ContextualListItemComposer({
         />
       }
     >
-      <View style={{ gap: theme.space[6] }}>
-        {errorMessage === undefined ? null : (
-          <Text accessibilityRole="alert" variant="footnote" color="danger">
-            {errorMessage}
-          </Text>
-        )}
-        <Field
-          label="Title"
-          value={title}
-          onChangeText={setTitle}
-          autoFocus
-          maxLength={MAX_TITLE_LEN}
-          onSubmitEditing={() => void commit()}
-          testID="list-contextual-add-title"
-        />
-        <Field
-          label="Note"
-          optional
-          value={note}
-          onChangeText={setNote}
-          multiline
-          maxLength={MAX_NOTES_LEN}
-          testID="list-contextual-add-note"
-        />
-      </View>
+      <ListItemComposerFields
+        title={title}
+        note={note}
+        {...(errorMessage === undefined ? {} : { errorMessage })}
+        {...(errorRequestId === undefined ? {} : { errorRequestId })}
+        autoFocusTitle
+        onTitleChange={setTitle}
+        onNoteChange={setNote}
+        onSubmitTitle={() => void commit()}
+        titleTestID="list-contextual-add-title"
+        noteTestID="list-contextual-add-note"
+      />
     </Sheet>
   );
 }

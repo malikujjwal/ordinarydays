@@ -33,19 +33,27 @@ export interface AddListItemResult {
   add: (listId: string, fields: AddListItemFields) => Promise<string | undefined>;
   isAdding: boolean;
   errorMessage: string | undefined;
+  errorRequestId: string | undefined;
   dismissError: () => void;
 }
 
-export function describeAddFailure(error: unknown): string {
+export function describeAddFailure(error: unknown): {
+  message: string;
+  requestId?: string;
+} {
   if (error instanceof ApiError) {
-    return error.status >= 500 ? 'Something went wrong.' : error.message;
+    return {
+      message: error.status >= 500 ? 'Something went wrong.' : error.message,
+      requestId: error.requestId,
+    };
   }
-  return "Couldn't save this.";
+  return { message: "Couldn't save this." };
 }
 
 export function useAddListItem(): AddListItemResult {
   const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
+  const failure = error === undefined ? undefined : describeAddFailure(error);
 
   return {
     add: async (listId, fields) => {
@@ -65,14 +73,15 @@ export function useAddListItem(): AddListItemResult {
         setError(undefined);
         return item.itemId;
       } catch (caught) {
-        setError(describeAddFailure(caught));
+        setError(caught);
         return undefined;
       } finally {
         setAdding(false);
       }
     },
     isAdding: adding,
-    errorMessage: error,
+    errorMessage: failure?.message,
+    errorRequestId: failure?.requestId,
     dismissError: () => setError(undefined),
   };
 }

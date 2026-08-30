@@ -14,19 +14,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
 import { ContextualListItemComposer } from '@/features/lists/components/ContextualListItemComposer';
-import { ListAddRow } from '@/features/lists/components/ListAddRow';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
-import { ListEmptyState } from '@/features/lists/components/ListEmptyState';
-import { ListHeader } from '@/features/lists/components/ListHeader';
+import { ListDetailSurface } from '@/features/lists/components/ListDetailSurface';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
 import { ListItemRow } from '@/features/lists/components/ListItemRow';
-import { ListOverview } from '@/features/lists/components/ListOverview';
 import { ListSettingsSheet } from '@/features/lists/components/ListSettingsSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
-import { ReorderableList } from '@/features/lists/components/ReorderableList';
-import { StateSections } from '@/features/lists/components/StateSections';
 import type { ListSettings } from '@/features/lists/hooks/useListSettings';
-import { countLine } from '@/features/lists/model/listCard';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -392,7 +386,7 @@ function ItemsFixture() {
   const books = preset(4);
   const places = preset(5);
   const meals = preset(6);
-  const blank = preset(0);
+  const emptyFeatureList = preset(5);
   return (
     <ScreenShell measure="reading">
       <ScrollView
@@ -400,23 +394,29 @@ function ItemsFixture() {
       >
         <Text variant="title">Typed item summaries</Text>
         <Frame title="Watch">
-          <ListItemRow list={watch} item={ITEMS[0] as ListItemView} onOpen={() => {}} />
+          <ListItemRow list={watch} item={itemFixture(0)} onOpen={() => {}} />
         </Frame>
         <Frame title="Books">
-          <ListItemRow list={books} item={ITEMS[1] as ListItemView} onOpen={() => {}} />
+          <ListItemRow list={books} item={itemFixture(1)} onOpen={() => {}} />
         </Frame>
         <Frame title="Places">
-          <ListItemRow list={places} item={ITEMS[2] as ListItemView} onOpen={() => {}} />
+          <ListItemRow list={places} item={itemFixture(2)} onOpen={() => {}} />
         </Frame>
         <Frame title="Meals">
-          <ListItemRow list={meals} item={ITEMS[3] as ListItemView} onOpen={() => {}} />
+          <ListItemRow list={meals} item={itemFixture(3)} onOpen={() => {}} />
         </Frame>
         <Frame title="Empty configured feature">
-          <ListItemRow list={blank} item={ITEMS[4] as ListItemView} onOpen={() => {}} />
+          <ListItemRow list={emptyFeatureList} item={itemFixture(4)} onOpen={() => {}} />
         </Frame>
       </ScrollView>
     </ScreenShell>
   );
+}
+
+function itemFixture(index: number): ListItemView {
+  const item = ITEMS[index];
+  if (item === undefined) throw new Error(`Missing typed item fixture ${String(index)}`);
+  return item;
 }
 
 const CHECKLIST_ITEMS: readonly ListItemView[] = [
@@ -456,7 +456,6 @@ function OpenListFixture({
 }: {
   state: 'empty' | 'checklist' | 'stages' | 'context-add';
 }) {
-  const theme = useTheme();
   const checklist: List = {
     ...preset(1),
     title: 'Weekend packing',
@@ -471,55 +470,28 @@ function OpenListFixture({
     { ...checklistItem(2), state: 'done', title: 'Review the spacing' },
   ];
 
+  const visibleList = empty ? { ...list, itemCount: 0, doneCount: 0 } : list;
+  const visibleItems = empty ? [] : state === 'stages' ? stagedItems : CHECKLIST_ITEMS;
+
   return (
     <View style={{ flex: 1 }}>
-      <ScreenShell
-        header={
-          <ListHeader
-            list={empty ? { ...list, itemCount: 0, doneCount: 0 } : list}
-            onBack={() => {}}
-            onOpenMenu={() => {}}
-            onRename={() => {}}
-          />
-        }
-        scroll={false}
-        bodySpacing="compact"
-        measure="reading"
-      >
-        <ScrollView contentContainerStyle={{ gap: theme.space[3] }}>
-          {empty ? (
-            <ListEmptyState body={list.emptyStateCopy} onAdd={() => {}} />
-          ) : (
-            <>
-              <ListOverview count={countLine(list)} />
-              {state === 'stages' ? (
-                <StateSections
-                  list={
-                    list as List & {
-                      itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
-                    }
-                  }
-                  items={stagedItems}
-                  onOpen={() => {}}
-                  onDrop={() => {}}
-                />
-              ) : (
-                <ReorderableList
-                  items={CHECKLIST_ITEMS}
-                  keyOf={(item) => item.itemId}
-                  labelOf={(item) => item.title}
-                  rangeOf={() => ({ first: 0, last: CHECKLIST_ITEMS.length - 1 })}
-                  onDrop={() => {}}
-                  renderItem={(item) => (
-                    <ListItemRow list={list} item={item} onOpen={() => {}} />
-                  )}
-                />
-              )}
-              <ListAddRow listName={list.title} onPress={() => {}} />
-            </>
-          )}
-        </ScrollView>
-      </ScreenShell>
+      <ListDetailSurface
+        list={visibleList}
+        items={visibleItems}
+        itemCount={visibleList.itemCount}
+        complete
+        status="success"
+        isOffline={false}
+        onBack={() => {}}
+        onOpenMenu={() => {}}
+        onRename={() => {}}
+        onRetry={() => {}}
+        onLoadMore={() => {}}
+        onAdd={() => {}}
+        onOpenItem={() => {}}
+        onToggleChecked={() => undefined}
+        onDrop={() => {}}
+      />
       {state === 'context-add' ? (
         <ContextualListItemComposer
           open

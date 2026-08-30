@@ -6,18 +6,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
 
-const mocks = vi.hoisted(() => ({
-  view: {} as ListDetailView,
-  save: vi.fn(),
-  uncheckAll: vi.fn(),
-  clearDone: vi.fn(),
-  archive: vi.fn(),
-  removeList: vi.fn(),
-  back: vi.fn(),
-  drop: vi.fn(),
-  add: vi.fn(),
-  addError: undefined as string | undefined,
-}));
+const mocks = vi.hoisted(() => {
+  const addFailure: {
+    message: string | undefined;
+    requestId: string | undefined;
+  } = { message: undefined, requestId: undefined };
+  return {
+    view: {} as ListDetailView,
+    save: vi.fn(),
+    uncheckAll: vi.fn(),
+    clearDone: vi.fn(),
+    archive: vi.fn(),
+    removeList: vi.fn(),
+    back: vi.fn(),
+    drop: vi.fn(),
+    add: vi.fn(),
+    addFailure,
+  };
+});
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'list-detail-test-intent' }));
 vi.mock('../hooks/useListDetail', () => ({ useListDetail: () => mocks.view }));
@@ -44,7 +50,8 @@ vi.mock('@/hooks/useAddListItem', () => ({
   useAddListItem: () => ({
     add: mocks.add,
     isAdding: false,
-    errorMessage: mocks.addError,
+    errorMessage: mocks.addFailure.message,
+    errorRequestId: mocks.addFailure.requestId,
     dismissError: vi.fn(),
   }),
 }));
@@ -131,7 +138,8 @@ beforeEach(() => {
   ])
     mock.mockReset();
   setView();
-  mocks.addError = undefined;
+  mocks.addFailure.message = undefined;
+  mocks.addFailure.requestId = undefined;
   mocks.add.mockResolvedValue('itm_01J8XKQ2M4N5P6R7S8T9V0W1X6');
 });
 
@@ -258,14 +266,14 @@ describe('the configuration-driven List detail', () => {
       title: 'Book venue',
       note: 'Ask about the courtyard',
     });
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('');
-    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.getByLabelText('Title')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Note')).toHaveProperty('value', '');
   });
 
   it('submits with Return and keeps Title focused for rapid entry', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
-    const title = screen.getByLabelText('Title') as HTMLInputElement;
+    const title = screen.getByLabelText('Title');
     fireEvent.change(title, { target: { value: 'Pack chargers' } });
     title.focus();
     fireEvent.keyDown(title, { key: 'Enter' });
@@ -273,11 +281,12 @@ describe('the configuration-driven List detail', () => {
     await waitFor(() => expect(mocks.add).toHaveBeenCalledOnce());
     expect(mocks.add).toHaveBeenCalledWith(LIST.listId, { title: 'Pack chargers' });
     expect(document.activeElement).toBe(title);
-    expect(title.value).toBe('');
+    expect(title).toHaveProperty('value', '');
   });
 
   it('retains both fields and shows the contracted error when the write fails', async () => {
-    mocks.addError = "Couldn't save this.";
+    mocks.addFailure.message = "Couldn't save this.";
+    mocks.addFailure.requestId = 'req_context_add_9';
     mocks.add.mockResolvedValue(undefined);
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
@@ -288,11 +297,13 @@ describe('the configuration-driven List detail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to Launch' }));
 
     await waitFor(() => expect(mocks.add).toHaveBeenCalledOnce());
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Book venue');
-    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe(
+    expect(screen.getByLabelText('Title')).toHaveProperty('value', 'Book venue');
+    expect(screen.getByLabelText('Note')).toHaveProperty(
+      'value',
       'Ask about the courtyard',
     );
-    expect(screen.getByRole('alert').textContent).toBe("Couldn't save this.");
+    expect(screen.getByRole('alert').textContent).toContain("Couldn't save this.");
+    expect(screen.getByRole('alert').textContent).toContain('req_context_add_9');
     expect(mocks.view.refresh).not.toHaveBeenCalled();
   });
 

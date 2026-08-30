@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { type ActivityTypeName, type ColorScheme, colors, typeAccents } from './colors';
+import {
+  type ActivityTypeName,
+  type ColorScheme,
+  collectionSurfaces,
+  colors,
+  typeAccents,
+} from './colors';
 import { AA_BODY, AA_LARGE, contrastRatio, parseColor, ratioOf } from './contrast';
 
 /**
@@ -191,6 +197,24 @@ describe.each(schemes)('%s scheme — text on the Up Next surface', (scheme) => 
     ).toBeGreaterThanOrEqual(AA_BODY);
   });
 });
+
+/** §5.2a's collection cards carry real counts and timestamps, never decorative-only ink. */
+describe.each(schemes)(
+  '%s scheme — collection cards carry readable information',
+  (scheme) => {
+    const palette = colors[scheme];
+
+    it.each(Object.entries(collectionSurfaces[scheme]))(
+      'textPrimary on %s',
+      (tone, surface) => {
+        expect(
+          contrastRatio(palette.textPrimary, surface),
+          `${scheme}: textPrimary on ${tone} is ${ratioOf(palette.textPrimary, surface)}:1`,
+        ).toBeGreaterThanOrEqual(AA_BODY);
+      },
+    );
+  },
+);
 
 /**
  * `surfaceInput` carries the text a user has typed and the placeholder before it, so both inks

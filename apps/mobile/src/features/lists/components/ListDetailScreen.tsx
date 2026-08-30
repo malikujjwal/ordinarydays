@@ -1,7 +1,5 @@
-import type { List } from '@od/shared/types';
-import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
-import { useCallback, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { useState } from 'react';
+import { View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useAddListItem } from '@/hooks/useAddListItem';
 import { useListBulkActions } from '../hooks/useListBulkActions';
@@ -10,26 +8,12 @@ import { useListItemActions } from '../hooks/useListItemActions';
 import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
-import { countLine } from '../model/listCard';
-import {
-  doneCount,
-  ITEM_SCROLL_FETCH_RATIO,
-  mayActOnWholeList,
-  mayShowEmptyState,
-} from '../model/listDetail';
-import { openInMaps } from '../model/openInMaps';
-import { orderedItems, reorderRange } from '../model/reorder';
+import { doneCount, mayActOnWholeList } from '../model/listDetail';
 import { ContextualListItemComposer } from './ContextualListItemComposer';
 import { ItemSheet } from './ItemSheet';
-import { ListAddRow } from './ListAddRow';
-import { ListEmptyState } from './ListEmptyState';
-import { ListHeader } from './ListHeader';
+import { ListDetailSurface } from './ListDetailSurface';
 import { ListHeaderMenu } from './ListHeaderMenu';
-import { ListItemRow } from './ListItemRow';
-import { ListOverview } from './ListOverview';
 import { ListSettingsSheet } from './ListSettingsSheet';
-import { ReorderableList } from './ReorderableList';
-import { StateSections } from './StateSections';
 
 /**
  * One list, its items and its contextual composer
@@ -103,7 +87,6 @@ export function ListDetailScreen({
   onBack,
   onOpenActivity,
 }: ListDetailScreenProps) {
-  const theme = useTheme();
   const view = useListDetail(listId);
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
@@ -146,25 +129,6 @@ export function ListDetailScreen({
     loadedCount: view.items.length,
     complete: view.complete,
   };
-  const showEmpty =
-    mayShowEmptyState(progress, view.status !== 'pending') && view.status !== 'error';
-
-  const onScroll = useCallback(
-    (event: {
-      nativeEvent: {
-        contentOffset: { y: number };
-        contentSize: { height: number };
-        layoutMeasurement: { height: number };
-      };
-    }) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const depth =
-        (contentOffset.y + layoutMeasurement.height) / Math.max(1, contentSize.height);
-      if (depth >= ITEM_SCROLL_FETCH_RATIO) view.loadMore();
-    },
-    [view.loadMore],
-  );
-
   /*
    * One overlay, applied once, so the header, the rows, the `⋯` menu and the settings sheet all
    * draw the same optimistic truth. A sheet showing checkboxes on while the rows below still
@@ -172,128 +136,31 @@ export function ListDetailScreen({
    */
   const list = settings.view;
 
-  const header = (
-    <ListHeader
-      list={list}
-      onBack={onBack}
-      onOpenMenu={() => setMenuOpen(true)}
-      onRename={settings.rename}
-    />
-  );
-
   return (
-    <ScreenShell
-      header={header}
-      scroll={false}
-      bodySpacing="compact"
-      testID="list-detail"
-    >
-      <ScrollView
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        contentContainerStyle={{ gap: theme.space[3] }}
-        testID="list-detail-scroll"
-      >
-        {view.isOffline ? (
-          <Text variant="footnote" color="textSecondary">
-            You're offline. Showing saved data.
-          </Text>
-        ) : null}
-
-        {/* §5.3's two failure classes: rows on screen keep them and show a line above. */}
-        {view.status === 'error' && view.items.length === 0 ? (
-          <View testID="list-detail-error">
-            <EmptyState
-              heading="Couldn't load this."
-              action={{ label: 'Try again', onPress: view.refetch }}
-            />
-            {view.requestId === undefined ? null : (
-              <Text
-                variant="footnote"
-                color="textSecondary"
-                align="center"
-                selectable
-                testID="list-detail-request-id"
-              >
-                {view.requestId}
-              </Text>
-            )}
-          </View>
-        ) : view.message === undefined ? null : (
-          <Text variant="footnote" color="danger" testID="list-detail-refresh-failed">
-            Couldn't refresh. Try again.
-          </Text>
-        )}
-
-        {view.status === 'pending' ? (
-          <View testID="list-detail-loading">
-            <Skeleton shape="row" count={5} />
-          </View>
-        ) : showEmpty && list !== undefined ? (
-          /*
-           * §5.9 verbatim: the fixed heading, then this list's own stored copy. `EmptyState`
-           * carries no action — the persistent add row below is §5.6's contextual action, and
-           * a second one would be two controls for one thing.
-           */
-          <ListEmptyState body={list.emptyStateCopy} onAdd={() => setAddOpen(true)} />
-        ) : list === undefined ? null : list.itemStateMode.mode === 'stages' &&
-          list.itemStateMode.groupByState ? (
-          <View style={{ gap: theme.space[3] }}>
-            <ListOverview count={countLine(list)} />
-            <StateSections
-              list={
-                list as List & {
-                  itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
-                }
-              }
-              items={view.items}
-              onOpen={(item) => setOpenItemId(item.itemId)}
-              onDrop={reorder.drop}
-            />
-          </View>
-        ) : (
-          <View style={{ gap: theme.space[2] }}>
-            <ListOverview count={countLine(list)} />
-            {/* Reorder is offered in every mode and never mutates item state. */}
-            <ReorderableList
-              /*
-               * Sorted here as well as by the projection, and deliberately: `(rank, itemId)` is
-               * the order both platforms already produce, and passing it through the one exported
-               * comparator on the way to the screen means a restored, legacy or seeded duplicate
-               * rank renders identically on two devices whichever order it reached them in
-               * (acceptance criterion 29). It is a no-op on an already-ordered projection.
-               */
-              items={orderedItems(view.items)}
-              keyOf={(item) => item.itemId}
-              labelOf={(item) => item.title}
-              rangeOf={(itemId) => reorderRange(list, view.items, itemId)}
-              onDrop={reorder.drop}
-              testID="list-detail-items"
-              renderItem={(item) => (
-                /* The renderer reads stored configuration, never creation provenance. */
-                <ListItemRow
-                  list={list}
-                  item={item}
-                  onOpen={() => setOpenItemId(item.itemId)}
-                  onToggleChecked={(next) =>
-                    items.save(item, {
-                      state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
-                    })
-                  }
-                  {...(item.features?.place === undefined
-                    ? {}
-                    : { onOpenLocation: () => void openInMaps(item.features?.place) })}
-                  testID={`list-item-${item.itemId}`}
-                />
-              )}
-            />
-          </View>
-        )}
-
-        {list === undefined || view.itemCount === 0 ? null : (
-          <ListAddRow listName={list.title} onPress={() => setAddOpen(true)} />
-        )}
-      </ScrollView>
+    <View style={{ flex: 1 }}>
+      <ListDetailSurface
+        list={list}
+        items={view.items}
+        itemCount={view.itemCount}
+        complete={view.complete}
+        status={view.status}
+        isOffline={view.isOffline}
+        {...(view.message === undefined ? {} : { message: view.message })}
+        {...(view.requestId === undefined ? {} : { requestId: view.requestId })}
+        onBack={onBack}
+        onOpenMenu={() => setMenuOpen(true)}
+        onRename={settings.rename}
+        onRetry={view.refetch}
+        onLoadMore={view.loadMore}
+        onAdd={() => setAddOpen(true)}
+        onOpenItem={(item) => setOpenItemId(item.itemId)}
+        onToggleChecked={(item, next) =>
+          items.save(item, {
+            state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
+          })
+        }
+        onDrop={reorder.drop}
+      />
 
       {list === undefined ? null : (
         <ContextualListItemComposer
@@ -301,6 +168,9 @@ export function ListDetailScreen({
           listName={list.title}
           isAdding={add.isAdding}
           {...(add.errorMessage === undefined ? {} : { errorMessage: add.errorMessage })}
+          {...(add.errorRequestId === undefined
+            ? {}
+            : { errorRequestId: add.errorRequestId })}
           onClose={() => {
             add.dismissError();
             setAddOpen(false);
@@ -389,6 +259,6 @@ export function ListDetailScreen({
           testID="list-delete-confirm"
         />
       )}
-    </ScreenShell>
+    </View>
   );
 }

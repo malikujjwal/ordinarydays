@@ -11,8 +11,9 @@ export interface ListTypeCardProps {
 /** One actionable catalogue choice; it communicates navigation, never selection. */
 export function ListTypeCard({ choice, leading = false, onPress }: ListTypeCardProps) {
   const theme = useTheme();
-  const icon =
-    templateIcons[choice.icon as keyof typeof templateIcons] ?? templateIcons.list;
+  const icon = templateIcons[choice.icon] ?? templateIcons.list;
+  if (icon === undefined)
+    throw new Error('The template icon registry has no list fallback.');
   const label = choice.templateKey === 'blank' ? 'Blank list' : choice.chooserLabel;
 
   return (

@@ -64,10 +64,12 @@ export function ListIndexRow({
   testID,
 }: ListIndexRowProps) {
   const theme = useTheme();
-  const glyph =
-    templateIcons[list.icon as keyof typeof templateIcons] ?? templateIcons.list;
+  const glyph = templateIcons[list.icon] ?? templateIcons.list;
+  if (glyph === undefined)
+    throw new Error('The template icon registry has no list fallback.');
   const count = countLine(list);
   const progress = checkedProgress(list);
+  const collectionTone = collectionToneForListId(list.listId);
   // `lastItemActivityAt`, never `updatedAt`. The distinction is the whole of P3-47 and the
   // reason the field exists; `model/updatedLine.ts` records why using the other reads backwards.
   const updated = updatedLine(list.lastItemActivityAt, now, timezone);
@@ -76,7 +78,7 @@ export function ListIndexRow({
     <Card
       elevation="e2"
       radius="lg"
-      surfaceTone={collectionToneForListId(list.listId)}
+      surfaceTone={collectionTone}
       onPress={onPress}
       /**
        * One accessible element carrying the whole card, per `interaction-contract.md` §6: the
@@ -91,18 +93,18 @@ export function ListIndexRow({
         <Text variant="heading" numberOfLines={2}>
           {list.title}
         </Text>
-        <Text variant="subhead" color="textSecondary">
+        <Text variant="subhead" color="textPrimary">
           {count}
         </Text>
         {progress === undefined ? null : (
           <ProgressBar
             value={progress}
-            tone="neutral"
+            collectionTone={collectionTone}
             label={count}
             {...(testID === undefined ? {} : { testID: `${testID}-progress` })}
           />
         )}
-        <Text variant="footnote" color="textDisabled">
+        <Text variant="footnote" color="textPrimary">
           {updated}
         </Text>
       </View>

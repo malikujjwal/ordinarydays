@@ -1,4 +1,5 @@
 import { View } from 'react-native';
+import type { CollectionSurfaceTone } from '../theme/colors';
 import { useTheme } from '../theme/index';
 
 /**
@@ -16,14 +17,24 @@ export interface ProgressBarProps {
   /** 0–1. Clamped, because a caller computing `done / total` can hand over `NaN` at zero. */
   value: number;
   tone?: 'accent' | 'neutral';
+  /** §5.2a's surface-paired track and fill. Takes precedence over `tone`. */
+  collectionTone?: Exclude<CollectionSurfaceTone, 'neutral'>;
   /** The accessible description, e.g. `2 of 6 done`. Without it the bar is announced as bare. */
   label?: string;
   testID?: string;
 }
 
-export function ProgressBar({ value, tone = 'accent', label, testID }: ProgressBarProps) {
+export function ProgressBar({
+  value,
+  tone = 'accent',
+  collectionTone,
+  label,
+  testID,
+}: ProgressBarProps) {
   const theme = useTheme();
   const clamped = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+  const collection =
+    collectionTone === undefined ? undefined : theme.collectionProgress(collectionTone);
 
   return (
     <View
@@ -40,7 +51,7 @@ export function ProgressBar({ value, tone = 'accent', label, testID }: ProgressB
       style={{
         height: 4,
         borderRadius: theme.radius.pill,
-        backgroundColor: theme.colors.border,
+        backgroundColor: collection?.track ?? theme.colors.border,
         overflow: 'hidden',
       }}
     >
@@ -50,7 +61,8 @@ export function ProgressBar({ value, tone = 'accent', label, testID }: ProgressB
           height: '100%',
           borderRadius: theme.radius.pill,
           backgroundColor:
-            tone === 'accent' ? theme.colors.accent : theme.colors.textSecondary,
+            collection?.fill ??
+            (tone === 'accent' ? theme.colors.accent : theme.colors.textSecondary),
         }}
       />
     </View>

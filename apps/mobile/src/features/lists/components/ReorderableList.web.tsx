@@ -1,7 +1,7 @@
 import { GripVertical, Touchable, useTheme } from '@od/ui';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { View } from 'react-native';
-import { dropIndex, type ReorderRange } from '../model/reorder';
+import { dropIndex, REORDER_LONG_PRESS_MS, type ReorderRange } from '../model/reorder';
 import type { ReorderableListProps } from './ReorderableList';
 
 /**
@@ -40,6 +40,14 @@ interface RowState {
   readonly pointerY?: number;
 }
 
+interface PendingLongPress {
+  readonly itemId: string;
+  readonly index: number;
+  readonly range: ReorderRange;
+  readonly pointerY: number;
+  readonly timer: ReturnType<typeof setTimeout>;
+}
+
 const clamp = (value: number, range: ReorderRange): number =>
   Math.min(Math.max(value, range.first), range.last);
 
@@ -55,6 +63,28 @@ function travel(heights: readonly number[], from: number, to: number): number {
   return distance;
 }
 
+const TOUCH_LAYOUT_QUERY = '(hover: none), (pointer: coarse)';
+
+function useTouchLayout(): boolean {
+  const [touch, setTouch] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia(TOUCH_LAYOUT_QUERY).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia(TOUCH_LAYOUT_QUERY);
+    const update = () => setTouch(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  return touch;
+}
+
 export function ReorderableList<T>({
   items,
   keyOf,
@@ -65,6 +95,8 @@ export function ReorderableList<T>({
   testID,
 }: ReorderableListProps<T>) {
   const theme = useTheme();
+  const owner = useId();
+  const touchLayout = useTouchLayout();
   const [hovered, setHovered] = useState<string>();
   const [focused, setFocused] = useState<string>();
   const [held, setHeld] = useState<RowState>();
@@ -72,6 +104,7 @@ export function ReorderableList<T>({
   /** The live row, for window listeners that must not close over a stale render. */
   const live = useRef<RowState | undefined>(undefined);
   live.current = held;
+  const pendingLongPress = useRef<PendingLongPress | undefined>(undefined);
   /** Each row's current position, so the keyboard listener can name one from its id alone. */
   const indices = useRef(new Map<string, number>());
   indices.current = new Map(items.map((item, index) => [keyOf(item), index]));
@@ -87,8 +120,66 @@ export function ReorderableList<T>({
   );
 
   useEffect(() => {
-    if (held?.pointerY === undefined) return;
+    const clearPending = () => {
+      const pending = pendingLongPress.current;
+      if (pending === undefined) return;
+      clearTimeout(pending.timer);
+      pendingLongPress.current = undefined;
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !(event.target instanceof Element)) return;
+      const row = event.target.closest<HTMLElement>('[data-testid^="list-reorder-row-"]');
+      if (
+        row === null ||
+        row.closest<HTMLElement>('[id^="reorder-"]')?.id !== `reorder-${owner}`
+      )
+        return;
+      const itemId = row.dataset.testid?.replace('list-reorder-row-', '');
+      if (itemId === undefined) return;
+      const index = indices.current.get(itemId);
+      const range = rangeOf(itemId);
+      if (index === undefined || range === undefined) return;
+
+      const touchPointer = event.pointerType === 'touch' || event.pointerType === 'pen';
+      if (touchPointer) {
+        clearPending();
+        const timer = setTimeout(() => {
+          const pending = pendingLongPress.current;
+          if (pending?.itemId !== itemId) return;
+          pendingLongPress.current = undefined;
+          const next = {
+            itemId,
+            index,
+            toIndex: index,
+            range,
+            pointerY: pending.pointerY,
+          };
+          live.current = next;
+          setHeld(next);
+        }, REORDER_LONG_PRESS_MS);
+        pendingLongPress.current = {
+          itemId,
+          index,
+          range,
+          pointerY: event.pageY,
+          timer,
+        };
+        return;
+      }
+
+      const handle = event.target.closest<HTMLElement>(
+        '[data-testid^="list-reorder-handle-"]',
+      );
+      if (handle === null) return;
+      const next = { itemId, index, toIndex: index, range, pointerY: event.pageY };
+      live.current = next;
+      setHeld(next);
+    };
     const onMove = (event: PointerEvent) => {
+      const pending = pendingLongPress.current;
+      if (pending !== undefined && Math.abs(event.pageY - pending.pointerY) > 8) {
+        clearPending();
+      }
       const current = live.current;
       if (current?.pointerY === undefined) return;
       const translationY = event.pageY - current.pointerY;
@@ -96,17 +187,35 @@ export function ReorderableList<T>({
         dropIndex(heights.current, current.index, translationY),
         current.range,
       );
-      if (next !== current.toIndex) setHeld({ ...current, toIndex: next });
+      if (next !== current.toIndex) {
+        const moved = { ...current, toIndex: next };
+        live.current = moved;
+        setHeld(moved);
+      }
     };
-    const onUp = () => finish(true);
+    const onUp = (event: PointerEvent) => {
+      clearPending();
+      if (live.current?.pointerY === undefined) return;
+      // Prevent the synthetic click after a long press from also opening the item sheet.
+      event.preventDefault();
+      finish(true);
+    };
+    const onCancel = () => {
+      clearPending();
+      if (live.current?.pointerY !== undefined) finish(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', () => finish(false));
+    window.addEventListener('pointercancel', onCancel);
     return () => {
+      clearPending();
+      document.removeEventListener('pointerdown', onDown, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
-  }, [finish, held?.pointerY]);
+  }, [finish, owner, rangeOf]);
 
   /**
    * One `keydown` listener for every handle, dispatched by which one has focus.
@@ -154,7 +263,7 @@ export function ReorderableList<T>({
   }, [finish, rangeOf]);
 
   return (
-    <View testID={testID}>
+    <View nativeID={`reorder-${owner}`} testID={testID}>
       {items.map((item, index) => {
         const itemId = keyOf(item);
         const itemLabel = labelOf(item);
@@ -179,6 +288,7 @@ export function ReorderableList<T>({
         return (
           <View
             key={itemId}
+            testID={`list-reorder-row-${itemId}`}
             onLayout={(event) => {
               heights.current[index] = event.nativeEvent.layout.height;
             }}
@@ -203,7 +313,10 @@ export function ReorderableList<T>({
                   top: theme.space[2],
                   right: 0,
                   opacity:
-                    hovered === itemId || focused === itemId || grabbed !== undefined
+                    touchLayout ||
+                    hovered === itemId ||
+                    focused === itemId ||
+                    grabbed !== undefined
                       ? 1
                       : 0,
                   /*
@@ -234,24 +347,6 @@ export function ReorderableList<T>({
                   onBlur={() =>
                     setFocused((current) => (current === itemId ? undefined : current))
                   }
-                  /*
-                   * `onPressIn` rather than `onPointerDown`: it is the prop React Native
-                   * actually declares, it fires on pointer down on the web build, and its
-                   * `pageY` is in the same frame as the `pointermove` listener above — mixing
-                   * page and client coordinates would put the drop in the wrong gap on a
-                   * scrolled page.
-                   */
-                  onPressIn={(event) => {
-                    const bounds = rangeOf(itemId);
-                    if (bounds === undefined) return;
-                    setHeld({
-                      itemId,
-                      index,
-                      toIndex: index,
-                      range: bounds,
-                      pointerY: event.nativeEvent.pageY,
-                    });
-                  }}
                   testID={`list-reorder-handle-${itemId}`}
                   style={{
                     alignItems: 'center',

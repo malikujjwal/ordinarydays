@@ -83,7 +83,9 @@ const COLLECTION_TONES = [
 ] as const satisfies readonly CollectionSurfaceTone[];
 
 /** Stable identity hash for §5.2a's presentation-only collection surface. */
-export function collectionToneForListId(listId: string): CollectionSurfaceTone {
+export function collectionToneForListId(
+  listId: string,
+): (typeof COLLECTION_TONES)[number] {
   let hash = 2166136261;
   for (let index = 0; index < listId.length; index += 1) {
     hash ^= listId.charCodeAt(index);

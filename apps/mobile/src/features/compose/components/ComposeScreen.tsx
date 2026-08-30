@@ -251,6 +251,9 @@ export function ComposeScreen({
               {...(addItem.errorMessage === undefined
                 ? {}
                 : { errorMessage: addItem.errorMessage })}
+              {...(addItem.errorRequestId === undefined
+                ? {}
+                : { errorRequestId: addItem.errorRequestId })}
               onTitleChange={draft.setTitle}
               onNoteChange={draft.setNotes}
               onChooseList={draft.chooseList}

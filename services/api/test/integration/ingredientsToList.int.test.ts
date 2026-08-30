@@ -1,8 +1,18 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { MAX_INGREDIENTS_PER_ADD, systemClock, timeZone } from '@od/shared';
+import { fixedClock, MAX_INGREDIENTS_PER_ADD, timeZone } from '@od/shared';
 import { addWallDays } from '@od/shared/recurrence';
+import { instant } from '@od/shared/schemas';
 import type { List, ListItem } from '@od/shared/types';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
 
 useTestTable();
@@ -29,6 +39,9 @@ type AppModule = typeof import('../../src/app.js');
 
 let createApp: AppModule['createApp'];
 
+const TEST_CLOCK = fixedClock(instant.parse('2026-08-29T16:00:00.000Z'));
+let requestTick = 0;
+
 const DEV = 'usr_local_dev';
 
 const MEAL = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
@@ -40,10 +53,21 @@ const TOMATOES = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3';
 const SOUR_CREAM = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A4';
 
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(TEST_CLOCK.now());
   createApp = (await import('../../src/app.js')).createApp;
 });
 
-const app = () => createApp();
+beforeEach(() => {
+  requestTick = 0;
+  vi.setSystemTime(TEST_CLOCK.now());
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
+
+const app = () => createApp({ rateLimitNow: () => Date.parse(TEST_CLOCK.now()) });
 
 type Json = Record<string, unknown>;
 
@@ -52,8 +76,10 @@ const request = (
   path: string,
   body?: unknown,
   headers: Record<string, string> = {},
-) =>
-  app().fetch(
+) => {
+  vi.setSystemTime(Date.parse(TEST_CLOCK.now()) + requestTick * 1_000);
+  requestTick += 1;
+  return app().fetch(
     new Request(`http://localhost${path}`, {
       method,
       headers: {
@@ -66,6 +92,7 @@ const request = (
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   );
+};
 
 /** Every row in one partition, so a stray write cannot hide behind a targeted read. */
 const partition = async (pk: string) =>
@@ -122,7 +149,7 @@ const INGREDIENTS = [
 const SUNDAY = nextSunday();
 
 function nextSunday(): string {
-  const today = systemClock.todayIn(timeZone.parse('America/New_York'));
+  const today = TEST_CLOCK.todayIn(timeZone.parse('America/New_York'));
   const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
   return addWallDays(today, (7 - weekday) % 7 || 7);
 }

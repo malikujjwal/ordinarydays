@@ -1,6 +1,6 @@
-import { MAX_NOTES_LEN, MAX_TITLE_LEN } from '@od/shared/constants';
-import { Field, Text, useTheme } from '@od/ui';
+import { Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
+import { ListItemComposerFields } from '@/components/ListItemComposerFields';
 import { CaptureRow } from './CaptureRow';
 import { type ListDestination, ListDestinationChooser } from './ListDestinationChooser';
 
@@ -13,6 +13,7 @@ export interface GlobalListItemComposerProps {
   sourceUrl: string | undefined;
   attachmentUri: string | undefined;
   errorMessage?: string;
+  errorRequestId?: string;
   onTitleChange: (title: string) => void;
   onNoteChange: (note: string) => void;
   onChooseList: (listId: string) => void;
@@ -33,6 +34,7 @@ export function GlobalListItemComposer({
   sourceUrl,
   attachmentUri,
   errorMessage,
+  errorRequestId,
   onTitleChange,
   onNoteChange,
   onChooseList,
@@ -49,26 +51,15 @@ export function GlobalListItemComposer({
       <Text variant="title" color="textDisplay" accessibilityRole="header">
         Add list item
       </Text>
-      {errorMessage === undefined ? null : (
-        <Text accessibilityRole="alert" variant="footnote" color="danger">
-          {errorMessage}
-        </Text>
-      )}
-      <Field
-        label="Title"
-        value={title}
-        onChangeText={onTitleChange}
-        maxLength={MAX_TITLE_LEN}
-        testID="compose-title"
-      />
-      <Field
-        label="Note"
-        optional
-        value={note}
-        onChangeText={onNoteChange}
-        multiline
-        maxLength={MAX_NOTES_LEN}
-        testID="compose-item-note"
+      <ListItemComposerFields
+        title={title}
+        note={note}
+        {...(errorMessage === undefined ? {} : { errorMessage })}
+        {...(errorRequestId === undefined ? {} : { errorRequestId })}
+        onTitleChange={onTitleChange}
+        onNoteChange={onNoteChange}
+        titleTestID="compose-title"
+        noteTestID="compose-item-note"
       />
       <ListDestinationChooser
         lists={destinations}

@@ -14,7 +14,7 @@ import {
   typeIcons,
 } from '../icons/index';
 import type { ColorScheme } from '../theme/colors';
-import { colors } from '../theme/colors';
+import { collectionSurfaces, colors } from '../theme/colors';
 import { elevation } from '../theme/elevation';
 import { ThemeProvider, useBreakpoint, useTheme } from '../theme/ThemeProvider';
 import { space } from '../theme/tokens';
@@ -191,6 +191,19 @@ describe('Card', () => {
     );
     expect(getComputedStyle(screen.getByTestId('hero')).backgroundColor).toBe(
       cssRgb(colors[scheme].upNextSurface),
+    );
+  });
+
+  it.each(schemes)('keeps a collection fill above %s elevation', (scheme) => {
+    wrap(
+      <Card surfaceTone="collectionRose" elevation="e2" testID="collection-card">
+        <Text>Groceries</Text>
+      </Card>,
+      scheme,
+    );
+
+    expect(getComputedStyle(screen.getByTestId('collection-card')).backgroundColor).toBe(
+      cssRgb(collectionSurfaces[scheme].collectionRose),
     );
   });
 });

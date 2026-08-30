@@ -78,6 +78,11 @@ export interface Theme {
   typeAccent: (name: ActivityTypeName) => TypeAccent;
   /** Resolves §5.2a's presentation-only List-card fill. */
   collectionSurface: (tone: CollectionSurfaceTone) => string;
+  /** Readable progress treatment paired to the actual collection-card surface. */
+  collectionProgress: (tone: CollectionSurfaceTone) => {
+    track: string;
+    fill: string;
+  };
 }
 
 const ThemeContext = createContext<Theme | undefined>(undefined);
@@ -133,6 +138,10 @@ export function ThemeProvider({ children, scheme, serifFamily }: ThemeProviderPr
       typeAccent: (name) => typeAccents[active][name],
       collectionSurface: (tone) =>
         tone === 'neutral' ? palette.surfaceRaised : collectionSurfaces[active][tone],
+      collectionProgress: (tone) =>
+        tone === 'neutral'
+          ? { track: palette.border, fill: palette.textSecondary }
+          : { track: palette.collectionIconSurface, fill: palette.textPrimary },
     };
   }, [active, serifFamily]);
 
