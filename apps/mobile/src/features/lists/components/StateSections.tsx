@@ -4,7 +4,7 @@ import {
   type IconProps,
   List as ListIcon,
   PlayRect,
-  Text,
+  SectionHeader,
   useTheme,
 } from '@od/ui';
 import { View } from 'react-native';
@@ -67,7 +67,6 @@ export function stateGroupReorderRange(
 
 export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProps) {
   const theme = useTheme();
-  const stageAccent = theme.typeAccent('custom');
   return (
     <View style={{ gap: theme.space[4] }} testID="list-state-sections">
       {ORDER.map((state) => {
@@ -79,34 +78,13 @@ export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProp
             style={{ gap: theme.space[2] }}
             testID={`list-state-${state}`}
           >
-            <View
+            <SectionHeader
+              title={list.itemStateMode.labels[state]}
+              count={section.length}
+              icon={STAGE_ICONS[state]}
+              appearance="tinted"
               testID={`stage-heading-${state}`}
-              style={{
-                minHeight: theme.layout.hitTarget,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: theme.space[2],
-                paddingHorizontal: theme.space[4],
-                paddingVertical: theme.space[2],
-                borderRadius: theme.radius.md,
-                backgroundColor: stageAccent.surface,
-              }}
-            >
-              <View aria-hidden testID={`stage-heading-${state}-icon`}>
-                {(() => {
-                  const Icon = STAGE_ICONS[state];
-                  return <Icon size={18} color={stageAccent.accent} />;
-                })()}
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text variant="bodyStrong" color="textPrimary">
-                  {list.itemStateMode.labels[state]}
-                </Text>
-              </View>
-              <Text variant="footnoteStrong" color="textSecondary">
-                {section.length}
-              </Text>
-            </View>
+            />
             <ReorderableList
               items={section}
               keyOf={(item) => item.itemId}

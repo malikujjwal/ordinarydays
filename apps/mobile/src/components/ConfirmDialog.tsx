@@ -1,4 +1,5 @@
 import {
+  AlertDialog,
   Button,
   Calendar,
   Check,
@@ -10,8 +11,7 @@ import {
   Users,
   useTheme,
 } from '@od/ui';
-import { useEffect, useRef } from 'react';
-import { Modal, Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 /**
  * The destructive confirmation `interaction-contract.md` §1a.1 specifies, as one component.
@@ -95,14 +95,7 @@ export function ConfirmDialog({
   testID = 'confirm-dialog',
 }: ConfirmDialogProps) {
   const theme = useTheme();
-  const alertRef = useRef<View>(null);
   const { heading, removesLead, removes, keeps, confirmLabel } = confirmation;
-
-  useEffect(() => {
-    if (!open || !centred || Platform.OS !== 'web') return;
-    const card = alertRef.current as unknown as HTMLElement | null;
-    card?.querySelector<HTMLElement>('[data-testid="confirm-cancel"]')?.focus();
-  }, [centred, open]);
 
   const content = (
     <View testID={embedded ? testID : undefined} style={{ gap: theme.space[5] }}>
@@ -244,44 +237,15 @@ export function ConfirmDialog({
 
   if (centred) {
     return (
-      <Modal
-        visible={open}
-        transparent
-        animationType={Platform.OS === 'web' ? 'none' : 'fade'}
-        accessibilityLabel={heading}
+      <AlertDialog
+        open={open}
+        label={heading}
         onRequestClose={onCancel}
+        initialFocusTestID="confirm-cancel"
+        testID={testID}
       >
-        <View
-          style={{
-            flex: 1,
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: theme.space[5],
-            backgroundColor: theme.colors.scrim,
-          }}
-        >
-          <View
-            ref={alertRef}
-            role="alertdialog"
-            aria-modal
-            accessibilityLabel={heading}
-            accessibilityViewIsModal
-            testID={testID}
-            style={[
-              {
-                width: '100%',
-                maxWidth: 380,
-                padding: theme.space[6],
-                borderRadius: theme.radius.sheet,
-                backgroundColor: theme.colors.surfaceOverlay,
-              },
-              theme.elevation('e3'),
-            ]}
-          >
-            {centredContent}
-          </View>
-        </View>
-      </Modal>
+        {centredContent}
+      </AlertDialog>
     );
   }
 

@@ -163,6 +163,26 @@ describe('every primitive renders', () => {
     ).toBe(96);
   });
 
+  it('keeps every side of a boxed Field boundary visible', () => {
+    wrap(<Field label="Title" value="" />);
+
+    expect(getComputedStyle(screen.getByLabelText('Title')).borderBottomWidth).toBe(
+      '1px',
+    );
+  });
+
+  it('uses only the token-owned bottom focus line for an underline Field', () => {
+    wrap(<Field label="Quick add" value="" appearance="underline" />);
+    const field = screen.getByLabelText('Quick add');
+    fireEvent.focus(field);
+
+    expect(field.style.outlineColor).toBe('transparent');
+    expect(field.style.outlineStyle).toBe('solid');
+    expect(field.style.outlineWidth).toBe('0px');
+    expect(getComputedStyle(field).borderTopWidth).toBe('0px');
+    expect(getComputedStyle(field).borderBottomWidth).toBe('2px');
+  });
+
   it('Chip', () => {
     wrap(<Chip label="From screenshot" />);
     const chip = screen.getByText('From screenshot');

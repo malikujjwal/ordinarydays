@@ -169,6 +169,12 @@ describe('the canonical item editor shell', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Reorder Paper' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Reorder Paper' }).parentElement?.style.opacity,
+    ).toBe('1');
+    expect(screen.getByTestId('list-reorder-row-sub_1').style.backgroundColor).toBe(
+      'rgba(0, 0, 0, 0)',
+    );
     expect(screen.getByRole('button', { name: 'More actions for Paper' })).toBeTruthy();
     expect(screen.getByDisplayValue('Paper')).toBeTruthy();
     expect(screen.getByDisplayValue('2 sheets')).toBeTruthy();
@@ -176,12 +182,36 @@ describe('the canonical item editor shell', () => {
     expect(screen.queryByRole('button', { name: 'Up' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Down' })).toBeNull();
 
+    const grip = screen.getByRole('button', { name: 'Reorder Paper' });
+    grip.focus();
+    fireEvent.keyDown(document, { key: 'Enter' });
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    fireEvent.keyDown(document, { key: 'Enter' });
+    expect(calls.save).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'The Bear' }),
+      expect.objectContaining({
+        features: {
+          subItems: {
+            entries: [
+              expect.objectContaining({ id: 'sub_2', title: 'Tape' }),
+              expect.objectContaining({ id: 'sub_1', title: 'Paper' }),
+            ],
+          },
+        },
+      }),
+    );
+    calls.save.mockClear();
+
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Paper' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove Paper' }));
     expect(calls.save).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'The Bear' }),
       {
-        features: { subItems: { entries: [{ id: 'sub_2', title: 'Tape', rank: 'b0' }] } },
+        features: {
+          subItems: {
+            entries: [expect.objectContaining({ id: 'sub_2', title: 'Tape' })],
+          },
+        },
       },
     );
   });
@@ -217,12 +247,11 @@ describe('the canonical item editor shell', () => {
     const subject = item();
     mount(subject);
 
-    fireEvent.click(screen.getByTestId('item-sheet-delete'));
+    const deleteItem = screen.getByRole('button', { name: 'Delete item' });
+    fireEvent.click(deleteItem);
 
     expect(calls.remove).toHaveBeenCalledWith(subject);
-    expect(screen.getByTestId('item-sheet-delete').getAttribute('style')).not.toContain(
-      'background-color',
-    );
+    expect(deleteItem.getAttribute('style')).not.toContain('background-color');
   });
 
   it('keeps stable automation handles on the primary fields', () => {

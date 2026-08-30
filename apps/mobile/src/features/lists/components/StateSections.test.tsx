@@ -58,6 +58,7 @@ describe('StateSections', () => {
     expect(screen.queryByText('Read')).toBeNull();
     expect(screen.getByTestId('stage-heading-open').textContent).toContain('Saved');
     expect(screen.getByTestId('stage-heading-open').textContent).toContain('1');
+    expect(screen.getByRole('heading', { name: 'Saved, 1' })).toBeTruthy();
     expect(screen.getByTestId('stage-heading-open-icon')).toBeTruthy();
     expect(screen.getByTestId('stage-heading-active').textContent).toContain('Reading');
     expect(

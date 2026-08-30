@@ -69,8 +69,6 @@ export function ListHeader({
   const [draft, setDraft] = useState<string>();
   const editing = draft !== undefined;
   const title = list?.title ?? 'List';
-  /** Wraps the title control so focus can be handed back to it after the field goes away. */
-  const titleSlot = useRef<View>(null);
   const returning = useRef(false);
   const leaving = useRef(false);
 
@@ -83,8 +81,7 @@ export function ListHeader({
   useEffect(() => {
     if (Platform.OS !== 'web' || editing || !returning.current) return;
     returning.current = false;
-    const slot = titleSlot.current as unknown as HTMLElement | null;
-    slot?.querySelector<HTMLElement>('[role="button"]')?.focus();
+    document.querySelector<HTMLElement>('[data-testid="list-title"]')?.focus();
   }, [editing]);
 
   const leaveEditor = () => {
@@ -140,7 +137,7 @@ export function ListHeader({
               testID="list-title-field"
             />
           ) : (
-            <View ref={titleSlot}>
+            <View>
               <Touchable
                 square={false}
                 accessibilityRole="button"

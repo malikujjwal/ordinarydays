@@ -153,6 +153,8 @@ export const layout = {
   focusRingWidth: 2,
   /** Content rows are sized by what they hold, above this floor. */
   rowMinHeight: 56,
+  /** Centred destructive alerts keep a readable measure on every viewport. */
+  alertDialogMaxWidth: 380,
   /**
    * **`SettingRow`'s own floor** (founder's decision, 2026-08-13). Named rather than smuggled
    * into the component as an unexplained 72.

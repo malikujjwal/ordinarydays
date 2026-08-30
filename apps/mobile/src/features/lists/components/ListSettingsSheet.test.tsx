@@ -4,6 +4,7 @@ import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ListSettings } from '../hooks/useListSettings';
+import { SLOT_MEANINGS } from '../model/listSettings';
 import { ListSettingsSheet } from './ListSettingsSheet';
 
 const list = (overrides: Partial<List> = {}): List => ({
@@ -106,9 +107,17 @@ describe('the P3-33 List settings hierarchy', () => {
     expect(group.getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('Show a section for each populated stage')).toBeTruthy();
     expect(screen.getByText('Stage labels')).toBeTruthy();
+    expect(screen.getByText('Queued · Building · Shipped')).toBeTruthy();
+    expect(screen.queryByLabelText('First stage')).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Stage labels.*Queued.*Building.*Shipped/i }),
+    );
+    expect(screen.getByRole('dialog', { name: 'Stage labels' })).toBeTruthy();
     expect(screen.getByLabelText('First stage')).toHaveProperty('value', 'Queued');
     expect(screen.getByLabelText('Active stage')).toHaveProperty('value', 'Building');
     expect(screen.getByLabelText('Done stage')).toHaveProperty('value', 'Shipped');
+    expect(screen.queryByText('Item details')).toBeNull();
   });
 
   it('commits edited stage labels through the existing state-mode write', () => {
@@ -121,6 +130,9 @@ describe('the P3-33 List settings hierarchy', () => {
     });
     const actions = mount(subject);
 
+    fireEvent.click(
+      screen.getByRole('button', { name: /Stage labels.*Queued.*Building.*Shipped/i }),
+    );
     fireEvent.change(screen.getByLabelText('First stage'), {
       target: { value: 'Saved' },
     });
@@ -130,6 +142,24 @@ describe('the P3-33 List settings hierarchy', () => {
       ...subject.itemStateMode,
       labels: { open: 'Saved', active: 'Building', done: 'Shipped' },
     });
+  });
+
+  it('collapses Planning to one destination row and edits it in a focused sheet', () => {
+    const actions = mount(list({ slot: 'groceries' }));
+
+    expect(
+      screen.getByRole('button', { name: /Default destination.*Groceries/i }),
+    ).toBeTruthy();
+    expect(screen.queryByText(SLOT_MEANINGS.groceries)).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Default destination.*Groceries/i }),
+    );
+    expect(screen.getByRole('dialog', { name: 'Default destination' })).toBeTruthy();
+    expect(screen.getByText(SLOT_MEANINGS.groceries)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Watch Later/i }));
+    expect(actions.setSlot).toHaveBeenCalledWith('watch');
   });
 
   it('opens focused naming configuration the first time Sub-items is enabled', () => {

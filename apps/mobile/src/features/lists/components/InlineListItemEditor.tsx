@@ -1,3 +1,4 @@
+import { MAX_TITLE_LEN } from '@od/shared/constants';
 import { Button, Field, IconTile, Plus, Text, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
@@ -46,9 +47,9 @@ export function InlineListItemEditor({
             value={title}
             hideLabel
             autoFocus
-            appearance="bare"
+            appearance="underline"
             hint="Return adds another"
-            maxLength={200}
+            maxLength={MAX_TITLE_LEN}
             onChangeText={(next) => {
               setTitle(next);
               onChange?.();
@@ -59,7 +60,7 @@ export function InlineListItemEditor({
         </View>
         <Button
           label="Add"
-          variant="ghost"
+          variant="primary"
           size="sm"
           disabled={disabled}
           loading={isAdding}

@@ -250,6 +250,10 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByTestId('list-detail')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByLabelText('Item title')).toBeTruthy();
+    expect(screen.getByLabelText('Item title').getAttribute('maxlength')).toBe('200');
+    expect(screen.getByLabelText('Item title').getAttribute('style')).toContain(
+      'border-bottom-width: 2px',
+    );
     expect(screen.queryByLabelText('Note')).toBeNull();
     expect(screen.getByText('Return adds another')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy();

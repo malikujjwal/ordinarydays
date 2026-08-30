@@ -9,7 +9,6 @@ import {
   Button,
   Checkbox,
   Field,
-  GripVertical,
   IconButton,
   MoreHorizontal,
   Plus,
@@ -43,6 +42,7 @@ import {
   subItemsPatch,
   titlePatch,
 } from '../model/itemSheet';
+import { ReorderableList } from './ReorderableList';
 
 export interface ItemSheetProps {
   open: boolean;
@@ -276,131 +276,140 @@ export function ItemSheet({
         <Text variant="sectionLabel" color="textSecondary">
           {config.sectionLabel}
         </Text>
-        {subItems.map((entry, index) => {
-          const name = entry.title.trim() || config.singularLabel;
-          const menuOpen = openSubItemMenu === entry.id;
-          const move = (to: number) => {
-            const next = moveSubItem(subItems, index, to);
+        <ReorderableList
+          items={subItems}
+          keyOf={(entry) => entry.id}
+          labelOf={(entry) => entry.title.trim() || config.singularLabel}
+          rangeOf={() => ({ first: 0, last: Math.max(0, subItems.length - 1) })}
+          handlePlacement="leading"
+          handleAppearance="quiet"
+          handleVisibility="persistent"
+          onDrop={(itemId, to) => {
+            const from = subItems.findIndex((entry) => entry.id === itemId);
+            const next = moveSubItem(subItems, from, to);
             setSubItems(next);
             setOpenSubItemMenu(undefined);
             commit(subItemsPatch(item, next));
-          };
-          return (
-            <View
-              key={entry.id}
-              testID={`sub-item-${entry.id}`}
-              style={{
-                gap: theme.space[1],
-                paddingVertical: theme.space[2],
-                borderBottomWidth: 1,
-                borderBottomColor: theme.colors.border,
-              }}
-            >
+          }}
+          renderItem={(entry, index) => {
+            const name = entry.title.trim() || config.singularLabel;
+            const menuOpen = openSubItemMenu === entry.id;
+            const move = (to: number) => {
+              const next = moveSubItem(subItems, index, to);
+              setSubItems(next);
+              setOpenSubItemMenu(undefined);
+              commit(subItemsPatch(item, next));
+            };
+            return (
               <View
+                testID={`sub-item-${entry.id}`}
                 style={{
-                  minHeight: theme.layout.rowMinHeight,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: theme.space[2],
+                  gap: theme.space[1],
+                  paddingVertical: theme.space[2],
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.border,
                 }}
               >
-                <IconButton
-                  icon={GripVertical}
-                  label={`Reorder ${name}`}
-                  onPress={() => setOpenSubItemMenu(menuOpen ? undefined : entry.id)}
-                  testID={`sub-item-${entry.id}-grip`}
-                />
-                <View style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}>
-                  <Field
-                    label={config.singularLabel}
-                    value={entry.title}
-                    hideLabel
-                    appearance="bare"
-                    placeholder={config.singularLabel}
-                    onChangeText={(value) =>
-                      setSubItems((rows) =>
-                        rows.map((row) =>
-                          row.id === entry.id ? { ...row, title: value } : row,
-                        ),
-                      )
-                    }
-                    onBlur={() =>
-                      commit(
-                        subItemsPatch(
-                          item,
-                          subItems.filter((row) => row.title.trim() !== ''),
-                        ),
-                      )
-                    }
-                  />
-                  {config.secondaryLabel === undefined ? null : (
+                <View
+                  style={{
+                    minHeight: theme.layout.rowMinHeight,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: theme.space[2],
+                  }}
+                >
+                  <View style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}>
                     <Field
-                      label={config.secondaryLabel}
-                      value={entry.secondary ?? ''}
+                      label={config.singularLabel}
+                      value={entry.title}
                       hideLabel
                       appearance="bare"
-                      textVariant="footnote"
-                      placeholder={config.secondaryLabel}
+                      placeholder={config.singularLabel}
                       onChangeText={(value) =>
                         setSubItems((rows) =>
                           rows.map((row) =>
-                            row.id === entry.id ? { ...row, secondary: value } : row,
+                            row.id === entry.id ? { ...row, title: value } : row,
                           ),
                         )
                       }
-                      onBlur={() => commit(subItemsPatch(item, subItems))}
+                      onBlur={() =>
+                        commit(
+                          subItemsPatch(
+                            item,
+                            subItems.filter((row) => row.title.trim() !== ''),
+                          ),
+                        )
+                      }
                     />
-                  )}
+                    {config.secondaryLabel === undefined ? null : (
+                      <Field
+                        label={config.secondaryLabel}
+                        value={entry.secondary ?? ''}
+                        hideLabel
+                        appearance="bare"
+                        textVariant="footnote"
+                        placeholder={config.secondaryLabel}
+                        onChangeText={(value) =>
+                          setSubItems((rows) =>
+                            rows.map((row) =>
+                              row.id === entry.id ? { ...row, secondary: value } : row,
+                            ),
+                          )
+                        }
+                        onBlur={() => commit(subItemsPatch(item, subItems))}
+                      />
+                    )}
+                  </View>
+                  <IconButton
+                    icon={MoreHorizontal}
+                    label={`More actions for ${name}`}
+                    onPress={() => setOpenSubItemMenu(menuOpen ? undefined : entry.id)}
+                    testID={`sub-item-${entry.id}-menu`}
+                  />
                 </View>
-                <IconButton
-                  icon={MoreHorizontal}
-                  label={`More actions for ${name}`}
-                  onPress={() => setOpenSubItemMenu(menuOpen ? undefined : entry.id)}
-                  testID={`sub-item-${entry.id}-menu`}
-                />
-              </View>
-              {menuOpen ? (
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    flexWrap: 'wrap',
-                    justifyContent: 'flex-end',
-                    gap: theme.space[2],
-                  }}
-                  testID={`sub-item-${entry.id}-actions`}
-                >
-                  <Button
-                    label={`Move ${name} up`}
-                    accessibilityLabel={`Move ${name} up`}
-                    variant="ghost"
-                    size="sm"
-                    disabled={index === 0}
-                    onPress={() => move(index - 1)}
-                  />
-                  <Button
-                    label={`Move ${name} down`}
-                    accessibilityLabel={`Move ${name} down`}
-                    variant="ghost"
-                    size="sm"
-                    disabled={index === subItems.length - 1}
-                    onPress={() => move(index + 1)}
-                  />
-                  <Button
-                    label={`Remove ${name}`}
-                    variant="ghost"
-                    size="sm"
-                    onPress={() => {
-                      const next = subItems.filter((_, at) => at !== index);
-                      setSubItems(next);
-                      setOpenSubItemMenu(undefined);
-                      commit(subItemsPatch(item, next));
+                {menuOpen ? (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      flexWrap: 'wrap',
+                      justifyContent: 'flex-end',
+                      gap: theme.space[2],
                     }}
-                  />
-                </View>
-              ) : null}
-            </View>
-          );
-        })}
+                    testID={`sub-item-${entry.id}-actions`}
+                  >
+                    <Button
+                      label={`Move ${name} up`}
+                      accessibilityLabel={`Move ${name} up`}
+                      variant="ghost"
+                      size="sm"
+                      disabled={index === 0}
+                      onPress={() => move(index - 1)}
+                    />
+                    <Button
+                      label={`Move ${name} down`}
+                      accessibilityLabel={`Move ${name} down`}
+                      variant="ghost"
+                      size="sm"
+                      disabled={index === subItems.length - 1}
+                      onPress={() => move(index + 1)}
+                    />
+                    <Button
+                      label={`Remove ${name}`}
+                      variant="ghost"
+                      size="sm"
+                      onPress={() => {
+                        const next = subItems.filter((_, at) => at !== index);
+                        setSubItems(next);
+                        setOpenSubItemMenu(undefined);
+                        commit(subItemsPatch(item, next));
+                      }}
+                    />
+                  </View>
+                ) : null}
+              </View>
+            );
+          }}
+        />
         <Button
           label={`Add ${config.singularLabel}`}
           variant="ghost"

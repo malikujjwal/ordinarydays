@@ -567,7 +567,8 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
 | `Sheet` | `open`, `onClose`, `title?`, `detent` (`fit` \| `medium` \| `large`), `actions?`, `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. **Behaviour is fixed by §6.1, not by the screen.** |
-| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength` | default, focused, filled, error, disabled. `surfaceInput` fill, `radius.lg`, **`borderStrong` at rest** and the accessible `focusRing` on focus. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
+| `AlertDialog` | `open`, `label`, `onRequestClose`, `initialFocusTestID?`, `children` | Always centred and scrim-modal. The scrim never dismisses it. The safe action receives initial focus; focus is trapped and returns to the trigger on close. Reduce Motion removes the native fade. Geometry and focus behaviour belong to the primitive, not a feature screen. |
+| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength`, `appearance` (`boxed` \| `bare` \| `underline`) | default, focused, filled, error, disabled. `boxed` uses `surfaceInput`, `radius.lg`, **`borderStrong` at rest** and the accessible `focusRing` on focus. `bare` is content-like inline editing. `underline` is the persistent-boundary rapid-entry treatment. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
 | `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderStrong` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
@@ -576,7 +577,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
 | `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
-| `SectionHeader` | `title`, `count?`, `action?` | default only. `caption` type, uppercase, wide-tracked, `accessibilityRole="header"`. |
+| `SectionHeader` | `title`, `count?`, `action?`, `icon?`, `appearance` (`plain` \| `tinted`) | `plain` is caption type, uppercase and wide-tracked. `tinted` is the compact icon/title/count boundary for grouped content. Both expose the title and count as one heading name. |
 | `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. A product anatomy may supply one compact, non-interactive `IconTile`; that is a semantic marker, not an illustration. |
 | `Toast` | `message`, `requestId?` (small, selectable API correlation id), `action?` (`{ label, onPress }`), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. The primitive accepts only the two product windows; the shell host may shorten visibility to a positive remaining server deadline, capped at the applicable window, and suppresses an expired or zero-length offer. |
 | `Skeleton` | `shape` (`row` \| `card` \| `text`), `count` | Shimmer off under Reduce Motion. Minimum display 200 ms. |
@@ -644,6 +645,12 @@ them stacked into a column because the content above it happened to grow.
 
 **Keep the close button even once swipe exists.** Swipe is the convenience; the button is what
 makes dismissal obvious and gives assistive technology and the keyboard a target.
+
+`AlertDialog` is the deliberate exception to the width-driven Sheet presentation: a short,
+consequential decision remains a centred alert at every width. It has no close control because
+its explicit safe action is `Cancel`, and its scrim cannot answer the decision. The primitive
+owns the `alertdialog` name, safe initial focus, Tab loop, trigger restoration and Reduce Motion
+handling; a feature supplies only the consequences and actions.
 
 **Gesture priority, so the drag and the scroll do not fight** (§25). The pan lives on the
 **whole surface** and engages only while the body is scrolled to its top, claiming the gesture in

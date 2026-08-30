@@ -33,6 +33,7 @@ export interface ListSettingsSheetProps {
 
 const SLOTS: readonly DefaultSlot[] = ['groceries', 'watch', 'meals'];
 const MODES: readonly ItemStateMode['mode'][] = ['none', 'checkbox', 'stages'];
+type SettingsEditor = 'main' | 'subItems' | 'stages' | 'slot';
 
 export function ListSettingsSheet({
   open,
@@ -42,7 +43,7 @@ export function ListSettingsSheet({
   testID = 'list-settings',
 }: ListSettingsSheetProps) {
   const theme = useTheme();
-  const [namingOpen, setNamingOpen] = useState(false);
+  const [editor, setEditor] = useState<SettingsEditor>('main');
   const [sectionLabel, setSectionLabel] = useState(
     list.featureConfig.subItems?.sectionLabel ?? 'Sub-items',
   );
@@ -57,6 +58,7 @@ export function ListSettingsSheet({
   const [stageLabels, setStageLabels] = useState(
     stages?.labels ?? { open: 'Saved', active: 'In progress', done: 'Done' },
   );
+  const [selectedSlot, setSelectedSlot] = useState<DefaultSlot | null>(list.slot);
   useEffect(() => {
     setSectionLabel(list.featureConfig.subItems?.sectionLabel ?? 'Sub-items');
     setSingularLabel(list.featureConfig.subItems?.singularLabel ?? 'Sub-item');
@@ -66,7 +68,10 @@ export function ListSettingsSheet({
     if (stages !== undefined) setStageLabels(stages.labels);
   }, [stages]);
   useEffect(() => {
-    if (!open) setNamingOpen(false);
+    setSelectedSlot(list.slot);
+  }, [list.slot]);
+  useEffect(() => {
+    if (!open) setEditor('main');
   }, [open]);
   const saveNaming = () => {
     settings.setSubItemLabels({
@@ -74,7 +79,7 @@ export function ListSettingsSheet({
       singularLabel: singularLabel.trim() || 'Sub-item',
       ...(secondaryLabel.trim() === '' ? {} : { secondaryLabel: secondaryLabel.trim() }),
     });
-    setNamingOpen(false);
+    setEditor('main');
   };
   const saveStageLabels = () => {
     if (stages === undefined) return;
@@ -89,18 +94,26 @@ export function ListSettingsSheet({
   };
   const subItems = list.featureConfig.subItems;
   const mealIntegration = subItems?.integration === 'mealIngredients';
+  const sheetTitle =
+    editor === 'subItems'
+      ? 'Sub-item settings'
+      : editor === 'stages'
+        ? 'Stage labels'
+        : editor === 'slot'
+          ? 'Default destination'
+          : 'List settings';
 
   return (
     <Sheet
       open={open}
       onClose={() => {
-        if (namingOpen) setNamingOpen(false);
+        if (editor !== 'main') setEditor('main');
         else onClose();
       }}
-      title={namingOpen ? 'Sub-item settings' : 'List settings'}
-      detent={namingOpen ? 'fit' : 'large'}
-      testID={namingOpen ? 'sub-item-settings-sheet' : testID}
-      {...(namingOpen
+      title={sheetTitle}
+      detent={editor === 'main' ? 'large' : 'fit'}
+      testID={editor === 'subItems' ? 'sub-item-settings-sheet' : testID}
+      {...(editor === 'subItems'
         ? {
             actions: (
               <Button
@@ -115,7 +128,7 @@ export function ListSettingsSheet({
           }
         : {})}
     >
-      {namingOpen ? (
+      {editor === 'subItems' ? (
         <View style={{ gap: theme.space[4] }}>
           <Text variant="subhead" color="textSecondary">
             Use familiar words for the small list shown inside every item.
@@ -184,6 +197,62 @@ export function ListSettingsSheet({
             </View>
           </View>
         </View>
+      ) : editor === 'stages' && stages !== undefined ? (
+        <View style={{ gap: theme.space[4] }}>
+          <Text variant="subhead" color="textSecondary">
+            Use short labels that describe the three intrinsic item states.
+          </Text>
+          <Field
+            label="First stage"
+            value={stageLabels.open}
+            onChangeText={(open) => setStageLabels((current) => ({ ...current, open }))}
+            onBlur={saveStageLabels}
+          />
+          <Field
+            label="Active stage"
+            value={stageLabels.active}
+            onChangeText={(active) =>
+              setStageLabels((current) => ({ ...current, active }))
+            }
+            onBlur={saveStageLabels}
+          />
+          <Field
+            label="Done stage"
+            value={stageLabels.done}
+            onChangeText={(done) => setStageLabels((current) => ({ ...current, done }))}
+            onBlur={saveStageLabels}
+          />
+        </View>
+      ) : editor === 'slot' ? (
+        <View style={{ gap: theme.space[4] }}>
+          <RowGroup label="Default destination">
+            {SLOTS.map((slot) => (
+              <SettingRow
+                key={slot}
+                label={SLOT_LABELS[slot]}
+                summary={SLOT_MEANINGS[slot]}
+                selected={selectedSlot === slot}
+                disabled={settings.busy}
+                onPress={() => {
+                  setSelectedSlot(slot);
+                  settings.setSlot(slot);
+                }}
+              />
+            ))}
+            <SettingRow
+              label={NO_SLOT_LABEL}
+              selected={selectedSlot === null}
+              disabled={settings.busy}
+              onPress={() => {
+                setSelectedSlot(null);
+                settings.setSlot(null);
+              }}
+            />
+          </RowGroup>
+          <Text variant="footnote" color="textSecondary">
+            {SLOT_CLEARS_PROFILE_DEFAULT}
+          </Text>
+        </View>
       ) : (
         <View style={{ gap: theme.space[5] }}>
           <Text variant="subhead" color="textSecondary">
@@ -216,34 +285,14 @@ export function ListSettingsSheet({
                 }
                 testID="list-settings-group-by-state"
               />
-              <RowGroup label="Stage labels" testID="list-settings-stage-labels">
-                <View style={{ gap: theme.space[3] }}>
-                  <Field
-                    label="First stage"
-                    value={stageLabels.open}
-                    onChangeText={(open) =>
-                      setStageLabels((current) => ({ ...current, open }))
-                    }
-                    onBlur={saveStageLabels}
-                  />
-                  <Field
-                    label="Active stage"
-                    value={stageLabels.active}
-                    onChangeText={(active) =>
-                      setStageLabels((current) => ({ ...current, active }))
-                    }
-                    onBlur={saveStageLabels}
-                  />
-                  <Field
-                    label="Done stage"
-                    value={stageLabels.done}
-                    onChangeText={(done) =>
-                      setStageLabels((current) => ({ ...current, done }))
-                    }
-                    onBlur={saveStageLabels}
-                  />
-                </View>
-              </RowGroup>
+              <SettingRow
+                label="Stage labels"
+                summary={`${stageLabels.open} · ${stageLabels.active} · ${stageLabels.done}`}
+                opens
+                disabled={settings.busy}
+                onPress={() => setEditor('stages')}
+                testID="list-settings-stage-labels"
+              />
             </View>
           )}
 
@@ -285,7 +334,7 @@ export function ListSettingsSheet({
               onPress={() => {
                 const enabling = list.featureConfig.subItems?.enabled !== true;
                 settings.setFeatureEnabled('subItems', enabling);
-                if (enabling) setNamingOpen(true);
+                if (enabling) setEditor('subItems');
               }}
               testID="list-settings-feature-sub-items"
             />
@@ -295,7 +344,7 @@ export function ListSettingsSheet({
                 value="Edit"
                 opens
                 disabled={settings.busy}
-                onPress={() => setNamingOpen(true)}
+                onPress={() => setEditor('subItems')}
                 testID="list-settings-sub-item-naming"
               />
             )}
@@ -303,24 +352,12 @@ export function ListSettingsSheet({
 
           <View style={{ gap: theme.space[2] }}>
             <RowGroup label="Planning" testID="list-settings-slot">
-              <Text variant="footnoteStrong" color="textSecondary">
-                Default destination
-              </Text>
-              {SLOTS.map((slot) => (
-                <SettingRow
-                  key={slot}
-                  label={SLOT_LABELS[slot]}
-                  summary={SLOT_MEANINGS[slot]}
-                  selected={list.slot === slot}
-                  disabled={settings.busy}
-                  onPress={() => settings.setSlot(slot)}
-                />
-              ))}
               <SettingRow
-                label={NO_SLOT_LABEL}
-                selected={list.slot === null}
+                label="Default destination"
+                value={selectedSlot === null ? NO_SLOT_LABEL : SLOT_LABELS[selectedSlot]}
+                opens
                 disabled={settings.busy}
-                onPress={() => settings.setSlot(null)}
+                onPress={() => setEditor('slot')}
               />
             </RowGroup>
             <Text variant="footnote" color="textSecondary">

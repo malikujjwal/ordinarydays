@@ -47,8 +47,8 @@ describe('ListHeaderMenu', () => {
   it('offers both immediate done-set actions with their count', () => {
     const actions = mount();
 
-    fireEvent.click(screen.getByTestId('list-clear-checked'));
-    fireEvent.click(screen.getByTestId('list-uncheck-all'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear checked (7)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Uncheck all (7)' }));
 
     expect(screen.getByText('Clear checked (7)')).toBeTruthy();
     expect(screen.getByText('Uncheck all (7)')).toBeTruthy();
@@ -77,8 +77,12 @@ describe('ListHeaderMenu', () => {
       }),
     );
 
-    fireEvent.click(screen.getByTestId('list-settings-open'));
-    fireEvent.click(screen.getByTestId('list-archive'));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'List settings, State, item details and planning',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive list' }));
 
     expect(actions.onOpenSettings).toHaveBeenCalledOnce();
     expect(actions.onArchive).toHaveBeenCalledOnce();
@@ -87,9 +91,11 @@ describe('ListHeaderMenu', () => {
   it('puts List settings first and explains what it contains', () => {
     mount();
 
-    const sheet = screen.getByTestId('list-header-menu');
-    const settings = screen.getByTestId('list-settings-open');
-    const clear = screen.getByTestId('list-clear-checked');
+    const sheet = screen.getByRole('dialog');
+    const settings = screen.getByRole('button', {
+      name: 'List settings, State, item details and planning',
+    });
+    const clear = screen.getByRole('button', { name: 'Clear checked (7)' });
     expect(
       settings.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

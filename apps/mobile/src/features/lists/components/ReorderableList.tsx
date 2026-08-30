@@ -58,6 +58,12 @@ export interface ReorderableListProps<T> {
   rangeOf: (itemId: string) => ReorderRange | undefined;
   onDrop: (itemId: string, toIndex: number) => void;
   renderItem: (item: T, index: number) => ReactNode;
+  /** Content rows trail; compact nested rows lead with their grip. */
+  handlePlacement?: 'leading' | 'trailing';
+  /** Nested rows use a neutral grip without the raised pointer chrome. */
+  handleAppearance?: 'surface' | 'quiet';
+  /** Nested rows keep the grip visible because there is no trailing wrapper-owned handle. */
+  handleVisibility?: 'adaptive' | 'persistent';
   testID?: string;
 }
 
@@ -72,6 +78,8 @@ interface RowProps {
   translation: SharedValue<number>;
   onMeasured: (index: number, height: number) => void;
   onDrop: (itemId: string, toIndex: number) => void;
+  handlePlacement: 'leading' | 'trailing';
+  handleAppearance: 'surface' | 'quiet';
   children: ReactNode;
 }
 
@@ -93,6 +101,8 @@ function ReorderableRow({
   translation,
   onMeasured,
   onDrop,
+  handlePlacement,
+  handleAppearance,
   children,
 }: RowProps) {
   const theme = useTheme();
@@ -155,8 +165,11 @@ function ReorderableRow({
           style,
           {
             position: 'relative',
-            paddingRight: theme.layout.hitTarget,
-            backgroundColor: theme.colors.surface,
+            ...(handlePlacement === 'leading'
+              ? { paddingLeft: theme.layout.hitTarget }
+              : { paddingRight: theme.layout.hitTarget }),
+            backgroundColor:
+              handleAppearance === 'quiet' ? 'transparent' : theme.colors.surface,
           },
         ]}
       >
@@ -181,7 +194,7 @@ function ReorderableRow({
             style={{
               position: 'absolute',
               top: theme.space[2],
-              right: 0,
+              ...(handlePlacement === 'leading' ? { left: 0 } : { right: 0 }),
               width: theme.layout.hitTarget,
               height: theme.layout.hitTarget,
               alignItems: 'center',
@@ -203,6 +216,8 @@ export function ReorderableList<T>({
   rangeOf,
   onDrop,
   renderItem,
+  handlePlacement = 'trailing',
+  handleAppearance = 'surface',
   testID,
 }: ReorderableListProps<T>) {
   const heights = useSharedValue<number[]>([]);
@@ -238,6 +253,8 @@ export function ReorderableList<T>({
             translation={translation}
             onMeasured={onMeasured}
             onDrop={onDrop}
+            handlePlacement={handlePlacement}
+            handleAppearance={handleAppearance}
           >
             {renderItem(item, index)}
           </ReorderableRow>

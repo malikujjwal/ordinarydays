@@ -16,6 +16,7 @@
 
 export * from './icons/index';
 export { templateIcon } from './icons/templateIcon';
+export { AlertDialog, type AlertDialogProps } from './primitives/AlertDialog';
 export {
   Avatar,
   type AvatarProps,

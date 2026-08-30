@@ -92,6 +92,9 @@ export function ReorderableList<T>({
   rangeOf,
   onDrop,
   renderItem,
+  handlePlacement = 'trailing',
+  handleAppearance = 'surface',
+  handleVisibility = 'adaptive',
   testID,
 }: ReorderableListProps<T>) {
   const theme = useTheme();
@@ -298,8 +301,13 @@ export function ReorderableList<T>({
             }
             style={{
               position: 'relative',
-              ...(range === undefined ? {} : { paddingRight: theme.layout.hitTarget }),
-              backgroundColor: theme.colors.surface,
+              ...(range === undefined
+                ? {}
+                : handlePlacement === 'leading'
+                  ? { paddingLeft: theme.layout.hitTarget }
+                  : { paddingRight: theme.layout.hitTarget }),
+              backgroundColor:
+                handleAppearance === 'quiet' ? 'transparent' : theme.colors.surface,
               transform: [{ translateY: shift }],
               zIndex: grabbed === undefined ? 0 : 2,
             }}
@@ -311,8 +319,9 @@ export function ReorderableList<T>({
                 style={{
                   position: 'absolute',
                   top: theme.space[2],
-                  right: 0,
+                  ...(handlePlacement === 'leading' ? { left: 0 } : { right: 0 }),
                   opacity:
+                    handleVisibility === 'persistent' ||
                     touchLayout ||
                     hovered === itemId ||
                     focused === itemId ||
@@ -353,8 +362,14 @@ export function ReorderableList<T>({
                     justifyContent: 'center',
                     borderRadius: theme.radius.pill,
                     borderWidth: 1,
-                    borderColor: theme.colors.borderStrong,
-                    backgroundColor: theme.colors.surfaceRaised,
+                    borderColor:
+                      handleAppearance === 'quiet'
+                        ? 'transparent'
+                        : theme.colors.borderStrong,
+                    backgroundColor:
+                      handleAppearance === 'quiet'
+                        ? 'transparent'
+                        : theme.colors.surfaceRaised,
                   }}
                 >
                   <GripVertical size={20} color={theme.colors.textSecondary} />

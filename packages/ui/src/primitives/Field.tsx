@@ -79,8 +79,10 @@ export interface FieldProps {
    * `plans-and-lists.md` §2.1 renders as the header and not as a labelled form row. It still
    * focuses, still commits on blur, and still shows its focus ring. A bare multiline field
    * starts at one control row and grows with content instead of reserving a form-sized block.
+   * `underline` is the rapid-entry control: content-like at rest, with one persistent boundary
+   * that becomes the focus indicator instead of drawing a form box around the row.
    */
-  appearance?: 'boxed' | 'bare';
+  appearance?: 'boxed' | 'bare' | 'underline';
   /** The type variant for the value. `body` unless the field *is* the screen's title. */
   textVariant?: TypeVariant;
   testID?: string;
@@ -113,6 +115,8 @@ export function Field({
   const theme = useTheme();
   const [focused, setFocused] = useState(false);
   const bare = appearance === 'bare';
+  const underline = appearance === 'underline';
+  const quiet = bare || underline;
 
   return (
     <View style={{ gap: theme.space[2] }}>
@@ -183,16 +187,24 @@ export function Field({
           {
             color: disabled
               ? theme.colors.textDisabled
-              : bare
+              : quiet
                 ? theme.colors.textDisplay
                 : theme.colors.textPrimary,
-            backgroundColor: bare ? 'transparent' : theme.colors.surfaceInput,
-            borderRadius: bare ? theme.radius.none : theme.radius.lg,
-            paddingHorizontal: bare ? theme.space[0] : theme.space[5],
-            paddingVertical: bare ? theme.space[2] : theme.space[4],
-            minHeight: multiline && !bare ? 96 : theme.layout.hitTarget,
+            backgroundColor: quiet ? 'transparent' : theme.colors.surfaceInput,
+            borderRadius: quiet ? theme.radius.none : theme.radius.lg,
+            paddingHorizontal: quiet ? theme.space[0] : theme.space[5],
+            paddingVertical: quiet ? theme.space[2] : theme.space[4],
+            minHeight: multiline && !quiet ? 96 : theme.layout.hitTarget,
             textAlignVertical: multiline ? 'top' : 'center',
-            borderWidth: 1,
+            outlineColor: underline ? 'transparent' : undefined,
+            outlineStyle: underline ? 'solid' : undefined,
+            outlineWidth: underline ? 0 : undefined,
+            ...(underline
+              ? {
+                  borderWidth: 0,
+                  borderBottomWidth: focused ? theme.layout.focusRingWidth : 1,
+                }
+              : { borderWidth: 1 }),
             /**
              * **The rest border is `borderStrong`** — amended 2026-08-16 (P2-43), on the
              * founder's report that in light mode you cannot tell where the input is.
@@ -215,6 +227,11 @@ export function Field({
                   : bare
                     ? 'transparent'
                     : theme.colors.borderStrong,
+            borderBottomColor: underline
+              ? focused
+                ? theme.colors.focusRing
+                : theme.colors.borderStrong
+              : undefined,
           },
         ]}
       />

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
+import type { IconProps } from '../icons/index';
 import { useMotion, useTheme } from '../theme/index';
 import { type } from '../theme/tokens';
 import { Button } from './Button';
@@ -19,6 +20,9 @@ export interface SectionHeaderProps {
   title: string;
   count?: number;
   action?: React.ReactNode;
+  icon?: (props: IconProps) => React.ReactElement;
+  /** A quiet filled section boundary for grouped content such as List stages. */
+  appearance?: 'plain' | 'tinted';
   variant?: 'caption' | 'sectionLabel';
   testID?: string;
 }
@@ -28,10 +32,14 @@ export function SectionHeader({
   title,
   count,
   action,
+  icon: Icon,
+  appearance = 'plain',
   variant = 'caption',
   testID,
 }: SectionHeaderProps) {
   const theme = useTheme();
+  const tinted = appearance === 'tinted';
+  const tint = theme.typeAccent('custom');
 
   return (
     <View
@@ -40,10 +48,24 @@ export function SectionHeader({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: theme.space[2],
         // The section's own gap supplies the rest; 8 here plus 4 there read as an odd 12.
-        paddingBottom: theme.space[2],
+        ...(tinted
+          ? {
+              minHeight: theme.layout.hitTarget,
+              paddingHorizontal: theme.space[4],
+              paddingVertical: theme.space[2],
+              borderRadius: theme.radius.md,
+              backgroundColor: tint.surface,
+            }
+          : { paddingBottom: theme.space[2] }),
       }}
     >
+      {Icon === undefined ? null : (
+        <View aria-hidden testID={testID === undefined ? undefined : `${testID}-icon`}>
+          <Icon size={18} color={tinted ? tint.accent : theme.colors.textSecondary} />
+        </View>
+      )}
       {/**
        * `role="heading"` as well as `accessibilityRole`, for the same React Native Web
        * reason as the other primitives.
@@ -54,16 +76,18 @@ export function SectionHeader({
        * say "Up next", not spell out "U-P N-E-X-T" — and it is worth knowing before someone
        * writes `title="UP NEXT"` to make a test pass.
        */}
-      <Text
-        variant={variant}
-        color="textSecondary"
-        role="heading"
-        aria-level={2}
-        accessibilityRole="header"
-        {...(count === undefined ? {} : { accessibilityLabel: `${title}, ${count}` })}
-      >
-        {title}
-      </Text>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text
+          variant={tinted ? 'bodyStrong' : variant}
+          color={tinted ? 'textPrimary' : 'textSecondary'}
+          role="heading"
+          aria-level={2}
+          accessibilityRole="header"
+          {...(count === undefined ? {} : { accessibilityLabel: `${title}, ${count}` })}
+        >
+          {title}
+        </Text>
+      </View>
       {/**
        * **The action keeps its 44 pt target without setting the header's height.**
        *
@@ -94,8 +118,8 @@ export function SectionHeader({
        */}
       {action !== undefined || count === undefined ? null : (
         <Text
-          variant={variant}
-          color="textMuted"
+          variant={tinted ? 'footnoteStrong' : variant}
+          color={tinted ? 'textSecondary' : 'textMuted'}
           aria-hidden
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"

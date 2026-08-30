@@ -13,7 +13,7 @@ export function ListOverview({ count }: ListOverviewProps) {
     <View
       testID="list-overview"
       style={{
-        alignItems: 'center',
+        alignItems: 'flex-start',
         paddingBottom: theme.space[2],
       }}
     >
