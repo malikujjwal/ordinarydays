@@ -167,7 +167,7 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page.getByText('Queued').first()).toBeVisible();
       await expect(page.getByText('Building').first()).toBeVisible();
       await expect(page.getByText('Shipped').first()).toBeVisible();
-      await page.getByTestId('list-header').scrollIntoViewIfNeeded();
+      await expect(page.getByTestId('list-header')).toBeInViewport({ ratio: 1 });
       await expect(page).toHaveScreenshot(`stages-compact-${scheme}.png`);
     });
 

@@ -50,19 +50,18 @@ function mount(overrides: { list?: List | undefined } = {}) {
   return { onBack, onOpenMenu, onRename, onShare };
 }
 
-const activateTitle = () => fireEvent.click(screen.getByTestId('list-title'));
+const activateTitle = () =>
+  fireEvent.click(screen.getByRole('button', { name: 'Rename Groceries' }));
 const type = (value: string) =>
-  fireEvent.change(screen.getByTestId('list-title-field'), { target: { value } });
+  fireEvent.change(screen.getByLabelText('List name'), { target: { value } });
 
 describe('renaming is inline on the title', () => {
   it('shows the title as a control, and no field until it is activated', () => {
     mount();
 
     expect(screen.getByText('Groceries')).toBeDefined();
-    expect(screen.queryByTestId('list-title-field')).toBeNull();
-    expect(screen.getByTestId('list-title').getAttribute('aria-label')).toBe(
-      'Rename Groceries',
-    );
+    expect(screen.queryByLabelText('List name')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Rename Groceries' })).toBeTruthy();
     expect(screen.getByTestId('list-title-pencil')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
   });
@@ -71,11 +70,11 @@ describe('renaming is inline on the title', () => {
     mount();
     activateTitle();
 
-    const field = screen.getByTestId('list-title-field') as HTMLInputElement;
+    const field = screen.getByLabelText('List name') as HTMLInputElement;
     expect(field.value).toBe('Groceries');
     expect(document.activeElement).toBe(field);
     // The control it replaced is gone while the editor is open.
-    expect(screen.queryByTestId('list-title')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Rename Groceries' })).toBeNull();
   });
 
   /** One write, one field. §5.5: renaming changes nothing else. */
@@ -83,7 +82,7 @@ describe('renaming is inline on the title', () => {
     const { onRename } = mount();
     activateTitle();
     type('  Favourite restaurants  ');
-    fireEvent.blur(screen.getByTestId('list-title-field'));
+    fireEvent.blur(screen.getByLabelText('List name'));
 
     expect(onRename).toHaveBeenCalledTimes(1);
     expect(onRename).toHaveBeenCalledWith('Favourite restaurants');
@@ -95,7 +94,7 @@ describe('renaming is inline on the title', () => {
     const { onRename } = mount();
     activateTitle();
     type('Shopping');
-    fireEvent.keyDown(screen.getByTestId('list-title-field'), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByLabelText('List name'), { key: 'Enter' });
 
     expect(onRename).toHaveBeenCalledWith('Shopping');
   });
@@ -104,11 +103,11 @@ describe('renaming is inline on the title', () => {
     const { onRename } = mount();
     activateTitle();
     type('   ');
-    fireEvent.blur(screen.getByTestId('list-title-field'));
+    fireEvent.blur(screen.getByLabelText('List name'));
 
     expect(onRename).not.toHaveBeenCalled();
     expect(screen.getByText('Groceries')).toBeDefined();
-    expect(screen.queryByTestId('list-title-field')).toBeNull();
+    expect(screen.queryByLabelText('List name')).toBeNull();
   });
 
   /**
@@ -119,9 +118,11 @@ describe('renaming is inline on the title', () => {
     mount();
     activateTitle();
     type('Shopping');
-    fireEvent.keyDown(screen.getByTestId('list-title-field'), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByLabelText('List name'), { key: 'Enter' });
 
-    expect(document.activeElement).toBe(screen.getByTestId('list-title'));
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Rename Groceries' }),
+    );
   });
 
   /** A title is required (`list.ts`'s `title` schema); an empty one is refused before it flies. */
@@ -129,10 +130,10 @@ describe('renaming is inline on the title', () => {
     const { onRename } = mount();
     activateTitle();
     type('   ');
-    fireEvent.keyDown(screen.getByTestId('list-title-field'), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByLabelText('List name'), { key: 'Enter' });
 
     expect(onRename).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('list-title-field')).toBeNull();
+    expect(screen.queryByLabelText('List name')).toBeNull();
     expect(screen.getByText('Groceries')).toBeDefined();
   });
 
@@ -140,9 +141,9 @@ describe('renaming is inline on the title', () => {
     const { onBack, onOpenMenu, onShare } = mount();
     activateTitle();
 
-    fireEvent.click(screen.getByTestId('list-detail-back'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    fireEvent.click(screen.getByTestId('list-detail-menu'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(onBack).toHaveBeenCalled();
     expect(onShare).toHaveBeenCalled();
     expect(onOpenMenu).toHaveBeenCalled();
@@ -153,6 +154,6 @@ describe('renaming is inline on the title', () => {
     mount({ list: undefined });
 
     expect(screen.getByText('List')).toBeDefined();
-    expect(screen.queryByTestId('list-detail-menu')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
   });
 });

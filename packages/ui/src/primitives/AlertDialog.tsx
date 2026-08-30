@@ -12,6 +12,14 @@ export interface AlertDialogProps {
   testID?: string;
 }
 
+/** Keeps the platform branch deterministic and directly testable as a documented state. */
+export function alertDialogAnimationType(
+  platform: string,
+  reducedMotion: boolean,
+): 'none' | 'fade' {
+  return platform === 'web' || reducedMotion ? 'none' : 'fade';
+}
+
 /**
  * The shared, non-dismissible-scrim alert surface for consequential decisions.
  *
@@ -89,7 +97,7 @@ export function AlertDialog({
     <Modal
       visible={open}
       transparent
-      animationType={Platform.OS === 'web' || motion.reduced ? 'none' : 'fade'}
+      animationType={alertDialogAnimationType(Platform.OS, motion.reduced)}
       accessibilityLabel={label}
       onRequestClose={onRequestClose}
     >

@@ -17,11 +17,12 @@ import {
   SettingRow,
   Sheet,
   Text,
+  type Theme,
   Touchable,
   useTheme,
 } from '@od/ui';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { newLocalId } from '@/lib/localIds';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import { useListItemActions } from '../hooks/useListItemActions';
@@ -57,6 +58,29 @@ export interface ItemSheetProps {
 
 const STATES: readonly ListItemState[] = ['open', 'active', 'done'];
 
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    subItem: {
+      gap: theme.space[1],
+      paddingVertical: theme.space[2],
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
+    subItemRow: {
+      minHeight: theme.layout.rowMinHeight,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.space[2],
+    },
+    subItemFields: { flex: 1, minWidth: 0, gap: theme.space[1] },
+    subItemActions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'flex-end',
+      gap: theme.space[2],
+    },
+  });
+
 export function ItemSheet({
   open,
   list,
@@ -68,6 +92,7 @@ export function ItemSheet({
   testID = 'item-sheet',
 }: ItemSheetProps) {
   const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const actions = useListItemActions({
     onSaved: onChanged,
     onRemoving: onChanged,
@@ -301,24 +326,9 @@ export function ItemSheet({
               commit(subItemsPatch(item, next));
             };
             return (
-              <View
-                testID={`sub-item-${entry.id}`}
-                style={{
-                  gap: theme.space[1],
-                  paddingVertical: theme.space[2],
-                  borderBottomWidth: 1,
-                  borderBottomColor: theme.colors.border,
-                }}
-              >
-                <View
-                  style={{
-                    minHeight: theme.layout.rowMinHeight,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: theme.space[2],
-                  }}
-                >
-                  <View style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}>
+              <View testID={`sub-item-${entry.id}`} style={styles.subItem}>
+                <View style={styles.subItemRow}>
+                  <View style={styles.subItemFields}>
                     <Field
                       label={config.singularLabel}
                       value={entry.title}
@@ -369,12 +379,7 @@ export function ItemSheet({
                 </View>
                 {menuOpen ? (
                   <View
-                    style={{
-                      flexDirection: 'row',
-                      flexWrap: 'wrap',
-                      justifyContent: 'flex-end',
-                      gap: theme.space[2],
-                    }}
+                    style={styles.subItemActions}
                     testID={`sub-item-${entry.id}-actions`}
                   >
                     <Button

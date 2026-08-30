@@ -96,6 +96,24 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const theme = useTheme();
   const { heading, removesLead, removes, keeps, confirmLabel } = confirmation;
+  const actions = (
+    <View style={{ flexDirection: 'row', gap: theme.space[3], flexWrap: 'wrap' }}>
+      {/* Cancel first, and the safe choice. */}
+      <Button
+        label="Cancel"
+        variant="secondary"
+        onPress={onCancel}
+        testID="confirm-cancel"
+      />
+      <Button
+        label={confirmLabel}
+        variant="danger"
+        loading={busy}
+        onPress={onConfirm}
+        testID="confirm-accept"
+      />
+    </View>
+  );
 
   const content = (
     <View testID={embedded ? testID : undefined} style={{ gap: theme.space[5] }}>
@@ -131,22 +149,7 @@ export function ConfirmDialog({
         )}
       </View>
 
-      <View style={{ flexDirection: 'row', gap: theme.space[3], flexWrap: 'wrap' }}>
-        {/* Cancel first, and the safe choice. */}
-        <Button
-          label="Cancel"
-          variant="secondary"
-          onPress={onCancel}
-          testID="confirm-cancel"
-        />
-        <Button
-          label={confirmLabel}
-          variant="danger"
-          loading={busy}
-          onPress={onConfirm}
-          testID="confirm-accept"
-        />
-      </View>
+      {actions}
     </View>
   );
 
@@ -215,21 +218,7 @@ export function ConfirmDialog({
             );
           })}
         </View>
-        <View style={{ flexDirection: 'row', gap: theme.space[3], flexWrap: 'wrap' }}>
-          <Button
-            label="Cancel"
-            variant="secondary"
-            onPress={onCancel}
-            testID="confirm-cancel"
-          />
-          <Button
-            label={confirmLabel}
-            variant="danger"
-            loading={busy}
-            onPress={onConfirm}
-            testID="confirm-accept"
-          />
-        </View>
+        {actions}
       </View>
     );
 

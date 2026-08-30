@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ThemeProvider } from '../theme/ThemeProvider';
-import { AlertDialog } from './AlertDialog';
+import { AlertDialog, alertDialogAnimationType } from './AlertDialog';
 import { Button } from './Button';
 
 function Fixture() {
@@ -30,6 +30,13 @@ function Fixture() {
 }
 
 describe('AlertDialog', () => {
+  it('removes the native fade when Reduce Motion is enabled', () => {
+    expect(alertDialogAnimationType('ios', true)).toBe('none');
+    expect(alertDialogAnimationType('android', true)).toBe('none');
+    expect(alertDialogAnimationType('ios', false)).toBe('fade');
+    expect(alertDialogAnimationType('web', false)).toBe('none');
+  });
+
   it('names the modal, focuses the safe choice, traps Tab and restores its trigger', async () => {
     render(<Fixture />);
     const trigger = screen.getByRole('button', { name: 'Open confirmation' });

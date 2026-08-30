@@ -239,7 +239,7 @@ describe('the P3-33 List settings hierarchy', () => {
         },
       }),
     );
-    fireEvent.click(screen.getByTestId('list-settings-sub-item-naming'));
+    fireEvent.click(screen.getByRole('button', { name: /Steps.*Edit/ }));
 
     expect(screen.getByText(/Generic Sub-items/)).toBeTruthy();
     expect(screen.queryByText(/Meal integration/)).toBeNull();
