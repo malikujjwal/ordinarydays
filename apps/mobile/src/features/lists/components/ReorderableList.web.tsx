@@ -1,6 +1,6 @@
-import { GripVertical, Touchable, useTheme } from '@od/ui';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { GripVertical, type Theme, Touchable, useTheme } from '@od/ui';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { dropIndex, REORDER_LONG_PRESS_MS, type ReorderRange } from '../model/reorder';
 import type { ReorderableListProps } from './ReorderableList';
 
@@ -65,6 +65,40 @@ function travel(heights: readonly number[], from: number, to: number): number {
 
 const TOUCH_LAYOUT_QUERY = '(hover: none), (pointer: coarse)';
 
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    row: { position: 'relative', zIndex: 0 },
+    rowRaised: { zIndex: 2 },
+    rowLeading: { paddingLeft: theme.layout.hitTarget },
+    rowTrailing: { paddingRight: theme.layout.hitTarget },
+    rowSurface: { backgroundColor: theme.colors.surface },
+    rowQuiet: { backgroundColor: 'transparent' },
+    handleSlot: {
+      position: 'absolute',
+      top: theme.space[2],
+      pointerEvents: 'auto',
+      zIndex: 3,
+    },
+    handleLeading: { left: 0 },
+    handleTrailing: { right: 0 },
+    handleVisible: { opacity: 1 },
+    handleHidden: { opacity: 0 },
+    handle: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: theme.radius.pill,
+      borderWidth: 1,
+    },
+    handleSurface: {
+      borderColor: theme.colors.borderStrong,
+      backgroundColor: theme.colors.surfaceRaised,
+    },
+    handleQuiet: {
+      borderColor: 'transparent',
+      backgroundColor: 'transparent',
+    },
+  });
+
 function useTouchLayout(): boolean {
   const [touch, setTouch] = useState(
     () =>
@@ -98,6 +132,7 @@ export function ReorderableList<T>({
   testID,
 }: ReorderableListProps<T>) {
   const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const owner = useId();
   const touchLayout = useTouchLayout();
   const [hovered, setHovered] = useState<string>();
@@ -287,6 +322,12 @@ export function ReorderableList<T>({
                 : index < held.index && index >= held.toIndex
                   ? (heights.current[held.index] ?? 0)
                   : 0;
+        const handleVisible =
+          handleVisibility === 'persistent' ||
+          touchLayout ||
+          hovered === itemId ||
+          focused === itemId ||
+          grabbed !== undefined;
 
         return (
           <View
@@ -299,42 +340,34 @@ export function ReorderableList<T>({
             onPointerLeave={() =>
               setHovered((current) => (current === itemId ? undefined : current))
             }
-            style={{
-              position: 'relative',
-              ...(range === undefined
-                ? {}
+            style={[
+              styles.row,
+              range === undefined
+                ? null
                 : handlePlacement === 'leading'
-                  ? { paddingLeft: theme.layout.hitTarget }
-                  : { paddingRight: theme.layout.hitTarget }),
-              backgroundColor:
-                handleAppearance === 'quiet' ? 'transparent' : theme.colors.surface,
-              transform: [{ translateY: shift }],
-              zIndex: grabbed === undefined ? 0 : 2,
-            }}
+                  ? styles.rowLeading
+                  : styles.rowTrailing,
+              handleAppearance === 'quiet' ? styles.rowQuiet : styles.rowSurface,
+              // The translation is the only per-row style value; it is live drag state.
+              { transform: [{ translateY: shift }] },
+              grabbed === undefined ? null : styles.rowRaised,
+            ]}
           >
             {renderItem(item, index)}
 
             {range === undefined ? null : (
               <View
-                style={{
-                  position: 'absolute',
-                  top: theme.space[2],
-                  ...(handlePlacement === 'leading' ? { left: 0 } : { right: 0 }),
-                  opacity:
-                    handleVisibility === 'persistent' ||
-                    touchLayout ||
-                    hovered === itemId ||
-                    focused === itemId ||
-                    grabbed !== undefined
-                      ? 1
-                      : 0,
+                style={[
+                  styles.handleSlot,
+                  handlePlacement === 'leading'
+                    ? styles.handleLeading
+                    : styles.handleTrailing,
+                  handleVisible ? styles.handleVisible : styles.handleHidden,
                   /*
                    * Never `display: none` and never removed: the handle stays in the tab order
                    * so a keyboard user can reach a control a pointer user reveals by hovering.
                    */
-                  pointerEvents: 'auto',
-                  zIndex: 3,
-                }}
+                ]}
               >
                 <Touchable
                   square
@@ -357,20 +390,12 @@ export function ReorderableList<T>({
                     setFocused((current) => (current === itemId ? undefined : current))
                   }
                   testID={`list-reorder-handle-${itemId}`}
-                  style={{
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: theme.radius.pill,
-                    borderWidth: 1,
-                    borderColor:
-                      handleAppearance === 'quiet'
-                        ? 'transparent'
-                        : theme.colors.borderStrong,
-                    backgroundColor:
-                      handleAppearance === 'quiet'
-                        ? 'transparent'
-                        : theme.colors.surfaceRaised,
-                  }}
+                  style={[
+                    styles.handle,
+                    handleAppearance === 'quiet'
+                      ? styles.handleQuiet
+                      : styles.handleSurface,
+                  ]}
                 >
                   <GripVertical size={20} color={theme.colors.textSecondary} />
                 </Touchable>

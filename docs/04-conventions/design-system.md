@@ -134,7 +134,7 @@ content length — `Repeat` alone beside `Notes`-with-summary. Both are minima; 
 gallery states, not separate primitives. `Row` and `SettingRow` are the two row families —
 "navigation row", "choice row", "check row", "disclosure row", "content row" are *roles* of
 those. `TaskRow` is a domain composition of the row family, not a new visual primitive.
-`Button` is one component with `primary / secondary / ghost / danger`, and a "text action" is
+`Button` is one component with `primary / secondary / ghost / danger / dangerGhost`, and a "text action" is
 its `ghost` role rather than a separate component. `IconButton` stays separate because its
 geometry and accessibility contract genuinely differ. Six implementations independently
 remembering radius, pressed state, focus, disabled state and accessibility is the failure this
@@ -559,7 +559,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | Component | Props | States |
 | --- | --- | --- |
 | `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `textAction` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
-| `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger`), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth`, `flush` (a `ghost` whose label aligns with the text column — §0) | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
+| `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger` — filled destructive commit \| `dangerGhost` — low-emphasis destructive text action), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth`, `flush` (a ghost variant whose label aligns with the text column — §0) | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
 | `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `tone` (`neutral` \| `accent`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |
 | `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `surfaceTone?` (`neutral` \| `collectionRose` \| `collectionSand` \| `collectionBlue` \| `collectionOlive`), `onPress?` | default, pressed, focused. Collection tones resolve through §5.2a's paired surfaces; callers never pass raw colours. |

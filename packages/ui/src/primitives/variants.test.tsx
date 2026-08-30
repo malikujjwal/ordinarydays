@@ -50,13 +50,23 @@ const cssRgb = (hex: string): string => {
 };
 
 describe.each(schemes)('%s scheme renders every variant', (scheme) => {
-  it.each<ButtonVariant>(['primary', 'secondary', 'ghost', 'danger'])(
+  it.each<ButtonVariant>(['primary', 'secondary', 'ghost', 'danger', 'dangerGhost'])(
     'Button %s',
     (variant) => {
       wrap(<Button label="Save" variant={variant} onPress={() => {}} />, scheme);
       expect(screen.getByRole('button', { name: 'Save' })).toBeDefined();
     },
   );
+
+  it('keeps dangerGhost low-chrome while retaining destructive color', () => {
+    wrap(<Button label="Delete item" variant="dangerGhost" />, scheme);
+    const button = screen.getByRole('button', { name: 'Delete item' });
+
+    expect(getComputedStyle(button).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(getComputedStyle(screen.getByText('Delete item')).color).toBe(
+      cssRgb(colors[scheme].danger),
+    );
+  });
 
   it.each<ChipTone>(['neutral', 'accent', 'warning', 'danger', 'success'])(
     'Chip %s',

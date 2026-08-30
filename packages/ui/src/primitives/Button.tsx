@@ -14,7 +14,7 @@ import { Touchable } from './Touchable';
  * single primary action.
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dangerGhost';
 
 export interface ButtonProps {
   label: string;
@@ -118,6 +118,11 @@ export function Button({
     },
     ghost: { bg: 'transparent', fg: 'textAction' as const, border: 'transparent' },
     danger: { bg: theme.colors.danger, fg: 'inverse' as const, border: 'transparent' },
+    dangerGhost: {
+      bg: 'transparent',
+      fg: 'danger' as const,
+      border: 'transparent',
+    },
   }[variant];
   const foregroundColor =
     palette.fg === 'inverse' ? theme.colors.textInverse : theme.colors[palette.fg];

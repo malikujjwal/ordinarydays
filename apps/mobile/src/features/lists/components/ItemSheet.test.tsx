@@ -169,12 +169,14 @@ describe('the canonical item editor shell', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Reorder Paper' })).toBeTruthy();
+    const handleSlot = screen.getByRole('button', {
+      name: 'Reorder Paper',
+    }).parentElement;
+    if (handleSlot === null) throw new Error('Reorder handle must have a visible slot');
+    expect(getComputedStyle(handleSlot).opacity).toBe('1');
     expect(
-      screen.getByRole('button', { name: 'Reorder Paper' }).parentElement?.style.opacity,
-    ).toBe('1');
-    expect(screen.getByTestId('list-reorder-row-sub_1').style.backgroundColor).toBe(
-      'rgba(0, 0, 0, 0)',
-    );
+      getComputedStyle(screen.getByTestId('list-reorder-row-sub_1')).backgroundColor,
+    ).toBe('rgba(0, 0, 0, 0)');
     expect(screen.getByRole('button', { name: 'More actions for Paper' })).toBeTruthy();
     expect(screen.getByDisplayValue('Paper')).toBeTruthy();
     expect(screen.getByDisplayValue('2 sheets')).toBeTruthy();
@@ -251,7 +253,7 @@ describe('the canonical item editor shell', () => {
     fireEvent.click(deleteItem);
 
     expect(calls.remove).toHaveBeenCalledWith(subject);
-    expect(deleteItem.getAttribute('style')).not.toContain('background-color');
+    expect(getComputedStyle(deleteItem).backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
   it('keeps stable automation handles on the primary fields', () => {

@@ -1,6 +1,7 @@
-import { GripVertical, useTheme } from '@od/ui';
+import { GripVertical, type Theme, useTheme } from '@od/ui';
 import type { ReactNode } from 'react';
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
+import { StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   ReduceMotion,
@@ -80,6 +81,7 @@ interface RowProps {
   onDrop: (itemId: string, toIndex: number) => void;
   handlePlacement: 'leading' | 'trailing';
   handleAppearance: 'surface' | 'quiet';
+  styles: ReorderStyles;
   children: ReactNode;
 }
 
@@ -89,6 +91,27 @@ const SETTLE = {
   stiffness: 220,
   reduceMotion: ReduceMotion.System,
 } as const;
+
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    row: { position: 'relative' },
+    rowLeading: { paddingLeft: theme.layout.hitTarget },
+    rowTrailing: { paddingRight: theme.layout.hitTarget },
+    rowSurface: { backgroundColor: theme.colors.surface },
+    rowQuiet: { backgroundColor: 'transparent' },
+    handle: {
+      position: 'absolute',
+      top: theme.space[2],
+      width: theme.layout.hitTarget,
+      height: theme.layout.hitTarget,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    handleLeading: { left: 0 },
+    handleTrailing: { right: 0 },
+  });
+
+type ReorderStyles = ReturnType<typeof createStyles>;
 
 function ReorderableRow({
   index,
@@ -103,10 +126,10 @@ function ReorderableRow({
   onDrop,
   handlePlacement,
   handleAppearance,
+  styles,
   children,
 }: RowProps) {
   const theme = useTheme();
-
   const commit = useCallback(
     (toIndex: number) => {
       onDrop(itemId, toIndex);
@@ -163,14 +186,9 @@ function ReorderableRow({
         onLayout={(event) => onMeasured(index, event.nativeEvent.layout.height)}
         style={[
           style,
-          {
-            position: 'relative',
-            ...(handlePlacement === 'leading'
-              ? { paddingLeft: theme.layout.hitTarget }
-              : { paddingRight: theme.layout.hitTarget }),
-            backgroundColor:
-              handleAppearance === 'quiet' ? 'transparent' : theme.colors.surface,
-          },
+          styles.row,
+          handlePlacement === 'leading' ? styles.rowLeading : styles.rowTrailing,
+          handleAppearance === 'quiet' ? styles.rowQuiet : styles.rowSurface,
         ]}
       >
         {children}
@@ -191,15 +209,12 @@ function ReorderableRow({
               if (next !== index) onDrop(itemId, next);
             }}
             testID={`list-reorder-handle-${itemId}`}
-            style={{
-              position: 'absolute',
-              top: theme.space[2],
-              ...(handlePlacement === 'leading' ? { left: 0 } : { right: 0 }),
-              width: theme.layout.hitTarget,
-              height: theme.layout.hitTarget,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            style={[
+              styles.handle,
+              handlePlacement === 'leading'
+                ? styles.handleLeading
+                : styles.handleTrailing,
+            ]}
           >
             <GripVertical size={20} color={theme.colors.textSecondary} />
           </Animated.View>
@@ -220,6 +235,8 @@ export function ReorderableList<T>({
   handleAppearance = 'surface',
   testID,
 }: ReorderableListProps<T>) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const heights = useSharedValue<number[]>([]);
   const activeIndex = useSharedValue(-1);
   const hoverIndex = useSharedValue(-1);
@@ -255,6 +272,7 @@ export function ReorderableList<T>({
             onDrop={onDrop}
             handlePlacement={handlePlacement}
             handleAppearance={handleAppearance}
+            styles={styles}
           >
             {renderItem(item, index)}
           </ReorderableRow>

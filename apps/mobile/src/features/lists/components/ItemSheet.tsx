@@ -18,7 +18,6 @@ import {
   Sheet,
   Text,
   type Theme,
-  Touchable,
   useTheme,
 } from '@od/ui';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
@@ -78,6 +77,13 @@ const createStyles = (theme: Theme) =>
       flexWrap: 'wrap',
       justifyContent: 'flex-end',
       gap: theme.space[2],
+    },
+    deleteRow: {
+      minHeight: theme.layout.hitTarget,
+      justifyContent: 'center',
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.border,
+      paddingVertical: theme.space[3],
     },
   });
 
@@ -500,26 +506,19 @@ export function ItemSheet({
 
         {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
 
-        <Touchable
-          accessibilityRole="button"
-          accessibilityLabel="Delete item"
-          onPress={() => {
-            actions.remove(item);
-            onClose();
-          }}
-          testID="item-sheet-delete"
-          style={{
-            minHeight: theme.layout.hitTarget,
-            justifyContent: 'center',
-            borderTopWidth: 1,
-            borderTopColor: theme.colors.border,
-            paddingVertical: theme.space[3],
-          }}
-        >
-          <Text variant="bodyStrong" color="danger">
-            Delete item
-          </Text>
-        </Touchable>
+        <View style={styles.deleteRow}>
+          <Button
+            label="Delete item"
+            variant="dangerGhost"
+            size="sm"
+            flush
+            onPress={() => {
+              actions.remove(item);
+              onClose();
+            }}
+            testID="item-sheet-delete"
+          />
+        </View>
       </View>
     </Sheet>
   );

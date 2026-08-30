@@ -103,12 +103,13 @@ describe('the handle', () => {
     mount(anywhere);
     const control = handle('itm_b');
     const reveal = control.parentElement;
-    expect(reveal?.style.opacity).toBe('0');
+    if (reveal === null) throw new Error('Reorder handle must have a reveal slot');
+    expect(getComputedStyle(reveal).opacity).toBe('0');
 
     fireEvent.focus(control);
-    expect(reveal?.style.opacity).toBe('1');
+    expect(getComputedStyle(reveal).opacity).toBe('1');
     fireEvent.blur(control);
-    expect(reveal?.style.opacity).toBe('0');
+    expect(getComputedStyle(reveal).opacity).toBe('0');
   });
 
   it('stays visible on a touch layout before focus or hover', () => {
@@ -122,7 +123,9 @@ describe('the handle', () => {
     );
     mount(anywhere);
 
-    expect(handle('itm_b').parentElement?.style.opacity).toBe('1');
+    const reveal = handle('itm_b').parentElement;
+    if (reveal === null) throw new Error('Reorder handle must have a reveal slot');
+    expect(getComputedStyle(reveal).opacity).toBe('1');
   });
 
   it('exposes bounded Move up and Move down accessibility actions', () => {
