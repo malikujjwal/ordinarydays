@@ -60,7 +60,7 @@ export function ListDetailSurface({
   const theme = useTheme();
   const showEmpty = mayShowEmptyState(
     { itemCount, loadedCount: items.length, complete },
-    status !== 'pending',
+    status !== 'pending' && status !== 'error',
   );
   const onScroll = useCallback(
     (event: {

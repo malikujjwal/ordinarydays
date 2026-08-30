@@ -457,21 +457,22 @@ export const typeIcons = {
  * That is exactly why the test that pins the two together lives in `apps/mobile`, which can
  * see both.
  */
-export const templateIcons: Readonly<Record<string, (props: IconProps) => ReactElement>> =
-  {
-    bag: Bag,
-    book: Book,
-    bowl: Bowl,
-    cart: Cart,
-    'check-square': CheckSquare,
-    cup: Cup,
-    film: Film,
-    gift: Gift,
-    glass: Glass,
-    heart: Heart,
-    list: List,
-    'map-pin': MapPin,
-    'play-rect': PlayRect,
-    star: Star,
-    suitcase: Suitcase,
-  } as const;
+type IconComponent = (props: IconProps) => ReactElement;
+
+export const templateIcons: Readonly<Record<string, IconComponent>> = {
+  bag: Bag,
+  book: Book,
+  bowl: Bowl,
+  cart: Cart,
+  'check-square': CheckSquare,
+  cup: Cup,
+  film: Film,
+  gift: Gift,
+  glass: Glass,
+  heart: Heart,
+  list: List,
+  'map-pin': MapPin,
+  'play-rect': PlayRect,
+  star: Star,
+  suitcase: Suitcase,
+} as const;

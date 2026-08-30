@@ -211,6 +211,23 @@ describe('the configuration-driven List detail', () => {
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 
+  it('keeps a failed zero-item load exclusive from the successful empty state', () => {
+    setView({
+      status: 'error',
+      items: [],
+      itemCount: 0,
+      message: "Couldn't load this.",
+      requestId: 'req_list_load_9',
+    });
+    mount();
+
+    expect(screen.getByText("Couldn't load this.")).toBeTruthy();
+    expect(screen.getByText('req_list_load_9')).toBeTruthy();
+    expect(screen.queryByText('Start with one item')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add item' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
+  });
+
   it('puts the reorder overview above rows and the contextual Add row last', () => {
     mount();
 
@@ -228,7 +245,7 @@ describe('the configuration-driven List detail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
 
     expect(screen.getByTestId('list-detail')).toBeTruthy();
-    expect(screen.getByTestId('list-contextual-add')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Add item to Launch' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Add item to Launch' })).toBeTruthy();
     expect(screen.getByLabelText('Title')).toBeTruthy();
     expect(screen.getByLabelText('Note')).toBeTruthy();
@@ -245,7 +262,7 @@ describe('the configuration-driven List detail', () => {
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
-    expect(screen.getByTestId('list-contextual-add')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Add item to Launch' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 

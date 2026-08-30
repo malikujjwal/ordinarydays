@@ -1,6 +1,6 @@
 import type { Instant, TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
-import { Card, IconTile, ProgressBar, Text, templateIcons, useTheme } from '@od/ui';
+import { Card, IconTile, ProgressBar, Text, templateIcon, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import {
   checkedProgress,
@@ -64,9 +64,7 @@ export function ListIndexRow({
   testID,
 }: ListIndexRowProps) {
   const theme = useTheme();
-  const glyph = templateIcons[list.icon] ?? templateIcons.list;
-  if (glyph === undefined)
-    throw new Error('The template icon registry has no list fallback.');
+  const glyph = templateIcon(list.icon);
   const count = countLine(list);
   const progress = checkedProgress(list);
   const collectionTone = collectionToneForListId(list.listId);

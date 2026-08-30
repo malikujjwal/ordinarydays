@@ -15,6 +15,7 @@
  */
 
 export * from './icons/index';
+export { templateIcon } from './icons/templateIcon';
 export {
   Avatar,
   type AvatarProps,

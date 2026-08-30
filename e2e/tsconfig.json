@@ -26,6 +26,10 @@
   "compilerOptions": {
     "module": "commonjs",
     "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@od/shared/client": ["../packages/shared/src/client/index.ts"]
+    },
     "verbatimModuleSyntax": false,
     "types": ["node"],
     "composite": false,

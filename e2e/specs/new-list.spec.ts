@@ -1,4 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
+import { type ListView, listResponse } from '@od/shared/client';
 import { expect, type Page, type Response, test } from '@playwright/test';
 
 /**
@@ -46,19 +47,12 @@ async function expectNoSeriousA11yViolations(page: Page, where: string): Promise
   ).toEqual([]);
 }
 
-type CreatedList = {
-  templateKey: string;
-  title: string;
-  itemStateMode: { mode: string };
-  slot: string | null;
-};
-
 /** The canonical row returned by the UI's own create request. */
-async function createdList(responsePromise: Promise<Response>): Promise<CreatedList> {
+async function createdList(responsePromise: Promise<Response>): Promise<ListView> {
   const response = await responsePromise;
   expect(response.ok(), await response.text()).toBe(true);
-  const body = (await response.json()) as { data: CreatedList };
-  return body.data;
+  const body: unknown = await response.json();
+  return listResponse.parse(body).data;
 }
 
 function nextListCreate(page: Page): Promise<Response> {

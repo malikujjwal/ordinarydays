@@ -1,5 +1,5 @@
 import type { ListTemplateChoice } from '@od/shared/lists';
-import { Card, ChevronRight, IconTile, Text, templateIcons, useTheme } from '@od/ui';
+import { Card, ChevronRight, IconTile, Text, templateIcon, useTheme } from '@od/ui';
 import { View } from 'react-native';
 
 export interface ListTypeCardProps {
@@ -11,9 +11,7 @@ export interface ListTypeCardProps {
 /** One actionable catalogue choice; it communicates navigation, never selection. */
 export function ListTypeCard({ choice, leading = false, onPress }: ListTypeCardProps) {
   const theme = useTheme();
-  const icon = templateIcons[choice.icon] ?? templateIcons.list;
-  if (icon === undefined)
-    throw new Error('The template icon registry has no list fallback.');
+  const icon = templateIcon(choice.icon);
   const label = choice.templateKey === 'blank' ? 'Blank list' : choice.chooserLabel;
 
   return (
