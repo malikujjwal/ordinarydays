@@ -2,15 +2,17 @@ import { MAX_TITLE_LEN } from '@od/shared/constants';
 import type { List } from '@od/shared/types';
 import {
   Button,
+  ChevronLeft,
   Field,
   IconButton,
   MoreHorizontal,
+  Pencil,
   Text,
   Touchable,
   useTheme,
 } from '@od/ui';
 import { useEffect, useRef, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { Platform, Share, View } from 'react-native';
 
 /**
  * The list detail header, and the **only** place a list is renamed
@@ -23,10 +25,10 @@ import { Platform, View } from 'react-native';
  * `ListSettingsSheet.test.tsx` asserts the sheet has no Rename row, so re-adding one fails a
  * test rather than shipping two ways to do one thing.
  *
- * Activating the title swaps it for a focused field; `Save` commits **one**
- * `PATCH /v1/lists/:id { title }` under `If-Match`, and both `Save` and `Cancel` put focus back
- * on the title. That last part is `interaction-contract.md` §7.3's rule for a control that
- * replaces itself: a keyboard user who cancels must not be dropped at the top of the document.
+ * Activating the title swaps it for a focused field; Return or blur commits **one**
+ * `PATCH /v1/lists/:id { title }` under `If-Match`. There are no duplicate Save/Cancel
+ * controls in the compact header. Leaving the editor puts focus back on the title, following
+ * `interaction-contract.md` §7.3's replacement-control rule.
  *
  * ## Renaming changes nothing else
  *
@@ -35,7 +37,7 @@ import { Platform, View } from 'react-native';
  * as they were. There is no inference here from the typed words to anything — §1a.2's table
  * names "Renaming a list" and answers "Nothing" — and the write this sends carries one field.
  *
- * ## The draft is local, and it is discarded on Cancel
+ * ## The draft is local
  *
  * Nothing is sent while typing. The committed title reappears under an open editor if somebody
  * else renames the list — the projection flows straight through to `value` — and a save that
@@ -48,8 +50,10 @@ export interface ListHeaderProps {
   onBack: () => void;
   /** Opens the `⋯` menu. Absent list means no menu — there is nothing to act on yet. */
   onOpenMenu: () => void;
-  /** Commits the new title. Called once, on `Save`, with the trimmed value. */
+  /** Commits the new title once, on Return or blur, with the trimmed value. */
   onRename: (title: string) => void;
+  /** Overrides the platform share sheet, primarily for deterministic callers and tests. */
+  onShare?: () => void;
   testID?: string;
 }
 
@@ -58,6 +62,7 @@ export function ListHeader({
   onBack,
   onOpenMenu,
   onRename,
+  onShare,
   testID = 'list-header',
 }: ListHeaderProps) {
   const theme = useTheme();
@@ -67,6 +72,7 @@ export function ListHeader({
   /** Wraps the title control so focus can be handed back to it after the field goes away. */
   const titleSlot = useRef<View>(null);
   const returning = useRef(false);
+  const leaving = useRef(false);
 
   /**
    * §7.3's "Web equivalents": focus returns to the triggering element when a transient control
@@ -87,92 +93,121 @@ export function ListHeader({
   };
 
   const save = () => {
+    if (leaving.current) return;
+    leaving.current = true;
     const next = draft?.trim() ?? '';
-    if (next.length === 0) return;
+    if (next.length === 0) {
+      leaveEditor();
+      return;
+    }
     leaveEditor();
     // One write, one field. `useListSettings` drops it when the title has not actually changed.
     onRename(next);
   };
 
   return (
-    <View style={{ gap: theme.space[2], paddingBottom: theme.space[3] }} testID={testID}>
+    <View style={{ paddingBottom: theme.space[3] }} testID={testID}>
       <View
         style={{
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          gap: theme.space[2],
+          minHeight: theme.layout.hitTarget,
         }}
       >
-        <Button
+        <IconButton
+          icon={ChevronLeft}
           label="Back"
-          variant="ghost"
-          flush
           onPress={onBack}
           testID="list-detail-back"
         />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          {editing ? (
+            <Field
+              label="List name"
+              hideLabel
+              appearance="bare"
+              textVariant="heading"
+              autoFocus
+              value={draft}
+              onChangeText={(next) => {
+                leaving.current = false;
+                setDraft(next);
+              }}
+              maxLength={MAX_TITLE_LEN}
+              onSubmitEditing={save}
+              onBlur={save}
+              testID="list-title-field"
+            />
+          ) : (
+            <View ref={titleSlot}>
+              <Touchable
+                square={false}
+                accessibilityRole="button"
+                /*
+                 * The action, not the content: a screen reader hearing only the list's name would
+                 * have no way to know the header does anything. The name is still in it, because
+                 * `Rename` alone would not say *what* is being renamed.
+                 */
+                accessibilityLabel={`Rename ${title}`}
+                disabled={list === undefined}
+                onPress={() => {
+                  leaving.current = false;
+                  setDraft(title);
+                }}
+                testID="list-title"
+                style={{
+                  minHeight: theme.layout.hitTarget,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: theme.space[2],
+                }}
+              >
+                <Text
+                  variant="title"
+                  color="textDisplay"
+                  accessibilityRole="header"
+                  numberOfLines={1}
+                >
+                  {title}
+                </Text>
+                <View
+                  aria-hidden
+                  testID="list-title-pencil"
+                  style={{
+                    width: 30,
+                    height: 30,
+                    flexShrink: 0,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: theme.radius.md,
+                    backgroundColor: theme.colors.surfaceRaised,
+                  }}
+                >
+                  <Pencil size={14} color={theme.colors.accent} />
+                </View>
+              </Touchable>
+            </View>
+          )}
+        </View>
         {list === undefined ? null : (
-          <IconButton
-            icon={MoreHorizontal}
-            label="More"
-            onPress={onOpenMenu}
-            testID="list-detail-menu"
-          />
+          <>
+            <Button
+              label="Share"
+              variant="ghost"
+              size="sm"
+              onPress={onShare ?? (() => void Share.share({ message: title, title }))}
+              testID="list-detail-share"
+            />
+            <IconButton
+              icon={MoreHorizontal}
+              label="More"
+              onPress={onOpenMenu}
+              testID="list-detail-menu"
+            />
+          </>
         )}
       </View>
-
-      {editing ? (
-        <View style={{ gap: theme.space[3] }}>
-          <Field
-            label="List name"
-            hideLabel
-            appearance="bare"
-            textVariant="display"
-            autoFocus
-            value={draft}
-            onChangeText={setDraft}
-            maxLength={MAX_TITLE_LEN}
-            /* Return commits, as it does on every single-line title field in the app. */
-            onSubmitEditing={save}
-            submitBlurs
-            testID="list-title-field"
-          />
-          <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
-            {/* Cancel first, and it discards the draft without a write. */}
-            <Button
-              label="Cancel"
-              variant="secondary"
-              onPress={leaveEditor}
-              testID="list-title-cancel"
-            />
-            <Button
-              label="Save"
-              onPress={save}
-              disabled={draft.trim().length === 0}
-              testID="list-title-save"
-            />
-          </View>
-        </View>
-      ) : (
-        <View ref={titleSlot}>
-          <Touchable
-            square={false}
-            accessibilityRole="button"
-            /*
-             * The action, not the content: a screen reader hearing only the list's name would
-             * have no way to know the header does anything. The name is still in it, because
-             * `Rename` alone would not say *what* is being renamed.
-             */
-            accessibilityLabel={`Rename ${title}`}
-            disabled={list === undefined}
-            onPress={() => setDraft(title)}
-            testID="list-title"
-          >
-            <Text variant="display" color="textDisplay" accessibilityRole="header">
-              {title}
-            </Text>
-          </Touchable>
-        </View>
-      )}
     </View>
   );
 }

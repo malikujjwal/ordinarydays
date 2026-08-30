@@ -9,11 +9,16 @@ import {
   Button,
   Checkbox,
   Field,
+  GripVertical,
+  IconButton,
+  MoreHorizontal,
+  Plus,
   Row,
   RowGroup,
   SettingRow,
   Sheet,
   Text,
+  Touchable,
   useTheme,
 } from '@od/ui';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
@@ -93,6 +98,7 @@ export function ItemSheet({
   const [subItems, setSubItems] = useState<readonly ListSubItem[]>(
     item.features?.subItems?.entries ?? [],
   );
+  const [openSubItemMenu, setOpenSubItemMenu] = useState<string>();
   const previousItem = useRef(item);
 
   useEffect(() => {
@@ -270,81 +276,137 @@ export function ItemSheet({
         <Text variant="sectionLabel" color="textSecondary">
           {config.sectionLabel}
         </Text>
-        {subItems.map((entry, index) => (
-          <View key={entry.id} style={{ flexDirection: 'row', gap: theme.space[2] }}>
-            <View style={{ flex: 1 }}>
-              <Field
-                label={config.singularLabel}
-                value={entry.title}
-                onChangeText={(value) =>
-                  setSubItems((rows) =>
-                    rows.map((row) =>
-                      row.id === entry.id ? { ...row, title: value } : row,
-                    ),
-                  )
-                }
-                onBlur={() =>
-                  commit(
-                    subItemsPatch(
-                      item,
-                      subItems.filter((row) => row.title.trim() !== ''),
-                    ),
-                  )
-                }
-              />
-            </View>
-            {config.secondaryLabel === undefined ? null : (
-              <View style={{ flex: 1 }}>
-                <Field
-                  label={config.secondaryLabel}
-                  value={entry.secondary ?? ''}
-                  onChangeText={(value) =>
-                    setSubItems((rows) =>
-                      rows.map((row) =>
-                        row.id === entry.id ? { ...row, secondary: value } : row,
-                      ),
-                    )
-                  }
-                  onBlur={() => commit(subItemsPatch(item, subItems))}
+        {subItems.map((entry, index) => {
+          const name = entry.title.trim() || config.singularLabel;
+          const menuOpen = openSubItemMenu === entry.id;
+          const move = (to: number) => {
+            const next = moveSubItem(subItems, index, to);
+            setSubItems(next);
+            setOpenSubItemMenu(undefined);
+            commit(subItemsPatch(item, next));
+          };
+          return (
+            <View
+              key={entry.id}
+              testID={`sub-item-${entry.id}`}
+              style={{
+                gap: theme.space[1],
+                paddingVertical: theme.space[2],
+                borderBottomWidth: 1,
+                borderBottomColor: theme.colors.border,
+              }}
+            >
+              <View
+                style={{
+                  minHeight: theme.layout.rowMinHeight,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: theme.space[2],
+                }}
+              >
+                <IconButton
+                  icon={GripVertical}
+                  label={`Reorder ${name}`}
+                  onPress={() => setOpenSubItemMenu(menuOpen ? undefined : entry.id)}
+                  testID={`sub-item-${entry.id}-grip`}
+                />
+                <View style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}>
+                  <Field
+                    label={config.singularLabel}
+                    value={entry.title}
+                    hideLabel
+                    appearance="bare"
+                    placeholder={config.singularLabel}
+                    onChangeText={(value) =>
+                      setSubItems((rows) =>
+                        rows.map((row) =>
+                          row.id === entry.id ? { ...row, title: value } : row,
+                        ),
+                      )
+                    }
+                    onBlur={() =>
+                      commit(
+                        subItemsPatch(
+                          item,
+                          subItems.filter((row) => row.title.trim() !== ''),
+                        ),
+                      )
+                    }
+                  />
+                  {config.secondaryLabel === undefined ? null : (
+                    <Field
+                      label={config.secondaryLabel}
+                      value={entry.secondary ?? ''}
+                      hideLabel
+                      appearance="bare"
+                      textVariant="footnote"
+                      placeholder={config.secondaryLabel}
+                      onChangeText={(value) =>
+                        setSubItems((rows) =>
+                          rows.map((row) =>
+                            row.id === entry.id ? { ...row, secondary: value } : row,
+                          ),
+                        )
+                      }
+                      onBlur={() => commit(subItemsPatch(item, subItems))}
+                    />
+                  )}
+                </View>
+                <IconButton
+                  icon={MoreHorizontal}
+                  label={`More actions for ${name}`}
+                  onPress={() => setOpenSubItemMenu(menuOpen ? undefined : entry.id)}
+                  testID={`sub-item-${entry.id}-menu`}
                 />
               </View>
-            )}
-            <Button
-              label="Remove"
-              variant="ghost"
-              onPress={() => {
-                const next = subItems.filter((_, at) => at !== index);
-                setSubItems(next);
-                commit(subItemsPatch(item, next));
-              }}
-            />
-            <Button
-              label="Up"
-              variant="ghost"
-              disabled={index === 0}
-              onPress={() => {
-                const next = moveSubItem(subItems, index, index - 1);
-                setSubItems(next);
-                commit(subItemsPatch(item, next));
-              }}
-              testID={`sub-item-${entry.id}-up`}
-            />
-            <Button
-              label="Down"
-              variant="ghost"
-              disabled={index === subItems.length - 1}
-              onPress={() => {
-                const next = moveSubItem(subItems, index, index + 1);
-                setSubItems(next);
-                commit(subItemsPatch(item, next));
-              }}
-              testID={`sub-item-${entry.id}-down`}
-            />
-          </View>
-        ))}
+              {menuOpen ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    justifyContent: 'flex-end',
+                    gap: theme.space[2],
+                  }}
+                  testID={`sub-item-${entry.id}-actions`}
+                >
+                  <Button
+                    label={`Move ${name} up`}
+                    accessibilityLabel={`Move ${name} up`}
+                    variant="ghost"
+                    size="sm"
+                    disabled={index === 0}
+                    onPress={() => move(index - 1)}
+                  />
+                  <Button
+                    label={`Move ${name} down`}
+                    accessibilityLabel={`Move ${name} down`}
+                    variant="ghost"
+                    size="sm"
+                    disabled={index === subItems.length - 1}
+                    onPress={() => move(index + 1)}
+                  />
+                  <Button
+                    label={`Remove ${name}`}
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => {
+                      const next = subItems.filter((_, at) => at !== index);
+                      setSubItems(next);
+                      setOpenSubItemMenu(undefined);
+                      commit(subItemsPatch(item, next));
+                    }}
+                  />
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
         <Button
           label={`Add ${config.singularLabel}`}
-          variant="secondary"
+          variant="ghost"
+          size="sm"
+          icon={Plus}
+          flush
           disabled={subItems.length >= MAX_INGREDIENTS}
           onPress={() => setSubItems((rows) => appendSubItem(rows, newLocalId('sub')))}
         />
@@ -356,7 +418,7 @@ export function ItemSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title={item.title}
+      title="Item details"
       detent="large"
       testID={testID}
     >
@@ -371,6 +433,7 @@ export function ItemSheet({
         />
         <Field
           label="Note"
+          optional
           value={note}
           onChangeText={setNote}
           onBlur={() => commit(notePatch(item, note))}
@@ -423,15 +486,26 @@ export function ItemSheet({
 
         {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
 
-        <Button
-          label="Delete item"
-          variant="danger"
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Delete item"
           onPress={() => {
             actions.remove(item);
             onClose();
           }}
           testID="item-sheet-delete"
-        />
+          style={{
+            minHeight: theme.layout.hitTarget,
+            justifyContent: 'center',
+            borderTopWidth: 1,
+            borderTopColor: theme.colors.border,
+            paddingVertical: theme.space[3],
+          }}
+        >
+          <Text variant="bodyStrong" color="danger">
+            Delete item
+          </Text>
+        </Touchable>
       </View>
     </Sheet>
   );

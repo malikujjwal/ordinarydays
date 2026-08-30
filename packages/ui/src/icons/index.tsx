@@ -147,6 +147,38 @@ export const ChevronLeft = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/** Inline rename affordance. */
+export const Pencil = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M4 20l4.2-1 10.9-10.9-3.2-3.2L5 15.8z" stroke={color} {...stroke} />
+    <Path d="M13.9 6.9l3.2 3.2M4 20l1-4.2" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** Destructive object removal. */
+export const Trash = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v5M14 11v5"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
+/** People affected by a share or access change. */
+export const Users = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Circle cx={9} cy={8} r={3} stroke={color} {...stroke} />
+    <Path d="M3.5 19c.5-3.5 2.3-5.2 5.5-5.2s5 1.7 5.5 5.2" stroke={color} {...stroke} />
+    <Path
+      d="M15.2 5.7a3 3 0 0 1 0 4.7M16.2 13.8c2.4.5 3.8 2.2 4.3 5.2"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
 /** A section that can be collapsed; the pair a disclosure toggles between. */
 export const ChevronUp = ({ size, color }: IconProps) => (
   <Frame size={size}>

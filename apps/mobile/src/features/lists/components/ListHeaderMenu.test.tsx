@@ -84,6 +84,18 @@ describe('ListHeaderMenu', () => {
     expect(actions.onArchive).toHaveBeenCalledOnce();
   });
 
+  it('puts List settings first and explains what it contains', () => {
+    mount();
+
+    const sheet = screen.getByTestId('list-header-menu');
+    const settings = screen.getByTestId('list-settings-open');
+    const clear = screen.getByTestId('list-clear-checked');
+    expect(
+      settings.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(sheet.textContent).toContain('State, item details and planning');
+  });
+
   it('makes list deletion discoverable from the detail overflow menu', () => {
     const actions = mount();
 

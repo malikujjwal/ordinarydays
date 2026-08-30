@@ -329,6 +329,7 @@ export function ListsScreen({
 
       {pendingDestructive === undefined ? null : (
         <ConfirmDialog
+          centred={pendingDestructive.action === 'delete'}
           open
           confirmation={
             pendingDestructive.action === 'delete'

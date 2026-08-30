@@ -294,7 +294,7 @@ describe('row actions', () => {
     // would pass on the card while the dialog said nothing.
     const dialog = within(screen.getByTestId('list-delete-confirm'));
     expect(dialog.getByText('Delete "Groceries"?')).toBeTruthy();
-    expect(dialog.getByText(/12 items/)).toBeTruthy();
+    expect(dialog.getByText(/12 List items/)).toBeTruthy();
     expect(dialog.getByText(/2 other people/)).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('confirm-accept'));

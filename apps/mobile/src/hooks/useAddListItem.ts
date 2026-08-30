@@ -6,10 +6,7 @@ import { apiClient } from '@/lib/apiClient';
 /**
  * `Add to {list name}` on **web**: one online `POST /v1/lists/:id/items` (P3-27).
  *
- * In `src/hooks/` rather than in the lists slice because **two features commit this write** —
- * list detail's inline add row and the global `List item` route in compose — and
- * `repo-structure.md` §3.2 moves a thing two features need up rather than letting one import
- * the other's. `no-cross-feature-imports` enforces that rather than suggesting it.
+ * Kept in `src/hooks/` as the platform-resolved write used by List detail's inline add row.
  *
  * The native file beside this one accepts the same confirmation into SQLite first. Web mints
  * the **key**, native mints the **id** — the split `useCreateList` records, for ADR-024's
@@ -18,7 +15,7 @@ import { apiClient } from '@/lib/apiClient';
  *
  * ## One write per commit, and the list is a parameter
  *
- * `listId` arrives from the caller — the list whose detail this is, or the one the user picked
+ * `listId` arrives from the caller — the open List whose detail this is
  * — and is the path id. Nothing here reads a default, a recent destination or a title
  * (criterion 33). There is no argument through which one could.
  */

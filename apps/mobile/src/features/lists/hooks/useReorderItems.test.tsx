@@ -33,6 +33,59 @@ beforeEach(() => {
 });
 
 describe('useReorderItems', () => {
+  it('holds one optimistic display order until the authoritative rank reconciles', async () => {
+    let resolvePatch!: (item: ListItemView) => void;
+    calls.patch.mockReturnValue(
+      new Promise<ListItemView>((resolve) => {
+        resolvePatch = resolve;
+      }),
+    );
+    const applyRank = vi.fn();
+    const onMoved = vi.fn();
+    const mounted = renderHook(
+      ({ items }: { items: readonly ListItemView[] }) =>
+        useReorderItems({
+          listId: rows[0].listId,
+          list: { itemStateMode: { mode: 'none' } },
+          items,
+          applyRank,
+          onMoved,
+        }),
+      { initialProps: { items: rows } },
+    );
+
+    act(() => mounted.result.current.drop(rows[1].itemId, 0));
+
+    expect(applyRank).not.toHaveBeenCalled();
+    expect(mounted.result.current.items.map((entry) => entry.itemId)).toEqual([
+      rows[1].itemId,
+      rows[0].itemId,
+    ]);
+    expect(new Set(mounted.result.current.items.map((entry) => entry.itemId)).size).toBe(
+      rows.length,
+    );
+    expect(calls.patch).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolvePatch({ ...rows[1], rank: 'A' });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(applyRank).toHaveBeenCalledOnce());
+    expect(mounted.result.current.items.map((entry) => entry.itemId)).toEqual([
+      rows[1].itemId,
+      rows[0].itemId,
+    ]);
+
+    mounted.rerender({ items: [{ ...rows[1], rank: 'A' }, rows[0]] });
+    expect(mounted.result.current.items.map((entry) => entry.itemId)).toEqual([
+      rows[1].itemId,
+      rows[0].itemId,
+    ]);
+    expect(calls.patch).toHaveBeenCalledOnce();
+    expect(onMoved).toHaveBeenCalledOnce();
+  });
+
   it('sends only the absolute neighbour position and installs the server rank', async () => {
     calls.patch.mockResolvedValue({ ...rows[1], rank: 'A' });
     const applyRank = vi.fn();

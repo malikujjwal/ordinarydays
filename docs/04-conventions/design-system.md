@@ -466,7 +466,7 @@ olive/ochre as reinforcement only.
 One accent per stored activity type, drawn from the refreshed families (mulberry, olive,
 ochre, rosewood, stone — no blues). Used for the row's type marker, the icon squircle on
 cards, the detail header's tint, and the explicit Plan-kind choice after the user taps
-**Plan**. The global Add sheet uses neutral **Task / Plan / List item** destinations; it
+**Plan**. The global Add sheet uses neutral **Task / Plan / List** destinations; it
 does not present type inference as an accent choice. Type colour is never used as a row
 background.
 
@@ -942,6 +942,49 @@ require a human side-by-side comparison with that reference; a baseline may not 
 merely because it matches the current implementation. Review explicitly records spacing,
 section gaps, row height, segmented-control geometry, switch alignment, selected state and
 sheet sizing. Only after that approval do exact CI pixel comparisons protect the result.
+
+#### 7.2b Open List anatomy
+
+An open List is a content surface, not a second collection card and not a sparse hero page.
+Content begins immediately after the standard header: no cover, oversized title block, empty
+spacer or duplicate List name may sit between the header and the first useful line.
+
+```text
+‹  Groceries ✎                              Share  ⋯
+4 items · 2 checked
+──────────────────────────────────────────────────────
+☐  Paper towels
+   Large pack                                      ⋮⋮
+☑  Yogurt
+   1 cup                                           ⋮⋮
+──────────────────────────────────────────────────────
+⊕  Add an item
+   to Groceries
+```
+
+The compact count line bridges title and content and uses the same computed grammar as the
+index card. It is information in `textSecondary`, never a button, progress bar, helper
+instruction or sticky toolbar. Discoverability belongs to the visible row grips. When the List
+is empty the approved compact empty state replaces the count and rows.
+
+Items use the common 56 pt-minimum `Row`: checkbox when exposed, body, populated typed-feature
+summary or disclosure, then a 44 pt trailing grip hit target. The grip stays visibly neutral
+and never becomes a menu or a decorative chevron. On touch layouts it is persistent; pointer
+layouts reveal it on hover and keyboard focus. The drag wrapper owns it so `ListItemRow` remains
+one semantic item renderer. The body still opens item detail and whole-row long-press still
+starts the same drag (`interaction-contract.md` §3.2).
+
+The add control is the final row in the same measure, not a detached FAB, screen footer or
+Lists-index action. Its plus sits in a small dashed IconTile and the two-line copy reads
+`Add an item` / `to <list name>`. It expands in place into a Title-only rapid-entry row with a
+compact `Add` action; there is no sheet, destination chooser or Note field. Return and `Add`
+perform the same single write, then clear and re-focus Title. The later Item-details sheet owns
+the normal top-aligned multiline Note field, with `Note` and trailing `Optional` above it.
+
+Grouped staged Lists insert tinted populated section headers between the count and rows. Each
+header carries a stage icon, configured label and count; it never reads as another item, and
+each group keeps its own reorder bounds. At 200% text the count and trailing metadata
+may move below the title before any label truncates; the grip retains its 44 pt target.
 
 ### 7.3 Plans — event cards
 

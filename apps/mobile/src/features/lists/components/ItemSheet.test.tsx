@@ -48,6 +48,16 @@ beforeEach(() => {
 });
 
 describe('the canonical item editor shell', () => {
+  it('uses the common Item details title and marks the top-aligned Note optional', () => {
+    mount();
+
+    expect(screen.getByRole('dialog', { name: 'Item details' })).toBeTruthy();
+    expect(screen.getByText('Optional')).toBeTruthy();
+    expect(screen.getByLabelText('Note').getAttribute('style')).toContain(
+      'vertical-align: top',
+    );
+  });
+
   it('keeps hidden intrinsic state and exposes configured stage labels', () => {
     mount();
     expect(screen.queryByTestId('item-state-editor')).toBeNull();
@@ -134,6 +144,48 @@ describe('the canonical item editor shell', () => {
     expect(screen.getByLabelText('Quantity')).toBeTruthy();
   });
 
+  it('renders populated Sub-items as compact vertical rows with grip and overflow', () => {
+    mount(
+      item({
+        features: {
+          subItems: {
+            entries: [
+              { id: 'sub_1', title: 'Paper', secondary: '2 sheets', rank: 'a0' },
+              { id: 'sub_2', title: 'Tape', rank: 'b0' },
+            ],
+          },
+        },
+      }),
+      list({
+        featureConfig: {
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Materials',
+            singularLabel: 'Material',
+            secondaryLabel: 'Quantity',
+          },
+        },
+      }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Reorder Paper' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'More actions for Paper' })).toBeTruthy();
+    expect(screen.getByDisplayValue('Paper')).toBeTruthy();
+    expect(screen.getByDisplayValue('2 sheets')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Up' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Down' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Paper' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Paper' }));
+    expect(calls.save).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'The Bear' }),
+      {
+        features: { subItems: { entries: [{ id: 'sub_2', title: 'Tape', rank: 'b0' }] } },
+      },
+    );
+  });
+
   it('does not expose retained values while their feature is disabled', () => {
     mount(
       item({
@@ -168,6 +220,9 @@ describe('the canonical item editor shell', () => {
     fireEvent.click(screen.getByTestId('item-sheet-delete'));
 
     expect(calls.remove).toHaveBeenCalledWith(subject);
+    expect(screen.getByTestId('item-sheet-delete').getAttribute('style')).not.toContain(
+      'background-color',
+    );
   });
 
   it('keeps stable automation handles on the primary fields', () => {

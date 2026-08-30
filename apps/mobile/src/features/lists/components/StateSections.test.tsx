@@ -56,6 +56,10 @@ describe('StateSections', () => {
     expect(screen.getAllByText('Saved').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Reading').length).toBeGreaterThan(0);
     expect(screen.queryByText('Read')).toBeNull();
+    expect(screen.getByTestId('stage-heading-open').textContent).toContain('Saved');
+    expect(screen.getByTestId('stage-heading-open').textContent).toContain('1');
+    expect(screen.getByTestId('stage-heading-open-icon')).toBeTruthy();
+    expect(screen.getByTestId('stage-heading-active').textContent).toContain('Reading');
     expect(
       screen
         .getByTestId('list-state-open')

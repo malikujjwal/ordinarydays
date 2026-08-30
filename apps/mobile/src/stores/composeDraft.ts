@@ -38,10 +38,9 @@ import { nextCanonicalId } from '@/lib/canonicalIds';
 /**
  * Which screen of the modal is showing. `object` is always where it opens.
  *
- * `listItemForm` keeps Title, Note and the required inline destination together. Its target
- * remains absent until the user names a List.
+ * List creation leaves this draft entirely: the route opens the ordinary New List flow.
  */
-export type ComposeStep = 'object' | 'planKind' | 'listItemForm' | 'form';
+export type ComposeStep = 'object' | 'planKind' | 'form';
 
 /** Profile-backed values that belong to a newly chosen Event draft. */
 export interface EventDraftDefaults {
@@ -79,8 +78,6 @@ export interface ComposeDraftState {
   idempotencyKey: string | undefined;
   /** Permanent identity minted with the durable create and sent unchanged to the server. */
   activityId: string | undefined;
-  /** The List item's permanent `itm_`, minted on the same terms (P3-27). */
-  itemId: string | undefined;
 
   /** `activities.md` §4's Date / Time / End time, for every type that has them. */
   schedule: DraftSchedule;
@@ -94,8 +91,6 @@ export interface ComposeDraftState {
   openTodayTask: (date: WallDate) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
-  /** The one place `target` can become a List item, and the only input is a chosen list. */
-  chooseList: (listId: string) => void;
   back: () => void;
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
@@ -115,8 +110,6 @@ export interface ComposeDraftState {
   takeIdempotencyKey: () => string;
   /** Returns the permanent `act_` ULID for this logical create. */
   takeActivityId: () => string;
-  /** Returns the permanent `itm_` ULID for this logical item create. */
-  takeItemId: () => string;
   reset: () => void;
 }
 
@@ -129,7 +122,6 @@ const EMPTY = {
   attachmentUri: undefined,
   idempotencyKey: undefined,
   activityId: undefined,
-  itemId: undefined,
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
@@ -141,7 +133,6 @@ const EMPTY = {
   | 'openTodayTask'
   | 'chooseObject'
   | 'choosePlanKind'
-  | 'chooseList'
   | 'back'
   | 'setTitle'
   | 'setNotes'
@@ -158,7 +149,6 @@ const EMPTY = {
   | 'setDetails'
   | 'takeIdempotencyKey'
   | 'takeActivityId'
-  | 'takeItemId'
   | 'reset'
 >;
 
@@ -173,7 +163,6 @@ const edited = (patch: Partial<ComposeDraftState>) => ({
   ...patch,
   idempotencyKey: undefined,
   activityId: undefined,
-  itemId: undefined,
 });
 
 function withEventDefaults(
@@ -234,17 +223,9 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       set({ step: 'planKind', target: undefined });
       return;
     }
-    set({ step: 'listItemForm', target: undefined });
+    // List creation belongs to `NewListSheet`; it never becomes an Activity/ListItem target.
+    set({ step: 'object', target: undefined });
   },
-
-  /**
-   * The one place `target` can become a List item.
-   *
-   * Its only input is a list the user tapped. Nothing about the title reaches here, and there
-   * is no parameter through which a remembered or default destination could.
-   */
-  chooseList: (listId) =>
-    set({ step: 'listItemForm', target: { objectKind: 'listItem', listId } }),
 
   /**
    * The one place `target` can become a Plan, and where re-choosing a kind runs **P1-17's
@@ -312,7 +293,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    */
   back: () => {
     const { step, target } = get();
-    if (step === 'planKind' || step === 'listItemForm') {
+    if (step === 'planKind') {
       set({ step: 'object', target: undefined });
       return;
     }
@@ -446,14 +427,6 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     const activityId = nextCanonicalId('act');
     set({ activityId });
     return activityId;
-  },
-
-  takeItemId: () => {
-    const existing = get().itemId;
-    if (existing !== undefined) return existing;
-    const itemId = nextCanonicalId('itm');
-    set({ itemId });
-    return itemId;
   },
 
   reset: () => set({ ...EMPTY }),

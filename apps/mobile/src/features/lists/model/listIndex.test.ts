@@ -314,21 +314,25 @@ describe('the delete confirmation', () => {
     const confirmation = deleteListConfirmation(list({ itemCount: 12 }));
 
     expect(confirmation.heading).toBe('Delete "Groceries"?');
-    expect(confirmation.removes).toEqual(['12 items']);
+    expect(confirmation.removes).toEqual([
+      '12 List items will be removed',
+      'No other people will lose access',
+    ]);
     expect(confirmation.confirmLabel).toBe('Delete list');
-    expect(confirmation.keeps).toContain('plans you made from this list stay');
+    expect(confirmation.keeps).toContain('Linked Plans remain');
   });
 
   it('counts other members, excluding the owner', () => {
     expect(deleteListConfirmation(list({ memberCount: 4 })).removes).toEqual([
-      '12 items',
-      'the list for 3 other people',
+      '12 List items will be removed',
+      '3 other people will lose access',
     ]);
   });
 
-  it('says nothing about members on a list of one', () => {
+  it('truthfully says when nobody else loses access', () => {
     expect(deleteListConfirmation(list({ memberCount: 1 })).removes).toEqual([
-      '12 items',
+      '12 List items will be removed',
+      'No other people will lose access',
     ]);
   });
 });

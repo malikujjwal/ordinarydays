@@ -1,5 +1,6 @@
 import { Text, ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReorderableList } from './ReorderableList';
 
@@ -161,6 +162,46 @@ describe('touch long press', () => {
 });
 
 describe('one grab, one drop', () => {
+  it('keeps every stable item id mounted exactly once when order reconciles', () => {
+    const mountedIds = vi.fn();
+    const unmountedIds = vi.fn();
+    const TrackedRow = ({ row }: { row: Row }) => {
+      useEffect(() => {
+        mountedIds(row.itemId);
+        return () => unmountedIds(row.itemId);
+      }, [row.itemId]);
+      return <Text testID={`tracked-${row.itemId}`}>{row.title}</Text>;
+    };
+    const list = (items: readonly Row[]) => (
+      <ThemeProvider scheme="light">
+        <ReorderableList
+          items={items}
+          keyOf={(row) => row.itemId}
+          labelOf={(row) => row.title}
+          rangeOf={anywhere}
+          onDrop={onDrop}
+          renderItem={(row) => <TrackedRow row={row} />}
+        />
+      </ThemeProvider>
+    );
+    const mounted = render(list(rows));
+    const [first, second, third, fourth] = rows;
+    if (
+      first === undefined ||
+      second === undefined ||
+      third === undefined ||
+      fourth === undefined
+    )
+      throw new Error('Stable-row fixture is incomplete.');
+
+    mounted.rerender(list([second, first, third, fourth]));
+
+    expect(mountedIds).toHaveBeenCalledTimes(rows.length);
+    expect(unmountedIds).not.toHaveBeenCalled();
+    for (const row of rows)
+      expect(screen.getAllByTestId(`tracked-${row.itemId}`)).toHaveLength(1);
+  });
+
   it('drops at the position the arrows reached, in one call', () => {
     mount(anywhere);
 

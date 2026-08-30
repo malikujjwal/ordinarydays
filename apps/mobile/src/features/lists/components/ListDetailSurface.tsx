@@ -1,5 +1,6 @@
 import type { List, ListItemView } from '@od/shared/types';
 import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
+import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 import { ScrollView, View } from 'react-native';
 import { countLine } from '../model/listCard';
@@ -29,6 +30,7 @@ export interface ListDetailSurfaceProps {
   onRetry: () => void;
   onLoadMore: () => void;
   onAdd: () => void;
+  addEditor?: ReactNode;
   onOpenItem: (item: ListItemView) => void;
   onToggleChecked: (
     item: ListItemView,
@@ -53,6 +55,7 @@ export function ListDetailSurface({
   onRetry,
   onLoadMore,
   onAdd,
+  addEditor,
   onOpenItem,
   onToggleChecked,
   onDrop,
@@ -132,8 +135,10 @@ export function ListDetailSurface({
           <View testID="list-detail-loading">
             <Skeleton shape="row" count={5} />
           </View>
-        ) : showEmpty && list !== undefined ? (
+        ) : showEmpty && list !== undefined && addEditor === undefined ? (
           <ListEmptyState body={list.emptyStateCopy} onAdd={onAdd} />
+        ) : showEmpty && list !== undefined ? (
+          addEditor
         ) : list === undefined ? null : isGroupedStageList(list) ? (
           <View style={{ gap: theme.space[3] }}>
             <ListOverview count={countLine(list)} />
@@ -170,7 +175,9 @@ export function ListDetailSurface({
           </View>
         )}
 
-        {list === undefined || itemCount === 0 ? null : (
+        {addEditor !== undefined && itemCount > 0 ? (
+          addEditor
+        ) : list === undefined || itemCount === 0 || addEditor !== undefined ? null : (
           <ListAddRow listName={list.title} onPress={onAdd} />
         )}
       </ScrollView>

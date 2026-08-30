@@ -55,6 +55,9 @@ describe('the P3-33 List settings hierarchy', () => {
     mount();
     const sheet = screen.getByTestId('list-settings');
 
+    expect(sheet.textContent).toContain(
+      'Choose how items behave and which optional details are available.',
+    );
     expect(sheet.textContent).toContain('Item state');
     expect(sheet.textContent).toContain('None');
     expect(sheet.textContent).toContain('Checkboxes');
@@ -63,12 +66,13 @@ describe('the P3-33 List settings hierarchy', () => {
     expect(sheet.textContent).toContain('One optional line on each item');
     expect(sheet.textContent).toContain('Place and address on each item');
     expect(sheet.textContent).toContain('Add a short list inside each item');
+    expect(sheet.textContent).toContain('Planning');
     expect(sheet.textContent).toContain('Default destination');
     expect(sheet.textContent?.indexOf('Item state')).toBeLessThan(
       sheet.textContent?.indexOf('Item details') ?? 0,
     );
     expect(sheet.textContent?.indexOf('Item details')).toBeLessThan(
-      sheet.textContent?.indexOf('Default destination') ?? 0,
+      sheet.textContent?.indexOf('Planning') ?? 0,
     );
     expect(sheet.textContent).not.toMatch(/behaviou?r|destructive/i);
     expect(screen.queryByTestId('list-settings-group-by-state')).toBeNull();
@@ -101,6 +105,31 @@ describe('the P3-33 List settings hierarchy', () => {
     expect(group.getAttribute('role')).toBe('switch');
     expect(group.getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('Show a section for each populated stage')).toBeTruthy();
+    expect(screen.getByText('Stage labels')).toBeTruthy();
+    expect(screen.getByLabelText('First stage')).toHaveProperty('value', 'Queued');
+    expect(screen.getByLabelText('Active stage')).toHaveProperty('value', 'Building');
+    expect(screen.getByLabelText('Done stage')).toHaveProperty('value', 'Shipped');
+  });
+
+  it('commits edited stage labels through the existing state-mode write', () => {
+    const subject = list({
+      itemStateMode: {
+        mode: 'stages',
+        labels: { open: 'Queued', active: 'Building', done: 'Shipped' },
+        groupByState: true,
+      },
+    });
+    const actions = mount(subject);
+
+    fireEvent.change(screen.getByLabelText('First stage'), {
+      target: { value: 'Saved' },
+    });
+    fireEvent.blur(screen.getByLabelText('First stage'));
+
+    expect(actions.setStateMode).toHaveBeenCalledWith({
+      ...subject.itemStateMode,
+      labels: { open: 'Saved', active: 'Building', done: 'Shipped' },
+    });
   });
 
   it('opens focused naming configuration the first time Sub-items is enabled', () => {
@@ -109,7 +138,7 @@ describe('the P3-33 List settings hierarchy', () => {
     fireEvent.click(screen.getByTestId('list-settings-feature-sub-items'));
 
     expect(actions.setFeatureEnabled).toHaveBeenCalledWith('subItems', true);
-    expect(screen.getByRole('dialog', { name: 'Sub-item naming' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Sub-item settings' })).toBeTruthy();
     expect(screen.getByText('Section label')).toBeTruthy();
     expect(screen.getByText('Singular label')).toBeTruthy();
     expect(screen.getByText('Secondary field label')).toBeTruthy();
@@ -151,9 +180,38 @@ describe('the P3-33 List settings hierarchy', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Ingredients.*Edit/i }));
 
-    expect(screen.getByRole('dialog', { name: 'Sub-item naming' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Sub-item settings' })).toBeTruthy();
     expect(screen.getByText('Section label')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Used as ingredients when creating Meal plans. Labels alone never activate this integration.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Preview')).toBeTruthy();
+    expect(screen.getByTestId('sub-item-settings-preview').textContent).toContain(
+      'Ingredients',
+    );
+    expect(screen.getByRole('button', { name: 'Save naming' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
     expect(screen.queryByText('Item state')).toBeNull();
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('labels ordinary configuration as generic Sub-items rather than Meal integration', () => {
+    mount(
+      list({
+        featureConfig: {
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Steps',
+            singularLabel: 'Step',
+          },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByTestId('list-settings-sub-item-naming'));
+
+    expect(screen.getByText(/Generic Sub-items/)).toBeTruthy();
+    expect(screen.queryByText(/Meal integration/)).toBeNull();
   });
 });

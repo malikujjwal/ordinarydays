@@ -1,11 +1,25 @@
 import type { List, ListItemState, ListItemView } from '@od/shared/types';
-import { Text, useTheme } from '@od/ui';
+import {
+  Check,
+  type IconProps,
+  List as ListIcon,
+  PlayRect,
+  Text,
+  useTheme,
+} from '@od/ui';
 import { View } from 'react-native';
 import { orderedItems, type ReorderRange } from '../model/reorder';
 import { ListItemRow } from './ListItemRow';
 import { ReorderableList } from './ReorderableList';
 
 const ORDER: readonly ListItemState[] = ['open', 'active', 'done'];
+const STAGE_ICONS: Readonly<
+  Record<ListItemState, (props: IconProps) => React.ReactElement>
+> = {
+  open: ListIcon,
+  active: PlayRect,
+  done: Check,
+};
 
 export type GroupedStageList = List & {
   itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
@@ -53,6 +67,7 @@ export function stateGroupReorderRange(
 
 export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProps) {
   const theme = useTheme();
+  const stageAccent = theme.typeAccent('custom');
   return (
     <View style={{ gap: theme.space[4] }} testID="list-state-sections">
       {ORDER.map((state) => {
@@ -64,9 +79,34 @@ export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProp
             style={{ gap: theme.space[2] }}
             testID={`list-state-${state}`}
           >
-            <Text variant="sectionLabel" color="textSecondary">
-              {list.itemStateMode.labels[state]}
-            </Text>
+            <View
+              testID={`stage-heading-${state}`}
+              style={{
+                minHeight: theme.layout.hitTarget,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: theme.space[2],
+                paddingHorizontal: theme.space[4],
+                paddingVertical: theme.space[2],
+                borderRadius: theme.radius.md,
+                backgroundColor: stageAccent.surface,
+              }}
+            >
+              <View aria-hidden testID={`stage-heading-${state}-icon`}>
+                {(() => {
+                  const Icon = STAGE_ICONS[state];
+                  return <Icon size={18} color={stageAccent.accent} />;
+                })()}
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text variant="bodyStrong" color="textPrimary">
+                  {list.itemStateMode.labels[state]}
+                </Text>
+              </View>
+              <Text variant="footnoteStrong" color="textSecondary">
+                {section.length}
+              </Text>
+            </View>
             <ReorderableList
               items={section}
               keyOf={(item) => item.itemId}

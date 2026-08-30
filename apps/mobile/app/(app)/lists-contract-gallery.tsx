@@ -12,8 +12,10 @@ import { ScreenShell, Text, ThemeProvider, useTheme } from '@od/ui';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
-import { ContextualListItemComposer } from '@/features/lists/components/ContextualListItemComposer';
+import { InlineListItemEditor } from '@/features/lists/components/InlineListItemEditor';
+import { ItemSheet } from '@/features/lists/components/ItemSheet';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
 import { ListDetailSurface } from '@/features/lists/components/ListDetailSurface';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
@@ -21,6 +23,7 @@ import { ListItemRow } from '@/features/lists/components/ListItemRow';
 import { ListSettingsSheet } from '@/features/lists/components/ListSettingsSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import type { ListSettings } from '@/features/lists/hooks/useListSettings';
+import { deleteListConfirmation } from '@/features/lists/model/deleteConfirmation';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -203,10 +206,11 @@ const SETTINGS_LIST: List = {
     progress: { enabled: true, kind: 'episode' },
     place: { enabled: false },
     subItems: {
-      enabled: false,
+      enabled: true,
       sectionLabel: 'Ingredients',
       singularLabel: 'Ingredient',
       secondaryLabel: 'Quantity',
+      integration: 'mealIngredients',
     },
   },
 };
@@ -488,52 +492,77 @@ function OpenListFixture({
         onRetry={() => {}}
         onLoadMore={() => {}}
         onAdd={() => {}}
+        {...(state === 'context-add'
+          ? {
+              addEditor: (
+                <InlineListItemEditor
+                  isAdding={false}
+                  onAdd={async () => 'itm_contract_gallery'}
+                />
+              ),
+            }
+          : {})}
         onOpenItem={() => {}}
         onToggleChecked={() => undefined}
         onDrop={() => {}}
       />
-      {state === 'context-add' ? (
-        <ContextualListItemComposer
-          open
-          listName={list.title}
-          isAdding={false}
-          onClose={() => {}}
-          onAdd={async () => undefined}
-        />
-      ) : null}
     </View>
   );
 }
 
 function GlobalComposerFixture() {
-  const destinations = [
-    { listId: 'lst_gallery_groceries', title: 'Groceries' },
-    { listId: 'lst_gallery_restaurants', title: 'Restaurants to try' },
-  ];
   const openDraft = useComposeDraft((state) => state.open);
-  const chooseObject = useComposeDraft((state) => state.chooseObject);
-  const setTitle = useComposeDraft((state) => state.setTitle);
-  const setNotes = useComposeDraft((state) => state.setNotes);
 
   useEffect(() => {
     openDraft();
-    chooseObject('listItem');
-    setTitle('Try Zahav');
-    setNotes('Ask about the tasting menu');
-  }, [chooseObject, openDraft, setNotes, setTitle]);
+  }, [openDraft]);
 
   return (
     <ComposeScreen
       onClose={() => {}}
       today="2026-08-28"
       timezone="America/New_York"
-      listDestinations={{
-        lists: destinations,
-        status: 'success',
-        refetch: () => {},
-      }}
       onCreateList={() => {}}
     />
+  );
+}
+
+function ItemDetailsFixture() {
+  return (
+    <View style={{ flex: 1 }}>
+      <ItemSheet
+        open
+        list={preset(6)}
+        item={itemFixture(3)}
+        onClose={() => {}}
+        onChanged={() => {}}
+        onRemoved={() => {}}
+      />
+    </View>
+  );
+}
+
+function DeleteFixture() {
+  const list: List = {
+    ...preset(1),
+    title: 'Weekend packing',
+    itemCount: 18,
+    doneCount: 7,
+    memberCount: 3,
+  };
+
+  return (
+    <>
+      <OpenListFixture state="checklist" />
+      <ConfirmDialog
+        open
+        centred
+        confirmation={deleteListConfirmation(list)}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+        testID="list-delete-confirm"
+      />
+    </>
   );
 }
 
@@ -546,6 +575,8 @@ function ContractFrame({ frame }: { frame: string }) {
   if (frame === 'checklist') return <OpenListFixture state="checklist" />;
   if (frame === 'context-add') return <OpenListFixture state="context-add" />;
   if (frame === 'global-add') return <GlobalComposerFixture />;
+  if (frame === 'item-details') return <ItemDetailsFixture />;
+  if (frame === 'delete') return <DeleteFixture />;
   return <OverviewFixture />;
 }
 

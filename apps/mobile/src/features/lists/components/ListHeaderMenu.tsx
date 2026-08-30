@@ -1,5 +1,5 @@
 import type { List } from '@od/shared/types';
-import { Button, Sheet, Text, useTheme } from '@od/ui';
+import { Button, SettingRow, Sheet, Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
 
 /**
@@ -72,6 +72,14 @@ export function ListHeaderMenu({
   return (
     <Sheet open={open} onClose={onClose} title="More" testID="list-header-menu">
       <View style={{ gap: theme.space[4], alignItems: 'stretch' }}>
+        {/* Settings lead: they are the ordinary continuation of this menu, not a bulk action. */}
+        <SettingRow
+          label="List settings"
+          summary="State, item details and planning"
+          opens
+          onPress={onOpenSettings}
+          testID="list-settings-open"
+        />
         {checkable && checkedCount > 0 ? (
           <>
             <Button
@@ -88,13 +96,6 @@ export function ListHeaderMenu({
             />
           </>
         ) : null}
-        {/* Settings exist for every List; only the checkbox-derived bulk actions are gated. */}
-        <Button
-          variant="secondary"
-          label="List settings"
-          onPress={onOpenSettings}
-          testID="list-settings-open"
-        />
         <Button
           variant="secondary"
           label="Archive list"

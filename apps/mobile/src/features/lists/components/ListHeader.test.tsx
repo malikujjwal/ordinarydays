@@ -35,6 +35,7 @@ function mount(overrides: { list?: List | undefined } = {}) {
   const onBack = vi.fn();
   const onOpenMenu = vi.fn();
   const onRename = vi.fn();
+  const onShare = vi.fn();
   render(
     <ThemeProvider scheme="light">
       <ListHeader
@@ -42,10 +43,11 @@ function mount(overrides: { list?: List | undefined } = {}) {
         onBack={onBack}
         onOpenMenu={onOpenMenu}
         onRename={onRename}
+        onShare={onShare}
       />
     </ThemeProvider>,
   );
-  return { onBack, onOpenMenu, onRename };
+  return { onBack, onOpenMenu, onRename, onShare };
 }
 
 const activateTitle = () => fireEvent.click(screen.getByTestId('list-title'));
@@ -61,6 +63,8 @@ describe('renaming is inline on the title', () => {
     expect(screen.getByTestId('list-title').getAttribute('aria-label')).toBe(
       'Rename Groceries',
     );
+    expect(screen.getByTestId('list-title-pencil')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
   });
 
   it('swaps the title for a focused field pre-filled with the current name', () => {
@@ -75,14 +79,16 @@ describe('renaming is inline on the title', () => {
   });
 
   /** One write, one field. §5.5: renaming changes nothing else. */
-  it('commits the trimmed title once on Save', () => {
+  it('commits the trimmed title once on blur, with no Save or Cancel controls', () => {
     const { onRename } = mount();
     activateTitle();
     type('  Favourite restaurants  ');
-    fireEvent.click(screen.getByTestId('list-title-save'));
+    fireEvent.blur(screen.getByTestId('list-title-field'));
 
     expect(onRename).toHaveBeenCalledTimes(1);
     expect(onRename).toHaveBeenCalledWith('Favourite restaurants');
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
   });
 
   it('commits on Return, the way every single-line title field does', () => {
@@ -94,11 +100,11 @@ describe('renaming is inline on the title', () => {
     expect(onRename).toHaveBeenCalledWith('Shopping');
   });
 
-  it('writes nothing on Cancel and puts the committed title back', () => {
+  it('writes nothing for a blank title on blur and puts the committed title back', () => {
     const { onRename } = mount();
     activateTitle();
-    type('Something else');
-    fireEvent.click(screen.getByTestId('list-title-cancel'));
+    type('   ');
+    fireEvent.blur(screen.getByTestId('list-title-field'));
 
     expect(onRename).not.toHaveBeenCalled();
     expect(screen.getByText('Groceries')).toBeDefined();
@@ -109,39 +115,36 @@ describe('renaming is inline on the title', () => {
    * §7.3: focus returns to the triggering element when a transient control closes. The field
    * replaced the title, so leaving would otherwise drop focus onto the document body.
    */
-  it.each([
-    ['Save', 'list-title-save'],
-    ['Cancel', 'list-title-cancel'],
-  ])('returns focus to the title after %s', (_label, testID) => {
+  it('returns focus to the title after Return', () => {
     mount();
     activateTitle();
     type('Shopping');
-    fireEvent.click(screen.getByTestId(testID));
+    fireEvent.keyDown(screen.getByTestId('list-title-field'), { key: 'Enter' });
 
     expect(document.activeElement).toBe(screen.getByTestId('list-title'));
   });
 
   /** A title is required (`list.ts`'s `title` schema); an empty one is refused before it flies. */
-  it('refuses to save an empty title', () => {
+  it('reverts an empty title when Return is pressed', () => {
     const { onRename } = mount();
     activateTitle();
     type('   ');
-    fireEvent.click(screen.getByTestId('list-title-save'));
+    fireEvent.keyDown(screen.getByTestId('list-title-field'), { key: 'Enter' });
 
     expect(onRename).not.toHaveBeenCalled();
-    expect(screen.getByTestId('list-title-field')).toBeDefined();
-    expect(screen.getByTestId('list-title-save').getAttribute('aria-disabled')).toBe(
-      'true',
-    );
+    expect(screen.queryByTestId('list-title-field')).toBeNull();
+    expect(screen.getByText('Groceries')).toBeDefined();
   });
 
-  it('leaves the ⋯ menu and Back where they are while editing', () => {
-    const { onBack, onOpenMenu } = mount();
+  it('leaves Share, the ⋯ menu and Back in the compact header while editing', () => {
+    const { onBack, onOpenMenu, onShare } = mount();
     activateTitle();
 
     fireEvent.click(screen.getByTestId('list-detail-back'));
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     fireEvent.click(screen.getByTestId('list-detail-menu'));
     expect(onBack).toHaveBeenCalled();
+    expect(onShare).toHaveBeenCalled();
     expect(onOpenMenu).toHaveBeenCalled();
   });
 

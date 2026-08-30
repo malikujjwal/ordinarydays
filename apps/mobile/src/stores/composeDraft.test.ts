@@ -73,33 +73,9 @@ describe('nothing is selected until the user taps', () => {
     expect(draft().target).toEqual({ objectKind: 'plan', type: 'custom' });
   });
 
-  /** The global composer opens before its required destination has been chosen. */
-  it('choosing List item reaches the item composer with no target', () => {
-    draft().chooseObject('listItem');
-    expect(draft().step).toBe('listItemForm');
-    expect(draft().target).toBeUndefined();
-  });
-
-  it('fixes the list in the same composer and preserves its title and note', () => {
-    draft().chooseObject('listItem');
-    draft().setTitle('Try Zahav');
-    draft().setNotes('Ask about the tasting menu');
-    draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
-
-    expect(draft().step).toBe('listItemForm');
-    expect(draft().target).toEqual({
-      objectKind: 'listItem',
-      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
-    });
-    expect(draft().title).toBe('Try Zahav');
-    expect(draft().notes).toBe('Ask about the tasting menu');
-  });
-
-  it('returns from the List item composer with no destination retained', () => {
-    draft().chooseObject('listItem');
-    draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
-    draft().back();
-
+  /** List creation is route-owned and never turns the Activity draft into a List item. */
+  it('choosing List leaves the draft unselected for the route-owned New List flow', () => {
+    draft().chooseObject('list');
     expect(draft().step).toBe('object');
     expect(draft().target).toBeUndefined();
   });

@@ -11,7 +11,9 @@ async function openFrame(
     | 'empty'
     | 'checklist'
     | 'context-add'
-    | 'global-add',
+    | 'global-add'
+    | 'item-details'
+    | 'delete',
   scheme: 'light' | 'dark' = 'light',
 ) {
   await page.goto(
@@ -103,7 +105,8 @@ test.describe('P3-33 production List contracts', () => {
     test(`checklist anatomy compact ${scheme}`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'checklist', scheme);
-      await expect(page.getByText('Drag handles to reorder')).toBeVisible();
+      await expect(page.getByText('3 items · 1 checked')).toBeVisible();
+      await expect(page.getByText('Drag handles to reorder')).toHaveCount(0);
       await expect(page.getByRole('button', { name: 'Add an item' })).toBeVisible();
       await expect(page).toHaveScreenshot(`checklist-compact-${scheme}.png`);
     });
@@ -136,6 +139,15 @@ test.describe('P3-33 production List contracts', () => {
       );
       await expect(page).toHaveScreenshot(`settings-compact-${scheme}.png`);
     });
+
+    test(`Sub-item settings compact ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'settings', scheme);
+      await page.getByTestId('list-settings-sub-item-naming').click();
+      await expect(page.getByTestId('sub-item-settings-sheet')).toBeVisible();
+      await expect(page.getByTestId('sub-item-settings-preview')).toBeVisible();
+      await expect(page).toHaveScreenshot(`sub-item-settings-compact-${scheme}.png`);
+    });
   }
 
   test('settings expanded uses the shared centred-sheet geometry', async ({ page }) => {
@@ -145,41 +157,75 @@ test.describe('P3-33 production List contracts', () => {
     await expect(page).toHaveScreenshot('settings-expanded-light.png');
   });
 
-  test('generic stages hide no populated group and keep configured labels', async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await openFrame(page, 'stages');
-    await expect(page.getByTestId('list-state-sections')).toBeVisible();
-    await expect(page.getByText('Queued').first()).toBeVisible();
-    await expect(page.getByText('Building').first()).toBeVisible();
-    await expect(page.getByText('Shipped').first()).toBeVisible();
-    await expect(page).toHaveScreenshot('stages-compact-light.png');
-  });
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`generic stages hide no populated group and keep configured labels ${scheme}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'stages', scheme);
+      await expect(page.getByTestId('list-state-sections')).toBeVisible();
+      await expect(page.getByText('Queued').first()).toBeVisible();
+      await expect(page.getByText('Building').first()).toBeVisible();
+      await expect(page.getByText('Shipped').first()).toBeVisible();
+      await page.getByTestId('list-header').scrollIntoViewIfNeeded();
+      await expect(page).toHaveScreenshot(`stages-compact-${scheme}.png`);
+    });
 
-  test('contextual composer stays anchored over its List', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await openFrame(page, 'context-add');
-    await expect(page.getByTestId('list-contextual-add')).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: 'Add item to Weekend packing' }),
-    ).toBeVisible();
-    await expect(page.getByLabel('Note')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
-    await expect(page).toHaveScreenshot('context-add-compact-light.png');
-  });
+    test(`contextual rapid add stays inline in its List ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'context-add', scheme);
+      await expect(page.getByTestId('list-inline-add')).toBeVisible();
+      await expect(page.getByLabel('Item title')).toBeFocused();
+      await expect(page.getByLabel('Note')).toHaveCount(0);
+      await expect(page.getByText('Weekend packing')).toBeVisible();
+      await expect(page).toHaveScreenshot(`context-add-compact-${scheme}.png`);
+    });
 
-  test('global composer keeps destination inline and initially unselected', async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await openFrame(page, 'global-add');
-    await expect(page.getByTestId('compose-list-item')).toBeVisible();
-    await expect(page.getByText('Add to')).toBeVisible();
-    await expect(page.getByText('Which list?')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Choose a list' })).toBeDisabled();
-    await expect(page).toHaveScreenshot('global-add-compact-light.png');
-  });
+    test(`global Add offers List as an object ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'global-add', scheme);
+      await expect(page.getByTestId('object-chooser')).toBeVisible();
+      await expect(page.getByRole('button', { name: /List/ })).toBeVisible();
+      await expect(page.getByText('Add to')).toHaveCount(0);
+      await expect(page.getByText('Which list?')).toHaveCount(0);
+      await expect(page).toHaveScreenshot(`global-add-compact-${scheme}.png`);
+    });
+
+    test(`inline rename stays in the standard header ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'checklist', scheme);
+      await page.getByRole('button', { name: 'Rename Weekend packing' }).click();
+      await expect(page.getByLabel('List name')).toBeFocused();
+      await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
+      await expect(page).toHaveScreenshot(`rename-compact-${scheme}.png`);
+    });
+
+    test(`item details and Sub-items stay compact ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'item-details', scheme);
+      await expect(page.getByRole('dialog', { name: 'Item details' })).toBeVisible();
+      await expect(page.getByTestId('sub-items-editor')).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Reorder Ingredient 1' }),
+      ).toBeVisible();
+      await expect(page).toHaveScreenshot(`item-details-compact-${scheme}.png`);
+    });
+
+    test(`delete List uses the centred consequence dialog ${scheme}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'delete', scheme);
+      await expect(
+        page.getByRole('alertdialog', { name: 'Delete "Weekend packing"?' }),
+      ).toBeVisible();
+      await expect(page.getByText('18 List items will be removed')).toBeVisible();
+      await expect(page.getByText('Linked Plans will remain')).toBeVisible();
+      await expect(page.getByText('2 other people will lose access')).toBeVisible();
+      await expect(page).toHaveScreenshot(`delete-compact-${scheme}.png`);
+    });
+  }
 
   test('typed summaries stay populated-only and concise', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

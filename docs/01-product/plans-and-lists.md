@@ -76,9 +76,9 @@ they were entered:
 
 | Explicit action | Text entered | Result |
 | --- | --- | --- |
-| Global `+` → **List item** → `Restaurants to try` | `Try Zahav` | One ListItem in `Restaurants to try`; no Activity. |
+| `Restaurants to try` → **Add an item** | `Try Zahav` | One ListItem in `Restaurants to try`; no Activity. |
 | Global `+` → **Plan** → **Event** | `Try Zahav` | One undated Event Plan in **Needs a date**; no ListItem. |
-| Global `+` → **List item** → `Movies to watch` | `Watch Severance` | One ListItem in `Movies to watch`; no Activity. |
+| `Movies to watch` → **Add an item** | `Watch Severance` | One ListItem in `Movies to watch`; no Activity. |
 | Global `+` → **Plan** → **Watch** | `Watch Severance` | One undated Watch Plan in **Needs a date**; no ListItem. |
 | Global `+` → **Task** | `Watch Severance` | One Task in **ANYTIME**. The verb does not override the Task choice. |
 | **Plan** → **Watch**, then People picker → Alice | `Watch Severance Friday 8 PM` | One Friday Watch Plan shared with Alice. Typing `with Alice` alone would not add her. |
@@ -243,7 +243,7 @@ line of guidance, at most one action.
 | Past | `Nothing here` | `Plans that have happened show up here.` | — |
 | All three empty | `No plans` | `Add something you want to do, on its own or with someone.` | `Add` |
 
-Both `Add` actions open the same global **Task / Plan / List item** chooser with nothing
+Both `Add` actions open the same global **Task / Plan / List** chooser with nothing
 selected. Being on the Plans tab never pre-selects Plan or skips the Plan-kind choice.
 
 #### 1.3.4 The calendar navigator
@@ -869,19 +869,16 @@ Rules:
 4. There is no `/suggest-template` call, debounce, term catalogue, string matching, model
    call, confidence, or offline fallback. The catalogue ships with the client and works
    identically offline.
-5. If this flow was opened from global **List item** because no destination existed,
-   successful creation returns to the ListItem form with the new list visibly selected;
-   the final item action is `Add to <new list name>`.
+5. If this flow was opened from global **List**, successful creation closes the Add flow and
+   returns to the underlying surface. It creates no ListItem; items are added later from inside
+   the new List.
 6. Assistive technology announces each choice as `<style>. <description>`, then announces
    `List name, pre-filled with <title>` on the title step. Focus never skips the explicit
    style selection.
 
-Global `+` → **List item** does not put destination selection on a separate screen. It opens
-the item composer directly with title, optional note and a required inline `Add to` section.
-No List is selected in global context; an open List supplies itself visibly. Choosing
-`New list` enters the catalogue above and returns to the unchanged composer with the new List
-selected. The only commit remains `Add to <list name>`, so removing the extra `Which list?`
-step does not weaken explicit destination choice.
+Global `+` → **List** enters the catalogue above directly. It does not open a List-item
+composer, destination chooser, or `New list` detour because creating a List is the selected
+operation. ListItems are created only by the contextual title-only editor inside an open List.
 
 > **What the frames fix, and what the sheet primitive does** — settled 2026-08-27 (founder),
 > on the divergence raised in P3-26's PR.
@@ -940,10 +937,10 @@ Two more rules:
 
 | Operation | Rule |
 | --- | --- |
-| **Add item** | Persistent `+ Add an item` row at the foot. Return activates `Add to <list name>` and re-focuses so several items can be typed in sequence. Each commit is one `POST /v1/lists/:id/items`. |
+| **Add item** | Persistent `+ Add an item` row at the foot expands in place into a title-only editor. The current List fixes the destination; no sheet, destination chooser or Note field appears. Return or `Add` writes one item, clears after success and keeps Title focused for rapid entry. Note is added later from Item details. Each commit is one `POST /v1/lists/:id/items`. |
 | **Check / uncheck** | Only in checkbox mode. Tapping writes intrinsic `done` or `open` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
-| **Reorder** | Long-press and drag on every List. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
+| **Reorder** | Every item shows a neutral trailing grip on touch layouts; long-pressing the row or grip starts the same drag. Pointer layouts reveal the grip on hover/focus. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
 | **Clear checked** | In checkbox mode, deletes intrinsic `done` items immediately with no confirmation and offers the 10-second bulk Undo. |
 | **Uncheck all** | In checkbox mode, changes only `done → open`, records exactly those ids and offers bulk Undo. |
 | **Share** | Header `Share`, on every list. Opens the member sheet (§5.11.1). Owner only for adding and removing; a member sees the sheet read-only apart from `Leave list`. |
@@ -1559,8 +1556,8 @@ the episode-shaped Progress feature:
 | `features.progress.season` | integer | Current progress, shows only |
 | `features.progress.episode` | integer | Current progress, shows only |
 
-Entries are created by the list's `+ Add an item`, or by global `+` → **List item** followed
-by an explicit watch-list destination. A **Plan → Watch** creates only a Watch Plan,
+Entries are created by the list's contextual `+ Add an item` editor. A **Plan → Watch** creates
+only a Watch Plan,
 including when it has no date. Its separate `Also add a list item to <list name>` control is
 off by default and, if turned on, the final button names both writes. All fields are free
 text or numbers; the app never looks anything up.

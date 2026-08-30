@@ -1,7 +1,7 @@
 import { ApiError, isRetryable, patchListItem } from '@od/shared/client';
 import { onlineManager } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import { type ToastMessage, useToast } from '@/stores/toast';
@@ -53,6 +53,8 @@ import {
  * > `Retry` one mutation rather than two, and does not travel.
  */
 export interface ReorderItems {
+  /** The projection with at most one in-flight drag overlaid by stable item id. */
+  readonly items: readonly ListItemRow[];
   /**
    * Drops `itemId` at an insertion index in the list **with that row removed**.
    *
@@ -60,6 +62,13 @@ export interface ReorderItems {
    * a request — {@link planReorder} decides which, and this hook does not second-guess it.
    */
   readonly drop: (itemId: string, toIndex: number) => void;
+}
+
+interface OptimisticMove {
+  readonly dragId: string;
+  readonly itemId: string;
+  readonly rank: string;
+  readonly acknowledged: boolean;
 }
 
 function failureToast(error: unknown, message: string, retry: () => void): ToastMessage {
@@ -105,10 +114,36 @@ export function useReorderItems({
   const show = useToast((state) => state.show);
   /** The drag whose request may still write. A newer drop retires the previous one. */
   const activeDrag = useRef<string | undefined>(undefined);
+  const [optimistic, setOptimistic] = useState<OptimisticMove>();
+  const displayItems = useMemo(
+    () =>
+      orderedItems(
+        items.map((item) =>
+          item.itemId === optimistic?.itemId ? { ...item, rank: optimistic.rank } : item,
+        ),
+      ),
+    [items, optimistic],
+  );
+
+  /*
+   * Keep the overlay through the request and the platform projection write. Web installs the
+   * rank in React state; native commits it through SQLite. Clearing before either one appears
+   * would replay the old order between drop and reconciliation.
+   */
+  useEffect(() => {
+    if (!optimistic?.acknowledged) return;
+    const reconciled = items.some(
+      (item) => item.itemId === optimistic.itemId && item.rank === optimistic.rank,
+    );
+    if (!reconciled) return;
+    setOptimistic((current) =>
+      current?.dragId === optimistic.dragId ? undefined : current,
+    );
+  }, [items, optimistic]);
 
   const drop = useCallback(
     (itemId: string, toIndex: number) => {
-      const sorted = orderedItems(items);
+      const sorted = displayItems;
       const plan = planReorder(list, sorted, itemId, toIndex);
       // A drop back where it started, or one the watch guard refused. No write, no toast.
       if (plan === undefined) return;
@@ -122,8 +157,7 @@ export function useReorderItems({
         return;
       }
 
-      const before = sorted.find((candidate) => candidate.itemId === itemId);
-      if (before === undefined) return;
+      if (!sorted.some((candidate) => candidate.itemId === itemId)) return;
       // One drag, one identity, reused by its own `Retry` so two attempts are one mutation.
       const dragId = randomUUID();
       activeDrag.current = dragId;
@@ -131,7 +165,14 @@ export function useReorderItems({
       const send = () => {
         // A newer drag has taken the row since. That drag's position is the live one.
         if (activeDrag.current !== dragId) return;
-        if (plan.rank !== undefined) applyRank(itemId, plan.rank);
+        if (plan.rank !== undefined) {
+          setOptimistic({
+            dragId,
+            itemId,
+            rank: plan.rank,
+            acknowledged: false,
+          });
+        }
         void patchListItem(apiClient, listId, itemId, {
           /*
            * The position, and only the position. A rank here would be the client allocating in
@@ -142,21 +183,29 @@ export function useReorderItems({
         })
           .then((moved) => {
             if (activeDrag.current !== dragId) return;
+            setOptimistic({
+              dragId,
+              itemId,
+              rank: moved.rank,
+              acknowledged: true,
+            });
             applyRank(itemId, moved.rank);
             onMoved();
+            activeDrag.current = undefined;
           })
           .catch((error: unknown) => {
             if (activeDrag.current !== dragId) return;
-            // Back to the rank it had. The row returns to where the user took it from (§5.3).
-            applyRank(itemId, before.rank);
+            setOptimistic((current) =>
+              current?.dragId === dragId ? undefined : current,
+            );
             show(failureToast(error, "Couldn't move that.", send));
           });
       };
 
       send();
     },
-    [applyRank, items, list, listId, onMoved, show],
+    [applyRank, displayItems, list, listId, onMoved, show],
   );
 
-  return { drop };
+  return { items: displayItems, drop };
 }

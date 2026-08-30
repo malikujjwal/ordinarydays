@@ -4,9 +4,7 @@ import { format } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
-import type { ListDestination } from '@/features/compose/components/ListDestinationChooser';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
-import { useLists } from '@/features/lists/hooks/useLists';
 import { apiClient } from '@/lib/apiClient';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -22,34 +20,15 @@ const profileQuery = queryOptions({
  * renders one feature component. What it supplies is `onClose` plus the edge values — the
  * user's today and their zone — so `ComposeScreen` never has to know it is a route.
  *
- * ## Why the lists arrive here
- *
- * `List item` needs a destination, and the lists belong to another feature slice.
- * `no-cross-feature-imports` makes a **route** the one place allowed to see both, so this file
- * reads the index and hands the compose screen a plain array in the server's own pointer
- * order. Nothing is filtered, sorted or pre-selected on the way through, and no default or
- * recent destination is consulted (criterion 33, ADR-033).
- *
- * `New list` opens P3-26's sheet from here for the same reason, and §5.4 rule 5 is why its
- * `onCreated` calls `chooseList`: creating from the picker returns to the item form with the
- * new list visibly selected and its name on the final button.
+ * `List` opens P3-26's existing type-first creation sheet. The route is the seam that may see
+ * both feature slices; compose never creates or selects a ListItem destination.
  */
 export default function ComposeRoute() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const profile = useQuery(profileQuery);
-  const lists = useLists();
-  const chooseList = useComposeDraft((state) => state.chooseList);
+  const resetDraft = useComposeDraft((state) => state.reset);
   const [creatingList, setCreatingList] = useState(false);
-  const [createdDestination, setCreatedDestination] = useState<ListDestination>();
-  const availableDestinations = lists.lists
-    .filter((list) => !list.archived)
-    .map((list) => ({ listId: list.listId, title: list.title }));
-  const listDestinations =
-    createdDestination === undefined ||
-    availableDestinations.some((list) => list.listId === createdDestination.listId)
-      ? availableDestinations
-      : [...availableDestinations, createdDestination];
 
   return (
     <>
@@ -61,22 +40,15 @@ export default function ComposeRoute() {
           const user = profile.data ?? (await queryClient.ensureQueryData(profileQuery));
           return { reservationName: user.displayName, currency: user.currency };
         }}
-        listDestinations={{
-          // Archived lists are not destinations: they have left the index, and adding to one
-          // would put the item somewhere the user would have to go looking for.
-          lists: listDestinations,
-          status: lists.status,
-          refetch: lists.refetch,
-        }}
         onCreateList={() => setCreatingList(true)}
       />
       <NewListSheet
         open={creatingList}
         onClose={() => setCreatingList(false)}
-        onCreated={(created) => {
+        onCreated={() => {
           setCreatingList(false);
-          setCreatedDestination(created);
-          chooseList(created.listId);
+          resetDraft();
+          router.back();
         }}
       />
     </>

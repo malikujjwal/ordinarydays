@@ -1,5 +1,17 @@
-import { Button, Sheet, Text, useTheme } from '@od/ui';
-import { View } from 'react-native';
+import {
+  Button,
+  Calendar,
+  Check,
+  type IconProps,
+  List,
+  Sheet,
+  Text,
+  Trash,
+  Users,
+  useTheme,
+} from '@od/ui';
+import { useEffect, useRef } from 'react';
+import { Modal, Platform, View } from 'react-native';
 
 /**
  * The destructive confirmation `interaction-contract.md` §1a.1 specifies, as one component.
@@ -50,6 +62,13 @@ export interface Confirmation {
   keeps?: string;
   /** The destructive button. **Repeats the verb** — never `OK`, never `Continue`. */
   confirmLabel: string;
+  /** Compact alert-dialog introduction; destructive List deletion uses the approved wording. */
+  summary?: string;
+  /** Ordered, icon-backed consequences for the centred alert-dialog presentation. */
+  consequences?: readonly {
+    kind: 'removed' | 'kept' | 'access';
+    text: string;
+  }[];
 }
 export interface ConfirmDialogProps {
   open: boolean;
@@ -58,6 +77,8 @@ export interface ConfirmDialogProps {
   onConfirm: () => void;
   /** Renders the confirmation inside a sheet that is already open. */
   embedded?: boolean;
+  /** Uses the compact, centred alert-dialog presentation for a destructive object delete. */
+  centred?: boolean;
   /** True while the write is in flight; the primary button shows its own spinner. */
   busy?: boolean;
   testID?: string;
@@ -69,11 +90,19 @@ export function ConfirmDialog({
   onCancel,
   onConfirm,
   embedded = false,
+  centred = false,
   busy = false,
   testID = 'confirm-dialog',
 }: ConfirmDialogProps) {
   const theme = useTheme();
+  const alertRef = useRef<View>(null);
   const { heading, removesLead, removes, keeps, confirmLabel } = confirmation;
+
+  useEffect(() => {
+    if (!open || !centred || Platform.OS !== 'web') return;
+    const card = alertRef.current as unknown as HTMLElement | null;
+    card?.querySelector<HTMLElement>('[data-testid="confirm-cancel"]')?.focus();
+  }, [centred, open]);
 
   const content = (
     <View testID={embedded ? testID : undefined} style={{ gap: theme.space[5] }}>
@@ -128,7 +157,133 @@ export function ConfirmDialog({
     </View>
   );
 
+  const consequenceIcons: Readonly<
+    Record<'removed' | 'kept' | 'access', (props: IconProps) => React.ReactElement>
+  > = { removed: List, kept: Calendar, access: Users };
+  const centredContent =
+    confirmation.consequences === undefined ? (
+      content
+    ) : (
+      <View style={{ gap: theme.space[5] }}>
+        <View
+          aria-hidden
+          style={{
+            width: theme.layout.hitTarget,
+            height: theme.layout.hitTarget,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: theme.radius.pill,
+            backgroundColor: theme.colors.surfaceRaised,
+          }}
+        >
+          <Trash size={22} color={theme.colors.danger} />
+        </View>
+        <View style={{ gap: theme.space[2] }}>
+          <Text variant="heading" color="textDisplay" accessibilityRole="header">
+            {heading}
+          </Text>
+          {confirmation.summary === undefined ? null : (
+            <Text variant="body" color="textSecondary">
+              {confirmation.summary}
+            </Text>
+          )}
+        </View>
+        <View style={{ gap: theme.space[3] }}>
+          {confirmation.consequences.map((consequence) => {
+            const Icon = consequenceIcons[consequence.kind];
+            return (
+              <View
+                key={`${consequence.kind}:${consequence.text}`}
+                style={{
+                  minHeight: theme.layout.hitTarget,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: theme.space[3],
+                }}
+              >
+                <View aria-hidden>
+                  {consequence.kind === 'kept' ? (
+                    <View>
+                      <Calendar size={20} color={theme.colors.textSecondary} />
+                      <View style={{ position: 'absolute', right: -5, bottom: -5 }}>
+                        <Check size={13} color={theme.colors.success} />
+                      </View>
+                    </View>
+                  ) : (
+                    <Icon size={20} color={theme.colors.textSecondary} />
+                  )}
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text variant="body" color="textPrimary">
+                    {consequence.text}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+        <View style={{ flexDirection: 'row', gap: theme.space[3], flexWrap: 'wrap' }}>
+          <Button
+            label="Cancel"
+            variant="secondary"
+            onPress={onCancel}
+            testID="confirm-cancel"
+          />
+          <Button
+            label={confirmLabel}
+            variant="danger"
+            loading={busy}
+            onPress={onConfirm}
+            testID="confirm-accept"
+          />
+        </View>
+      </View>
+    );
+
   if (embedded) return open ? content : null;
+
+  if (centred) {
+    return (
+      <Modal
+        visible={open}
+        transparent
+        animationType={Platform.OS === 'web' ? 'none' : 'fade'}
+        accessibilityLabel={heading}
+        onRequestClose={onCancel}
+      >
+        <View
+          style={{
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: theme.space[5],
+            backgroundColor: theme.colors.scrim,
+          }}
+        >
+          <View
+            ref={alertRef}
+            role="alertdialog"
+            aria-modal
+            accessibilityLabel={heading}
+            accessibilityViewIsModal
+            testID={testID}
+            style={[
+              {
+                width: '100%',
+                maxWidth: 380,
+                padding: theme.space[6],
+                borderRadius: theme.radius.sheet,
+                backgroundColor: theme.colors.surfaceOverlay,
+              },
+              theme.elevation('e3'),
+            ]}
+          >
+            {centredContent}
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
   return (
     <Sheet open={open} onClose={onCancel} dismissible={false} testID={testID}>
