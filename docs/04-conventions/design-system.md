@@ -926,10 +926,11 @@ header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutat
 
 **Variable-height shelf.** The two columns stack independently at `space[4]`; a progress bar,
 two-line title, restore action or extra metadata changes only its own card and never creates an
-equal-height row band beneath its neighbour. Source order is not height-balanced: the unchanged
-sequence fills the first contiguous column and then the second, so visual reading order,
-keyboard order and screen-reader traversal remain the server's canonical order. The horizontal
-gutter is also `space[4]`, and both outer edges stay aligned to the tab gutter.
+equal-height row band beneath its neighbour. Source order is not height-balanced: within each
+active and archived group, the client first stably sorts newest-created by the time-sortable
+`listId`. That sorted sequence fills the first contiguous column and then the second, so visual
+reading order, keyboard order and screen-reader traversal agree. The horizontal gutter is also
+`space[4]`, and both outer edges stay aligned to the tab gutter.
 
 The index scroll content uses the shared floating-chrome metric for its compact bottom padding.
 That metric owns the tab-bar height, global Add clearance and the safe-area-aware bar offset; a

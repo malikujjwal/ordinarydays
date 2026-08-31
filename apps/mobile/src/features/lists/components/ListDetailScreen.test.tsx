@@ -249,7 +249,7 @@ describe('the configuration-driven List detail', () => {
     vi.useFakeTimers();
     mount();
 
-    const body = screen.getByTestId('list-item-itm_01J8XKQ2M4N5P6R7S8T9V0W1X3-body');
+    const body = screen.getByRole('button', { name: 'Write tests' });
     fireEvent.click(body);
     fireEvent.click(body);
 
