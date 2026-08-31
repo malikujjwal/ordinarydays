@@ -166,6 +166,14 @@ export const Trash = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/** A collection moved out of the active shelf without being deleted. */
+export const Archive = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Rect x={3} y={5} width={18} height={4} rx={1.5} stroke={color} {...stroke} />
+    <Path d="M5 9v10h14V9M9.5 13h5" stroke={color} {...stroke} />
+  </Frame>
+);
+
 /** People affected by a share or access change. */
 export const Users = ({ size, color }: IconProps) => (
   <Frame size={size}>

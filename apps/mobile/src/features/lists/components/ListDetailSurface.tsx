@@ -1,8 +1,22 @@
 import type { List, ListItemView } from '@od/shared/types';
-import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
+import {
+  EmptyState,
+  ScreenShell,
+  Skeleton,
+  Text,
+  useKeyboardInset,
+  useScrollToFocusedInput,
+  useTheme,
+} from '@od/ui';
 import type { ReactNode } from 'react';
-import { useCallback } from 'react';
-import { ScrollView, View } from 'react-native';
+import { useCallback, useRef } from 'react';
+import {
+  type ScrollView as RNScrollView,
+  ScrollView,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { countLine } from '../model/listCard';
 import { ITEM_SCROLL_FETCH_RATIO, mayShowEmptyState } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
@@ -39,6 +53,13 @@ export interface ListDetailSurfaceProps {
   onDrop: (itemId: string, toIndex: number) => void;
 }
 
+/** Stable room below rapid entry: keyboard replaces, rather than accumulates with, safe area. */
+export const listDetailScrollBottomPadding = (
+  keyboardInset: number,
+  safeAreaBottom: number,
+  spacing: number,
+): number => (keyboardInset > 0 ? keyboardInset : safeAreaBottom) + spacing;
+
 /** Production List-detail layout, shared by the live screen and its deterministic gallery. */
 export function ListDetailSurface({
   list,
@@ -61,6 +82,11 @@ export function ListDetailSurface({
   onDrop,
 }: ListDetailSurfaceProps) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const keyboard = useKeyboardInset();
+  const scrollRef = useRef<RNScrollView | null>(null);
+  const { height: viewportHeight } = useWindowDimensions();
+  useScrollToFocusedInput(scrollRef, keyboard, viewportHeight);
   const showEmpty = mayShowEmptyState(
     { itemCount, loadedCount: items.length, complete },
     status !== 'pending' && status !== 'error',
@@ -96,9 +122,20 @@ export function ListDetailSurface({
       testID="list-detail"
     >
       <ScrollView
+        ref={scrollRef}
         onScroll={onScroll}
         scrollEventThrottle={16}
-        contentContainerStyle={{ gap: theme.space[3] }}
+        automaticallyAdjustKeyboardInsets
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{
+          gap: theme.space[3],
+          paddingBottom: listDetailScrollBottomPadding(
+            keyboard,
+            insets.bottom,
+            theme.space[5],
+          ),
+        }}
         testID="list-detail-scroll"
       >
         {isOffline ? (

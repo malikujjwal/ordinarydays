@@ -8,6 +8,8 @@ import type { ListItemState, ListSubItem, ProgressValue } from '@od/shared/types
 import {
   Button,
   Checkbox,
+  ChevronDown,
+  ChevronUp,
   Field,
   IconButton,
   MoreHorizontal,
@@ -18,6 +20,8 @@ import {
   Sheet,
   Text,
   type Theme,
+  Touchable,
+  Trash,
   useTheme,
 } from '@od/ui';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
@@ -42,6 +46,7 @@ import {
   subItemsPatch,
   titlePatch,
 } from '../model/itemSheet';
+import { MenuActionRow } from './MenuActionRow';
 import { ReorderableList } from './ReorderableList';
 
 export interface ItemSheetProps {
@@ -60,8 +65,6 @@ const STATES: readonly ListItemState[] = ['open', 'active', 'done'];
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     subItem: {
-      gap: theme.space[1],
-      paddingVertical: theme.space[2],
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.border,
     },
@@ -71,19 +74,21 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
       gap: theme.space[2],
     },
-    subItemFields: { flex: 1, minWidth: 0, gap: theme.space[1] },
-    subItemActions: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'flex-end',
-      gap: theme.space[2],
-    },
-    deleteRow: {
+    subItemBody: {
+      flex: 1,
+      minWidth: 0,
       minHeight: theme.layout.hitTarget,
       justifyContent: 'center',
-      borderTopWidth: 1,
-      borderTopColor: theme.colors.border,
-      paddingVertical: theme.space[3],
+      gap: theme.space[1],
+    },
+    subItemFields: { flex: 1, minWidth: 0, gap: theme.space[1] },
+    subItemHeading: {
+      minHeight: theme.layout.hitTarget,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.space[2],
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
     },
   });
 
@@ -130,7 +135,10 @@ export function ItemSheet({
     item.features?.subItems?.entries ?? [],
   );
   const [openSubItemMenu, setOpenSubItemMenu] = useState<string>();
+  const [editingSubItem, setEditingSubItem] = useState<string>();
   const previousItem = useRef(item);
+
+  const selectedSubItem = subItems.find((entry) => entry.id === openSubItemMenu);
 
   useEffect(() => {
     const previous = previousItem.current;
@@ -303,10 +311,30 @@ export function ItemSheet({
       </View>
     ),
     subItems: (config) => (
-      <View key="subItems" style={{ gap: theme.space[3] }} testID="sub-items-editor">
-        <Text variant="sectionLabel" color="textSecondary">
-          {config.sectionLabel}
-        </Text>
+      <View key="subItems" testID="sub-items-editor">
+        <View style={styles.subItemHeading}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text variant="sectionLabel" color="textSecondary">
+              {config.sectionLabel}
+            </Text>
+          </View>
+          <Text variant="footnote" color="textSecondary">
+            {subItems.length === 1 ? '1 item' : `${String(subItems.length)} items`}
+          </Text>
+          <Button
+            label={`Add ${config.singularLabel.toLowerCase()}`}
+            variant="ghost"
+            size="sm"
+            icon={Plus}
+            flush
+            disabled={subItems.length >= MAX_INGREDIENTS}
+            onPress={() => {
+              const id = newLocalId('sub');
+              setSubItems((rows) => appendSubItem(rows, id));
+              setEditingSubItem(id);
+            }}
+          />
+        </View>
         <ReorderableList
           items={subItems}
           keyOf={(entry) => entry.id}
@@ -322,196 +350,170 @@ export function ItemSheet({
             setOpenSubItemMenu(undefined);
             commit(subItemsPatch(item, next));
           }}
-          renderItem={(entry, index) => {
+          renderItem={(entry) => {
             const name = entry.title.trim() || config.singularLabel;
-            const menuOpen = openSubItemMenu === entry.id;
-            const move = (to: number) => {
-              const next = moveSubItem(subItems, index, to);
-              setSubItems(next);
-              setOpenSubItemMenu(undefined);
-              commit(subItemsPatch(item, next));
-            };
             return (
               <View testID={`sub-item-${entry.id}`} style={styles.subItem}>
                 <View style={styles.subItemRow}>
-                  <View style={styles.subItemFields}>
-                    <Field
-                      label={config.singularLabel}
-                      value={entry.title}
-                      hideLabel
-                      appearance="bare"
-                      placeholder={config.singularLabel}
-                      onChangeText={(value) =>
-                        setSubItems((rows) =>
-                          rows.map((row) =>
-                            row.id === entry.id ? { ...row, title: value } : row,
-                          ),
-                        )
-                      }
-                      onBlur={() =>
-                        commit(
-                          subItemsPatch(
-                            item,
-                            subItems.filter((row) => row.title.trim() !== ''),
-                          ),
-                        )
-                      }
-                    />
-                    {config.secondaryLabel === undefined ? null : (
+                  {editingSubItem === entry.id ? (
+                    <View style={styles.subItemFields}>
                       <Field
-                        label={config.secondaryLabel}
-                        value={entry.secondary ?? ''}
+                        label={config.singularLabel}
+                        value={entry.title}
                         hideLabel
                         appearance="bare"
-                        textVariant="footnote"
-                        placeholder={config.secondaryLabel}
+                        autoFocus
+                        placeholder={config.singularLabel}
                         onChangeText={(value) =>
                           setSubItems((rows) =>
                             rows.map((row) =>
-                              row.id === entry.id ? { ...row, secondary: value } : row,
+                              row.id === entry.id ? { ...row, title: value } : row,
                             ),
                           )
                         }
-                        onBlur={() => commit(subItemsPatch(item, subItems))}
+                        onBlur={() => {
+                          const next = subItems.filter((row) => row.title.trim() !== '');
+                          setSubItems(next);
+                          if (!next.some((row) => row.id === entry.id)) {
+                            setEditingSubItem(undefined);
+                          }
+                          commit(subItemsPatch(item, next));
+                        }}
                       />
-                    )}
-                  </View>
+                      {config.secondaryLabel === undefined ? null : (
+                        <Field
+                          label={config.secondaryLabel}
+                          value={entry.secondary ?? ''}
+                          hideLabel
+                          appearance="bare"
+                          textVariant="footnote"
+                          placeholder={config.secondaryLabel}
+                          onChangeText={(value) =>
+                            setSubItems((rows) =>
+                              rows.map((row) =>
+                                row.id === entry.id ? { ...row, secondary: value } : row,
+                              ),
+                            )
+                          }
+                          onBlur={() => commit(subItemsPatch(item, subItems))}
+                        />
+                      )}
+                    </View>
+                  ) : (
+                    <Touchable
+                      square={false}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Edit ${name}`}
+                      onPress={() => setEditingSubItem(entry.id)}
+                      style={styles.subItemBody}
+                    >
+                      <Text variant="subhead" color="textPrimary" numberOfLines={2}>
+                        {name}
+                      </Text>
+                      {entry.secondary?.trim() ? (
+                        <Text variant="footnote" color="textSecondary">
+                          {entry.secondary}
+                        </Text>
+                      ) : null}
+                    </Touchable>
+                  )}
                   <IconButton
                     icon={MoreHorizontal}
                     label={`More actions for ${name}`}
-                    onPress={() => setOpenSubItemMenu(menuOpen ? undefined : entry.id)}
+                    onPress={() =>
+                      setOpenSubItemMenu((current) =>
+                        current === entry.id ? undefined : entry.id,
+                      )
+                    }
                     testID={`sub-item-${entry.id}-menu`}
                   />
                 </View>
-                {menuOpen ? (
-                  <View
-                    style={styles.subItemActions}
-                    testID={`sub-item-${entry.id}-actions`}
-                  >
-                    <Button
-                      label={`Move ${name} up`}
-                      accessibilityLabel={`Move ${name} up`}
-                      variant="ghost"
-                      size="sm"
-                      disabled={index === 0}
-                      onPress={() => move(index - 1)}
-                    />
-                    <Button
-                      label={`Move ${name} down`}
-                      accessibilityLabel={`Move ${name} down`}
-                      variant="ghost"
-                      size="sm"
-                      disabled={index === subItems.length - 1}
-                      onPress={() => move(index + 1)}
-                    />
-                    <Button
-                      label={`Remove ${name}`}
-                      variant="ghost"
-                      size="sm"
-                      onPress={() => {
-                        const next = subItems.filter((_, at) => at !== index);
-                        setSubItems(next);
-                        setOpenSubItemMenu(undefined);
-                        commit(subItemsPatch(item, next));
-                      }}
-                    />
-                  </View>
-                ) : null}
               </View>
             );
           }}
-        />
-        <Button
-          label={`Add ${config.singularLabel}`}
-          variant="ghost"
-          size="sm"
-          icon={Plus}
-          flush
-          disabled={subItems.length >= MAX_INGREDIENTS}
-          onPress={() => setSubItems((rows) => appendSubItem(rows, newLocalId('sub')))}
         />
       </View>
     ),
   };
 
   return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title="Item details"
-      detent="large"
-      testID={testID}
-    >
-      <View style={{ gap: theme.space[5] }}>
-        <Field
-          label="Title"
-          value={title}
-          onChangeText={setTitle}
-          onBlur={() => commit(titlePatch(item, title))}
-          maxLength={MAX_TITLE_LEN}
-          testID="item-sheet-title"
-        />
-        <Field
-          label="Note"
-          optional
-          value={note}
-          onChangeText={setNote}
-          onBlur={() => commit(notePatch(item, note))}
-          maxLength={MAX_NOTES_LEN}
-          multiline
-          testID="item-sheet-note"
-        />
-
-        {provenance === undefined ? null : (
-          <SettingRow
-            label={provenanceLine(provenance)}
-            {...(provenance.sourceActivityId === undefined || onOpenSource === undefined
-              ? {}
-              : {
-                  opens: true,
-                  onPress: () => onOpenSource(provenance.sourceActivityId as string),
-                })}
+    <>
+      <Sheet
+        open={open}
+        onClose={onClose}
+        title="Item details"
+        detent="large"
+        testID={testID}
+      >
+        <View style={{ gap: theme.space[5], paddingBottom: theme.space[1] }}>
+          <Field
+            label="Title"
+            value={title}
+            onChangeText={setTitle}
+            onBlur={() => commit(titlePatch(item, title))}
+            maxLength={MAX_TITLE_LEN}
+            testID="item-sheet-title"
           />
-        )}
+          <Field
+            label="Note"
+            optional
+            value={note}
+            onChangeText={setNote}
+            onBlur={() => commit(notePatch(item, note))}
+            maxLength={MAX_NOTES_LEN}
+            multiline
+            testID="item-sheet-note"
+          />
 
-        {list.itemStateMode.mode === 'none' ? null : list.itemStateMode.mode ===
-          'checkbox' ? (
-          <RowGroup label="State" testID="item-state-editor">
-            <Row
-              title="Done"
-              leading={
-                <Checkbox
-                  checked={item.state === 'done'}
-                  label="Done"
-                  onChange={(checked) =>
-                    void actions.save(item, { state: checked ? 'done' : 'open' })
-                  }
-                  testID="item-state-checkbox"
-                />
-              }
+          {provenance === undefined ? null : (
+            <SettingRow
+              label={provenanceLine(provenance)}
+              {...(provenance.sourceActivityId === undefined || onOpenSource === undefined
+                ? {}
+                : {
+                    opens: true,
+                    onPress: () => onOpenSource(provenance.sourceActivityId as string),
+                  })}
             />
-          </RowGroup>
-        ) : (
-          <RowGroup label="State" testID="item-state-editor">
-            {STATES.map((state) => (
-              <SettingRow
-                key={state}
-                label={stageLabels[state]}
-                selected={item.state === state}
-                onPress={() => void actions.save(item, { state })}
+          )}
+
+          {list.itemStateMode.mode === 'none' ? null : list.itemStateMode.mode ===
+            'checkbox' ? (
+            <RowGroup label="State" testID="item-state-editor">
+              <Row
+                title="Done"
+                leading={
+                  <Checkbox
+                    checked={item.state === 'done'}
+                    label="Done"
+                    onChange={(checked) =>
+                      void actions.save(item, { state: checked ? 'done' : 'open' })
+                    }
+                    testID="item-state-checkbox"
+                  />
+                }
               />
-            ))}
-          </RowGroup>
-        )}
+            </RowGroup>
+          ) : (
+            <RowGroup label="State" testID="item-state-editor">
+              {STATES.map((state) => (
+                <SettingRow
+                  key={state}
+                  label={stageLabels[state]}
+                  selected={item.state === state}
+                  onPress={() => void actions.save(item, { state })}
+                />
+              ))}
+            </RowGroup>
+          )}
 
-        {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
+          {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
 
-        <View style={styles.deleteRow}>
-          <Button
+          <MenuActionRow
             label="Delete item"
-            variant="dangerGhost"
-            size="sm"
-            flush
+            icon={Trash}
+            danger
+            separated
             onPress={() => {
               actions.remove(item);
               onClose();
@@ -519,7 +521,55 @@ export function ItemSheet({
             testID="item-sheet-delete"
           />
         </View>
-      </View>
-    </Sheet>
+      </Sheet>
+
+      {!open || selectedSubItem === undefined ? null : (
+        <Sheet
+          open
+          onClose={() => setOpenSubItemMenu(undefined)}
+          title={`${selectedSubItem.title.trim() || 'Sub-item'} actions`}
+          testID="sub-item-actions"
+        >
+          <View>
+            <MenuActionRow
+              label={`Move ${selectedSubItem.title.trim() || 'Sub-item'} up`}
+              icon={ChevronUp}
+              disabled={subItems.indexOf(selectedSubItem) === 0}
+              onPress={() => {
+                const from = subItems.indexOf(selectedSubItem);
+                const next = moveSubItem(subItems, from, from - 1);
+                setSubItems(next);
+                setOpenSubItemMenu(undefined);
+                commit(subItemsPatch(item, next));
+              }}
+            />
+            <MenuActionRow
+              label={`Move ${selectedSubItem.title.trim() || 'Sub-item'} down`}
+              icon={ChevronDown}
+              disabled={subItems.indexOf(selectedSubItem) === subItems.length - 1}
+              onPress={() => {
+                const from = subItems.indexOf(selectedSubItem);
+                const next = moveSubItem(subItems, from, from + 1);
+                setSubItems(next);
+                setOpenSubItemMenu(undefined);
+                commit(subItemsPatch(item, next));
+              }}
+            />
+            <MenuActionRow
+              label={`Remove ${selectedSubItem.title.trim() || 'Sub-item'}`}
+              icon={Trash}
+              danger
+              separated
+              onPress={() => {
+                const next = subItems.filter((entry) => entry.id !== selectedSubItem.id);
+                setSubItems(next);
+                setOpenSubItemMenu(undefined);
+                commit(subItemsPatch(item, next));
+              }}
+            />
+          </View>
+        </Sheet>
+      )}
+    </>
   );
 }

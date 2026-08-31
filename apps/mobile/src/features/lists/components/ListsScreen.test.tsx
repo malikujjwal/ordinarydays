@@ -4,8 +4,9 @@ import type { List } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import type { ListsView } from '../hooks/useLists';
-import { ListsScreen } from './ListsScreen';
+import { ListsScreen, listsScrollBottomPadding } from './ListsScreen';
 
 /**
  * The Lists tab (§P3-25, `plans-and-lists.md` §5.6, §5.9).
@@ -139,6 +140,17 @@ describe('server pointer order', () => {
   });
 });
 
+describe('floating navigation clearance', () => {
+  it('derives compact bottom space from the one shared chrome metric and safe area', () => {
+    expect(listsScrollBottomPadding(34, true)).toBe(bottomChromeScrollPadding(34));
+    expect(listsScrollBottomPadding(0, true)).toBe(bottomChromeScrollPadding(0));
+  });
+
+  it('keeps expanded content clear without paying for compact floating chrome', () => {
+    expect(listsScrollBottomPadding(20, false)).toBe(52);
+  });
+});
+
 describe('the archived filter', () => {
   it('hides archived lists until Show archived', () => {
     setView({
@@ -186,7 +198,7 @@ describe('the auto-drain rule', () => {
     expect(loadMore).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Show archived' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show archived/ }));
 
     await waitFor(() => expect(loadMore).toHaveBeenCalledOnce());
   });

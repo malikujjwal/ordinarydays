@@ -137,9 +137,10 @@ describe('the canonical item editor shell', () => {
       }),
     );
 
-    fireEvent.click(screen.getByText('Add Material'));
-
     expect(screen.getByText('Materials')).toBeTruthy();
+    expect(screen.getByText('0 items')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Add material' }));
+
     expect(screen.getByLabelText('Material')).toBeTruthy();
     expect(screen.getByLabelText('Quantity')).toBeTruthy();
   });
@@ -178,8 +179,9 @@ describe('the canonical item editor shell', () => {
       getComputedStyle(screen.getByTestId('list-reorder-row-sub_1')).backgroundColor,
     ).toBe('rgba(0, 0, 0, 0)');
     expect(screen.getByRole('button', { name: 'More actions for Paper' })).toBeTruthy();
-    expect(screen.getByDisplayValue('Paper')).toBeTruthy();
-    expect(screen.getByDisplayValue('2 sheets')).toBeTruthy();
+    expect(screen.getByText('Paper')).toBeTruthy();
+    expect(screen.getByText('2 sheets')).toBeTruthy();
+    expect(screen.getByText('2 items')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Up' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Down' })).toBeNull();
@@ -205,6 +207,7 @@ describe('the canonical item editor shell', () => {
     calls.save.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Paper' }));
+    expect(screen.getByRole('dialog', { name: 'Paper actions' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Remove Paper' }));
     expect(calls.save).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'The Bear' }),
@@ -216,6 +219,57 @@ describe('the canonical item editor shell', () => {
         },
       },
     );
+  });
+
+  it('uses configured singular lowercase copy for the compact Add action', () => {
+    mount(
+      item(),
+      list({
+        featureConfig: {
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Ingredients',
+            singularLabel: 'Ingredient',
+          },
+        },
+      }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Add ingredient' })).toBeTruthy();
+    expect(screen.queryByText('SUB-ITEMS')).toBeNull();
+  });
+
+  it('keeps a long single Sub-item compact when no secondary label is configured', () => {
+    mount(
+      item({
+        features: {
+          subItems: {
+            entries: [
+              {
+                id: 'sub_long',
+                title: 'A deliberately long ingredient title that needs two lines',
+                rank: 'a0',
+              },
+            ],
+          },
+        },
+      }),
+      list({
+        featureConfig: {
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Ingredients',
+            singularLabel: 'Ingredient',
+          },
+        },
+      }),
+    );
+
+    expect(screen.getByText('1 item')).toBeTruthy();
+    expect(screen.queryByText('Quantity')).toBeNull();
+    const row = screen.getByTestId('sub-item-sub_long').firstElementChild;
+    if (!(row instanceof HTMLElement)) throw new Error('Sub-item row must render');
+    expect(getComputedStyle(row).minHeight).toBe('56px');
   });
 
   it('does not expose retained values while their feature is disabled', () => {

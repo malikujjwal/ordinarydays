@@ -907,6 +907,20 @@ immediately after the list was used, and move when it was renamed — backwards 
 line means to a reader. `+ New list` is a `footnoteStrong` accent text action in the screen
 header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutates.
 
+**Variable-height shelf.** The two columns stack independently at `space[4]`; a progress bar,
+two-line title, restore action or extra metadata changes only its own card and never creates an
+equal-height row band beneath its neighbour. Source order is not height-balanced: the unchanged
+sequence fills the first contiguous column and then the second, so visual reading order,
+keyboard order and screen-reader traversal remain the server's canonical order. The horizontal
+gutter is also `space[4]`, and both outer edges stay aligned to the tab gutter.
+
+The index scroll content uses the shared floating-chrome metric for its compact bottom padding.
+That metric owns the tab-bar height, global Add clearance and the safe-area-aware bar offset; a
+Lists screen must not restate any of those numbers. Loading, empty, active and archived content
+all live inside that same padded scroll measure, so their final interactive element can scroll
+fully above navigation. At `medium` and `expanded`, where the rail replaces the floating bar,
+ordinary bottom safe area plus the standard spacing token is used instead.
+
 #### 7.2a List creation and settings contract
 
 `New list` is a two-step sheet. Step one is headed `Choose a list type`, contains no title
@@ -956,6 +970,12 @@ An open List is a content surface, not a second collection card and not a sparse
 Content begins immediately after the standard header: no cover, oversized title block, empty
 spacer or duplicate List name may sit between the header and the first useful line.
 
+The header is one leading 44 pt Back slot, one flexible leading-aligned title/edit slot, one
+fixed Share slot and one trailing 44 pt More slot. Unequal actions never optically centre the
+title. The pencil stays vertically aligned with the title inside the same editable control;
+the title may grow to two lines before clipping, while Share and More never shrink or leave the
+viewport. Rename still commits on Return or blur and adds no Save/Cancel pair.
+
 ```text
 ‹  Groceries ✎                              Share  ⋯
 4 items · 2 checked
@@ -987,6 +1007,23 @@ Lists-index action. Its plus sits in a small dashed IconTile and the two-line co
 compact `Add` action; there is no sheet, destination chooser or Note field. Return and `Add`
 perform the same single write, then clear and re-focus Title. The later Item-details sheet owns
 the normal top-aligned multiline Note field, with `Note` and trailing `Optional` above it.
+While that inline field is focused, the List scroll uses the shared live keyboard inset and
+focused-input measurement. The inset replaces the bottom safe area while the keyboard is up,
+updates as the keyboard resizes, and returns to the normal inset on dismissal; it is never
+accumulated per successful rapid add.
+
+Both Lists overflow sheets use one 56 pt-minimum menu-row grammar: aligned leading icon, label,
+optional subordinate summary, and a bottom divider. Only a row that opens another surface has a
+chevron. A toggle carries its state accessibly and visibly; destructive rows use danger ink and
+an icon on a transparent row, separated by a token gap, never a filled oversized button.
+
+Item details uses the compact Title field, the labelled top-aligned optional Note, then exposed
+State and enabled typed-feature groups. A configured Sub-item section uses its own vocabulary,
+an item count and `Add <singular>` action. Each child is a 56 pt-minimum row with a persistent
+leading grip, title and populated secondary value, and a trailing 44 pt More action. Tapping its
+body enters compact inline editing. More opens a content-sized action sheet containing compact
+Move up, Move down and Remove rows; those controls never expand the normal child row. `Delete
+item` closes the editor as a divider-separated danger menu row.
 
 Grouped staged Lists insert tinted populated section headers between the count and rows. Each
 header carries a stage icon, configured label and count; it never reads as another item, and

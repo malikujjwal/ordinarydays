@@ -102,6 +102,26 @@ describe('ListHeaderMenu', () => {
     expect(sheet.textContent).toContain('State, item details and planning');
   });
 
+  it('uses one full-width action-row grammar without detached archive copy or filled danger', () => {
+    mount();
+
+    for (const id of [
+      'list-settings-open',
+      'list-clear-checked',
+      'list-uncheck-all',
+      'list-archive',
+      'list-delete',
+    ]) {
+      expect(screen.getByTestId(id).getAttribute('style')).toContain('min-height: 56px');
+    }
+    expect(
+      screen.queryByText('Archived lists keep their items and are reachable from Lists.'),
+    ).toBeNull();
+    expect(getComputedStyle(screen.getByTestId('list-delete')).backgroundColor).toBe(
+      'rgba(0, 0, 0, 0)',
+    );
+  });
+
   it('makes list deletion discoverable from the detail overflow menu', () => {
     const actions = mount();
 

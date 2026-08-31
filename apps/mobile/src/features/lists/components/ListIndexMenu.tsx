@@ -1,5 +1,6 @@
-import { Button, Sheet, Text, useTheme } from '@od/ui';
+import { Archive, Sheet } from '@od/ui';
 import { View } from 'react-native';
+import { MenuActionRow } from './MenuActionRow';
 
 /**
  * The Lists **index** header's `⋯` (`plans-and-lists.md` §5.6 — "reachable through
@@ -39,24 +40,24 @@ export function ListIndexMenu({
   onToggleArchived,
   archivedCount,
 }: ListIndexMenuProps) {
-  const theme = useTheme();
+  const summary =
+    archivedCount === 0
+      ? 'Archived lists keep their items and can be restored.'
+      : `${String(archivedCount)} archived ${
+          archivedCount === 1 ? 'list' : 'lists'
+        }. They keep their items and can be restored.`;
 
   return (
     <Sheet open={open} onClose={onClose} title="More" testID="list-index-menu">
-      <View style={{ gap: theme.space[4], alignItems: 'stretch' }}>
-        <Button
-          variant="secondary"
+      <View>
+        <MenuActionRow
           label={showingArchived ? 'Hide archived' : 'Show archived'}
+          summary={summary}
+          icon={Archive}
+          checked={showingArchived}
           onPress={onToggleArchived}
           testID="lists-toggle-archived"
         />
-        <Text color="textMuted">
-          {archivedCount === 0
-            ? 'Archived lists keep their items and can be restored.'
-            : `${String(archivedCount)} archived ${
-                archivedCount === 1 ? 'list' : 'lists'
-              }. They keep their items and can be restored.`}
-        </Text>
       </View>
     </Sheet>
   );

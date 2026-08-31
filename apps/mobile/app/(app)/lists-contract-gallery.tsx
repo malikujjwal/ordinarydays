@@ -18,6 +18,8 @@ import { InlineListItemEditor } from '@/features/lists/components/InlineListItem
 import { ItemSheet } from '@/features/lists/components/ItemSheet';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
 import { ListDetailSurface } from '@/features/lists/components/ListDetailSurface';
+import { ListHeaderMenu } from '@/features/lists/components/ListHeaderMenu';
+import { ListIndexMenu } from '@/features/lists/components/ListIndexMenu';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
 import { ListItemRow } from '@/features/lists/components/ListItemRow';
 import { ListSettingsSheet } from '@/features/lists/components/ListSettingsSheet';
@@ -458,7 +460,14 @@ function checklistItem(index: number): ListItemView {
 function OpenListFixture({
   state,
 }: {
-  state: 'empty' | 'checklist' | 'stages' | 'context-add';
+  state:
+    | 'empty'
+    | 'checklist'
+    | 'stages'
+    | 'context-add'
+    | 'context-add-long'
+    | 'short-header'
+    | 'long-header';
 }) {
   const checklist: List = {
     ...preset(1),
@@ -466,7 +475,14 @@ function OpenListFixture({
     itemCount: CHECKLIST_ITEMS.length,
     doneCount: 1,
   };
-  const list = state === 'stages' ? { ...STAGED_LIST, itemCount: 3 } : checklist;
+  const title =
+    state === 'short-header'
+      ? 'Errands'
+      : state === 'long-header'
+        ? 'Everything to remember before the long weekend away'
+        : checklist.title;
+  const list =
+    state === 'stages' ? { ...STAGED_LIST, itemCount: 3 } : { ...checklist, title };
   const empty = state === 'empty';
   const stagedItems: readonly ListItemView[] = [
     { ...checklistItem(0), state: 'open', title: 'Sketch the frame' },
@@ -474,8 +490,23 @@ function OpenListFixture({
     { ...checklistItem(2), state: 'done', title: 'Review the spacing' },
   ];
 
-  const visibleList = empty ? { ...list, itemCount: 0, doneCount: 0 } : list;
-  const visibleItems = empty ? [] : state === 'stages' ? stagedItems : CHECKLIST_ITEMS;
+  const longItems = Array.from({ length: 14 }, (_, index) => ({
+    ...checklistItem(index % CHECKLIST_ITEMS.length),
+    itemId: `itm_01J8XKQ2M4N5P6R7S8T9V${String(index).padStart(4, '0')}`,
+    rank: `a${String(index).padStart(2, '0')}`,
+    title: `Packing item ${String(index + 1)}`,
+    state: index % 4 === 0 ? ('done' as const) : ('open' as const),
+  }));
+  const visibleItems = empty
+    ? []
+    : state === 'stages'
+      ? stagedItems
+      : state === 'context-add-long'
+        ? longItems
+        : CHECKLIST_ITEMS;
+  const visibleList = empty
+    ? { ...list, itemCount: 0, doneCount: 0 }
+    : { ...list, itemCount: visibleItems.length };
 
   return (
     <View style={{ flex: 1 }}>
@@ -492,7 +523,7 @@ function OpenListFixture({
         onRetry={() => {}}
         onLoadMore={() => {}}
         onAdd={() => {}}
-        {...(state === 'context-add'
+        {...(state === 'context-add' || state === 'context-add-long'
           ? {
               addEditor: (
                 <InlineListItemEditor
@@ -528,17 +559,76 @@ function GlobalComposerFixture() {
 }
 
 function ItemDetailsFixture() {
+  const list: List = {
+    ...STAGED_LIST,
+    title: 'Meal ideas',
+    featureConfig: {
+      place: { enabled: true },
+      subItems: {
+        enabled: true,
+        sectionLabel: 'Ingredients',
+        singularLabel: 'Ingredient',
+        secondaryLabel: 'Quantity',
+      },
+    },
+  };
+  const item: ListItemView = {
+    ...itemFixture(3),
+    state: 'active',
+    note: 'Easy weekday dinner with enough leftovers for lunch.',
+    features: {
+      place: { label: 'Home', address: 'Kitchen' },
+      subItems: {
+        entries: itemFixture(3).features?.subItems?.entries ?? [],
+      },
+    },
+  };
   return (
     <View style={{ flex: 1 }}>
       <ItemSheet
         open
-        list={preset(6)}
-        item={itemFixture(3)}
+        list={list}
+        item={item}
         onClose={() => {}}
         onChanged={() => {}}
         onRemoved={() => {}}
       />
     </View>
+  );
+}
+
+function ListIndexMenuFixture() {
+  return (
+    <>
+      <OverviewFixture />
+      <ListIndexMenu
+        open
+        onClose={() => {}}
+        showingArchived
+        archivedCount={3}
+        onToggleArchived={() => {}}
+      />
+    </>
+  );
+}
+
+function ListHeaderMenuFixture({ checked }: { checked: boolean }) {
+  const list = { ...preset(1), title: 'Weekend packing', itemCount: 14, doneCount: 4 };
+  return (
+    <>
+      <OpenListFixture state="checklist" />
+      <ListHeaderMenu
+        open
+        onClose={() => {}}
+        list={list}
+        checkedCount={checked ? 4 : 0}
+        onClearDone={() => {}}
+        onUncheckAll={() => {}}
+        onArchive={() => {}}
+        onDelete={() => {}}
+        onOpenSettings={() => {}}
+      />
+    </>
   );
 }
 
@@ -574,8 +664,14 @@ function ContractFrame({ frame }: { frame: string }) {
   if (frame === 'empty') return <OpenListFixture state="empty" />;
   if (frame === 'checklist') return <OpenListFixture state="checklist" />;
   if (frame === 'context-add') return <OpenListFixture state="context-add" />;
+  if (frame === 'context-add-long') return <OpenListFixture state="context-add-long" />;
+  if (frame === 'short-header') return <OpenListFixture state="short-header" />;
+  if (frame === 'long-header') return <OpenListFixture state="long-header" />;
   if (frame === 'global-add') return <GlobalComposerFixture />;
   if (frame === 'item-details') return <ItemDetailsFixture />;
+  if (frame === 'index-menu') return <ListIndexMenuFixture />;
+  if (frame === 'detail-menu') return <ListHeaderMenuFixture checked />;
+  if (frame === 'detail-menu-empty') return <ListHeaderMenuFixture checked={false} />;
   if (frame === 'delete') return <DeleteFixture />;
   return <OverviewFixture />;
 }

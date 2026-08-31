@@ -14,7 +14,9 @@ import {
 } from '@od/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import { TabScreen } from '@/components/TabScreen';
 import { useLists } from '../hooks/useLists';
 import { archivedListToast } from '../model/archiveUndoToast';
@@ -61,6 +63,12 @@ const VIEWPORT_ROWS = 8;
 /** Auto-fetch at 80 % scroll depth (`interaction-contract.md` §5.1). */
 const SCROLL_FETCH_RATIO = 0.8;
 
+/** One answer for the floating compact chrome, and ordinary safe-area breathing room at width. */
+export const listsScrollBottomPadding = (
+  insetBottom: number,
+  compact: boolean,
+): number => (compact ? bottomChromeScrollPadding(insetBottom) : insetBottom + space[8]);
+
 export interface ListsScreenProps {
   /** The clock, read at the route. §4.3 keeps `new Date()` out of anything testable. */
   now: Instant;
@@ -88,6 +96,7 @@ export function ListsScreen({
 }: ListsScreenProps) {
   const theme = useTheme();
   const breakpoint = useBreakpoint();
+  const insets = useSafeAreaInsets();
   const view = useLists();
   const effectiveViewerUserId = viewerUserId ?? view.viewerUserId;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -235,7 +244,15 @@ export function ListsScreen({
         onScroll={onScroll}
         scrollEventThrottle={16}
         contentContainerStyle={
-          breakpoint === 'compact' ? styles.compactContent : styles.wideContent
+          breakpoint === 'compact'
+            ? [
+                styles.compactContent,
+                { paddingBottom: listsScrollBottomPadding(insets.bottom, true) },
+              ]
+            : [
+                styles.wideContent,
+                { paddingBottom: listsScrollBottomPadding(insets.bottom, false) },
+              ]
         }
         testID="lists-scroll"
       >

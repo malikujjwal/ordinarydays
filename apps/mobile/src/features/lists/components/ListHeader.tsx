@@ -112,13 +112,15 @@ export function ListHeader({
           minHeight: theme.layout.hitTarget,
         }}
       >
-        <IconButton
-          icon={ChevronLeft}
-          label="Back"
-          onPress={onBack}
-          testID="list-detail-back"
-        />
-        <View style={{ flex: 1, minWidth: 0 }}>
+        <View testID="list-header-back-slot" style={{ width: theme.layout.hitTarget }}>
+          <IconButton
+            icon={ChevronLeft}
+            label="Back"
+            onPress={onBack}
+            testID="list-detail-back"
+          />
+        </View>
+        <View testID="list-header-title-slot" style={{ flex: 1, minWidth: 0 }}>
           {editing ? (
             <Field
               label="List name"
@@ -164,7 +166,7 @@ export function ListHeader({
                   variant="title"
                   color="textDisplay"
                   accessibilityRole="header"
-                  numberOfLines={1}
+                  numberOfLines={2}
                 >
                   {title}
                 </Text>
@@ -189,19 +191,26 @@ export function ListHeader({
         </View>
         {list === undefined ? null : (
           <>
-            <Button
-              label="Share"
-              variant="ghost"
-              size="sm"
-              onPress={onShare ?? (() => void Share.share({ message: title, title }))}
-              testID="list-detail-share"
-            />
-            <IconButton
-              icon={MoreHorizontal}
-              label="More"
-              onPress={onOpenMenu}
-              testID="list-detail-menu"
-            />
+            <View testID="list-header-share-slot" style={{ width: theme.space[11] }}>
+              <Button
+                label="Share"
+                variant="ghost"
+                size="sm"
+                onPress={onShare ?? (() => void Share.share({ message: title, title }))}
+                testID="list-detail-share"
+              />
+            </View>
+            <View
+              testID="list-header-more-slot"
+              style={{ width: theme.layout.hitTarget }}
+            >
+              <IconButton
+                icon={MoreHorizontal}
+                label="More"
+                onPress={onOpenMenu}
+                testID="list-detail-menu"
+              />
+            </View>
           </>
         )}
       </View>

@@ -13,6 +13,12 @@ async function openFrame(
     | 'context-add'
     | 'global-add'
     | 'item-details'
+    | 'index-menu'
+    | 'detail-menu'
+    | 'detail-menu-empty'
+    | 'short-header'
+    | 'long-header'
+    | 'context-add-long'
     | 'delete',
   scheme: 'light' | 'dark' = 'light',
 ) {
@@ -34,24 +40,34 @@ test.describe('P3-33 production List contracts', () => {
       await openFrame(page, 'overview');
 
       const first = page.getByRole('button', { name: /^Untitled list\./ });
-      const second = page.getByRole('button', { name: /^Checklist\./ });
+      const nextInColumn = page.getByRole('button', { name: /^Checklist\./ });
+      const secondColumn = page.getByRole('button', { name: /^Places to Visit\./ });
       const heading = page.getByText('Lists contract gallery');
       await expect(first).toBeVisible();
-      await expect(second).toBeVisible();
+      await expect(secondColumn).toBeVisible();
 
-      const [firstBox, secondBox, headingBox] = await Promise.all([
+      const [firstBox, nextBox, secondColumnBox, headingBox] = await Promise.all([
         first.boundingBox(),
-        second.boundingBox(),
+        nextInColumn.boundingBox(),
+        secondColumn.boundingBox(),
         heading.boundingBox(),
       ]);
       expect(firstBox).not.toBeNull();
-      expect(secondBox).not.toBeNull();
+      expect(nextBox).not.toBeNull();
+      expect(secondColumnBox).not.toBeNull();
       expect(headingBox).not.toBeNull();
-      if (firstBox === null || secondBox === null || headingBox === null) return;
+      if (
+        firstBox === null ||
+        nextBox === null ||
+        secondColumnBox === null ||
+        headingBox === null
+      )
+        return;
 
-      expect(Math.abs(firstBox.y - secondBox.y)).toBeLessThan(1);
-      expect(Math.abs(firstBox.width - secondBox.width)).toBeLessThan(1);
-      expect(secondBox.x - (firstBox.x + firstBox.width)).toBeCloseTo(12, 0);
+      expect(Math.abs(firstBox.y - secondColumnBox.y)).toBeLessThan(1);
+      expect(Math.abs(firstBox.width - secondColumnBox.width)).toBeLessThan(1);
+      expect(secondColumnBox.x - (firstBox.x + firstBox.width)).toBeCloseTo(12, 0);
+      expect(nextBox.y - (firstBox.y + firstBox.height)).toBeCloseTo(12, 0);
       expect(firstBox.x).toBeCloseTo(headingBox.x, 0);
       if (gutter !== undefined) expect(firstBox.x).toBeCloseTo(gutter, 0);
       expect(
@@ -70,6 +86,96 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page).toHaveScreenshot(`overview-compact-${scheme}.png`);
     });
   }
+
+  test('the final mixed-height tile scrolls completely into view at compact width', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openFrame(page, 'overview');
+    const last = page.getByRole('button', { name: /^Road trip stops\./ });
+    await last.scrollIntoViewIfNeeded();
+    await expect(last).toBeInViewport({ ratio: 1 });
+    await expect(page).toHaveScreenshot('overview-last-compact-light.png');
+  });
+
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`Lists index More uses compact rows ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'index-menu', scheme);
+      await expect(page.getByRole('checkbox', { name: /Hide archived/ })).toBeVisible();
+      await expect(page).toHaveScreenshot(`index-menu-compact-${scheme}.png`);
+    });
+
+    test(`List detail More uses compact rows ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'detail-menu', scheme);
+      await expect(page.getByRole('button', { name: 'Clear checked (4)' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Delete list' })).toBeVisible();
+      await expect(page).toHaveScreenshot(`detail-menu-compact-${scheme}.png`);
+    });
+
+    test(`long List header keeps fixed actions ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'long-header', scheme);
+      await expect(
+        page.getByRole('button', { name: /Rename Everything to remember/ }),
+      ).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Share' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'More' })).toBeVisible();
+      await expect(page).toHaveScreenshot(`long-header-compact-${scheme}.png`);
+    });
+
+    test(`long List rapid add remains the final focused row ${scheme}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openFrame(page, 'context-add-long', scheme);
+      const editor = page.getByTestId('list-inline-add');
+      await editor.scrollIntoViewIfNeeded();
+      await expect(page.getByLabel('Item title')).toBeFocused();
+      await expect(editor).toBeInViewport({ ratio: 1 });
+      await expect(page).toHaveScreenshot(`context-add-long-compact-${scheme}.png`);
+    });
+  }
+
+  test('List detail More omits inapplicable checked actions', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openFrame(page, 'detail-menu-empty');
+    await expect(page.getByText(/Clear checked/)).toHaveCount(0);
+    await expect(page.getByText(/Uncheck all/)).toHaveCount(0);
+    await expect(page).toHaveScreenshot('detail-menu-no-checked-compact-light.png');
+  });
+
+  test('short List header stays leading-aligned at 320', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 844 });
+    await openFrame(page, 'short-header');
+    await expect(page.getByRole('button', { name: 'Rename Errands' })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(320);
+    await expect(page).toHaveScreenshot('short-header-320-light.png');
+  });
+
+  test('maximum item details remain scrollable at 320', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 844 });
+    await openFrame(page, 'item-details');
+    await page.getByTestId('item-sheet-body').evaluate((body) => {
+      body.scrollTop = body.scrollHeight;
+    });
+    await expect(page.getByRole('button', { name: 'Delete item' })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(page).toHaveScreenshot('item-details-320-light.png');
+  });
+
+  test('item details use the centred expanded sheet without stretching rows', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await openFrame(page, 'item-details');
+    await expect(page.getByTestId('item-sheet')).toBeVisible();
+    await expect(page).toHaveScreenshot('item-details-expanded-light.png');
+  });
 
   test('creation chooser is explicit and unselected', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

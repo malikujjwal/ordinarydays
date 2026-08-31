@@ -1,6 +1,7 @@
 import type { List } from '@od/shared/types';
-import { Button, SettingRow, Sheet, Text, useTheme } from '@od/ui';
+import { Archive, Check, CheckSquare, ListLines, Sheet, Trash } from '@od/ui';
 import { View } from 'react-native';
+import { MenuActionRow } from './MenuActionRow';
 
 /**
  * The list header's `⋯` menu (`plans-and-lists.md` §5.6, §P3-10).
@@ -66,48 +67,46 @@ export function ListHeaderMenu({
   onDelete,
   onOpenSettings,
 }: ListHeaderMenuProps) {
-  const theme = useTheme();
   const checkable = supportsCheckedActions(list);
 
   return (
     <Sheet open={open} onClose={onClose} title="More" testID="list-header-menu">
-      <View style={{ gap: theme.space[4], alignItems: 'stretch' }}>
-        {/* Settings lead: they are the ordinary continuation of this menu, not a bulk action. */}
-        <SettingRow
+      <View>
+        <MenuActionRow
           label="List settings"
           summary="State, item details and planning"
+          icon={ListLines}
           opens
           onPress={onOpenSettings}
           testID="list-settings-open"
         />
         {checkable && checkedCount > 0 ? (
           <>
-            <Button
-              variant="secondary"
+            <MenuActionRow
               label={`Clear checked (${String(checkedCount)})`}
+              icon={Check}
               onPress={onClearDone}
               testID="list-clear-checked"
             />
-            <Button
-              variant="secondary"
+            <MenuActionRow
               label={`Uncheck all (${String(checkedCount)})`}
+              icon={CheckSquare}
               onPress={onUncheckAll}
               testID="list-uncheck-all"
             />
           </>
         ) : null}
-        <Button
-          variant="secondary"
+        <MenuActionRow
           label="Archive list"
+          icon={Archive}
           onPress={onArchive}
           testID="list-archive"
         />
-        <Text color="textMuted">
-          Archived lists keep their items and are reachable from Lists.
-        </Text>
-        <Button
-          variant="danger"
+        <MenuActionRow
           label="Delete list"
+          icon={Trash}
+          danger
+          separated
           onPress={onDelete}
           testID="list-delete"
         />

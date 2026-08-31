@@ -64,6 +64,25 @@ describe('renaming is inline on the title', () => {
     expect(screen.getByRole('button', { name: 'Rename Groceries' })).toBeTruthy();
     expect(screen.getByTestId('list-title-pencil')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
+    expect(screen.getByTestId('list-header-back-slot')).toBeTruthy();
+    expect(screen.getByTestId('list-header-title-slot').getAttribute('style')).toContain(
+      'flex: 1',
+    );
+    expect(screen.getByTestId('list-header-share-slot')).toBeTruthy();
+    expect(screen.getByTestId('list-header-more-slot')).toBeTruthy();
+  });
+
+  it('lets a long title use two lines without displacing fixed action slots', () => {
+    mount({
+      list: list({ title: 'A deliberately long list title that needs two lines' }),
+    });
+
+    const title = screen.getByText('A deliberately long list title that needs two lines');
+    expect(title.getAttribute('aria-label')).toBeNull();
+    expect(title.getAttribute('style')).toContain('webkit-line-clamp: 2');
+    expect(screen.getByTestId('list-header-share-slot').getAttribute('style')).toContain(
+      'width: 64px',
+    );
   });
 
   it('swaps the title for a focused field pre-filled with the current name', () => {

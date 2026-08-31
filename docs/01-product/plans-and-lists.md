@@ -937,7 +937,7 @@ Two more rules:
 
 | Operation | Rule |
 | --- | --- |
-| **Add item** | Persistent `+ Add an item` row at the foot expands in place into a title-only editor. The current List fixes the destination; no sheet, destination chooser or Note field appears. Return or `Add` writes one item, clears after success and keeps Title focused for rapid entry. Note is added later from Item details. Each commit is one `POST /v1/lists/:id/items`. |
+| **Add item** | Persistent `+ Add an item` row at the foot expands in place into a title-only editor. The current List fixes the destination; no sheet, destination chooser or Note field appears. Return or `Add` writes one item, clears after success and keeps Title focused for rapid entry. The live keyboard inset keeps the field, hint and action visible on a long List; dismissal restores the normal safe-area inset without accumulating offset across repeated adds. Note is added later from Item details. Each commit is one `POST /v1/lists/:id/items`. |
 | **Check / uncheck** | Only in checkbox mode. Tapping writes intrinsic `done` or `open` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
 | **Reorder** | Every item shows a neutral trailing grip on touch layouts; long-pressing the row or grip starts the same drag. Pointer layouts reveal the grip on hover/focus. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
@@ -958,6 +958,18 @@ On the Lists index, each card uses one soft full-card collection tone from the d
 palette. Tone is stable presentation derived from `listId`, not stored user data, a template
 lookup, a category or status. A hash collision may repeat a tone, but sorting never recolours a
 List. All card facts, actions and accessibility labels remain identical regardless of colour.
+
+Variable-height index cards keep their intrinsic height and a fixed per-column gap. The client
+does not sort or height-balance Lists: the server sequence remains the visual and accessibility
+sequence, filling one contiguous column and then the other. Every Lists-index state shares the
+same safe-area-aware floating-navigation clearance, including archived Restore actions and the
+empty, error and loading states.
+
+The List header has fixed Back, Share and More action slots around one flexible leading-aligned
+title/edit slot. A long title may use two lines without moving those actions; a short title does
+not centre itself in the remaining asymmetrical space. Both the index and detail `⋯` sheets use
+full-width compact action rows with aligned icons and inline summaries. Only List settings has a
+chevron; Delete is a separated danger-ink row rather than a filled action.
 
 The Lists index pages access pointers that may resolve to active or archived Lists. Filtering
 is not pagination completion: if a page contributes no visible active rows but has a cursor,
@@ -983,6 +995,14 @@ One common row and item sheet ask a typed registry for enabled feature summaries
 editors. Empty configured features add no row metadata and no blank controls. Populated summaries
 stay to one concise line: `S2 E4`, `Page 143`, `8 ingredients` or the Place label. Generic
 Sub-items use configured words inside the item; labels do not activate integrations.
+
+The item sheet keeps Title and the top-aligned optional Note first, then groups only the exposed
+state and enabled typed features. A Sub-item group is headed by its configured section label,
+current count and compact `Add <singular>` action. Existing children collapse to grip, title,
+populated secondary value and More; tapping the copy edits it in place, while More opens compact
+Move up, Move down and Remove rows. The sheet ends with one divider-separated compact `Delete
+item` danger row and remains scrollable when maximum content or enlarged text exceeds its
+detent.
 
 ### 5.8 Default destinations
 
