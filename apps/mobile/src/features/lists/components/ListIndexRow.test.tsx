@@ -74,12 +74,26 @@ describe('the card renders the list, not its template', () => {
   });
 });
 
-describe('the count line and the progress bar', () => {
-  it('shows the checked half on a checkable collection', () => {
+describe('the caption and the progress bar', () => {
+  it('shows done-of-total once a checkable collection has been started', () => {
     mount(list());
 
-    expect(screen.getByText('12 items · 5 checked')).toBeTruthy();
+    expect(screen.getByText('5 of 12 done · today')).toBeTruthy();
     expect(screen.getByTestId('card-progress')).toBeTruthy();
+  });
+
+  it('shows a plain count and no bar on an unstarted checkable collection', () => {
+    mount(list({ doneCount: 0 }));
+
+    expect(screen.getByText('12 items · today')).toBeTruthy();
+    expect(screen.queryByTestId('card-progress')).toBeNull();
+  });
+
+  it('says Empty rather than counting zero items', () => {
+    mount(list({ itemCount: 0, doneCount: 0 }));
+
+    expect(screen.getByText('Empty · today')).toBeTruthy();
+    expect(screen.queryByTestId('card-progress')).toBeNull();
   });
 
   /**
@@ -98,23 +112,23 @@ describe('the count line and the progress bar', () => {
       }),
     );
 
-    expect(screen.getByText('12 items')).toBeTruthy();
-    expect(screen.queryByText(/checked/)).toBeNull();
+    expect(screen.getByText('12 items · today')).toBeTruthy();
+    expect(screen.queryByText(/done/)).toBeNull();
     expect(screen.queryByTestId('card-progress')).toBeNull();
   });
 });
 
-describe('the updated line', () => {
+describe('the freshness half of the caption', () => {
   it('renders lastItemActivityAt', () => {
     mount(list({ lastItemActivityAt: instant.parse('2026-08-26T09:00:00.000Z') }));
 
-    expect(screen.getByText('Updated today')).toBeTruthy();
+    expect(screen.getByText('5 of 12 done · today')).toBeTruthy();
   });
 
   /**
    * The P3-47 distinction, asserted as a difference rather than as a value. `updatedAt` moves
-   * on a rename and not on checking an item, so a card using it would say `Updated today`
-   * because someone renamed the list — backwards from what the line means.
+   * on a rename and not on checking an item, so a card using it would say `today` because
+   * someone renamed the list — backwards from what the line means.
    */
   it('does not move when only updatedAt does', () => {
     mount(
@@ -124,8 +138,8 @@ describe('the updated line', () => {
       }),
     );
 
-    expect(screen.getByText('Updated 6 days ago')).toBeTruthy();
-    expect(screen.queryByText('Updated today')).toBeNull();
+    expect(screen.getByText('5 of 12 done · 6 days ago')).toBeTruthy();
+    expect(screen.queryByText(/today/)).toBeNull();
   });
 });
 
@@ -141,9 +155,7 @@ describe('tapping the card', () => {
   it('carries the whole card as one accessible element', () => {
     mount(list());
 
-    // Three lines, one stop. Three nodes would be three stops each saying part of a sentence.
-    expect(
-      screen.getByLabelText('Groceries. 12 items · 5 checked. Updated today'),
-    ).toBeTruthy();
+    // Two lines, one stop. Separate nodes would be stops each saying part of a sentence.
+    expect(screen.getByLabelText('Groceries. 5 of 12 done · today')).toBeTruthy();
   });
 });

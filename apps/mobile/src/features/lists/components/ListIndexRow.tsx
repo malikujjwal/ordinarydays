@@ -11,13 +11,13 @@ import {
 } from '@od/ui';
 import { View } from 'react-native';
 import {
+  cardCountPart,
   checkedProgress,
   collectionToneForListId,
-  countLine,
   listTint,
   showsCheckedCount,
 } from '../model/listCard';
-import { updatedLine } from '../model/updatedLine';
+import { updatedPhrase } from '../model/updatedLine';
 
 /**
  * One Lists-index card (`design-system.md` §7.2).
@@ -26,11 +26,13 @@ import { updatedLine } from '../model/updatedLine';
  *  ┌──────────────────────────┐  radius.lg · e2 · surfaceRaised
  *  │  [icon squircle 44]      │  IconTile, behaviour tint
  *  │  Groceries               │  heading
- *  │  12 items · 5 checked    │  subhead — the checked half only when checkable
- *  │  ────────                │  ProgressBar (neutral), same gate
- *  │  Updated today           │  footnote, from lastItemActivityAt
+ *  │  ────────                │  ProgressBar, only once something is done
+ *  │  5 of 12 done · today    │  subhead — `Empty`/`N items` when nothing is
  *  └──────────────────────────┘
  * ```
+ *
+ * One caption, not three lines (founder, 2026-08-31): the count and the freshness join with
+ * a `·`, so every card is the same shape and the grid reads evenly.
  *
  * ## It renders the row, and never the catalogue
  *
@@ -76,12 +78,12 @@ export function ListIndexRow({
 }: ListIndexRowProps) {
   const theme = useTheme();
   const glyph = templateIcon(list.icon);
-  const count = countLine(list);
+  const count = cardCountPart(list);
   const progress = checkedProgress(list);
   const collectionTone = collectionToneForListId(list.listId);
   // `lastItemActivityAt`, never `updatedAt`. The distinction is the whole of P3-47 and the
   // reason the field exists; `model/updatedLine.ts` records why using the other reads backwards.
-  const updated = updatedLine(list.lastItemActivityAt, now, timezone);
+  const caption = `${count} · ${updatedPhrase(list.lastItemActivityAt, now, timezone)}`;
 
   return (
     <Card
@@ -97,16 +99,13 @@ export function ListIndexRow({
        * three lines are one thing to a screen reader, and three separate nodes would be three
        * stops that each say part of a sentence.
        */
-      accessibilityLabel={`${list.title}. ${count}. ${updated}`}
+      accessibilityLabel={`${list.title}. ${caption}`}
       {...(testID === undefined ? {} : { testID })}
     >
       <View style={{ gap: theme.space[2], opacity: dimmed ? 0.6 : 1 }}>
         <IconTile icon={glyph} tint={listTint()} treatment="collection" />
         <Text variant="heading" numberOfLines={2}>
           {list.title}
-        </Text>
-        <Text variant="subhead" color="textPrimary">
-          {count}
         </Text>
         {progress === undefined ? null : (
           <ProgressBar
@@ -116,8 +115,8 @@ export function ListIndexRow({
             {...(testID === undefined ? {} : { testID: `${testID}-progress` })}
           />
         )}
-        <Text variant="footnote" color="textPrimary">
-          {updated}
+        <Text variant="subhead" color="textSecondary">
+          {caption}
         </Text>
       </View>
     </Card>

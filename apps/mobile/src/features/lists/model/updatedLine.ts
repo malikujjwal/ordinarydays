@@ -33,7 +33,8 @@ import { differenceInCalendarDays, parseISO } from 'date-fns';
 /** How long ago is worth counting in days. Past a week the card gets coarser, not longer. */
 const WEEK = 7;
 
-export function updatedLine(
+/** The bare phrase — `today`, `3 days ago` — for the card's single `count · when` caption. */
+export function updatedPhrase(
   lastItemActivityAt: Instant,
   now: Instant,
   timezone: TimeZone,
@@ -43,15 +44,23 @@ export function updatedLine(
   const days = differenceInCalendarDays(parseISO(today), parseISO(then));
 
   // Clamped at zero: a clock that is behind the server's writes should read as `today`, not as
-  // a negative count rendered as `Updated -1 days ago`.
-  if (days <= 0) return 'Updated today';
-  if (days === 1) return 'Updated yesterday';
-  if (days < WEEK) return `Updated ${String(days)} days ago`;
-  if (days < 14) return 'Updated last week';
+  // a negative count rendered as `-1 days ago`.
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < WEEK) return `${String(days)} days ago`;
+  if (days < 14) return 'last week';
 
   const weeks = Math.floor(days / WEEK);
-  if (days < 60) return `Updated ${String(weeks)} weeks ago`;
+  if (days < 60) return `${String(weeks)} weeks ago`;
 
   const months = Math.floor(days / 30);
-  return months < 12 ? `Updated ${String(months)} months ago` : 'Updated over a year ago';
+  return months < 12 ? `${String(months)} months ago` : 'over a year ago';
+}
+
+export function updatedLine(
+  lastItemActivityAt: Instant,
+  now: Instant,
+  timezone: TimeZone,
+): string {
+  return `Updated ${updatedPhrase(lastItemActivityAt, now, timezone)}`;
 }

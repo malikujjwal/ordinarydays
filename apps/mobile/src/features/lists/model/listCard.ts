@@ -50,15 +50,31 @@ export function countLine(list: ListCardSource): string {
 }
 
 /**
+ * The card's caption count, in the founder's 2026-08-31 vocabulary: `Empty` for a list with
+ * nothing in it, `2 of 5 done` for a checkable list someone has started, and `5 items`
+ * otherwise — one short line, so every card reads the same shape whatever its mode.
+ */
+export function cardCountPart(list: ListCardSource): string {
+  if (list.itemCount === 0) return 'Empty';
+  const checked = Math.max(0, Math.min(list.itemCount, list.doneCount));
+  if (showsCheckedCount(list) && checked > 0) {
+    return `${String(checked)} of ${String(list.itemCount)} done`;
+  }
+  return `${String(list.itemCount)} ${list.itemCount === 1 ? 'item' : 'items'}`;
+}
+
+/**
  * The neutral progress bar's 0–1 value, gated on the same flag as the count.
  *
  * `undefined` means no bar at all, which is what §7.2 asks for — not a bar at zero. An empty
- * checkable list gets no bar either: a full-width empty track on a list with nothing in it
- * reads as progress that has not started rather than as a list with no items.
+ * checkable list gets no bar, and neither does one nobody has started: a full-width empty
+ * track reads as progress that stalled rather than as a list waiting to be used (founder,
+ * 2026-08-31 — the mock draws the bar only on the card that says `1 of 2 done`).
  */
 export function checkedProgress(list: ListCardSource): number | undefined {
   if (!showsCheckedCount(list) || list.itemCount <= 0) return undefined;
   const checked = Math.max(0, Math.min(list.itemCount, list.doneCount));
+  if (checked <= 0) return undefined;
   return Math.min(1, checked / list.itemCount);
 }
 
