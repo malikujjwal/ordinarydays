@@ -1,7 +1,7 @@
 import { ApiError } from '@od/shared/client';
 import type { List } from '@od/shared/types';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useIsOffline } from '@/hooks/usePendingIntents';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
@@ -27,23 +27,36 @@ import type { ListDetailView } from './useListDetail';
  * becomes an error state.
  */
 
-function requireDetailDependencies() {
+/**
+ * One identity per session, not per render. The `.bind` calls mint new functions, and hook
+ * dependencies compare by identity: a per-render bind reached `useFocusEffect` through
+ * `refetch` and re-ran the effect on every render, whose own `refetch()` then scheduled the
+ * next render — a self-sustaining render loop that starved every timer in the app
+ * (2026-08-31). Memoized on the session object so an account switch still rebuilds them.
+ */
+function useDetailDependencies() {
   const state = requireActiveNativeState();
-  if (
-    state.lists === undefined ||
-    state.listItems === undefined ||
-    state.sync.pullListDetail === undefined ||
-    state.sync.pullListItemPage === undefined
-  ) {
-    throw new Error('Native list item state is not ready.');
-  }
-  return {
-    state,
-    lists: state.lists,
-    items: state.listItems,
-    pullDetail: state.sync.pullListDetail.bind(state.sync),
-    pullPage: state.sync.pullListItemPage.bind(state.sync),
-  };
+  return useMemo(() => {
+    const lists = state.lists;
+    const items = state.listItems;
+    const pullListDetail = state.sync.pullListDetail;
+    const pullListItemPage = state.sync.pullListItemPage;
+    if (
+      lists === undefined ||
+      items === undefined ||
+      pullListDetail === undefined ||
+      pullListItemPage === undefined
+    ) {
+      throw new Error('Native list item state is not ready.');
+    }
+    return {
+      state,
+      lists,
+      items,
+      pullDetail: pullListDetail.bind(state.sync),
+      pullPage: pullListItemPage.bind(state.sync),
+    };
+  }, [state]);
 }
 
 function describe(error: unknown): { message: string; requestId?: string } {
@@ -71,7 +84,7 @@ const EMPTY: Committed = {
 };
 
 export function useListDetail(listId: string): ListDetailView {
-  const { state, lists, items, pullDetail, pullPage } = requireDetailDependencies();
+  const { state, lists, items, pullDetail, pullPage } = useDetailDependencies();
   const isOffline = useIsOffline();
   const [committed, setCommitted] = useState<Committed>(EMPTY);
   const [status, setStatus] = useState<'pending' | 'success' | 'error'>('pending');
