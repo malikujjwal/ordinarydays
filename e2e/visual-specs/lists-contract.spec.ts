@@ -166,12 +166,11 @@ test.describe('P3-33 production List contracts', () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openTabFrame(page, 'index-chrome', scheme);
       const card = page.getByRole('button', { name: /^Untitled list\./ });
+      const dialog = page.getByRole('dialog', { name: 'Untitled list actions' });
       await card.dispatchEvent('mousedown', { button: 0, buttons: 1 });
-      await page.waitForTimeout(600);
+      await expect(dialog).toBeVisible();
       await card.dispatchEvent('mouseup', { button: 0, buttons: 0 });
 
-      const dialog = page.getByRole('dialog', { name: 'Untitled list actions' });
-      await expect(dialog).toBeVisible();
       await expect(dialog.getByRole('button', { name: 'Archive' })).toBeVisible();
       await expect(dialog.getByRole('button', { name: 'Delete' })).toBeVisible();
       await expect(page).toHaveScreenshot(`index-card-actions-compact-${scheme}.png`);

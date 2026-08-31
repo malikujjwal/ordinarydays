@@ -143,20 +143,36 @@ test('renaming a linked item leaves its Plan title alone', async ({ page, reques
     .toBe(renamed);
   await expect(title).toBeFocused();
 
+  const itemPatchUrl = `${API}/v1/lists/${listId}/items/${itemId}`;
+  const itemWrites: unknown[] = [];
+  page.on('request', (sent) => {
+    if (sent.method() === 'PATCH' && sent.url() === itemPatchUrl) {
+      itemWrites.push(sent.postDataJSON());
+    }
+  });
+
   // An empty rename is rejected locally and never overwrites the last valid server value.
   await title.fill('   ');
   await expect(page.getByText('Title is required.')).toBeVisible();
-  await page.waitForTimeout(500);
-  expect((await readItem(request, listId, itemId)).title).toBe(renamed);
+  // Blur is the field's explicit pending-write flush boundary. If validation leaked a write,
+  // it would be captured before the following known-good Note response synchronises the test.
+  await title.blur();
   await title.fill(renamed);
 
   // The note is its own field and its own write; renaming did not touch it.
   const note = testId(page, 'item-sheet-note');
+  const noteSaved = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PATCH' && response.url() === itemPatchUrl,
+  );
   await note.fill('Ask for the counter');
+  expect((await noteSaved).ok()).toBe(true);
   await expect
     .poll(async () => (await readItem(request, listId, itemId)).note)
     .toBe('Ask for the counter');
   await expect(note).toBeFocused();
+  expect(itemWrites).toEqual([{ note: 'Ask for the counter' }]);
+  expect((await readItem(request, listId, itemId)).title).toBe(renamed);
 
   // ---- Open the Plan the item is linked to --------------------------------------
   /*
