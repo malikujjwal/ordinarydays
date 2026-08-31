@@ -1,6 +1,5 @@
+import { interactionTiming } from '@od/ui';
 import { useCallback, useEffect, useRef } from 'react';
-
-const DOUBLE_ACTIVATION_WINDOW_MS = 500;
 
 /**
  * Runs a List navigation after the press visual has returned to rest.
@@ -41,7 +40,7 @@ export function useSettledNavigation<T>(
         unlock.current = setTimeout(() => {
           pending.current = false;
           unlock.current = undefined;
-        }, DOUBLE_ACTIVATION_WINDOW_MS);
+        }, interactionTiming.duplicateActivationWindow);
       });
     },
     [navigate],

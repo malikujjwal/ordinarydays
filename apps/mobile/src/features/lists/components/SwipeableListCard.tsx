@@ -1,10 +1,11 @@
 import { Text, Touchable, useTheme } from '@od/ui';
-import { Fragment, useCallback, useRef, useState } from 'react';
+import { Fragment, useCallback, useState } from 'react';
 import { View } from 'react-native';
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { ReduceMotion, type SharedValue } from 'react-native-reanimated';
+import { useLongPressActivation } from '../hooks/useLongPressActivation';
 import {
   type ListSwipeAction,
   listAccessibilityActions,
@@ -99,23 +100,15 @@ export function SwipeableListCard({
 }: SwipeableListCardProps) {
   const accessibilityActions = listAccessibilityActions(actions);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const longPressed = useRef(false);
+  const activation = useLongPressActivation(rowProps.onPress);
 
   const openActions =
     actions.length === 0
       ? undefined
       : () => {
-          longPressed.current = true;
+          activation.markLongPress();
           setActionsOpen(true);
         };
-
-  const activate = () => {
-    if (longPressed.current) {
-      longPressed.current = false;
-      return;
-    }
-    rowProps.onPress();
-  };
 
   return (
     <Fragment>
@@ -148,7 +141,7 @@ export function SwipeableListCard({
         >
           <ListIndexRow
             {...rowProps}
-            onPress={activate}
+            onPress={activation.activate}
             {...(openActions === undefined ? {} : { onLongPress: openActions })}
           />
         </View>
@@ -157,7 +150,10 @@ export function SwipeableListCard({
         open={actionsOpen}
         listTitle={rowProps.list.title}
         actions={actions}
-        onClose={() => setActionsOpen(false)}
+        onClose={() => {
+          activation.dismissActions();
+          setActionsOpen(false);
+        }}
         onAction={onAction}
       />
     </Fragment>

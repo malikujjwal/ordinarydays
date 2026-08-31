@@ -114,7 +114,7 @@ export function ListItemRow({
       {checkable ? (
         <Checkbox
           checked={checked}
-          label={checkboxLabel(item)}
+          label={checkboxLabel(item.title, checked)}
           disabled={onToggleChecked === undefined}
           {...(onToggleChecked === undefined ? {} : { onChange: toggleChecked })}
           {...id('checkbox')}

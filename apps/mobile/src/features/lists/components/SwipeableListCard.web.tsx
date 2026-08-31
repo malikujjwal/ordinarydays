@@ -1,6 +1,7 @@
-import { Text, Touchable, useTheme } from '@od/ui';
+import { interactionTiming, Text, Touchable, useTheme } from '@od/ui';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
+import { useLongPressActivation } from '../hooks/useLongPressActivation';
 import { listAccessibilityActions } from '../model/listSwipeActions';
 import { ListCardActionsSheet } from './ListCardActionsSheet';
 import { ListIndexRow, type ListIndexRowProps } from './ListIndexRow';
@@ -32,25 +33,18 @@ export function SwipeableListCard({
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const longPressed = useRef(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visible = actions.length > 0 && (hovered || focusWithin);
   const accessibilityActions = listAccessibilityActions(actions);
+  const activation = useLongPressActivation(rowProps.onPress);
 
   const openActions =
     actions.length === 0
       ? undefined
       : () => {
-          longPressed.current = true;
+          activation.markLongPress();
           setActionsOpen(true);
         };
-  const activate = () => {
-    if (longPressed.current) {
-      longPressed.current = false;
-      return;
-    }
-    rowProps.onPress();
-  };
   const cancelLongPress = useCallback(() => {
     if (longPressTimer.current !== undefined) clearTimeout(longPressTimer.current);
     longPressTimer.current = undefined;
@@ -69,7 +63,7 @@ export function SwipeableListCard({
         onPointerDown={() => {
           if (openActions === undefined) return;
           cancelLongPress();
-          longPressTimer.current = setTimeout(openActions, 500);
+          longPressTimer.current = setTimeout(openActions, interactionTiming.longPress);
         }}
         onPointerUp={cancelLongPress}
         onPointerCancel={cancelLongPress}
@@ -86,7 +80,7 @@ export function SwipeableListCard({
       >
         <ListIndexRow
           {...(rowProps as ListIndexRowProps)}
-          onPress={activate}
+          onPress={activation.activate}
           {...(openActions === undefined ? {} : { onLongPress: openActions })}
         />
         {visible ? (
@@ -127,7 +121,10 @@ export function SwipeableListCard({
         open={actionsOpen}
         listTitle={rowProps.list.title}
         actions={actions}
-        onClose={() => setActionsOpen(false)}
+        onClose={() => {
+          activation.dismissActions();
+          setActionsOpen(false);
+        }}
         onAction={onAction}
       />
     </Fragment>

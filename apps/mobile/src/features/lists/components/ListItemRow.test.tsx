@@ -46,7 +46,7 @@ function mount(
 describe('the canonical list item shell', () => {
   it('maps only done to a checked checkbox and writes the requested next value', () => {
     const handlers = mount(item({ state: 'done' }));
-    const checkbox = screen.getByTestId('row-checkbox');
+    const checkbox = screen.getByRole('checkbox', { name: 'The Bear, checked' });
 
     expect(checkbox.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(checkbox);
@@ -55,7 +55,7 @@ describe('the canonical list item shell', () => {
 
   it('turns two rapid presses into check then uncheck before the parent rerenders', () => {
     const handlers = mount(item({ state: 'open' }));
-    const checkbox = screen.getByTestId('row-checkbox');
+    const checkbox = screen.getByRole('checkbox', { name: 'The Bear, not checked' });
 
     fireEvent.click(checkbox);
     fireEvent.click(checkbox);
@@ -77,7 +77,7 @@ describe('the canonical list item shell', () => {
     );
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, not checked' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, not checked' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, checked' }));
     rendered.rerender(
       <ThemeProvider scheme="light">
         <ListItemRow
@@ -88,7 +88,7 @@ describe('the canonical list item shell', () => {
         />
       </ThemeProvider>,
     );
-    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, checked' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, not checked' }));
 
     expect(onToggleChecked.mock.calls).toEqual([[true], [false], [true]]);
   });
@@ -112,8 +112,12 @@ describe('the canonical list item shell', () => {
       </ThemeProvider>,
     );
 
-    fireEvent.click(screen.getByTestId('row-checkbox'));
-    expect(screen.getByTestId('row-checkbox').getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, not checked' }));
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'The Bear, checked' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
 
     // The individual write acknowledges, then Uncheck all changes the committed row again
     // before the original promise has retired from the optimistic toggle queue.
@@ -140,16 +144,22 @@ describe('the canonical list item shell', () => {
 
     await act(async () => settle?.(true));
 
-    expect(screen.getByTestId('row-checkbox').getAttribute('aria-checked')).toBe('false');
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'The Bear, not checked' })
+        .getAttribute('aria-checked'),
+    ).toBe('false');
   });
 
   it.each(['open', 'active'] as const)(
     'renders %s unchecked in checkbox mode',
     (state) => {
       mount(item({ state }));
-      expect(screen.getByTestId('row-checkbox').getAttribute('aria-checked')).toBe(
-        'false',
-      );
+      expect(
+        screen
+          .getByRole('checkbox', { name: 'The Bear, not checked' })
+          .getAttribute('aria-checked'),
+      ).toBe('false');
     },
   );
 

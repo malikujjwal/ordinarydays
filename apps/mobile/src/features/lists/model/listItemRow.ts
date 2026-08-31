@@ -69,6 +69,6 @@ export function rowBodyLabel(list: RowList, item: ListItemView): string {
     .join(', ');
 }
 
-export function checkboxLabel(item: ListItemView): string {
-  return `${item.title}, ${checkboxChecked(item) ? 'checked' : 'not checked'}`;
+export function checkboxLabel(title: string, checked: boolean): string {
+  return `${title}, ${checked ? 'checked' : 'not checked'}`;
 }

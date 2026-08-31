@@ -210,6 +210,19 @@ describe('ToastHost', () => {
     expect(screen.getByRole('alert').getAttribute('aria-live')).toBe('polite');
   });
 
+  it('renders the store-owned expiry without scheduling a second lifecycle timer', () => {
+    vi.useFakeTimers();
+    useToast.getState().show({ message: 'Saved' });
+    expect(vi.getTimerCount()).toBe(1);
+
+    const rendered = wrap(<ToastHost />);
+    expect(vi.getTimerCount()).toBe(1);
+    rendered.unmount();
+    expect(vi.getTimerCount()).toBe(1);
+
+    vi.useRealTimers();
+  });
+
   /** One at a time: a new toast commits the previous rather than queueing behind it. */
   it('replaces the previous message rather than stacking', () => {
     useToast.getState().show({ message: 'first' });
@@ -249,12 +262,12 @@ describe('ToastHost', () => {
     vi.useRealTimers();
   });
 
-  it('commits at the absolute deadline when part of the offer window has elapsed', () => {
+  it('commits at the producer-clamped deadline when part of the offer has elapsed', () => {
     vi.useFakeTimers();
     const onCommit = vi.fn();
     useToast.getState().showUndo({
       message: 'List archived',
-      duration: 6000,
+      duration: 1500,
       undoExpiresAt: '2026-08-27T14:00:01.500Z' as Instant,
       onUndo: vi.fn(),
       onCommit,

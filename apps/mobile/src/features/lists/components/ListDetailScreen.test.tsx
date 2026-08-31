@@ -285,11 +285,15 @@ describe('the configuration-driven List detail', () => {
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    expect(screen.getByText('Start with one item')).toBeTruthy();
+    expect(screen.getByText('Add a task.')).toBeTruthy();
+    expect(screen.getByTestId('list-detail-empty-icon')).toBeTruthy();
     expect(
       screen
         .getByTestId('list-detail-body')
         .contains(screen.getByTestId('list-contextual-add')),
     ).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Add item' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 

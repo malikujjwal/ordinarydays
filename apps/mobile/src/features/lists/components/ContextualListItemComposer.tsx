@@ -1,4 +1,4 @@
-import { Button, Close, IconButton, Text, useTheme } from '@od/ui';
+import { Button, Card, Close, IconButton, Text, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { ListItemComposerFields } from '@/components/ListItemComposerFields';
@@ -45,55 +45,48 @@ export function ContextualListItemComposer({
   if (!open) return null;
 
   return (
-    <View
-      testID="list-contextual-add"
-      style={{
-        gap: theme.space[5],
-        padding: theme.space[5],
-        borderRadius: theme.radius.lg,
-        backgroundColor: theme.colors.surfaceRaised,
-        ...theme.elevation('e1'),
-      }}
-    >
-      <View
-        style={{
-          minHeight: theme.layout.hitTarget,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: theme.space[3],
-        }}
-      >
-        <View style={{ flex: 1 }}>
-          <Text variant="heading" accessibilityRole="header">
-            {`Add item to ${listName}`}
-          </Text>
+    <Card elevation="e1" padding={5} testID="list-contextual-add">
+      <View style={{ gap: theme.space[5] }}>
+        <View
+          style={{
+            minHeight: theme.layout.hitTarget,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: theme.space[3],
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text variant="heading" accessibilityRole="header">
+              {`Add item to ${listName}`}
+            </Text>
+          </View>
+          <IconButton icon={Close} label="Close" onPress={onClose} />
         </View>
-        <IconButton icon={Close} label="Close" onPress={onClose} />
-      </View>
-      <ListItemComposerFields
-        title={title}
-        note={note}
-        {...(errorMessage === undefined ? {} : { errorMessage })}
-        {...(errorRequestId === undefined ? {} : { errorRequestId })}
-        autoFocusTitle
-        onTitleChange={setTitle}
-        onNoteChange={setNote}
-        onSubmitTitle={() => void commit()}
-        titleTestID="list-contextual-add-title"
-        noteTestID="list-contextual-add-note"
-      />
-      <View>
-        <Button
-          label={action}
-          fullWidth
-          size="lg"
-          disabled={disabled}
-          loading={isAdding}
-          onPress={() => void commit()}
-          testID="list-contextual-add-commit"
+        <ListItemComposerFields
+          title={title}
+          note={note}
+          {...(errorMessage === undefined ? {} : { errorMessage })}
+          {...(errorRequestId === undefined ? {} : { errorRequestId })}
+          autoFocusTitle
+          onTitleChange={setTitle}
+          onNoteChange={setNote}
+          onSubmitTitle={() => void commit()}
+          titleTestID="list-contextual-add-title"
+          noteTestID="list-contextual-add-note"
         />
+        <View>
+          <Button
+            label={action}
+            fullWidth
+            size="lg"
+            disabled={disabled}
+            loading={isAdding}
+            onPress={() => void commit()}
+            testID="list-contextual-add-commit"
+          />
+        </View>
       </View>
-    </View>
+    </Card>
   );
 }

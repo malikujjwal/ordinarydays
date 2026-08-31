@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Field,
   IconButton,
+  interactionTiming,
   MoreHorizontal,
   Plus,
   Row,
@@ -60,8 +61,6 @@ export interface ItemSheetProps {
 }
 
 const STATES: readonly ListItemState[] = ['open', 'active', 'done'];
-const FIELD_SAVE_DELAY_MS = 350;
-
 function useDebouncedAction() {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pending = useRef<(() => void) | undefined>(undefined);
@@ -80,7 +79,7 @@ function useDebouncedAction() {
     (action: () => void) => {
       pending.current = action;
       cancel();
-      timer.current = setTimeout(flush, FIELD_SAVE_DELAY_MS);
+      timer.current = setTimeout(flush, interactionTiming.fieldAutosave);
     },
     [cancel, flush],
   );

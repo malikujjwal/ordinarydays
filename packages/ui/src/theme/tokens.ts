@@ -143,6 +143,18 @@ export const motion = {
 export type DurationToken = keyof typeof motion.duration;
 
 /**
+ * Input-recognition and persistence quiet periods are not animation durations.
+ *
+ * They stay active under Reduce Motion: shortening one would turn a hold into a tap, allow a
+ * physical double activation through, or increase writes while somebody is still typing.
+ */
+export const interactionTiming = {
+  fieldAutosave: 350,
+  longPress: 500,
+  duplicateActivationWindow: 500,
+} as const;
+
+/**
  * Accessibility requirements, encoded as values so they are the default rather than
  * something to remember (`design-system.md` §9).
  */

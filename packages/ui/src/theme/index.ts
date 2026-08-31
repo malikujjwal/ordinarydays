@@ -35,6 +35,7 @@ export {
   type Breakpoint,
   breakpoints,
   type DurationToken,
+  interactionTiming,
   layout,
   motion,
   type RadiusToken,

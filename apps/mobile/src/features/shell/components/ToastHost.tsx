@@ -46,16 +46,6 @@ export function ToastHost() {
   }, [clock, current, dismiss, undo]);
 
   useEffect(() => {
-    if (current === undefined || remainingDuration === undefined) return;
-    if (remainingDuration <= 0) {
-      dismiss(current.id);
-      return;
-    }
-    const timer = setTimeout(() => dismiss(current.id), remainingDuration);
-    return () => clearTimeout(timer);
-  }, [current, dismiss, remainingDuration]);
-
-  useEffect(() => {
     if (Platform.OS !== 'web' || current?.kind !== 'undo') return;
     const predecessor = document.activeElement;
     const onKeyDown = (event: KeyboardEvent) => {

@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 export interface ListEmptyStateProps {
   body: string;
-  onAdd: () => void;
+  onAdd?: () => void;
 }
 
 /** The one-action empty List state from §7.2b. */
@@ -27,9 +27,11 @@ export function ListEmptyState({ body, onAdd }: ListEmptyStateProps) {
       <Text variant="subhead" color="textSecondary" align="center">
         {body}
       </Text>
-      <View style={{ paddingTop: theme.space[2] }}>
-        <Button label="Add item" variant="primary" onPress={onAdd} />
-      </View>
+      {onAdd === undefined ? null : (
+        <View style={{ paddingTop: theme.space[2] }}>
+          <Button label="Add item" variant="primary" onPress={onAdd} />
+        </View>
+      )}
     </View>
   );
 }

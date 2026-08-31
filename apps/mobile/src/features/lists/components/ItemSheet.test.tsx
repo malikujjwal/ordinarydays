@@ -55,10 +55,10 @@ describe('the canonical item editor shell', () => {
     const subject = item({ note: 'Pilot' });
     mount(subject);
 
-    fireEvent.change(screen.getByTestId('item-sheet-title'), {
+    fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'The Bear season 4' },
     });
-    fireEvent.change(screen.getByTestId('item-sheet-note'), {
+    fireEvent.change(screen.getByLabelText('Note'), {
       target: { value: 'Watch on Thursday' },
     });
     act(() => vi.advanceTimersByTime(400));
@@ -72,7 +72,7 @@ describe('the canonical item editor shell', () => {
     const subject = item();
     mount(subject);
 
-    fireEvent.change(screen.getByTestId('item-sheet-title'), {
+    fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: '   ' },
     });
     act(() => vi.advanceTimersByTime(400));
@@ -90,7 +90,7 @@ describe('the canonical item editor shell', () => {
     const onClose = vi.fn();
     mount(subject, list(), onClose);
 
-    fireEvent.change(screen.getByTestId('item-sheet-title'), {
+    fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'The Bear finale' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -421,7 +421,7 @@ describe('the canonical item editor shell', () => {
   it('does not erase a dirty field when another field refreshes from the server', () => {
     const subjectList = list();
     const mounted = mount(item(), subjectList);
-    fireEvent.change(screen.getByTestId('item-sheet-note'), {
+    fireEvent.change(screen.getByLabelText('Note'), {
       target: { value: 'Draft note' },
     });
 

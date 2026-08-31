@@ -290,7 +290,7 @@ describe('row actions', () => {
     setView({ lists: [row] });
     const { onOpenList, onArchive, onDelete, onRestore } = mount();
 
-    fireEvent.click(screen.getByTestId(`list-card-${row.listId}`));
+    fireEvent.click(screen.getByRole('button', { name: /^List A01\./ }));
 
     // Navigation waits one frame so the pressed collection tone has returned to rest before
     // the route transition snapshots this screen.
@@ -309,7 +309,7 @@ describe('row actions', () => {
     setView({ lists: [row] });
     const { onOpenList } = mount();
 
-    const card = screen.getByTestId(`list-card-${row.listId}`);
+    const card = screen.getByRole('button', { name: /^List A01\./ });
     fireEvent.click(card);
 
     expect(onOpenList).not.toHaveBeenCalled();
@@ -333,7 +333,7 @@ describe('row actions', () => {
     const row = list(idAt(0), { title: 'Groceries' });
     setView({ lists: [row] });
     const { onArchive } = mount();
-    const card = screen.getByTestId(`list-card-${row.listId}`);
+    const card = screen.getByRole('button', { name: /^Groceries\./ });
 
     fireEvent.pointerDown(card, { pointerId: 1, pointerType: 'touch', button: 0 });
     act(() => vi.advanceTimersByTime(500));

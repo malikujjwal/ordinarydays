@@ -132,10 +132,14 @@ export function ListDetailSurface({
           <View testID="list-detail-loading">
             <Skeleton shape="row" count={5} />
           </View>
-        ) : showEmpty && list !== undefined && addEditor === undefined ? (
-          <ListEmptyState body={list.emptyStateCopy} onAdd={onAdd} />
         ) : showEmpty && list !== undefined ? (
-          addEditor
+          <View style={{ gap: theme.space[5] }}>
+            <ListEmptyState
+              body={list.emptyStateCopy}
+              {...(addEditor === undefined ? { onAdd } : {})}
+            />
+            {addEditor}
+          </View>
         ) : list === undefined ? null : isGroupedStageList(list) ? (
           <View style={{ gap: theme.space[3] }}>
             <ListOverview count={countLine(list)} />

@@ -178,7 +178,7 @@ export interface ToastProps {
   requestId?: string;
   action?: { label: string; onPress: () => void };
   tone?: 'neutral' | 'error';
-  /** The two product-owned toast windows. Server deadlines are enforced by the host. */
+  /** The two product-owned toast windows. Producers clamp shorter server deadlines. */
   duration?: 6000 | 10000;
   onDismiss?: () => void;
   testID?: string;

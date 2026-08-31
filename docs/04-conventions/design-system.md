@@ -363,6 +363,17 @@ export const motion = {
 | Screen transition | platform default, capped at `max` | platform |
 | Swipe action tracking | none — it follows the finger | — |
 
+Recognition and persistence delays are not motion and remain unchanged under Reduce Motion:
+
+| Delay | Token | Value | Reason |
+| --- | --- | --- | --- |
+| List-item field autosave | `interactionTiming.fieldAutosave` | 350 ms | Persist shortly after typing pauses without requiring blur or writing on every keystroke. |
+| Custom pointer long press | `interactionTiming.longPress` | 500 ms | Match the platform hold gesture before opening the List-card actions sheet. |
+| Duplicate navigation guard | `interactionTiming.duplicateActivationWindow` | 500 ms | Coalesce one physical double activation while allowing the next deliberate tap. |
+
+These delays do not animate a visual property. Reducing them would change input recognition,
+write frequency or activation semantics rather than reduce motion.
+
 > **Sheet present / dismiss is unimplemented on web** — recorded 2026-08-27 (P3-26). The
 > animation was never this component's: it was React Native Web's `Modal` fading its own
 > container, at RNW's 250 ms rather than `slow`, and outside `useMotion()`'s reach. That
@@ -564,7 +575,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger` — filled destructive commit \| `dangerGhost` — low-emphasis destructive text action), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth`, `flush` (a ghost variant whose label aligns with the text column — §0) | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
 | `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `tone` (`neutral` \| `accent`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |
-| `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `surfaceTone?` (`neutral` \| `collectionRose` \| `collectionSand` \| `collectionBlue` \| `collectionOlive`), `onPress?` | default, pressed, focused. Collection tones resolve through §5.2a's paired surfaces; callers never pass raw colours. |
+| `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `surfaceTone?` (`neutral` \| `collectionRose` \| `collectionSand` \| `collectionBlue` \| `collectionOlive`), `onPress?`, `onLongPress?` | default, pressed, focused. Collection tones resolve through §5.2a's paired surfaces; callers never pass raw colours. A long press is a secondary path on the same target and never replaces equivalent named accessibility actions owned by the feature wrapper. |
 | `IconTile` | `icon`, `tint` (a type or template accent), `size` (44) | The squircle on plan and list cards. Non-interactive; `accessibilityElementsHidden`. |
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
@@ -581,7 +592,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
 | `SectionHeader` | `title`, `count?`, `action?`, `icon?`, `appearance` (`plain` \| `tinted`) | `plain` is caption type, uppercase and wide-tracked. `tinted` is the compact icon/title/count boundary for grouped content. Both expose the title and count as one heading name. |
 | `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. A product anatomy may supply one compact, non-interactive `IconTile`; that is a semantic marker, not an illustration. |
-| `Toast` | `message`, `requestId?` (small, selectable API correlation id), `action?` (`{ label, onPress }`), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. The primitive accepts only the two product windows; the shell host may shorten visibility to a positive remaining server deadline, capped at the applicable window, and suppresses an expired or zero-length offer. |
+| `Toast` | `message`, `requestId?` (small, selectable API correlation id), `action?` (`{ label, onPress }`), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. Producers shorten a positive remaining server deadline before presenting; the singleton toast store owns the one expiry timer so screen or presenter lifecycle cannot extend it. The shell host suppresses an expired offer and refuses Undo at or beyond its absolute deadline. |
 | `Skeleton` | `shape` (`row` \| `card` \| `text`), `count` | Shimmer off under Reduce Motion. Minimum display 200 ms. |
 
 Two rules for all of them: every interactive primitive has a minimum 44 × 44 hit target
