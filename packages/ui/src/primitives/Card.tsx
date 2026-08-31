@@ -14,7 +14,7 @@ import { Touchable } from './Touchable';
  * and a lighter surface plus a hairline in dark, so this component **never branches on the
  * scheme**.
  */
-export interface CardProps {
+interface CardSurfaceProps {
   children: React.ReactNode;
   elevation?: Extract<ElevationToken, 'e1' | 'e2' | 'e3'>;
   radius?: 'lg' | 'xl';
@@ -27,9 +27,6 @@ export interface CardProps {
    * 44 pt (`interaction-contract.md` §2); the card stops paying for it twice.
    */
   paddingBottom?: SpaceToken;
-  onPress?: () => void;
-  /** Optional secondary gesture; the caller must expose the same actions accessibly. */
-  onLongPress?: () => void;
   /** The UP NEXT card's mulberry-tinted shadow. The one surface that gets it. */
   hero?: boolean;
   /** Shared collection fill; callers choose a semantic tone, never a raw colour. */
@@ -37,6 +34,28 @@ export interface CardProps {
   accessibilityLabel?: string;
   testID?: string;
 }
+
+type CardInteractionProps =
+  | {
+      onPress?: undefined;
+      onLongPress?: never;
+      delayLongPress?: never;
+    }
+  | {
+      onPress: () => void;
+      onLongPress?: undefined;
+      delayLongPress?: never;
+    }
+  | {
+      onPress: () => void;
+      /** Secondary gesture; the caller must expose the same actions accessibly. */
+      onLongPress: () => void;
+      /** Recognition delay for the shared Pressable path. */
+      delayLongPress?: number;
+    };
+
+/** A Card is either a passive surface or one valid interactive target. */
+export type CardProps = CardSurfaceProps & CardInteractionProps;
 
 export function Card({
   children,
@@ -46,6 +65,7 @@ export function Card({
   paddingBottom,
   onPress,
   onLongPress,
+  delayLongPress,
   hero = false,
   surfaceTone = 'neutral',
   accessibilityLabel,
@@ -96,6 +116,7 @@ export function Card({
       {...(accessibilityLabel === undefined ? {} : { accessibilityLabel })}
       onPress={onPress}
       {...(onLongPress === undefined ? {} : { onLongPress })}
+      {...(delayLongPress === undefined ? {} : { delayLongPress })}
       testID={testID}
       style={style}
     >

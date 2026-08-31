@@ -165,18 +165,10 @@ test.describe('P3-33 production List contracts', () => {
     }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openTabFrame(page, 'index-chrome', scheme);
-      const card = page.locator('[data-testid^="swipeable-list-"]').first();
-      await card.dispatchEvent('pointerdown', {
-        pointerId: 1,
-        pointerType: 'touch',
-        button: 0,
-      });
-      await page.waitForTimeout(520);
-      await card.dispatchEvent('pointerup', {
-        pointerId: 1,
-        pointerType: 'touch',
-        button: 0,
-      });
+      const card = page.getByRole('button', { name: /^Untitled list\./ });
+      await card.dispatchEvent('mousedown', { button: 0, buttons: 1 });
+      await page.waitForTimeout(600);
+      await card.dispatchEvent('mouseup', { button: 0, buttons: 0 });
 
       const dialog = page.getByRole('dialog', { name: 'Untitled list actions' });
       await expect(dialog).toBeVisible();

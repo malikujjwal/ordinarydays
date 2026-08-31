@@ -289,7 +289,8 @@ describe('the pinned named write', () => {
   it('does not render a global List-item commit', () => {
     mount(undefined, { onCreateList: vi.fn() });
     tapChoice('Add list');
-    expect(screen.queryByTestId('compose-save')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Choose a list' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Add to / })).toBeNull();
   });
 
   /** Pinned, so it is reachable without scrolling the form it commits. */

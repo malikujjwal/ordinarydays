@@ -1,6 +1,14 @@
 import type { Instant, TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
-import { Card, IconTile, ProgressBar, Text, templateIcon, useTheme } from '@od/ui';
+import {
+  Card,
+  IconTile,
+  interactionTiming,
+  ProgressBar,
+  Text,
+  templateIcon,
+  useTheme,
+} from '@od/ui';
 import { View } from 'react-native';
 import {
   checkedProgress,
@@ -81,7 +89,9 @@ export function ListIndexRow({
       radius="lg"
       surfaceTone={collectionTone}
       onPress={onPress}
-      {...(onLongPress === undefined ? {} : { onLongPress })}
+      {...(onLongPress === undefined
+        ? {}
+        : { onLongPress, delayLongPress: interactionTiming.longPress })}
       /**
        * One accessible element carrying the whole card, per `interaction-contract.md` §6: the
        * three lines are one thing to a screen reader, and three separate nodes would be three

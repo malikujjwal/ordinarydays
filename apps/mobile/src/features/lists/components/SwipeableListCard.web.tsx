@@ -1,5 +1,5 @@
-import { interactionTiming, Text, Touchable, useTheme } from '@od/ui';
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Text, Touchable, useTheme } from '@od/ui';
+import { Fragment, useState } from 'react';
 import { View } from 'react-native';
 import { useLongPressActivation } from '../hooks/useLongPressActivation';
 import { listAccessibilityActions } from '../model/listSwipeActions';
@@ -33,7 +33,6 @@ export function SwipeableListCard({
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visible = actions.length > 0 && (hovered || focusWithin);
   const accessibilityActions = listAccessibilityActions(actions);
   const activation = useLongPressActivation(rowProps.onPress);
@@ -45,28 +44,12 @@ export function SwipeableListCard({
           activation.markLongPress();
           setActionsOpen(true);
         };
-  const cancelLongPress = useCallback(() => {
-    if (longPressTimer.current !== undefined) clearTimeout(longPressTimer.current);
-    longPressTimer.current = undefined;
-  }, []);
-  useEffect(() => cancelLongPress, [cancelLongPress]);
-
   return (
     <Fragment>
       <View
         testID={`swipeable-list-${rowProps.list.listId}`}
         onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => {
-          setHovered(false);
-          cancelLongPress();
-        }}
-        onPointerDown={() => {
-          if (openActions === undefined) return;
-          cancelLongPress();
-          longPressTimer.current = setTimeout(openActions, interactionTiming.longPress);
-        }}
-        onPointerUp={cancelLongPress}
-        onPointerCancel={cancelLongPress}
+        onPointerLeave={() => setHovered(false)}
         // React Native Web projects these onto the DOM node, so tabbing to any control inside
         // the card reveals the row's own actions rather than hiding them under the focus ring.
         onFocus={() => setFocusWithin(true)}

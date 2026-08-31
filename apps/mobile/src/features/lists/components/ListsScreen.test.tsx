@@ -73,6 +73,11 @@ function revealActions(listId: string) {
   fireEvent.pointerEnter(screen.getByTestId(`swipeable-list-${listId}`));
 }
 
+function showArchived() {
+  fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /^Show archived,/ }));
+}
+
 function mount(handlers: Partial<Parameters<typeof ListsScreen>[0]> = {}) {
   const props = {
     now: NOW,
@@ -167,8 +172,7 @@ describe('the archived filter', () => {
     expect(screen.getByText('Active')).toBeTruthy();
     expect(screen.queryByText('Old')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('lists-menu'));
-    fireEvent.click(screen.getByTestId('lists-toggle-archived'));
+    showArchived();
 
     expect(screen.getByText('Old')).toBeTruthy();
     // A separate de-emphasised group, not mixed into the active ones.
@@ -184,8 +188,7 @@ describe('the archived filter', () => {
     });
     mount();
 
-    fireEvent.click(screen.getByTestId('lists-menu'));
-    fireEvent.click(screen.getByTestId('lists-toggle-archived'));
+    showArchived();
 
     const archived = screen.getByTestId('lists-archived-section');
     expect(getComputedStyle(archived).borderTopWidth).toBe('1px');
@@ -197,8 +200,7 @@ describe('the archived filter', () => {
     setView({ lists: [archived] });
     const { onRestore } = mount();
 
-    fireEvent.click(screen.getByTestId('lists-menu'));
-    fireEvent.click(screen.getByTestId('lists-toggle-archived'));
+    showArchived();
     fireEvent.click(screen.getByTestId(`list-restore-${archived.listId}`));
 
     expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ title: 'Old' }));
@@ -273,8 +275,7 @@ describe('the auto-drain rule', () => {
     await waitFor(() => expect(loadMore).toHaveBeenCalled());
     const beforeToggle = loadMore.mock.calls.length;
 
-    fireEvent.click(screen.getByTestId('lists-menu'));
-    fireEvent.click(screen.getByTestId('lists-toggle-archived'));
+    showArchived();
 
     // The rows were already there; the toggle rendered them without another request.
     expect(screen.getByText('Old 0')).toBeTruthy();
@@ -326,25 +327,6 @@ describe('row actions', () => {
     fireEvent.click(card);
     act(() => vi.advanceTimersByTime(17));
     expect(onOpenList).toHaveBeenCalledTimes(2);
-  });
-
-  it('opens the card actions from a long press instead of requiring a swipe', () => {
-    vi.useFakeTimers();
-    const row = list(idAt(0), { title: 'Groceries' });
-    setView({ lists: [row] });
-    const { onArchive } = mount();
-    const card = screen.getByRole('button', { name: /^Groceries\./ });
-
-    fireEvent.pointerDown(card, { pointerId: 1, pointerType: 'touch', button: 0 });
-    act(() => vi.advanceTimersByTime(500));
-    fireEvent.pointerUp(card, { pointerId: 1, pointerType: 'touch', button: 0 });
-
-    expect(screen.getByRole('dialog', { name: 'Groceries actions' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    expect(onArchive).toHaveBeenCalledExactlyOnceWith(row);
   });
 
   it('archives from the swipe action without a dialog', () => {
@@ -437,8 +419,7 @@ describe('row actions', () => {
     setView({ lists: [row] });
     mount();
 
-    fireEvent.click(screen.getByTestId('lists-menu'));
-    fireEvent.click(screen.getByTestId('lists-toggle-archived'));
+    showArchived();
     revealActions(row.listId);
 
     expect(screen.queryByTestId('list-swipe-archive')).toBeNull();

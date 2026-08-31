@@ -86,7 +86,7 @@ test('global Add creates a List and contextual Add creates its List item', async
 
   // The ordinary catalogue opens unselected; no global List-item destination exists.
   await expect(testId(page, 'list-style-chooser')).toBeVisible();
-  await expect(testId(page, 'new-list-title')).toHaveCount(0);
+  await expect(page.getByLabel(/^List name,/)).toHaveCount(0);
   await expect(testId(page, 'list-destination-chooser')).toHaveCount(0);
   await expect(testId(page, 'compose-form')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^List item,/ })).toHaveCount(0);
@@ -94,7 +94,7 @@ test('global Add creates a List and contextual Add creates its List item', async
   await expectNoSeriousA11yViolations(page, '/compose (Add list catalogue)');
 
   await testId(page, 'list-style-blank').click();
-  await testId(page, 'new-list-title').fill(quickList);
+  await page.getByLabel(/^List name,/).fill(quickList);
   await testId(page, 'new-list-create').click();
   await expect(testId(page, 'lists-screen')).toBeVisible();
   await expect(page.getByText(quickList)).toBeVisible();
@@ -114,10 +114,10 @@ test('global Add creates a List and contextual Add creates its List item', async
   await expect(testId(page, 'list-contextual-add')).toBeVisible();
   await expect(testId(page, 'list-detail')).toBeAttached();
   await expect(testId(page, 'list-destination-chooser')).toHaveCount(0);
-  const field = testId(page, 'list-contextual-add-title');
+  const field = page.getByLabel('Title');
   await expect(field).toBeVisible();
   await field.fill(title);
-  await testId(page, 'list-contextual-add-note').fill('Buy two');
+  await page.getByLabel('Note').fill('Buy two');
   await page.getByRole('button', { name: `Add to ${groceries}` }).click();
 
   // The words land in the fixed contextual destination.
