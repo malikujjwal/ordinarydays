@@ -144,6 +144,7 @@ describe('request deadline', () => {
 
     const error = await request.catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ requestId: REQUEST_ID });
     expect(isRetryable(error)).toBe(true);
     expect(attempts).toBe(1);
     timeout.mockRestore();
@@ -202,6 +203,7 @@ describe('request deadline', () => {
 
       const error = await request;
       expect(error).toBeInstanceOf(NetworkError);
+      expect(error).toMatchObject({ requestId: REQUEST_ID });
       expect(isRetryable(error)).toBe(true);
       expect(attempts).toBe(1);
     } finally {
@@ -232,6 +234,7 @@ describe('request deadline', () => {
         new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
       ]);
       expect(error).toBeInstanceOf(NetworkError);
+      expect(error).toMatchObject({ requestId: REQUEST_ID });
       expect(isRetryable(error)).toBe(true);
       expect(calls).toHaveLength(0);
     } finally {
@@ -291,6 +294,7 @@ describe('request deadline', () => {
         new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
       ]);
       expect(error).toBeInstanceOf(NetworkError);
+      expect(error).toMatchObject({ requestId: REQUEST_ID });
       expect(isRetryable(error)).toBe(true);
       expect(calls).toHaveLength(1);
     } finally {
@@ -645,6 +649,7 @@ describe('error mapping', () => {
     const error = await client.request(health()).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ requestId: REQUEST_ID });
   });
 
   it('lets an abort surface as itself rather than as a network fault', async () => {

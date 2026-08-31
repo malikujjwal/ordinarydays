@@ -124,6 +124,8 @@ export class NetworkError extends Error {
     // `override` because `Error` already declares `cause`. Keeping the name rather than
     // inventing one means a logger that knows about `Error.cause` finds it.
     override readonly cause: unknown,
+    /** Client-generated correlation id when this error came from an HTTP request. */
+    readonly requestId?: string,
   ) {
     super(message);
     this.name = 'NetworkError';
@@ -201,7 +203,10 @@ function withinRequestDeadline<T>(
  * matters on that path: a successful request must not leave a ten-second timer or listeners
  * attached to a caller-owned signal.
  */
-function managedRequestSignal(caller: AbortSignal | undefined): ManagedRequestSignal {
+function managedRequestSignal(
+  caller: AbortSignal | undefined,
+  requestId: string,
+): ManagedRequestSignal {
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let deadlineExpired = false;
   let deadline: AbortSignal;
@@ -226,7 +231,11 @@ function managedRequestSignal(caller: AbortSignal | undefined): ManagedRequestSi
     // the deadline created in this function is a transient transport failure.
     if (caller?.aborted === true) return requestAbortReason(caller);
     if (deadlineExpired || deadline.aborted) {
-      return new NetworkError('The request timed out.', cause ?? deadline.reason);
+      return new NetworkError(
+        'The request timed out.',
+        cause ?? deadline.reason,
+        requestId,
+      );
     }
     return requestAbortReason(caller ?? deadline);
   };
@@ -476,7 +485,7 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
         // An abort is the caller's own decision and must surface as itself, not as a network
         // fault the client will then retry three times.
         if (cause instanceof Error && cause.name === 'AbortError') throw cause;
-        throw new NetworkError('The request could not be sent.', cause);
+        throw new NetworkError('The request could not be sent.', cause, requestId);
       }
     };
 
@@ -533,7 +542,7 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
       // inbound `X-Request-Id` — so a retry and its original correlate in the logs rather
       // than looking like two unrelated requests.
       const requestId = newRequestId();
-      const managedSignal = managedRequestSignal(options.signal);
+      const managedSignal = managedRequestSignal(options.signal, requestId);
       const { signal } = managedSignal;
       const boundedOptions: RequestOptions<S> = { ...options, signal };
       const retryable = isRetryableRequest(

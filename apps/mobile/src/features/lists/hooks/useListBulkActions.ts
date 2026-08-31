@@ -2,6 +2,7 @@ import {
   ApiError,
   clearCheckedListItems,
   isRetryable,
+  NetworkError,
   uncheckAllListItems,
   undoListOperation,
 } from '@od/shared/client';
@@ -71,15 +72,17 @@ function bulkFailureToast(
   retry: () => void,
 ): ToastMessage {
   const retryable = isRetryable(error);
+  const requestId =
+    error instanceof ApiError || error instanceof NetworkError
+      ? error.requestId
+      : undefined;
   return {
     message:
       error instanceof ApiError && !retryable
         ? error.message
         : BULK_FAILURE_MESSAGES[action][phase],
     tone: 'error',
-    ...(error instanceof ApiError && error.requestId !== undefined
-      ? { requestId: error.requestId }
-      : {}),
+    ...(requestId === undefined ? {} : { requestId }),
     ...(retryable ? { action: { label: 'Retry', onPress: retry } } : {}),
   };
 }

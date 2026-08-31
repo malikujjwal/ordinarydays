@@ -183,9 +183,11 @@ describe('List bulk actions', () => {
   );
 
   it('offers Retry for a client deadline failure from either bulk action', async () => {
-    calls.clear.mockRejectedValue(new NetworkError('The request timed out.', undefined));
+    calls.clear.mockRejectedValue(
+      new NetworkError('The request timed out.', undefined, 'req-clear-timeout'),
+    );
     calls.uncheck.mockRejectedValue(
-      new NetworkError('The request timed out.', undefined),
+      new NetworkError('The request timed out.', undefined, 'req-uncheck-timeout'),
     );
     const mounted = setup();
 
@@ -194,6 +196,7 @@ describe('List bulk actions', () => {
     });
     expect(useToast.getState().current).toMatchObject({
       message: "Couldn't clear checked items.",
+      requestId: 'req-clear-timeout',
       action: { label: 'Retry' },
     });
 
@@ -202,6 +205,7 @@ describe('List bulk actions', () => {
     });
     expect(useToast.getState().current).toMatchObject({
       message: "Couldn't uncheck items.",
+      requestId: 'req-uncheck-timeout',
       action: { label: 'Retry' },
     });
   });
