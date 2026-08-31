@@ -1,5 +1,5 @@
 import type { ListItemPlanState, ListItemView } from '@od/shared/types';
-import { Checkbox, Chip, Text, Touchable, useTheme } from '@od/ui';
+import { Checkbox, Chip, Text, Touchable, type as typeScale, useTheme } from '@od/ui';
 import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import {
@@ -98,6 +98,14 @@ export function ListItemRow({
   const stateLine = mayShowPlanStateLine(viewerPlan) ? planStateLine : undefined;
   const id = (suffix: string) =>
     testID === undefined ? {} : { testID: `${testID}-${suffix}` };
+  const dimmed = checkable && checked;
+  /**
+   * The Today row grammar, adopted whole (founder, 2026-08-31): no divider — spacing does
+   * the job the border used to do — `bodyStrong` titles over `footnote` metadata, and the
+   * 44 pt leading control lifted so its 24 pt glyph centres on the title's first line
+   * rather than on the row. The lift derivation is `AgendaRow`'s, from the same two tokens.
+   */
+  const leadingLift = (theme.layout.hitTarget - typeScale.bodyStrong.lineHeight) / 2;
 
   return (
     <View
@@ -105,24 +113,29 @@ export function ListItemRow({
       style={{
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: theme.space[3],
-        paddingVertical: theme.space[3],
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.borderSubtle,
+        paddingTop: theme.space[4],
+        paddingBottom: theme.space[4] + theme.space[1],
       }}
     >
       {checkable ? (
-        <Checkbox
-          checked={checked}
-          label={checkboxLabel(item.title, checked)}
-          disabled={onToggleChecked === undefined}
-          {...(onToggleChecked === undefined ? {} : { onChange: toggleChecked })}
-          {...id('checkbox')}
-        />
+        <View style={{ marginTop: -leadingLift }}>
+          <Checkbox
+            checked={checked}
+            label={checkboxLabel(item.title, checked)}
+            disabled={onToggleChecked === undefined}
+            {...(onToggleChecked === undefined ? {} : { onChange: toggleChecked })}
+            {...id('checkbox')}
+          />
+        </View>
       ) : null}
       <View
         pointerEvents="box-none"
-        style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          gap: theme.space[2],
+          paddingLeft: checkable ? theme.space[2] : 0,
+        }}
       >
         <Touchable
           accessibilityRole="button"
@@ -130,7 +143,11 @@ export function ListItemRow({
           disabled={onOpen === undefined}
           {...(onOpen === undefined ? {} : { onPress: onOpen })}
           {...id('body')}
-          style={{ alignItems: 'flex-start', alignSelf: 'stretch' }}
+          style={{
+            alignItems: 'flex-start',
+            alignSelf: 'stretch',
+            justifyContent: 'flex-start',
+          }}
         >
           <View
             style={{
@@ -141,18 +158,22 @@ export function ListItemRow({
             }}
           >
             <Text
-              variant="body"
-              color={checkable && checked ? 'textSecondary' : 'textPrimary'}
-              struck={checkable && checked}
+              variant="bodyStrong"
+              color={dimmed ? 'textMuted' : 'textPrimary'}
+              struck={dimmed}
             >
               {item.title}
             </Text>
             {item.sourceLabel === undefined ? null : (
-              <Text variant="subhead" color="textMuted">{`— ${item.sourceLabel}`}</Text>
+              <Text variant="footnote" color="textMuted">{`— ${item.sourceLabel}`}</Text>
             )}
           </View>
           {item.note === undefined ? null : (
-            <Text variant="subhead" color="textSecondary" numberOfLines={1}>
+            <Text
+              variant="footnote"
+              color={dimmed ? 'textMuted' : 'textSecondary'}
+              numberOfLines={1}
+            >
               {item.note}
             </Text>
           )}
@@ -175,12 +196,12 @@ export function ListItemRow({
           >
             {stage === undefined ? null : <Chip label={stage} {...id('state')} />}
             {progress === undefined ? null : (
-              <Text variant="subhead" color="textSecondary">
+              <Text variant="footnote" color="textMuted">
                 {progress}
               </Text>
             )}
             {subItems === undefined ? null : (
-              <Text variant="subhead" color="textSecondary">
+              <Text variant="footnote" color="textMuted">
                 {subItems}
               </Text>
             )}
@@ -196,7 +217,7 @@ export function ListItemRow({
             {...id('location')}
             style={{ alignItems: 'flex-start', alignSelf: 'stretch' }}
           >
-            <Text variant="subhead" color="textSecondary">
+            <Text variant="footnote" color="textSecondary">
               {place.address ?? place.label}
             </Text>
           </Touchable>

@@ -351,20 +351,21 @@ describe('the configuration-driven List detail', () => {
 
     expect(screen.getByTestId('list-detail')).toBeTruthy();
     expect(screen.queryByRole('dialog', { name: 'Add item to Launch' })).toBeNull();
-    expect(screen.getByText('Add item to Launch')).toBeTruthy();
     expect(
       screen
         .getByTestId('list-detail-body')
         .contains(screen.getByTestId('list-contextual-add')),
     ).toBe(true);
-    expect(screen.getByLabelText('Title')).toBeTruthy();
-    expect(screen.getByLabelText('Note')).toBeTruthy();
-    expect(screen.getByText('Optional')).toBeTruthy();
-    expect(screen.queryByText('Add to')).toBeNull();
+    // One rapid-entry row: the accessible name survives `hideLabel`, the note stays with
+    // the item sheet, and Return-adds-another is stated rather than discovered.
+    expect(screen.getByLabelText('Add item to Launch')).toBeTruthy();
+    expect(screen.getByText('Return adds another')).toBeTruthy();
+    expect(screen.queryByLabelText('Note')).toBeNull();
     expect(screen.queryByText('New list')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Add to Launch' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Done adding' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
   });
 
   it('opens the same contextual composer from the sole empty-state action', () => {
@@ -384,31 +385,26 @@ describe('the configuration-driven List detail', () => {
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 
-  it('persists Title and optional Note as exactly one item, then refreshes once', async () => {
+  it('persists a typed title as exactly one item, then refreshes once', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Book venue' } });
-    fireEvent.change(screen.getByLabelText('Note'), {
-      target: { value: 'Ask about the courtyard' },
+    fireEvent.change(screen.getByLabelText('Add item to Launch'), {
+      target: { value: 'Book venue' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Add to Launch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
     await waitFor(() => {
       expect(mocks.add).toHaveBeenCalledOnce();
       expect(mocks.view.refresh).toHaveBeenCalledOnce();
     });
-    expect(mocks.add).toHaveBeenCalledWith(LIST.listId, {
-      title: 'Book venue',
-      note: 'Ask about the courtyard',
-    });
-    expect(screen.getByLabelText('Title')).toHaveProperty('value', '');
-    expect(screen.getByLabelText('Note')).toHaveProperty('value', '');
+    expect(mocks.add).toHaveBeenCalledWith(LIST.listId, { title: 'Book venue' });
+    expect(screen.getByLabelText('Add item to Launch')).toHaveProperty('value', '');
   });
 
   it('submits with Return and keeps Title focused for rapid entry', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
-    const title = screen.getByLabelText('Title');
+    const title = screen.getByLabelText('Add item to Launch');
     fireEvent.change(title, { target: { value: 'Pack chargers' } });
     title.focus();
     fireEvent.keyDown(title, { key: 'Enter' });
@@ -419,26 +415,26 @@ describe('the configuration-driven List detail', () => {
     expect(title).toHaveProperty('value', '');
   });
 
-  it('retains both fields and shows the contracted error when the write fails', async () => {
+  it('retains the typed title and shows the contracted error when the write fails', async () => {
     mocks.addFailure.message = "Couldn't save this.";
     mocks.addFailure.requestId = 'req_context_add_9';
     mocks.add.mockResolvedValue(undefined);
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Book venue' } });
-    fireEvent.change(screen.getByLabelText('Note'), {
-      target: { value: 'Ask about the courtyard' },
+    fireEvent.change(screen.getByLabelText('Add item to Launch'), {
+      target: { value: 'Book venue' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Add to Launch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
     await waitFor(() => expect(mocks.add).toHaveBeenCalledOnce());
-    expect(screen.getByLabelText('Title')).toHaveProperty('value', 'Book venue');
-    expect(screen.getByLabelText('Note')).toHaveProperty(
+    expect(screen.getByLabelText('Add item to Launch')).toHaveProperty(
       'value',
-      'Ask about the courtyard',
+      'Book venue',
     );
-    expect(screen.getByRole('alert').textContent).toContain("Couldn't save this.");
-    expect(screen.getByRole('alert').textContent).toContain('req_context_add_9');
+    expect(screen.getByText("Couldn't save this.")).toBeTruthy();
+    expect(screen.getByTestId('list-contextual-add-request-id').textContent).toBe(
+      'req_context_add_9',
+    );
     expect(mocks.view.refresh).not.toHaveBeenCalled();
   });
 
