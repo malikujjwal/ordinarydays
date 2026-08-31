@@ -153,6 +153,35 @@ describe('List bulk actions', () => {
     });
   });
 
+  it.each([
+    ['forbidden', 403],
+    ['not_found', 404],
+    ['rate_limited', 429],
+  ] as const)(
+    'preserves the contracted %s API message without offering Retry',
+    async (code, status) => {
+      calls.clear.mockRejectedValue(
+        new ApiError(
+          code,
+          `Contracted ${String(status)} message.`,
+          status,
+          'req-contract',
+        ),
+      );
+      const mounted = setup();
+
+      await act(async () => {
+        await mounted.result.current.clearDone(LIST_ID);
+      });
+
+      expect(useToast.getState().current).toMatchObject({
+        message: `Contracted ${String(status)} message.`,
+        requestId: 'req-contract',
+      });
+      expect(useToast.getState().current).not.toHaveProperty('action');
+    },
+  );
+
   it('offers Retry for a client deadline failure from either bulk action', async () => {
     calls.clear.mockRejectedValue(new NetworkError('The request timed out.', undefined));
     calls.uncheck.mockRejectedValue(
@@ -207,6 +236,28 @@ describe('List bulk actions', () => {
       LIST_ID,
       'bulk-key',
     );
+  });
+
+  it('starts the same optimistic lifecycle again while a Retry is pending', async () => {
+    const lifecycle = { onStarted: vi.fn(), onRejected: vi.fn() };
+    calls.clear
+      .mockRejectedValueOnce(new ApiError('internal', 'Unavailable.', 503, 'req-bulk'))
+      .mockReturnValueOnce(new Promise(() => undefined));
+    const mounted = setup();
+
+    await act(async () => {
+      await mounted.result.current.clearDone(LIST_ID, lifecycle);
+    });
+    expect(lifecycle.onStarted).toHaveBeenCalledOnce();
+    expect(lifecycle.onRejected).toHaveBeenCalledOnce();
+    const failure = useToast.getState().current;
+    if (failure?.kind !== 'message') throw new Error('Expected a retry message');
+
+    act(() => failure.action?.onPress());
+
+    await waitFor(() => expect(calls.clear).toHaveBeenCalledTimes(2));
+    expect(lifecycle.onStarted).toHaveBeenCalledTimes(2);
+    expect(lifecycle.onRejected).toHaveBeenCalledOnce();
   });
 
   it('shortens the Clear checked offer to the server deadline after a slow response', async () => {

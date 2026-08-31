@@ -197,11 +197,22 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByRole('button', { name: 'Uncheck all (1)' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Clear checked (1)' }));
 
-    expect(mocks.clearDone).toHaveBeenCalledWith(LIST.listId);
+    expect(mocks.clearDone).toHaveBeenCalledWith(
+      LIST.listId,
+      expect.objectContaining({
+        onStarted: expect.any(Function),
+        onRejected: expect.any(Function),
+      }),
+    );
   });
 
   it('removes the checked rows immediately while Clear checked is in flight', () => {
-    mocks.clearDone.mockReturnValue(new Promise(() => undefined));
+    mocks.clearDone.mockImplementation(
+      (_listId, lifecycle: { onStarted: () => void }) => {
+        lifecycle.onStarted();
+        return new Promise(() => undefined);
+      },
+    );
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
@@ -212,13 +223,24 @@ describe('the configuration-driven List detail', () => {
   });
 
   it('unchecks the checked rows immediately while Uncheck all is in flight', () => {
-    mocks.uncheckAll.mockReturnValue(new Promise(() => undefined));
+    mocks.uncheckAll.mockImplementation(
+      (_listId, lifecycle: { onStarted: () => void }) => {
+        lifecycle.onStarted();
+        return new Promise(() => undefined);
+      },
+    );
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Uncheck all (1)' }));
 
-    expect(mocks.uncheckAll).toHaveBeenCalledWith(LIST.listId);
+    expect(mocks.uncheckAll).toHaveBeenCalledWith(
+      LIST.listId,
+      expect.objectContaining({
+        onStarted: expect.any(Function),
+        onRejected: expect.any(Function),
+      }),
+    );
     expect(
       screen
         .getByRole('checkbox', { name: 'Ship, not checked' })
@@ -227,7 +249,15 @@ describe('the configuration-driven List detail', () => {
   });
 
   it('restores the checked rows when Clear checked is rejected', async () => {
-    mocks.clearDone.mockResolvedValue(false);
+    mocks.clearDone.mockImplementation(
+      (_listId, lifecycle: { onStarted: () => void; onRejected: () => void }) => {
+        lifecycle.onStarted();
+        return Promise.resolve().then(() => {
+          lifecycle.onRejected();
+          return false;
+        });
+      },
+    );
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
@@ -236,6 +266,27 @@ describe('the configuration-driven List detail', () => {
     expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Ship' })).toBeTruthy(),
+    );
+  });
+
+  it('reapplies the Clear checked preview when its Retry starts', async () => {
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear checked (1)' }));
+    const lifecycle = mocks.clearDone.mock.calls[0]?.[1] as
+      | { onStarted: () => void; onRejected: () => void }
+      | undefined;
+    if (lifecycle === undefined) throw new Error('Expected bulk lifecycle callbacks');
+
+    lifecycle.onRejected();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Ship' })).toBeTruthy(),
+    );
+    lifecycle.onStarted();
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull(),
     );
   });
 

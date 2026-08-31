@@ -40,45 +40,47 @@ import {
  * purpose and one screen owning both numbers is how they drift.
  */
 export interface ListBulkActions {
-  clearDone: (listId: string) => Promise<boolean>;
-  uncheckAll: (listId: string) => Promise<boolean>;
+  clearDone: (listId: string, lifecycle?: BulkActionLifecycle) => Promise<boolean>;
+  uncheckAll: (listId: string, lifecycle?: BulkActionLifecycle) => Promise<boolean>;
   archive: (list: List) => void;
   remove: (list: List) => void;
 }
 
-function bulkFailureToast(
-  error: unknown,
-  action: 'clear-done' | 'uncheck-all',
-  retry: () => void,
-): ToastMessage {
-  return {
-    message:
-      action === 'clear-done'
-        ? "Couldn't clear checked items."
-        : "Couldn't uncheck items.",
-    tone: 'error',
-    ...(error instanceof ApiError && error.requestId !== undefined
-      ? { requestId: error.requestId }
-      : {}),
-    ...(isRetryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
-  };
+type BulkAction = 'clear-done' | 'uncheck-all';
+
+export interface BulkActionLifecycle {
+  readonly onStarted: () => void;
+  readonly onRejected: () => void;
 }
 
-function bulkUndoFailureToast(
+const BULK_FAILURE_MESSAGES: Record<BulkAction, Record<'forward' | 'undo', string>> = {
+  'clear-done': {
+    forward: "Couldn't clear checked items.",
+    undo: "Couldn't undo clearing checked items.",
+  },
+  'uncheck-all': {
+    forward: "Couldn't uncheck items.",
+    undo: "Couldn't undo unchecking items.",
+  },
+};
+
+function bulkFailureToast(
   error: unknown,
-  action: 'clear-done' | 'uncheck-all',
+  action: BulkAction,
+  phase: 'forward' | 'undo',
   retry: () => void,
 ): ToastMessage {
+  const retryable = isRetryable(error);
   return {
     message:
-      action === 'clear-done'
-        ? "Couldn't undo clearing checked items."
-        : "Couldn't undo unchecking items.",
+      error instanceof ApiError && !retryable
+        ? error.message
+        : BULK_FAILURE_MESSAGES[action][phase],
     tone: 'error',
     ...(error instanceof ApiError && error.requestId !== undefined
       ? { requestId: error.requestId }
       : {}),
-    ...(isRetryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
+    ...(retryable ? { action: { label: 'Retry', onPress: retry } } : {}),
   };
 }
 
@@ -92,9 +94,11 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
   const run = useCallback(
     async (
       listId: string,
-      action: 'clear-done' | 'uncheck-all',
+      action: BulkAction,
       idempotencyKey: string,
+      lifecycle?: BulkActionLifecycle,
     ): Promise<boolean> => {
+      lifecycle?.onStarted();
       // The accepted action owns the singleton toast slot before this request can settle.
       dismiss();
       const call = action === 'clear-done' ? clearCheckedListItems : uncheckAllListItems;
@@ -125,7 +129,7 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
                   )
                     .then(() => onChanged())
                     .catch((error: unknown) =>
-                      show(bulkUndoFailureToast(error, action, undo)),
+                      show(bulkFailureToast(error, action, 'undo', undo)),
                     );
                 };
                 undo();
@@ -136,9 +140,10 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
         }
         return true;
       } catch (error) {
+        lifecycle?.onRejected();
         show(
-          bulkFailureToast(error, action, () => {
-            void run(listId, action, idempotencyKey);
+          bulkFailureToast(error, action, 'forward', () => {
+            void run(listId, action, idempotencyKey, lifecycle);
           }),
         );
         return false;
@@ -148,8 +153,9 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
   );
 
   return {
-    clearDone: (listId) => run(listId, 'clear-done', randomUUID()),
-    uncheckAll: (listId) => run(listId, 'uncheck-all', randomUUID()),
+    clearDone: (listId, lifecycle) => run(listId, 'clear-done', randomUUID(), lifecycle),
+    uncheckAll: (listId, lifecycle) =>
+      run(listId, 'uncheck-all', randomUUID(), lifecycle),
     archive: onArchive,
     remove: onDelete,
   };

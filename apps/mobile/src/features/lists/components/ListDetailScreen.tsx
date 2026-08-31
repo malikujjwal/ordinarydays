@@ -181,10 +181,16 @@ export function ListDetailScreen({
       view.items.filter((item) => item.state === 'done').map((item) => item.itemId),
     );
     if (itemIds.size === 0) return;
+    const preview = { action, itemIds };
+    const lifecycle = {
+      onStarted: () => setPendingBulk(preview),
+      onRejected: () => setPendingBulk(undefined),
+    };
     setMenuOpen(false);
-    setPendingBulk({ action, itemIds });
     const request =
-      action === 'clear-done' ? bulk.clearDone(listId) : bulk.uncheckAll(listId);
+      action === 'clear-done'
+        ? bulk.clearDone(listId, lifecycle)
+        : bulk.uncheckAll(listId, lifecycle);
     void Promise.resolve(request).then((accepted) => {
       if (!accepted) setPendingBulk(undefined);
     });
