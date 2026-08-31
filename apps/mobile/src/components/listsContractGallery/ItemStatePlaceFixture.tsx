@@ -1,4 +1,4 @@
-import type { List, ListItemView } from '@od/shared/types';
+﻿import type { List, ListItemView } from '@od/shared/types';
 import { View } from 'react-native';
 import { ItemSheet } from '@/features/lists/components/ItemSheet';
 import { ListDetailSurface } from '@/features/lists/components/ListDetailSurface';
@@ -35,7 +35,6 @@ export function ItemStatePlaceFixture() {
         itemCount={items.length}
         complete
         status="success"
-        isOffline={false}
         onBack={() => {}}
         onOpenMenu={() => {}}
         onRename={() => {}}

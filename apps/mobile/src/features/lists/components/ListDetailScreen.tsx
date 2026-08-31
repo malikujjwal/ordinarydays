@@ -204,8 +204,6 @@ export function ListDetailScreen({
         itemCount={presentedItemCount}
         complete={view.complete}
         status={view.status}
-        isOffline={view.isOffline}
-        {...(view.message === undefined ? {} : { message: view.message })}
         {...(view.requestId === undefined ? {} : { requestId: view.requestId })}
         onBack={onBack}
         onOpenMenu={() => setMenuOpen(true)}

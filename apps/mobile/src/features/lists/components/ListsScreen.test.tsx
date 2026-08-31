@@ -436,8 +436,11 @@ describe('loading and failure', () => {
     expect(screen.queryByText('No lists yet')).toBeNull();
   });
 
-  /** §5.3: with cached rows the content stays and the failure is a line above it. */
-  it('keeps rows on a failed refresh', () => {
+  /**
+   * §5.3 amended (founder, 2026-08-31): cached rows stay, and the failure lives in the
+   * header's connectivity glyph rather than as an inline line that reflows the grid.
+   */
+  it('keeps rows on a failed refresh without an inline failure line', () => {
     setView({
       lists: [list(idAt(0))],
       message: 'Network down',
@@ -446,8 +449,8 @@ describe('loading and failure', () => {
     mount();
 
     expect(screen.getByText(`List ${idAt(0)}`)).toBeTruthy();
-    expect(screen.getByTestId('lists-refresh-failed')).toBeTruthy();
-    expect(screen.getByText('req_refresh_failure')).toBeTruthy();
+    expect(screen.queryByTestId('lists-refresh-failed')).toBeNull();
+    expect(screen.queryByText('req_refresh_failure')).toBeNull();
   });
 
   it('becomes an error screen when there is nothing to keep', () => {

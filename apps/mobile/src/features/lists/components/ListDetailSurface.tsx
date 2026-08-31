@@ -21,8 +21,6 @@ export interface ListDetailSurfaceProps {
   itemCount: number;
   complete: boolean;
   status: 'pending' | 'success' | 'error';
-  isOffline: boolean;
-  message?: string;
   requestId?: string;
   onBack: () => void;
   onOpenMenu: () => void;
@@ -46,8 +44,6 @@ export function ListDetailSurface({
   itemCount,
   complete,
   status,
-  isOffline,
-  message,
   requestId,
   onBack,
   onOpenMenu,
@@ -98,12 +94,11 @@ export function ListDetailSurface({
       testID="list-detail"
     >
       <View style={{ gap: theme.space[3] }}>
-        {isOffline ? (
-          <Text variant="footnote" color="textSecondary">
-            You're offline. Showing saved data.
-          </Text>
-        ) : null}
-
+        {/*
+         * Connectivity and refresh state live in the header's cloud glyph (founder,
+         * 2026-08-31): inline lines here reflowed the rows every time they appeared. Only
+         * the empty-failure class keeps the body — there is nothing else to show.
+         */}
         {status === 'error' && items.length === 0 ? (
           <View testID="list-detail-error">
             <EmptyState
@@ -122,11 +117,7 @@ export function ListDetailSurface({
               </Text>
             )}
           </View>
-        ) : message === undefined ? null : (
-          <Text variant="footnote" color="danger" testID="list-detail-refresh-failed">
-            Couldn't refresh. Try again.
-          </Text>
-        )}
+        ) : null}
 
         {status === 'pending' ? (
           <View testID="list-detail-loading">

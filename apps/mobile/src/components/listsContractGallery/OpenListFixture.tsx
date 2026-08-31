@@ -1,4 +1,4 @@
-import type { List, ListItemView } from '@od/shared/types';
+﻿import type { List, ListItemView } from '@od/shared/types';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { ContextualListItemComposer } from '@/features/lists/components/ContextualListItemComposer';
@@ -66,7 +66,6 @@ export function OpenListFixture({ state }: OpenListFixtureProps) {
         itemCount={visibleList.itemCount}
         complete
         status="success"
-        isOffline={false}
         onBack={() => {}}
         onOpenMenu={() => {}}
         onRename={() => {}}

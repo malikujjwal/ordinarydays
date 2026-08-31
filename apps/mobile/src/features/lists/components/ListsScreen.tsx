@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { ConnectivityStatus } from '@/components/ConnectivityStatus';
 import { TabScreen } from '@/components/TabScreen';
 import { useLists } from '../hooks/useLists';
 import { useSettledNavigation } from '../hooks/useSettledNavigation';
@@ -210,6 +211,7 @@ export function ListsScreen({
       title="Lists"
       testID="lists-screen"
       bleedBody
+      titleAccessory={<ConnectivityStatus />}
       headerAction={
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[3] }}>
           {/* `+ New list` is a text action in the header, not a FAB (§7.2). */}
@@ -237,16 +239,11 @@ export function ListsScreen({
         scrollEventThrottle={16}
         testID="lists-scroll"
       >
-        {view.isOffline ? (
-          <Text variant="footnote" color="textSecondary">
-            You're offline. Showing saved data.
-          </Text>
-        ) : null}
-
         {/*
-          §5.3's two failure classes, kept apart. With rows on screen the cached content stays
-          and the failure is a line above it; with nothing to keep, the screen itself is the
-          error and offers `Try again`.
+          Connectivity and refresh state live in the header's cloud glyph (founder,
+          2026-08-31): an inline line above the rows reflowed the whole screen every time it
+          appeared. With nothing to keep, the screen itself is still the error and offers
+          `Try again` — §5.3's empty-failure class is unchanged.
         */}
         {view.status === 'error' && view.lists.length === 0 ? (
           <View testID="lists-error">
@@ -266,29 +263,7 @@ export function ListsScreen({
               </Text>
             )}
           </View>
-        ) : view.message === undefined ? null : (
-          <View testID="lists-refresh-failed">
-            <Touchable
-              accessibilityRole="button"
-              accessibilityLabel="Couldn't refresh. Try again."
-              onPress={view.refetch}
-            >
-              <Text variant="footnote" color="danger">
-                Couldn't refresh. Try again.
-              </Text>
-            </Touchable>
-            {view.requestId === undefined ? null : (
-              <Text
-                variant="footnote"
-                color="textSecondary"
-                selectable
-                testID="lists-refresh-request-id"
-              >
-                {view.requestId}
-              </Text>
-            )}
-          </View>
-        )}
+        ) : null}
 
         {view.status === 'pending' ? (
           <View testID="lists-loading" style={{ paddingTop: theme.space[5] }}>

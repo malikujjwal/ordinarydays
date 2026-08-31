@@ -13,6 +13,7 @@ import {
 } from '@od/ui';
 import { useEffect, useRef, useState } from 'react';
 import { Platform, Share, View } from 'react-native';
+import { ConnectivityStatus } from '@/components/ConnectivityStatus';
 
 /**
  * The list detail header, and the **only** place a list is renamed
@@ -122,6 +123,12 @@ export function ListHeader({
           />
         </View>
         <View style={{ flex: 1, minWidth: 0 }} />
+        {/*
+         * The Today header's cloud glyph, in the same quiet role (founder, 2026-08-31):
+         * offline, syncing and synced live here rather than as inline lines that reflow
+         * the rows beneath. It renders nothing at all when there is nothing to say.
+         */}
+        <ConnectivityStatus />
         {list === undefined ? null : (
           <>
             <View
