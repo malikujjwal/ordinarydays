@@ -8,11 +8,9 @@ import type { List } from '@od/shared/types';
  * | List you own | `Archive` · `Delete` |
  * | List you are a member of | `Leave` |
  *
- * There is **no swipe right and no long press**. The index is not reorderable: `ListIndex`
- * stores `role` and `addedAt` only (ADR-042), so there is no rank a drag could write to, and
- * §3.2 says so in as many words. §P3-25 still describes §3.2 as offering a long-press
- * `Reorder lists`; that sentence is stale — §3.2 was corrected — and it is raised in the pull
- * request rather than built.
+ * There is **no swipe right and no index reorder**. A mobile long press opens an action sheet
+ * containing these same actions; it never starts a drag. `ListIndex` stores no rank (ADR-042),
+ * so there is no manual order for that gesture to write.
  *
  * ## Why `role` is a parameter and not read from the list
  *

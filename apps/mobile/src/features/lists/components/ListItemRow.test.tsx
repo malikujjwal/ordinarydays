@@ -1,6 +1,6 @@
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ListItemRow } from './ListItemRow';
 
@@ -91,6 +91,56 @@ describe('the canonical list item shell', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'The Bear, checked' }));
 
     expect(onToggleChecked.mock.calls).toEqual([[true], [false], [true]]);
+  });
+
+  it('adopts a bulk uncheck that lands while an earlier checkbox write is settling', async () => {
+    let settle: ((accepted: boolean) => void) | undefined;
+    const onToggleChecked = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const rendered = render(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list()}
+          item={item({ state: 'open' })}
+          onToggleChecked={onToggleChecked}
+          testID="row"
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId('row-checkbox'));
+    expect(screen.getByTestId('row-checkbox').getAttribute('aria-checked')).toBe('true');
+
+    // The individual write acknowledges, then Uncheck all changes the committed row again
+    // before the original promise has retired from the optimistic toggle queue.
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list()}
+          item={item({ state: 'done' })}
+          onToggleChecked={onToggleChecked}
+          testID="row"
+        />
+      </ThemeProvider>,
+    );
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list()}
+          item={item({ state: 'open' })}
+          onToggleChecked={onToggleChecked}
+          testID="row"
+        />
+      </ThemeProvider>,
+    );
+
+    await act(async () => settle?.(true));
+
+    expect(screen.getByTestId('row-checkbox').getAttribute('aria-checked')).toBe('false');
   });
 
   it.each(['open', 'active'] as const)(

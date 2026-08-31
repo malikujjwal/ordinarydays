@@ -12,7 +12,7 @@ import { type ObjectChoice, objectChoices } from '@/features/compose/model/targe
  *
  * Task                        ›
  * Plan                        ›
- * List item                   ›
+ * Add list                    ›
  * ```
  *
  * ## What this component does not have, and why each absence is load-bearing

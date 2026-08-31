@@ -137,20 +137,26 @@ test('renaming a linked item leaves its Plan title alone', async ({ page, reques
   const title = testId(page, 'item-sheet-title');
   await expect(title).toHaveValue(original);
   await title.fill(renamed);
-  // One PATCH per field, on blur. No Save button exists to press.
-  await title.blur();
-
+  // The debounce commits while the field remains focused; no blur or Save button is required.
   await expect
     .poll(async () => (await readItem(request, listId, itemId)).title)
     .toBe(renamed);
+  await expect(title).toBeFocused();
+
+  // An empty rename is rejected locally and never overwrites the last valid server value.
+  await title.fill('   ');
+  await expect(page.getByText('Title is required.')).toBeVisible();
+  await page.waitForTimeout(500);
+  expect((await readItem(request, listId, itemId)).title).toBe(renamed);
+  await title.fill(renamed);
 
   // The note is its own field and its own write; renaming did not touch it.
   const note = testId(page, 'item-sheet-note');
   await note.fill('Ask for the counter');
-  await note.blur();
   await expect
     .poll(async () => (await readItem(request, listId, itemId)).note)
     .toBe('Ask for the counter');
+  await expect(note).toBeFocused();
 
   // ---- Open the Plan the item is linked to --------------------------------------
   /*

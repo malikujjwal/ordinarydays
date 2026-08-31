@@ -2,8 +2,8 @@ import { instant } from '@od/shared/schemas';
 import type { TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import type { ListsView } from '../hooks/useLists';
 import { listsScrollBottomPadding } from './ListsIndexScroll';
@@ -13,7 +13,7 @@ import { ListsScreen } from './ListsScreen';
  * The Lists tab (§P3-25, `plans-and-lists.md` §5.6, §5.9).
  *
  * The hook is stubbed so the screen's own rules are what is under test: the archived filter,
- * the drain, the empty-state gate and server order. `useLists.native.test.tsx` and
+ * the drain, the empty-state gate and newest-first order. `useLists.native.test.tsx` and
  * `listsRepository.test.ts` cover the two data paths behind it.
  */
 
@@ -96,6 +96,8 @@ beforeEach(() => {
   setView();
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe('the empty state', () => {
   /** §5.9, verbatim. `No lists yet` states literal absence, which §5.2 allows. */
   it('renders §5.9 exactly once the cursor is exhausted', () => {
@@ -119,19 +121,19 @@ describe('the empty state', () => {
   });
 });
 
-describe('server pointer order', () => {
-  /** ADR-042: `ListIndex` stores no rank, so any client sort would be inventing an order. */
-  it('renders a deliberately shuffled response in response order', () => {
+describe('newest-first order', () => {
+  it('renders newly created Lists before older Lists regardless of response order', () => {
     const shuffled = [
-      list(idAt(2), { title: 'Zebra' }),
-      list(idAt(0), { title: 'Apple' }),
-      list(idAt(1), { title: 'Mango' }),
+      list(idAt(0), { title: 'Oldest' }),
+      list(idAt(2), { title: 'Newest' }),
+      list(idAt(1), { title: 'Middle' }),
     ];
     setView({ lists: shuffled });
     mount();
 
-    const rendered = ['Zebra', 'Apple', 'Mango'].map((title) => screen.getByText(title));
-    // Document order matches response order.
+    const rendered = ['Newest', 'Middle', 'Oldest'].map((title) =>
+      screen.getByText(title),
+    );
     expect(rendered[0]?.compareDocumentPosition(rendered[1] as Node)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
@@ -171,6 +173,22 @@ describe('the archived filter', () => {
     expect(screen.getByText('Old')).toBeTruthy();
     // A separate de-emphasised group, not mixed into the active ones.
     expect(screen.getByText('Archived')).toBeTruthy();
+  });
+
+  it('separates Archived from the final active card with a visible top border', () => {
+    setView({
+      lists: [
+        list(idAt(0), { title: 'Active' }),
+        list(idAt(1), { title: 'Old', archived: true }),
+      ],
+    });
+    mount();
+
+    fireEvent.click(screen.getByTestId('lists-menu'));
+    fireEvent.click(screen.getByTestId('lists-toggle-archived'));
+
+    const archived = screen.getByTestId('lists-archived-section');
+    expect(getComputedStyle(archived).borderTopWidth).toBe('1px');
   });
 
   /** One tap, per §5.6 — and it is a settings write, not a re-create. */
@@ -267,17 +285,66 @@ describe('the auto-drain rule', () => {
 
 describe('row actions', () => {
   it('opens the list on tap and issues no mutation', () => {
+    vi.useFakeTimers();
     const row = list(idAt(0));
     setView({ lists: [row] });
     const { onOpenList, onArchive, onDelete, onRestore } = mount();
 
     fireEvent.click(screen.getByTestId(`list-card-${row.listId}`));
 
-    expect(onOpenList).toHaveBeenCalledWith(row.listId);
+    // Navigation waits one frame so the pressed collection tone has returned to rest before
+    // the route transition snapshots this screen.
+    expect(onOpenList).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(17));
+    expect(onOpenList).toHaveBeenCalledExactlyOnceWith(row.listId);
     // U1: tapping a row opens detail and never mutates.
     expect(onArchive).not.toHaveBeenCalled();
     expect(onDelete).not.toHaveBeenCalled();
     expect(onRestore).not.toHaveBeenCalled();
+  });
+
+  it('coalesces a multi-frame double click into one navigation', () => {
+    vi.useFakeTimers();
+    const row = list(idAt(0));
+    setView({ lists: [row] });
+    const { onOpenList } = mount();
+
+    const card = screen.getByTestId(`list-card-${row.listId}`);
+    fireEvent.click(card);
+
+    expect(onOpenList).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(17));
+    expect(onOpenList).toHaveBeenCalledExactlyOnceWith(row.listId);
+
+    act(() => vi.advanceTimersByTime(100));
+    fireEvent.click(card);
+    act(() => vi.advanceTimersByTime(17));
+    expect(onOpenList).toHaveBeenCalledOnce();
+
+    // The guard is not permanent: a later deliberate activation still works.
+    act(() => vi.advanceTimersByTime(400));
+    fireEvent.click(card);
+    act(() => vi.advanceTimersByTime(17));
+    expect(onOpenList).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the card actions from a long press instead of requiring a swipe', () => {
+    vi.useFakeTimers();
+    const row = list(idAt(0), { title: 'Groceries' });
+    setView({ lists: [row] });
+    const { onArchive } = mount();
+    const card = screen.getByTestId(`list-card-${row.listId}`);
+
+    fireEvent.pointerDown(card, { pointerId: 1, pointerType: 'touch', button: 0 });
+    act(() => vi.advanceTimersByTime(500));
+    fireEvent.pointerUp(card, { pointerId: 1, pointerType: 'touch', button: 0 });
+
+    expect(screen.getByRole('dialog', { name: 'Groceries actions' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(onArchive).toHaveBeenCalledExactlyOnceWith(row);
   });
 
   it('archives from the swipe action without a dialog', () => {

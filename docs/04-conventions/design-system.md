@@ -468,7 +468,7 @@ olive/ochre as reinforcement only.
 One accent per stored activity type, drawn from the refreshed families (mulberry, olive,
 ochre, rosewood, stone — no blues). Used for the row's type marker, the icon squircle on
 cards, the detail header's tint, and the explicit Plan-kind choice after the user taps
-**Plan**. The global Add sheet uses neutral **Task / Plan / List item** destinations; it
+**Plan**. The global Add sheet uses neutral **Task / Plan / Add list** destinations; it
 does not present type inference as an accent choice. Type colour is never used as a row
 background.
 
@@ -1009,10 +1009,12 @@ starts the same drag (`interaction-contract.md` §3.2).
 
 The add control is the final row in the same measure, not a detached FAB, screen footer or
 Lists-index action. Its plus sits in a small dashed IconTile and the two-line copy reads
-`Add an item` / `to <list name>`. It opens the compact shared composer over the still-visible
-List. The current List fixes the destination; there is no chooser or `New list`. Title and the
-top-aligned multiline Note appear together, with `Note` and trailing `Optional` above the
-field, and the named write is `Add to <list name>`. Return performs that same single write,
+`Add an item` / `to <list name>`. It opens the compact shared composer inline in the same
+scrolling List measure, so the standard header and current content remain visible and the
+composer can scroll above the software keyboard even after the List grows. The current List
+fixes the destination; there is no chooser or `New list`. Title and the top-aligned multiline
+Note appear together, with `Note` and trailing `Optional` above the field, and the named write
+is `Add to <list name>`. Return performs that same single write,
 then clears both fields and re-focuses Title. The composer uses the shared close control and
 does not add a duplicate Cancel.
 

@@ -94,6 +94,7 @@ export function ListDetailSurface({
       bodySpacing="compact"
       onScroll={onScroll}
       scrollEventThrottle={16}
+      keepEndVisibleWithKeyboard={addEditor !== undefined}
       testID="list-detail"
     >
       <View style={{ gap: theme.space[3] }}>

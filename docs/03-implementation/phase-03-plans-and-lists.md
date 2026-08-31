@@ -84,8 +84,8 @@ Today's Anytime list and is not a backlog with a counter on it.
       semantics.
 - [ ] The creation-type-first List sheet with a visible editable title and exact `Create
       list` action, plus one production item shell and a typed feature-renderer registry.
-- [ ] Global `List item` creation keeps its required explicit destination inline; List detail
-      uses `+ Add an item` and ends with `Add to <list name>`. Neither route guesses a destination.
+- [ ] Global `Add list` opens the ordinary unselected List catalogue. List detail alone uses
+      `+ Add an item` and ends with `Add to <list name>`; no global List-item route exists.
 - [ ] Prep tasks as child activities inside a plan, with `childCount`, the two-level nesting
       cap, and survival of the parent's deletion.
 - [ ] Plan → list catalogue sheet with the same seven-type explicit order as general `New
@@ -190,15 +190,16 @@ P3-23 is mechanical; follow the canonical sections and skip the discussion.
 
 Three creation labels are cross-task contracts:
 
-- Global `+` → `List item` opens Title, optional Note, and the required inline `Add to`
-  destination in one composer. Nothing is selected and there is no `Which list?` step.
+- Global `+` → `Add list` opens the ordinary seven-type catalogue with nothing selected.
 - List detail uses the exact contextual action `+ Add an item`; the current List fixes the
-  destination and the final action is `Add to <list name>`.
+  destination, the inline composer stays in the scrolling List measure, and the final action
+  is `Add to <list name>`.
 - Plan detail uses the exact contextual action `+ Add prep task`; the parent fixes the
   relationship, the object is explicitly a Task, and the final action is `Save task`.
 
-All three are tested with the same title through another route, proving that context—not
-words—sets object kind and destination.
+The item and prep routes are tested with the same title through another route, proving that
+context—not words—sets object kind and destination. List creation still requires an explicit
+catalogue choice before its editable title.
 
 ---
 
@@ -1740,15 +1741,12 @@ header `⋯` holding `Show archived`
 - Row tap opens the list (U1). Swipe-left per
   [`../01-product/interaction-contract.md#3-gesture-table`](../01-product/interaction-contract.md#3-gesture-table)
   §3.2: `Archive` · `Delete` on an owned list, keyed off the pointer's `role` so the
-  member variant (`Leave`) is one branch in Phase 6, not a rewrite.
-- **Ordering is the server's stable pointer order** — lexicographic list id, with no claim
-  that client-minted ids represent chronology — and no client re-sort (decision recorded
-  here — raise in PR if wrong). §3.2 offers a long-press
-  `Reorder lists`, but `ListIndex` carries `role` and `addedAt` only
-  ([`../02-architecture/data-model.md#33-list-partition`](../02-architecture/data-model.md#33-list-partition))
-  and acceptance criterion 27 forbids adding attributes to the pointer, so there is
-  nothing to persist a manual order to. Do not build index reordering in this phase;
-  raise the doc conflict in the PR rather than resolving it silently.
+  member variant (`Leave`) is one branch in Phase 6, not a rewrite. Mobile long press opens a
+  polished action sheet containing those same operations; swipe and accessibility actions
+  remain equivalent, and no action exists only behind the gesture.
+- Active and archived groups render newest-created first by stable time-sortable `listId`.
+  `ListIndex` carries no rank, so there is no manual index order to persist and no List-card
+  drag. Item reordering inside an open List is unrelated.
 - Archived lists are filtered out of the main render on `archived` and shown by
   `Show archived` as a separate de-emphasised group with one-tap restore — a client-side
   filter over the same response, not a second endpoint. `GET /v1/lists` pages all access
@@ -1768,11 +1766,12 @@ header `⋯` holding `Show archived`
 **Tests.** Render: a fixture whose catalogue record is mutated after creation still renders
 the stored icon and copy; a watch list retaining `checkable: true` and checked rows renders no
 checked count; an archived list is absent until `Show archived`; the empty state
-matches §5.9 exactly; rows render in response order for a deliberately shuffled fixture —
-  no client sort; the first 50 pointers archived and page two active neither shows `No lists
+matches §5.9 exactly; a deliberately shuffled fixture renders newest-created first by
+  `listId`; the first 50 pointers archived and page two active neither shows `No lists
   yet` nor requires scrolling an invisible collection; opening `Show archived` reuses those
   first-page rows and continues draining when needed; a grep test that the feature directory imports no `LIST_TEMPLATES`;
-navigation test that tapping a row opens list detail and issues no mutation.
+navigation test that tapping a row opens list detail once and issues no mutation; long press
+opens the same Archive / Delete or Leave actions and dispatches through their existing paths.
 
 ---
 
@@ -1822,28 +1821,23 @@ template or model request.
 
 ---
 
-### P3-27 — List detail and explicit item destinations
+### P3-27 — List detail and its contextual item destination
 
 **Approach.** List detail renders the exact contextual action `+ Add an item`. It opens a
-compact composer over the still-visible List with Title, optional Note, the current List fixed,
-and final action `Add to <list name>`. Global `+` → `List item` opens the same fields plus a
-required inline `Add to` section with nothing selected and `New list` last; there is no separate
-`Which list?` step.
+compact composer inline in the scrolling List measure with Title, optional Note, the current
+List fixed, and final action `Add to <list name>`. The composer scrolls above the software
+keyboard as the List grows. Global `+` exposes `Add list` and has no List-item route.
 
-Neither route ever uses `defaultLists`, most-recently-used, list behaviour, title words or
-template metadata to choose the destination. `defaultLists` belongs only to named flows such as
-`Add ingredients to:`. Both routes send one `POST /v1/lists/:id/items`, with the path's `:id`
-equal to the List visibly named on the final action. Native confirmation
+The contextual route never uses `defaultLists`, most-recently-used, list behaviour, title words
+or template metadata to choose the destination. `defaultLists` belongs only to named flows such
+as `Add ingredients to:`. It sends one `POST /v1/lists/:id/items`, with the path's `:id` equal
+to the List visibly named on the final action. Native confirmation
 mints one monotonic `itm_` identity, then atomically stores the visible item and queued create;
 retry reuses both stable ids.
 
-Camera / Photos / Link are available only after that destination exists. Their Phase 1 stubs
-receive `{ objectKind: 'listItem', listId }`; Phase 8 may fill compatible item fields but may
-never return a different list.
-
-With zero items, detail renders fixed heading `Nothing here`, the List row's stored
-`emptyStateCopy`, and `+ Add an item`. It never looks up `templateKey` or regenerates guidance
-from behaviour or capabilities.
+With zero items, detail renders one compact semantic List icon, `Start with one item`, the List
+row's stored `emptyStateCopy`, and one primary `Add item` action. It never looks up
+`templateKey`, regenerates guidance from behaviour or capabilities, or renders a second add row.
 
 The initial detail response contains at most 50 items and an opaque cursor. Fetch subsequent
 pages at 80% scroll depth through `GET /v1/lists/:id/items?cursor=` and merge by `itemId` in
@@ -1855,14 +1849,14 @@ committed projection, discard every item cursor, wait for `Retry-After`, and res
 one. Replace the projection only after page one succeeds; never merge a post-repair page into
 pre-repair pages. This retry is projection recovery, not a `409` edit conflict.
 
-**Tests.** Assert global `+` renders exactly Task / Plan / List item, then opens Title, optional
-Note and the required inline destination with no selection and no `Which list?` step. Creating
-a new List returns with both fields intact and that List selected. Enter `Try Zahav` through
-`+ Add an item` inside another List and assert the compact composer is anchored over that List,
-writes exactly one item including Note, clears and re-focuses on success, and retains both
-fields plus the contracted error on failure. A recent/default list cannot alter either route. Mutate
+**Tests.** Assert global `+` renders exactly Task / Plan / Add list and that Add list opens the
+ordinary unselected catalogue without mounting a List-item form. Enter `Try Zahav` through
+`+ Add an item` inside a List and assert the compact composer is inline in that List's scroll
+measure, remains keyboard-reachable after the item collection grows, writes exactly one item
+including Note, clears and re-focuses on success, and retains both fields plus the contracted
+error on failure. A recent/default list cannot alter the route. Mutate
 the selected catalogue record after creating an empty List and assert detail still renders
-the stored guidance with `Nothing here`. A `503` item page with `Retry-After: 1` keeps the
+the stored guidance with `Start with one item`. A `503` item page with `Retry-After: 1` keeps the
 committed rows visible, clears every cursor, waits, restarts at page one, and installs no new
 projection until that first page succeeds.
 
@@ -2496,10 +2490,8 @@ Populated summaries are one line (`S2 E4`, `Page 143`, `8 ingredients`, a place 
 future capability is one typed configuration/value plus registry entry and optional Plan
 adapter, not another List behaviour or screen branch.
 
-Global `+` → **List item** opens one composer containing Title, optional Note, and a required
-inline `Add to` section. No List is preselected and there is no separate `Which list?` step.
-`New list` opens the ordinary unselected catalogue and returns to the same draft with Title and
-Note preserved, the new List visibly selected, and `Add to <list name>` enabled.
+Global `+` → **Add list** opens the ordinary unselected catalogue. It never mounts a global
+List-item form. List-item creation remains contextual to the destination List.
 
 **The open List must read as reorderable content.** Implement `design-system.md` §7.2b: content
 starts directly below the header with the compact overview (computed count at left, grip plus
@@ -2507,9 +2499,10 @@ starts directly below the header with the compact overview (computed count at le
 persistent neutral trailing grip owned by the drag wrapper, and the in-list add control is the
 final row in the same measure with `Add an item` / `to <list name>`. The grip and whole-row
 long-press start the same reorder; the body remains the item-detail target. The contextual
-control opens the compact destination-fixed composer over the still-visible List with Title,
-optional Note, and `Add to <list name>`. At large text the overview and row metadata reflow
-before truncating.
+control opens the compact destination-fixed composer inline in the same scrolling List measure
+with Title, optional Note, and `Add to <list name>`, keeping it reachable above the software
+keyboard as the List grows. At large text the overview and row metadata reflow before
+truncating.
 
 **Plan adapters, not List purpose.** `Plan this item` continues to ask General / Meal / Watch /
 Event with nothing preselected. The explicit Plan kind chooses a one-time copy adapter:
@@ -2583,8 +2576,8 @@ generic Materials/Stops example. It must not duplicate markup or CSS from the sc
 
 The production gallery also pins the List-specific presentation pass: varied full-card
 collection tones on the 2-up index; the Blank-first card catalogue; the compact
-`Start with one item` empty state; global Task / Plan / List item routing into the inline
-destination composer and new-List return; contextual Title/Note rapid entry; the compact
+`Start with one item` empty state; global Task / Plan / Add list routing into the ordinary
+unselected catalogue; contextual inline Title/Note rapid entry; the compact
 open-List overview, visible row grips and in-measure add row; and the exact List settings
 hierarchy. The collection tone is derived from
 `listId` presentation and never becomes stored configuration or a template branch. The small
@@ -2655,8 +2648,8 @@ List-specific.
    compatible intersection is copied once. Follow-up tests prove no automatic List write, no
    generic-text parsing, explicit confirmation/Undo and independence after copy.
 6. Existing List Playwright journeys are rewritten rather than deleted. Visual assertions cover
-   the coloured 2-up index, Blank-first card creation, global `+` → List item with inline
-   destination/new-List return, contextual Title/Note creation, `Start with one item`, the
+   the coloured 2-up index, Blank-first global `Add list` creation, contextual inline
+   Title/Note creation, `Start with one item`, the
    compact overview/no-title-gap rhythm,
    visible reorder grips, in-measure add row, top-aligned Item-details Note,
    exact settings hierarchy, generic stages, Watch, Meals/Sub-items, empty feature and populated
@@ -2833,7 +2826,7 @@ date chip, and a contract fixture proving an undated task is absent; unit tests
 over `rsvpSummary` for the five cases; a test asserting the rendered order equals the
 response order for a deliberately unsorted fixture; a Past fixture is de-emphasised while a
 Needs-a-date fixture is not. Tapping either Plans `Add` empty-state action opens the global
-**Task / Plan / List item** chooser with all three unselected; it does not open a Plan form. A
+**Task / Plan / Add list** chooser with all three unselected; it does not open a Plan form. A
 **grep test over
 `src/features/plans/`** asserting the directory contains no badge component and no numeric
 count bound to a stage length — the same shape of test P2-28 uses for unresolved items.
@@ -3648,10 +3641,11 @@ P3-26 still passes, which is what pins the accessibility fix in place.
     because they have remained undated.
 32. Needs-a-date rows for `custom`, `meal`, `watch`, and `event` have no checkbox or date
     chip. Tapping any needs-a-date row opens plan detail and writes nothing.
-33. Global `+` → `List item` opens Title, optional Note and a required inline destination with
-    nothing selected and no `Which list?` step. List detail's `+ Add an item` fixes the current
-    List and ends with `Add to <list name>`. Return writes exactly one item and supports rapid
-    entry. Neither route consults typed words, a default or a recent destination.
+33. Global `+` → `Add list` opens the ordinary unselected seven-type catalogue and no global
+    List-item page. List detail's `+ Add an item` fixes the current List, opens inline in that
+    List's scroll measure and ends with `Add to <list name>`. Return writes exactly one item and
+    supports rapid entry. The route consults neither typed words, a default nor a recent
+    destination.
 34. Plan detail's `+ Add prep task` fixes `type: 'task'` and the current
     `parentActivityId`, ends with `Save task`, and never classifies the entered title.
 35. An undated Plan detail reads `Not scheduled` with `Schedule`. Before Phase 6, People is a

@@ -1,7 +1,8 @@
 import { Text, Touchable, useTheme } from '@od/ui';
-import { useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { listAccessibilityActions } from '../model/listSwipeActions';
+import { ListCardActionsSheet } from './ListCardActionsSheet';
 import { ListIndexRow, type ListIndexRowProps } from './ListIndexRow';
 import type { SwipeableListCardProps } from './SwipeableListCard';
 
@@ -30,59 +31,105 @@ export function SwipeableListCard({
   const theme = useTheme();
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const longPressed = useRef(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visible = actions.length > 0 && (hovered || focusWithin);
   const accessibilityActions = listAccessibilityActions(actions);
 
+  const openActions =
+    actions.length === 0
+      ? undefined
+      : () => {
+          longPressed.current = true;
+          setActionsOpen(true);
+        };
+  const activate = () => {
+    if (longPressed.current) {
+      longPressed.current = false;
+      return;
+    }
+    rowProps.onPress();
+  };
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current !== undefined) clearTimeout(longPressTimer.current);
+    longPressTimer.current = undefined;
+  }, []);
+  useEffect(() => cancelLongPress, [cancelLongPress]);
+
   return (
-    <View
-      testID={`swipeable-list-${rowProps.list.listId}`}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      // React Native Web projects these onto the DOM node, so tabbing to any control inside
-      // the card reveals the row's own actions rather than hiding them under the focus ring.
-      onFocus={() => setFocusWithin(true)}
-      onBlur={() => setFocusWithin(false)}
-      style={{ position: 'relative' }}
-      accessibilityActions={[...accessibilityActions]}
-      onAccessibilityAction={({ nativeEvent }) => {
-        const selected = actions.find(({ name }) => name === nativeEvent.actionName);
-        if (selected !== undefined) onAction(selected);
-      }}
-    >
-      <ListIndexRow {...(rowProps as ListIndexRowProps)} />
-      {visible ? (
-        <View
-          style={{
-            position: 'absolute',
-            top: theme.space[2],
-            right: theme.space[2],
-            flexDirection: 'row',
-            gap: theme.space[2],
-          }}
-        >
-          {actions.map((action) => (
-            <Touchable
-              key={action.name}
-              accessibilityRole="button"
-              accessibilityLabel={action.label}
-              onPress={() => onAction(action)}
-              testID={`list-swipe-${action.name}`}
-              style={{
-                paddingHorizontal: theme.space[3],
-                paddingVertical: theme.space[2],
-                borderRadius: theme.radius.sm,
-                backgroundColor: action.destructive
-                  ? theme.colors.danger
-                  : theme.colors.accentDeep,
-              }}
-            >
-              <Text variant="footnoteStrong" color="inverse">
-                {action.label}
-              </Text>
-            </Touchable>
-          ))}
-        </View>
-      ) : null}
-    </View>
+    <Fragment>
+      <View
+        testID={`swipeable-list-${rowProps.list.listId}`}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => {
+          setHovered(false);
+          cancelLongPress();
+        }}
+        onPointerDown={() => {
+          if (openActions === undefined) return;
+          cancelLongPress();
+          longPressTimer.current = setTimeout(openActions, 500);
+        }}
+        onPointerUp={cancelLongPress}
+        onPointerCancel={cancelLongPress}
+        // React Native Web projects these onto the DOM node, so tabbing to any control inside
+        // the card reveals the row's own actions rather than hiding them under the focus ring.
+        onFocus={() => setFocusWithin(true)}
+        onBlur={() => setFocusWithin(false)}
+        style={{ position: 'relative' }}
+        accessibilityActions={[...accessibilityActions]}
+        onAccessibilityAction={({ nativeEvent }) => {
+          const selected = actions.find(({ name }) => name === nativeEvent.actionName);
+          if (selected !== undefined) onAction(selected);
+        }}
+      >
+        <ListIndexRow
+          {...(rowProps as ListIndexRowProps)}
+          onPress={activate}
+          {...(openActions === undefined ? {} : { onLongPress: openActions })}
+        />
+        {visible ? (
+          <View
+            style={{
+              position: 'absolute',
+              top: theme.space[2],
+              right: theme.space[2],
+              flexDirection: 'row',
+              gap: theme.space[2],
+            }}
+          >
+            {actions.map((action) => (
+              <Touchable
+                key={action.name}
+                accessibilityRole="button"
+                accessibilityLabel={action.label}
+                onPress={() => onAction(action)}
+                testID={`list-swipe-${action.name}`}
+                style={{
+                  paddingHorizontal: theme.space[3],
+                  paddingVertical: theme.space[2],
+                  borderRadius: theme.radius.sm,
+                  backgroundColor: action.destructive
+                    ? theme.colors.danger
+                    : theme.colors.accentDeep,
+                }}
+              >
+                <Text variant="footnoteStrong" color="inverse">
+                  {action.label}
+                </Text>
+              </Touchable>
+            ))}
+          </View>
+        ) : null}
+      </View>
+      <ListCardActionsSheet
+        open={actionsOpen}
+        listTitle={rowProps.list.title}
+        actions={actions}
+        onClose={() => setActionsOpen(false)}
+        onAction={onAction}
+      />
+    </Fragment>
   );
 }

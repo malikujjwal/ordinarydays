@@ -57,9 +57,9 @@ export interface NewListSheetProps {
   /**
    * The List that was made, including the title needed to select it before refetch completes.
    *
-   * P3-27's no-destination flow (§5.4 rule 5) returns to the ListItem form with this list
-   * visibly selected, and P3-39 opens the same sheet from a Plan. Both need the identity the
-   * moment it exists, which on native is before the server has seen it.
+   * Callers such as P3-39's Plan flow may need the identity the moment it exists, which on
+   * native is before the server has seen it. Global `Add list` simply dismisses Add after this
+   * callback; it never opens or returns to a global List-item draft.
    */
   onCreated?: (created: { listId: string; title: string }) => void;
 }

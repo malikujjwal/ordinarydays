@@ -1,8 +1,8 @@
 import { instant } from '@od/shared/schemas';
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
 
@@ -146,6 +146,8 @@ beforeEach(() => {
   mocks.add.mockResolvedValue('itm_01J8XKQ2M4N5P6R7S8T9V0W1X6');
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe('the configuration-driven List detail', () => {
   it('renders one flat item shell and maps checkbox writes to explicit intrinsic state', () => {
     mount();
@@ -243,13 +245,31 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByText('to Launch')).toBeTruthy();
   });
 
-  it('opens one contextual composer over the still-mounted List without a destination chooser', () => {
+  it('lets item press feedback settle before opening details and coalesces a double tap', () => {
+    vi.useFakeTimers();
+    mount();
+
+    const body = screen.getByTestId('list-item-itm_01J8XKQ2M4N5P6R7S8T9V0W1X3-body');
+    fireEvent.click(body);
+    fireEvent.click(body);
+
+    expect(screen.queryByRole('dialog', { name: 'Item details' })).toBeNull();
+    act(() => vi.advanceTimersByTime(17));
+    expect(screen.getAllByRole('dialog', { name: 'Item details' })).toHaveLength(1);
+  });
+
+  it('expands one contextual composer inline inside the List scroll measure', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
 
     expect(screen.getByTestId('list-detail')).toBeTruthy();
-    expect(screen.getByRole('dialog', { name: 'Add item to Launch' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Add item to Launch' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Add item to Launch' })).toBeNull();
+    expect(screen.getByText('Add item to Launch')).toBeTruthy();
+    expect(
+      screen
+        .getByTestId('list-detail-body')
+        .contains(screen.getByTestId('list-contextual-add')),
+    ).toBe(true);
     expect(screen.getByLabelText('Title')).toBeTruthy();
     expect(screen.getByLabelText('Note')).toBeTruthy();
     expect(screen.getByText('Optional')).toBeTruthy();
@@ -265,7 +285,11 @@ describe('the configuration-driven List detail', () => {
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
-    expect(screen.getByRole('dialog', { name: 'Add item to Launch' })).toBeTruthy();
+    expect(
+      screen
+        .getByTestId('list-detail-body')
+        .contains(screen.getByTestId('list-contextual-add')),
+    ).toBe(true);
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 

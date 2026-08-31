@@ -37,8 +37,8 @@ import, and any background processing the user did not initiate.
 **Capture never chooses what the user means and never creates or shares anything.**
 
 ```
-user chooses Task / Plan / List item
-        → Plan kind or list destination, when required
+user chooses Task / Plan, or invokes Add item inside a destination List
+        → Plan kind, when required; the contextual List already fixes its destination
         → capture endpoint returns compatible field suggestions
         → review in the already selected form
         → user activates Save task / Save plan / Add to <list name>

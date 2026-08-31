@@ -3,15 +3,13 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
 import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
-import { GlobalListItemComposer } from '@/features/compose/components/GlobalListItemComposer';
-import type { ListDestination } from '@/features/compose/components/ListDestinationChooser';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
 import { titleLabel } from '@/features/compose/model/fields';
+import type { ObjectChoice } from '@/features/compose/model/targets';
 import { canSave, successToast } from '@/features/compose/model/targets';
-import { useAddListItem } from '@/hooks/useAddListItem';
 import {
   type EventDraftDefaults,
   hasContent,
@@ -22,8 +20,8 @@ import { useToast } from '@/stores/toast';
 /**
  * The modal Add flow, end to end (P1-24).
  *
- * `object` → (`planKind`) → `form`, with List item using one form that keeps its required
- * destination inline. Nothing in the draft may infer that destination.
+ * `object` → (`planKind`) → `form`. `Add list` leaves the Activity composer and opens the
+ * ordinary unselected List catalogue; List items are created only from their owning List.
  *
  * Nothing is written to the server before the named write button. `onSave` is the only call
  * site of the mutation in this feature.
@@ -42,13 +40,7 @@ export interface ComposeScreenProps {
   timezone: string;
   /** Resolves the profile-backed defaults only when the user chooses Event. */
   loadEventDefaults?: () => Promise<EventDraftDefaults | undefined>;
-  /** Lists are injected by the route so compose does not cross feature boundaries. */
-  listDestinations?: {
-    readonly lists: readonly ListDestination[];
-    readonly status: 'pending' | 'success' | 'error';
-    readonly refetch: () => void;
-  };
-  /** Opens the ordinary List catalogue and returns the created destination here. */
+  /** Opens the ordinary unselected List catalogue. */
   onCreateList?: () => void;
 }
 
@@ -57,20 +49,21 @@ export function ComposeScreen({
   today,
   timezone,
   loadEventDefaults,
-  listDestinations,
   onCreateList,
 }: ComposeScreenProps) {
   const theme = useTheme();
   const draft = useComposeDraft();
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
-  const addItem = useAddListItem();
   const [discardOpen, setDiscardOpen] = useState(false);
-  const itemTarget = draft.target?.objectKind === 'listItem' ? draft.target : undefined;
-  const destinationTitle =
-    itemTarget === undefined
-      ? undefined
-      : listDestinations?.lists.find((list) => list.listId === itemTarget.listId)?.title;
+
+  function chooseObject(choice: ObjectChoice) {
+    if (choice === 'list') {
+      onCreateList?.();
+      return;
+    }
+    draft.chooseObject(choice);
+  }
 
   function choosePlanKind(type: Parameters<typeof draft.choosePlanKind>[0]) {
     if (type !== 'event' || loadEventDefaults === undefined) {
@@ -120,49 +113,23 @@ export function ComposeScreen({
     showToast({ message: successToast(target, draft.schedule, today) });
   }
 
-  async function addToList() {
-    if (itemTarget === undefined) return;
-    const note = draft.notes.trim();
-    const added = await addItem.add(itemTarget.listId, {
-      title: draft.title.trim(),
-      ...(note === '' ? {} : { note }),
-    });
-    if (!added) return;
-    draft.reset();
-    onClose();
-    showToast({ message: `Added to ${destinationTitle ?? 'list'}` });
-  }
-
   const showBack = draft.step !== 'object';
   /** Every step with a fixed target to write, and so the steps that have a footer. */
   const activityForm =
     draft.step === 'form' &&
     draft.target !== undefined &&
     draft.target.objectKind !== 'listItem';
-  const itemForm = draft.step === 'listItemForm';
   const writeEnabled = canSave({ title: draft.title, notes: draft.notes });
-  const footer = itemForm ? (
-    itemTarget === undefined ? (
-      <Button label="Choose a list" size="lg" fullWidth disabled testID="compose-save" />
-    ) : (
+  const footer =
+    activityForm && draft.target !== undefined ? (
       <ComposeSaveBar
-        target={itemTarget}
+        target={draft.target}
         saveEnabled={writeEnabled}
         attachmentUri={draft.attachmentUri}
-        onSave={() => void addToList()}
-        isSaving={addItem.isAdding}
-        {...(destinationTitle === undefined ? {} : { listName: destinationTitle })}
+        onSave={() => void save()}
+        isSaving={create.isSaving}
       />
-    )
-  ) : activityForm && draft.target !== undefined ? (
-    <ComposeSaveBar
-      target={draft.target}
-      saveEnabled={writeEnabled}
-      attachmentUri={draft.attachmentUri}
-      onSave={() => void save()}
-      isSaving={create.isSaving}
-    />
-  ) : undefined;
+    ) : undefined;
 
   const header = (
     <View
@@ -220,33 +187,9 @@ export function ComposeScreen({
       >
         <View style={{ gap: theme.space[5] }}>
           {draft.step === 'object' ? (
-            <ObjectChooser onChoose={draft.chooseObject} />
+            <ObjectChooser onChoose={chooseObject} />
           ) : draft.step === 'planKind' ? (
             <PlanKindChooser onChoose={choosePlanKind} />
-          ) : draft.step === 'listItemForm' ? (
-            <GlobalListItemComposer
-              title={draft.title}
-              note={draft.notes}
-              {...(itemTarget === undefined ? {} : { selectedListId: itemTarget.listId })}
-              destinations={listDestinations?.lists ?? []}
-              destinationStatus={listDestinations?.status ?? 'pending'}
-              sourceUrl={draft.sourceUrl}
-              attachmentUri={draft.attachmentUri}
-              {...(addItem.errorMessage === undefined
-                ? {}
-                : { errorMessage: addItem.errorMessage })}
-              {...(addItem.errorRequestId === undefined
-                ? {}
-                : { errorRequestId: addItem.errorRequestId })}
-              onTitleChange={draft.setTitle}
-              onNoteChange={draft.setNotes}
-              onChooseList={draft.chooseList}
-              onCreateList={() => onCreateList?.()}
-              onRetryDestinations={() => listDestinations?.refetch()}
-              onSourceUrlChange={draft.setSourceUrl}
-              onAttach={draft.attachImage}
-              onClearAttachment={draft.clearAttachment}
-            />
           ) : draft.target === undefined ||
             draft.target.objectKind === 'listItem' ? null : (
             <ComposeForm

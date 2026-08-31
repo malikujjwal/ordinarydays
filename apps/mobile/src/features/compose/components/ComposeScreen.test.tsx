@@ -1,7 +1,7 @@
 import type { WallDate } from '@od/shared/time';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -147,7 +147,7 @@ const chooser = (label: string) =>
 const tapChoice = (label: string) => fireEvent.click(chooser(label));
 
 describe('the first screen', () => {
-  it('asks the question and offers exactly Task, Plan, List item', () => {
+  it('asks the question and offers exactly Task, Plan, and Add list', () => {
     mount();
 
     expect(
@@ -155,7 +155,20 @@ describe('the first screen', () => {
     ).toBeDefined();
     expect(chooser('Task')).toBeDefined();
     expect(chooser('Plan')).toBeDefined();
-    expect(chooser('List item')).toBeDefined();
+    expect(chooser('Add list')).toBeDefined();
+    expect(screen.queryByRole('button', { name: /^List item,/ })).toBeNull();
+  });
+
+  it('opens ordinary List creation without entering a global List-item form', () => {
+    const onCreateList = vi.fn();
+    mount(undefined, { onCreateList });
+
+    tapChoice('Add list');
+
+    expect(onCreateList).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('list-destination-chooser')).toBeNull();
+    expect(useComposeDraft.getState().step).toBe('object');
+    expect(useComposeDraft.getState().target).toBeUndefined();
   });
 
   /**
@@ -168,7 +181,7 @@ describe('the first screen', () => {
     for (const [name, subtitle] of [
       ['Task', 'Something you need to do'],
       ['Plan', 'Something you intend to make happen'],
-      ['List item', 'Something you want to keep track of'],
+      ['Add list', 'A collection for things you want to keep track of'],
     ] as const) {
       expect(screen.getByText(subtitle)).toBeDefined();
       // Spoken as well as shown: the sentence is inside the row's accessible name.
@@ -198,7 +211,7 @@ describe('the first screen', () => {
  * pre-filled because it became visible.
  */
 describe('nothing is ever pre-selected', () => {
-  it.each(['Task', 'Plan', 'List item'])(
+  it.each(['Task', 'Plan', 'Add list'])(
     'the object chooser opens %s unselected',
     (name) => {
       mount();
@@ -273,11 +286,10 @@ describe('the pinned named write', () => {
     },
   );
 
-  it('keeps the List item commit disabled until its destination is named', () => {
-    mount();
-    tapChoice('List item');
-    const commit = screen.getByRole('button', { name: 'Choose a list' });
-    expect(commit.getAttribute('aria-disabled')).toBe('true');
+  it('does not render a global List-item commit', () => {
+    mount(undefined, { onCreateList: vi.fn() });
+    tapChoice('Add list');
+    expect(screen.queryByTestId('compose-save')).toBeNull();
   });
 
   /** Pinned, so it is reachable without scrolling the form it commits. */
@@ -503,148 +515,50 @@ describe('Plan', () => {
   });
 });
 
-/** The global List-item composer keeps its fields and explicit destination in one surface. */
-describe('List item', () => {
-  const destinations = {
-    lists: [
-      { listId: 'lst_01J0000000000000000000000A', title: 'Groceries' },
-      { listId: 'lst_01J0000000000000000000000B', title: 'Restaurants to try' },
-    ],
-    status: 'success' as const,
-    refetch: vi.fn(),
-  };
+/** List-item creation is contextual; global Add only launches ordinary List creation. */
+describe('Add list', () => {
+  it('opens the ordinary List catalogue from the chooser', () => {
+    const onCreateList = vi.fn();
+    mount(() => {}, { onCreateList });
+    tapChoice('Add list');
+    expect(onCreateList).toHaveBeenCalledOnce();
+  });
 
-  it('renders Title, optional Note and an unselected Add to section together', () => {
-    mount(() => {}, { listDestinations: destinations });
-    tapChoice('List item');
+  it('never renders the removed global List-item form', () => {
+    mount(() => {}, { onCreateList: vi.fn() });
+    tapChoice('Add list');
+    expect(screen.queryByTestId('list-destination-chooser')).toBeNull();
+    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.queryByLabelText('Note')).toBeNull();
+  });
 
-    expect(screen.getByTestId('list-destination-chooser')).toBeDefined();
-    expect(screen.getByLabelText('Title')).toBeDefined();
-    expect(screen.getByLabelText('Note')).toBeDefined();
-    expect(screen.getByText('Optional')).toBeDefined();
-    expect(screen.getByText('Add to')).toBeDefined();
-    expect(screen.getByText('Required')).toBeDefined();
-    expect(screen.queryByText('Which list?')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Photos' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Add a link' })).toBeNull();
+  it('leaves the Activity draft without a target', () => {
+    mount(() => {}, { onCreateList: vi.fn() });
+    tapChoice('Add list');
+    expect(useComposeDraft.getState().step).toBe('object');
+    expect(useComposeDraft.getState().target).toBeUndefined();
+  });
+
+  it('sends no Activity or List-item request', () => {
+    mount(() => {}, { onCreateList: vi.fn() });
+    tapChoice('Add list');
     expect(sent).toHaveLength(0);
   });
 
-  it('pre-selects no list, however many there are', () => {
-    mount(() => {}, { listDestinations: destinations });
-    tapChoice('List item');
-
-    for (const list of destinations.lists) {
-      const row = screen.getByRole('button', {
-        name: `${list.title}, select as destination`,
-      });
-      expect(row.getAttribute('aria-pressed')).toBe('false');
-    }
+  it('does not expose capture controls before the List catalogue', () => {
+    mount(() => {}, { onCreateList: vi.fn() });
+    tapChoice('Add list');
+    expect(screen.queryByRole('button', { name: 'Photos' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add a link' })).toBeNull();
   });
 
-  it('selects in place, preserves Title and Note, and names the write', () => {
-    mount(() => {}, { listDestinations: destinations });
-    tapChoice('List item');
-    fireEvent.change(screen.getByLabelText('Title'), {
-      target: { value: 'Try Zahav' },
-    });
-    fireEvent.change(screen.getByLabelText('Note'), {
-      target: { value: 'Ask about the tasting menu' },
-    });
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Restaurants to try, select as destination',
-      }),
-    );
-
-    expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
-    expect(screen.getByLabelText('Note')).toHaveProperty(
-      'value',
-      'Ask about the tasting menu',
-    );
+  it('keeps the chooser visible behind the catalogue callback', () => {
+    mount(() => {}, { onCreateList: vi.fn() });
+    tapChoice('Add list');
     expect(
-      screen
-        .getByRole('button', {
-          name: 'Restaurants to try, select as destination',
-        })
-        .getAttribute('aria-pressed'),
-    ).toBe('true');
-    expect(
-      screen.getByRole('button', { name: 'Add to Restaurants to try' }),
+      screen.getByRole('heading', { name: 'What would you like to add?' }),
     ).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Photos' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Add a link' })).toBeDefined();
-  });
-
-  it('keeps Title and Note when a newly created List is returned selected', () => {
-    const onCreateList = vi.fn();
-    mount(() => {}, { listDestinations: destinations, onCreateList });
-    tapChoice('List item');
-    fireEvent.change(screen.getByLabelText('Title'), {
-      target: { value: 'Try Zahav' },
-    });
-    fireEvent.change(screen.getByLabelText('Note'), {
-      target: { value: 'Patio if possible' },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^New list/ }));
-    expect(onCreateList).toHaveBeenCalledOnce();
-    act(() => {
-      useComposeDraft.getState().chooseList('lst_01J0000000000000000000000B');
-    });
-
-    expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
-    expect(screen.getByLabelText('Note')).toHaveProperty('value', 'Patio if possible');
-    expect(
-      screen.getByRole('button', { name: 'Add to Restaurants to try' }),
-    ).toBeDefined();
-  });
-
-  it('offers New list after the lists, never before them', () => {
-    mount(() => {}, { listDestinations: destinations });
-    tapChoice('List item');
-
-    const rows = screen
-      .getAllByRole('button')
-      .map((button) => button.getAttribute('aria-label'));
-    expect(rows.indexOf('New list, Choose a type, then name it')).toBeGreaterThan(
-      rows.indexOf('Groceries, select as destination'),
-    );
-  });
-
-  it('retains the draft and shows the API request id when the add fails', async () => {
-    stubFetch({
-      status: 500,
-      body: {
-        error: {
-          code: 'internal',
-          message: 'Database exploded',
-          requestId: 'req_global_add_9',
-        },
-      },
-    });
-    const onClose = vi.fn();
-    mount(onClose, { listDestinations: destinations });
-    tapChoice('List item');
-    fireEvent.change(screen.getByLabelText('Title'), {
-      target: { value: 'Try Zahav' },
-    });
-    fireEvent.change(screen.getByLabelText('Note'), {
-      target: { value: 'Patio if possible' },
-    });
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Restaurants to try, select as destination' }),
-    );
-    tap('Add to Restaurants to try');
-
-    await waitFor(() => expect(screen.getByRole('alert')).toBeDefined(), {
-      timeout: 10_000,
-    });
-    expect(screen.getByRole('alert').textContent).toContain('Something went wrong.');
-    expect(screen.getByRole('alert').textContent).toContain('req_global_add_9');
-    expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Try Zahav');
-    expect(screen.getByLabelText('Note')).toHaveProperty('value', 'Patio if possible');
-    expect(onClose).not.toHaveBeenCalled();
+    expect(chooser('Add list')).toBeDefined();
   });
 });
 

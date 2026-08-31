@@ -24,7 +24,7 @@ import {
   Trash,
   useTheme,
 } from '@od/ui';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { newLocalId } from '@/lib/localIds';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
@@ -60,6 +60,48 @@ export interface ItemSheetProps {
 }
 
 const STATES: readonly ListItemState[] = ['open', 'active', 'done'];
+const FIELD_SAVE_DELAY_MS = 350;
+
+function useDebouncedAction() {
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pending = useRef<(() => void) | undefined>(undefined);
+
+  const cancel = useCallback(() => {
+    if (timer.current !== undefined) clearTimeout(timer.current);
+    timer.current = undefined;
+  }, []);
+  const flush = useCallback(() => {
+    cancel();
+    const action = pending.current;
+    pending.current = undefined;
+    action?.();
+  }, [cancel]);
+  const schedule = useCallback(
+    (action: () => void) => {
+      pending.current = action;
+      cancel();
+      timer.current = setTimeout(flush, FIELD_SAVE_DELAY_MS);
+    },
+    [cancel, flush],
+  );
+  const now = useCallback(
+    (action: () => void) => {
+      pending.current = action;
+      flush();
+    },
+    [flush],
+  );
+
+  useEffect(
+    () => () => {
+      cancel();
+      pending.current = undefined;
+    },
+    [cancel],
+  );
+
+  return { schedule, flush, now } as const;
+}
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
@@ -136,6 +178,22 @@ export function ItemSheet({
   const [openSubItemMenu, setOpenSubItemMenu] = useState<string>();
   const [editingSubItem, setEditingSubItem] = useState<string>();
   const previousItem = useRef(item);
+  const latestItem = useRef(item);
+  latestItem.current = item;
+  const titleSave = useDebouncedAction();
+  const noteSave = useDebouncedAction();
+  const progressSave = useDebouncedAction();
+  const placeSave = useDebouncedAction();
+  const subItemsSave = useDebouncedAction();
+
+  const close = () => {
+    titleSave.flush();
+    noteSave.flush();
+    progressSave.flush();
+    placeSave.flush();
+    subItemsSave.flush();
+    onClose();
+  };
 
   const selectedSubItem = subItems.find((entry) => entry.id === openSubItemMenu);
 
@@ -215,11 +273,11 @@ export function ItemSheet({
   }, [item]);
 
   const commit = (patch: ReturnType<typeof titlePatch>) => {
-    if (patch !== undefined) void actions.save(item, patch);
+    if (patch !== undefined) void actions.save(latestItem.current, patch);
   };
-  const episodeValue = (): ProgressValue => {
-    const seasonNumber = itemNumber(season);
-    const episodeNumber = itemNumber(episode);
+  const episodeValue = (seasonText = season, episodeText = episode): ProgressValue => {
+    const seasonNumber = itemNumber(seasonText);
+    const episodeNumber = itemNumber(episodeText);
     return {
       kind: 'episode',
       ...(progress?.kind === 'episode' && progress.mediaKind !== undefined
@@ -247,17 +305,20 @@ export function ItemSheet({
           <Field
             label="Progress"
             value={progressText}
-            onChangeText={setProgressText}
-            onBlur={() =>
-              commit(
-                progressPatch(
-                  item,
-                  progressText.trim() === ''
-                    ? undefined
-                    : { kind: 'text', value: progressText.trim() },
+            onChangeText={(value) => {
+              setProgressText(value);
+              progressSave.schedule(() =>
+                commit(
+                  progressPatch(
+                    latestItem.current,
+                    value.trim() === ''
+                      ? undefined
+                      : { kind: 'text', value: value.trim() },
+                  ),
                 ),
-              )
-            }
+              );
+            }}
+            onBlur={progressSave.flush}
           />
         ) : (
           <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
@@ -265,16 +326,30 @@ export function ItemSheet({
               <Field
                 label="Season"
                 value={season}
-                onChangeText={setSeason}
-                onBlur={() => commit(progressPatch(item, episodeValue()))}
+                onChangeText={(value) => {
+                  setSeason(value);
+                  progressSave.schedule(() =>
+                    commit(
+                      progressPatch(latestItem.current, episodeValue(value, episode)),
+                    ),
+                  );
+                }}
+                onBlur={progressSave.flush}
               />
             </View>
             <View style={{ flex: 1 }}>
               <Field
                 label="Episode"
                 value={episode}
-                onChangeText={setEpisode}
-                onBlur={() => commit(progressPatch(item, episodeValue()))}
+                onChangeText={(value) => {
+                  setEpisode(value);
+                  progressSave.schedule(() =>
+                    commit(
+                      progressPatch(latestItem.current, episodeValue(season, value)),
+                    ),
+                  );
+                }}
+                onBlur={progressSave.flush}
               />
             </View>
           </View>
@@ -295,14 +370,24 @@ export function ItemSheet({
             <Field
               label="Place"
               value={placeLabel}
-              onChangeText={setPlaceLabel}
-              onBlur={() => commit(placePatch(item, placeLabel, placeAddress))}
+              onChangeText={(value) => {
+                setPlaceLabel(value);
+                placeSave.schedule(() =>
+                  commit(placePatch(latestItem.current, value, placeAddress)),
+                );
+              }}
+              onBlur={placeSave.flush}
             />
             <Field
               label="Address"
               value={placeAddress}
-              onChangeText={setPlaceAddress}
-              onBlur={() => commit(placePatch(item, placeLabel, placeAddress))}
+              onChangeText={(value) => {
+                setPlaceAddress(value);
+                placeSave.schedule(() =>
+                  commit(placePatch(latestItem.current, placeLabel, value)),
+                );
+              }}
+              onBlur={placeSave.flush}
               maxLength={MAX_ADDRESS_LEN}
             />
           </View>
@@ -347,7 +432,7 @@ export function ItemSheet({
             const next = moveSubItem(subItems, from, to);
             setSubItems(next);
             setOpenSubItemMenu(undefined);
-            commit(subItemsPatch(item, next));
+            subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
           }}
           renderItem={(entry) => {
             const name = entry.title.trim() || config.singularLabel;
@@ -363,20 +448,26 @@ export function ItemSheet({
                         appearance="bare"
                         autoFocus
                         placeholder={config.singularLabel}
-                        onChangeText={(value) =>
-                          setSubItems((rows) =>
-                            rows.map((row) =>
-                              row.id === entry.id ? { ...row, title: value } : row,
-                            ),
-                          )
-                        }
+                        onChangeText={(value) => {
+                          const next = subItems.map((row) =>
+                            row.id === entry.id ? { ...row, title: value } : row,
+                          );
+                          setSubItems(next);
+                          if (next.every((row) => row.title.trim() !== '')) {
+                            subItemsSave.schedule(() =>
+                              commit(subItemsPatch(latestItem.current, next)),
+                            );
+                          }
+                        }}
                         onBlur={() => {
                           const next = subItems.filter((row) => row.title.trim() !== '');
                           setSubItems(next);
                           if (!next.some((row) => row.id === entry.id)) {
                             setEditingSubItem(undefined);
                           }
-                          commit(subItemsPatch(item, next));
+                          subItemsSave.now(() =>
+                            commit(subItemsPatch(latestItem.current, next)),
+                          );
                         }}
                       />
                       {config.secondaryLabel === undefined ? null : (
@@ -387,14 +478,18 @@ export function ItemSheet({
                           appearance="bare"
                           textVariant="footnote"
                           placeholder={config.secondaryLabel}
-                          onChangeText={(value) =>
-                            setSubItems((rows) =>
-                              rows.map((row) =>
-                                row.id === entry.id ? { ...row, secondary: value } : row,
-                              ),
-                            )
-                          }
-                          onBlur={() => commit(subItemsPatch(item, subItems))}
+                          onChangeText={(value) => {
+                            const next = subItems.map((row) =>
+                              row.id === entry.id ? { ...row, secondary: value } : row,
+                            );
+                            setSubItems(next);
+                            if (next.every((row) => row.title.trim() !== '')) {
+                              subItemsSave.schedule(() =>
+                                commit(subItemsPatch(latestItem.current, next)),
+                              );
+                            }
+                          }}
+                          onBlur={subItemsSave.flush}
                         />
                       )}
                     </View>
@@ -439,7 +534,7 @@ export function ItemSheet({
     <>
       <Sheet
         open={open}
-        onClose={onClose}
+        onClose={close}
         title="Item details"
         detent="large"
         testID={testID}
@@ -448,8 +543,12 @@ export function ItemSheet({
           <Field
             label="Title"
             value={title}
-            onChangeText={setTitle}
-            onBlur={() => commit(titlePatch(item, title))}
+            onChangeText={(value) => {
+              setTitle(value);
+              titleSave.schedule(() => commit(titlePatch(latestItem.current, value)));
+            }}
+            onBlur={titleSave.flush}
+            {...(title.trim() === '' ? { error: 'Title is required.' } : {})}
             maxLength={MAX_TITLE_LEN}
             testID="item-sheet-title"
           />
@@ -457,8 +556,11 @@ export function ItemSheet({
             label="Note"
             optional
             value={note}
-            onChangeText={setNote}
-            onBlur={() => commit(notePatch(item, note))}
+            onChangeText={(value) => {
+              setNote(value);
+              noteSave.schedule(() => commit(notePatch(latestItem.current, value)));
+            }}
+            onBlur={noteSave.flush}
             maxLength={MAX_NOTES_LEN}
             multiline
             testID="item-sheet-note"
@@ -541,7 +643,7 @@ export function ItemSheet({
                 const next = moveSubItem(subItems, from, from - 1);
                 setSubItems(next);
                 setOpenSubItemMenu(undefined);
-                commit(subItemsPatch(item, next));
+                subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
               }}
             />
             <SettingRow
@@ -554,7 +656,7 @@ export function ItemSheet({
                 const next = moveSubItem(subItems, from, from + 1);
                 setSubItems(next);
                 setOpenSubItemMenu(undefined);
-                commit(subItemsPatch(item, next));
+                subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
               }}
             />
             <SettingRow
@@ -567,7 +669,7 @@ export function ItemSheet({
                 const next = subItems.filter((entry) => entry.id !== selectedSubItem.id);
                 setSubItems(next);
                 setOpenSubItemMenu(undefined);
-                commit(subItemsPatch(item, next));
+                subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
               }}
             />
           </View>

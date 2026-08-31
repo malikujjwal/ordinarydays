@@ -1,9 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useToast } from './toast';
 
 beforeEach(() => useToast.setState({ current: undefined }));
+afterEach(() => vi.useRealTimers());
 
 describe('the singleton toast lifecycle', () => {
+  it('retires a delete Undo toast on its own even when no screen rerenders', () => {
+    vi.useFakeTimers();
+    const onCommit = vi.fn();
+    useToast.getState().showUndo({
+      message: 'Chicken deleted',
+      duration: 6000,
+      onUndo: vi.fn(),
+      onCommit,
+    });
+
+    vi.advanceTimersByTime(6000);
+
+    expect(useToast.getState().current).toBeUndefined();
+    expect(onCommit).toHaveBeenCalledOnce();
+  });
   it.each(['ordinary', 'undo'] as const)(
     'commits an active Undo once before an %s replacement',
     (replacement) => {

@@ -22,9 +22,9 @@ Six rules. Everything in §3 is a consequence of them.
 
 Two supporting rules:
 
-- **Long-press is reorder or preview, never a hidden action.** In a reorderable list it
-  starts a drag. Elsewhere it opens a preview (iOS context menu) whose items duplicate the
-  `⋯` menu. No action exists only behind a long-press.
+- **Long-press is reorder or an action surface, never a hidden action.** In a reorderable
+  list it starts a drag. Elsewhere it opens the same actions available through swipe, an
+  accessibility action or the `⋯` menu. No action exists only behind a long-press.
 - **Nothing important is behind a gesture alone.** Every swipe action is also reachable from
   the detail screen or the `⋯` menu. Gestures are accelerators.
 
@@ -150,24 +150,20 @@ Rules for the follow-up itself:
 
 ### 1a.3 Creation intent is selected before assistance
 
-The global `+` always opens **Task / Plan / List item** in that fixed order, with nothing
+The global `+` always opens **Task / Plan / Add list** in that fixed order, with nothing
 selected. A contextual control fixes intent only by naming it: `+ Add a task`,
 `+ Add an item`, or `+ Add prep task`. Plan then requires **General / Meal / Watch /
 Event**, also fixed and unselected; General is an explicit choice, never a hidden
-fallback. List item requires an explicit destination unless the current list already names
-it.
+fallback. `Add list` opens the ordinary unselected seven-type List catalogue. List items are
+created only from a contextual control inside the List that owns them.
 
-After the user chooses **List item**, the item composer opens immediately. There is no
-intermediate `Which list?` screen. In global context the composer contains Title, optional
-Note, and a required inline `Add to` section with no List selected plus `New list`; choosing a
-List updates the named commit in place. `New list` opens the ordinary unselected catalogue and
-returns to the same composer with Title and Note intact and the new List visibly selected.
-
-In an open List, `+ Add an item` opens the compact List-owned composer over the still-visible
-header and content. The current List fixes the destination, so there is no destination chooser
-or `New list`. Title and optional multiline Note appear together and the final action is
-`Add to <list name>`. Return performs the same write, clears both fields after success, and
-keeps Title focused for rapid entry.
+In an open List, `+ Add an item` opens the compact List-owned composer inline in the same
+scrolling measure, with the header and current content still visible. The current List fixes
+the destination, so there is no destination chooser or `New list`. Title and optional
+multiline Note appear together and the final action is `Add to <list name>`. The inline
+placement must remain scrollable above the software keyboard as the List grows. Return
+performs the same write, clears both fields after success, and keeps Title focused for rapid
+entry.
 
 Text, photos, links, and AI are enabled only after those choices. They may suggest
 compatible field values but never object kind, Plan kind, people, sharing, destination,
@@ -220,7 +216,7 @@ product spec defines settings. They do not create or specify an app-wide Setting
 | Avatar stack | Not interactive on a row | Interactive on plan detail |
 | `⋯` | 44 × 44 pt | |
 | Swipe action button | Full row height, ≥ 72 pt wide | |
-| Global `+` | 56 × 56 pt | Accessible label `Add`; always opens Task / Plan / List item, never a preselected form |
+| Global `+` | 56 × 56 pt | Accessible label `Add`; always opens Task / Plan / Add list, never a preselected form |
 | Today's `See all (n)` ANYTIME footer | Full row width, min height 44 pt | Pushes the **Anytime** screen; never expands rows in place. This is a pushed route, not a fourth tab. |
 
 Adjacent hit targets are separated by at least 8 pt of non-interactive space.
@@ -291,16 +287,18 @@ selects a row implementation.
 
 | Row type | Tap body | Tap checkbox | Swipe right | Swipe right (full) | Swipe left | Swipe left (full) | Long press |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| List (on the Lists index), you own it | Open the list | — | — | — | `Archive` · `Delete` | — | — |
-| List (on the Lists index), you are a member | Open the list | — | — | — | `Leave` | — | — |
+| List (on the Lists index), you own it | Open the list | — | — | — | `Archive` · `Delete` | — | Open the same Archive / Delete action sheet |
+| List (on the Lists index), you are a member | Open the list | — | — | — | `Leave` | — | Open the same Leave action sheet |
 | Item, checkbox mode | Open item sheet | `done → open`; `open/active → done` | `Check` / `Uncheck` | Set the same explicit state | `Plan this item` · `Delete` | Plan-kind chooser | Drag to reorder within its list |
 | Item, no state presentation | Open item sheet | — | `Plan this item` | Plan-kind chooser | `Delete` | — | Drag to reorder |
 | Item, stages | Open item sheet | — | `Plan this item` | Plan-kind chooser | `Delete` | — | Drag within its current stage; changing stage is an explicit item-sheet action |
 | Item with a state line (`Planned Saturday · 7 PM`) | Title area → item sheet; **state line → the linked Activity** | As above | As above | As above | As above | As above | Drag to reorder |
 
-The Lists **index** is not reorderable: `ListIndex` stores no rank, and the index renders in
-server pointer order. Reordering applies to the items *within* a list, never to the lists
-themselves.
+The Lists **index** is not reorderable: `ListIndex` stores no rank, and active and archived
+groups render newest-created first from their stable time-sortable `listId`. Reordering applies
+to the items *within* a list, never to the lists themselves. On mobile, long-pressing a List
+card opens a polished action sheet that duplicates Archive / Delete or Leave; swipe and
+accessibility actions remain equivalent ways to reach the same operations.
 
 Every reorderable List item has a visible neutral grip at its trailing edge on touch layouts.
 It is an affordance for the existing gesture, not a second operation: long-pressing either the
@@ -478,7 +476,7 @@ and `turn into` are banned from empty-state copy for exactly that reason
 | Expenses on a plan | — | — | `Add expense` alone |
 
 Every empty-state action labelled `Add` is the global Add action: it opens **Task / Plan /
-List item** with nothing selected. The screen the empty state appears on does not choose the
+Add list** with nothing selected. The screen the empty state appears on does not choose the
 object. `Add item` inside an open List is deliberately different: it is a contextual action,
 so it opens the List-item composer with that List visibly fixed.
 
@@ -721,7 +719,7 @@ Global, active when focus is not in a text field:
 
 | Key | Action |
 | --- | --- |
-| `N` | Open the global **Task / Plan / List item** chooser |
+| `N` | Open the global **Task / Plan / Add list** chooser |
 | `T` / `P` / `L` | Today / Plans / Lists |
 | `/` | Focus search |
 | `R` | Refresh the current screen |
@@ -751,7 +749,7 @@ Within forms and sheets:
 | `Cmd/Ctrl + Return` | Submit, from anywhere in the form |
 | `Esc` | Cancel, with the discard prompt if dirty |
 | `Tab` / `Shift + Tab` | Move through fields in visual order |
-| `Alt + 1`–`3` | On the global chooser: Task, Plan, List item |
+| `Alt + 1`–`3` | On the global chooser: Task, Plan, Add list |
 | `Alt + 1`–`4` | On the Plan-kind chooser: General, Meal, Watch, Event |
 
 The shortcut sheet (`?`) lists every shortcut and is the discovery mechanism. Shortcuts are

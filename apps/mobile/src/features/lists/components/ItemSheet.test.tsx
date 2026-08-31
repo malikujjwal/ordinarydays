@@ -1,7 +1,7 @@
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ItemSheet } from './ItemSheet';
 
 const calls = vi.hoisted(() => ({ save: vi.fn(), remove: vi.fn() }));
@@ -27,14 +27,14 @@ const item = (overrides: Partial<ListItemView> = {}): ListItemView => ({
   ...overrides,
 });
 
-function mount(subject = item(), subjectList = list()) {
+function mount(subject = item(), subjectList = list(), onClose = vi.fn()) {
   return render(
     <ThemeProvider scheme="light">
       <ItemSheet
         open
         list={subjectList}
         item={subject}
-        onClose={vi.fn()}
+        onClose={onClose}
         onChanged={vi.fn()}
         onRemoved={vi.fn()}
       />
@@ -47,7 +47,108 @@ beforeEach(() => {
   calls.remove.mockReset();
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe('the canonical item editor shell', () => {
+  it('persists Title and Note while typing without requiring blur', () => {
+    vi.useFakeTimers();
+    const subject = item({ note: 'Pilot' });
+    mount(subject);
+
+    fireEvent.change(screen.getByTestId('item-sheet-title'), {
+      target: { value: 'The Bear season 4' },
+    });
+    fireEvent.change(screen.getByTestId('item-sheet-note'), {
+      target: { value: 'Watch on Thursday' },
+    });
+    act(() => vi.advanceTimersByTime(400));
+
+    expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
+    expect(calls.save).toHaveBeenCalledWith(subject, { note: 'Watch on Thursday' });
+  });
+
+  it('does not allow an item to be renamed to an empty title', () => {
+    vi.useFakeTimers();
+    const subject = item();
+    mount(subject);
+
+    fireEvent.change(screen.getByTestId('item-sheet-title'), {
+      target: { value: '   ' },
+    });
+    act(() => vi.advanceTimersByTime(400));
+
+    expect(screen.getByText('Title is required.')).toBeTruthy();
+    expect(calls.save).not.toHaveBeenCalledWith(
+      subject,
+      expect.objectContaining({ title: '' }),
+    );
+  });
+
+  it('flushes an in-focus field edit through the single close path', () => {
+    vi.useFakeTimers();
+    const subject = item();
+    const onClose = vi.fn();
+    mount(subject, list(), onClose);
+
+    fireEvent.change(screen.getByTestId('item-sheet-title'), {
+      target: { value: 'The Bear finale' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear finale' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('persists configured Progress, Place, and Sub-item fields while typing', () => {
+    vi.useFakeTimers();
+    const subject = item({
+      features: {
+        progress: { kind: 'text', value: 'Page 10' },
+        place: { label: 'Library', address: 'Main Street' },
+        subItems: { entries: [{ id: 'sub_1', title: 'Paper', rank: 'a0' }] },
+      },
+    });
+    mount(
+      subject,
+      list({
+        featureConfig: {
+          progress: { enabled: true, kind: 'text' },
+          place: { enabled: true },
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Materials',
+            singularLabel: 'Material',
+          },
+        },
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText('Progress'), {
+      target: { value: 'Page 11' },
+    });
+    fireEvent.change(screen.getByLabelText('Place'), {
+      target: { value: 'Branch library' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Paper' }));
+    fireEvent.change(screen.getByLabelText('Material'), {
+      target: { value: 'Cardstock' },
+    });
+    act(() => vi.advanceTimersByTime(400));
+
+    expect(calls.save).toHaveBeenCalledWith(subject, {
+      features: { progress: { kind: 'text', value: 'Page 11' } },
+    });
+    expect(calls.save).toHaveBeenCalledWith(subject, {
+      features: { place: { label: 'Branch library', address: 'Main Street' } },
+    });
+    expect(calls.save).toHaveBeenCalledWith(subject, {
+      features: {
+        subItems: {
+          entries: [expect.objectContaining({ id: 'sub_1', title: 'Cardstock' })],
+        },
+      },
+    });
+  });
   it('uses the common Item details title and marks the top-aligned Note optional', () => {
     mount();
 

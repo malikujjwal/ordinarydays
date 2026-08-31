@@ -73,31 +73,25 @@ describe('nothing is selected until the user taps', () => {
     expect(draft().target).toEqual({ objectKind: 'plan', type: 'custom' });
   });
 
-  /** The global composer opens before its required destination has been chosen. */
-  it('choosing List item reaches the item composer with no target', () => {
-    draft().chooseObject('listItem');
-    expect(draft().step).toBe('listItemForm');
+  it('choosing Add list never creates an Activity target', () => {
+    draft().chooseObject('list');
+    expect(draft().step).toBe('object');
     expect(draft().target).toBeUndefined();
   });
 
-  it('fixes the list in the same composer and preserves its title and note', () => {
-    draft().chooseObject('listItem');
+  it('keeps content out of the Activity draft when List creation is chosen', () => {
     draft().setTitle('Try Zahav');
     draft().setNotes('Ask about the tasting menu');
-    draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
+    draft().chooseObject('list');
 
-    expect(draft().step).toBe('listItemForm');
-    expect(draft().target).toEqual({
-      objectKind: 'listItem',
-      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
-    });
+    expect(draft().step).toBe('object');
+    expect(draft().target).toBeUndefined();
     expect(draft().title).toBe('Try Zahav');
     expect(draft().notes).toBe('Ask about the tasting menu');
   });
 
-  it('returns from the List item composer with no destination retained', () => {
-    draft().chooseObject('listItem');
-    draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
+  it('Back from an untouched Add chooser retains no destination', () => {
+    draft().chooseObject('list');
     draft().back();
 
     expect(draft().step).toBe('object');

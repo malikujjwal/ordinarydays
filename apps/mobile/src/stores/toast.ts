@@ -47,6 +47,7 @@ export interface ToastState {
 }
 
 let nextToastId = 1;
+const DEFAULT_TOAST_DURATION_MS = 6000;
 
 const activeMessage = (toast: ToastMessage): ActiveToast => ({
   ...toast,
@@ -61,16 +62,32 @@ const activeUndo = (toast: UndoToastMessage): ActiveToast => ({
 });
 
 export const useToast = create<ToastState>()((set, get) => {
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearExpiry = () => {
+    if (expiryTimer !== undefined) clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+  };
+
   const commitCurrent = (id?: number) => {
     const current = get().current;
     if (current === undefined || (id !== undefined && current.id !== id)) return;
+    clearExpiry();
     set({ current: undefined });
     if (current.kind === 'undo') current.onCommit();
+  };
+
+  const scheduleExpiry = (toast: ActiveToast) => {
+    clearExpiry();
+    expiryTimer = setTimeout(
+      () => commitCurrent(toast.id),
+      Math.max(0, toast.duration ?? DEFAULT_TOAST_DURATION_MS),
+    );
   };
 
   const replace = (next: ActiveToast) => {
     commitCurrent();
     set({ current: next });
+    scheduleExpiry(next);
     return next.id;
   };
 
@@ -88,6 +105,7 @@ export const useToast = create<ToastState>()((set, get) => {
       ) {
         return;
       }
+      clearExpiry();
       set({ current: undefined });
       current.onUndo();
     },
@@ -96,7 +114,9 @@ export const useToast = create<ToastState>()((set, get) => {
       const next = activeMessage(toast);
       if (current?.id === id && current.kind === 'undo') {
         // The original write did not happen, so ending its window is not a commit.
+        clearExpiry();
         set({ current: next });
+        scheduleExpiry(next);
         return next.id;
       }
       return replace(next);

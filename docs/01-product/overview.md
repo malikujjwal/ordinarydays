@@ -78,16 +78,17 @@ relationships between them are optional edges, not pipeline stages. There is no
 `Lists → Plans → Today` pipeline. Anything that treats one as the definition of the others
 is wrong.
 
-The distinction between a task, a plan, and a list item is chosen **before** details are
-entered. It is not inferred from the title, a date, a person, a source image, or a model:
+The distinction between a task, a plan, a List, and a list item is chosen **before** details
+are entered. It is not inferred from the title, a date, a person, a source image, or a model:
 
-> **The entry point, or an explicit Task / Plan / List item choice, determines what is
+> **The entry point, or an explicit Task / Plan / Add list choice, determines what is
 > created. A date changes scheduling state, not identity.**
 >
 > A **Task** is stored as an Activity with `objectKind: 'task'`, `type: 'task'`. A **Plan**
 > is stored as an Activity with `objectKind: 'plan'`; its explicitly chosen kind maps to
-> `custom`, `meal`, `watch`, `event`. A **List item** is stored as a `ListItem`
-> in a destination the user chose.
+> `custom`, `meal`, `watch`, `event`. **Add list** opens the unselected List-type catalogue.
+> A **List item** is stored as a `ListItem` only after the contextual entry point inside its
+> destination List fixes that identity.
 
 This is the rule for the whole document set, stated here once and canonical in
 [`../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity`](../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity).
@@ -107,18 +108,17 @@ un-plans it: an undated plan is a plan waiting for a day.
               │                         Add task / prep task / list item
               ▼                                      │
      required unselected choice                      │
-       Task / Plan / List item                       │
-              └──────────────────┬───────────────────┘
-                                 ▼
-                       explicit, fixed target
-                    ┌────────────────┼────────────────┐
-                    ▼                ▼                ▼
-                  Task             Plan           List item
-             objectKind: task objectKind: plan   choose a list
-                    │                │                │
-                    └────────┬───────┘                │
-                             ▼                        ▼
-                       Activities                  Lists
+       Task / Plan / Add list                        │
+              │                                      │
+        explicit target                              │
+       ┌──────┼──────────┐                           │
+       ▼      ▼          ▼                           ▼
+     Task    Plan     List catalogue             List item
+ objectKind: task objectKind: plan              current List fixed
+       │      │          │                           │
+       └──┬───┘          └─────────────┬─────────────┘
+          ▼                            ▼
+     Activities                      Lists
                              │                        │
                              │◀ ─ ─ (a) ─ ─ ─ ─ ─ ─ ┤
                              ├─ ─ ─ (b) ─ ─ ─ ─ ─ ─▶│

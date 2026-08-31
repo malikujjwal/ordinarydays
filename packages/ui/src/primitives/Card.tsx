@@ -28,6 +28,8 @@ export interface CardProps {
    */
   paddingBottom?: SpaceToken;
   onPress?: () => void;
+  /** Optional secondary gesture; the caller must expose the same actions accessibly. */
+  onLongPress?: () => void;
   /** The UP NEXT card's mulberry-tinted shadow. The one surface that gets it. */
   hero?: boolean;
   /** Shared collection fill; callers choose a semantic tone, never a raw colour. */
@@ -43,6 +45,7 @@ export function Card({
   padding = 6,
   paddingBottom,
   onPress,
+  onLongPress,
   hero = false,
   surfaceTone = 'neutral',
   accessibilityLabel,
@@ -92,6 +95,7 @@ export function Card({
       accessibilityRole="button"
       {...(accessibilityLabel === undefined ? {} : { accessibilityLabel })}
       onPress={onPress}
+      {...(onLongPress === undefined ? {} : { onLongPress })}
       testID={testID}
       style={style}
     >

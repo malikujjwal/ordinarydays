@@ -73,34 +73,38 @@ export function OpenListFixture({ state }: OpenListFixtureProps) {
         onRetry={() => {}}
         onLoadMore={() => {}}
         onAdd={() => {}}
+        {...(state !== 'context-add' && state !== 'context-add-long'
+          ? {}
+          : {
+              addEditor: (
+                <ContextualListItemComposer
+                  open
+                  listName={list.title}
+                  isAdding={false}
+                  onClose={() => {}}
+                  onAdd={async ({ title: itemTitle }) => {
+                    const itemId = `itm_contract_gallery_${String(longItems.length + 1)}`;
+                    if (state === 'context-add-long') {
+                      setLongItems((current) => [
+                        ...current,
+                        {
+                          ...checklistItem(0),
+                          itemId,
+                          rank: `z${String(current.length).padStart(2, '0')}`,
+                          title: itemTitle,
+                          state: 'open',
+                        },
+                      ]);
+                    }
+                    return itemId;
+                  }}
+                />
+              ),
+            })}
         onOpenItem={() => {}}
         onToggleChecked={() => undefined}
         onDrop={() => {}}
       />
-      {state === 'context-add' || state === 'context-add-long' ? (
-        <ContextualListItemComposer
-          open
-          listName={list.title}
-          isAdding={false}
-          onClose={() => {}}
-          onAdd={async ({ title: itemTitle }) => {
-            const itemId = `itm_contract_gallery_${String(longItems.length + 1)}`;
-            if (state === 'context-add-long') {
-              setLongItems((current) => [
-                ...current,
-                {
-                  ...checklistItem(0),
-                  itemId,
-                  rank: `z${String(current.length).padStart(2, '0')}`,
-                  title: itemTitle,
-                  state: 'open',
-                },
-              ]);
-            }
-            return itemId;
-          }}
-        />
-      ) : null}
     </View>
   );
 }

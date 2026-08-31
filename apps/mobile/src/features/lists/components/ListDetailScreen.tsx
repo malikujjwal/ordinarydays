@@ -7,6 +7,7 @@ import { useListDetail } from '../hooks/useListDetail';
 import { useListItemActions } from '../hooks/useListItemActions';
 import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
+import { useSettledNavigation } from '../hooks/useSettledNavigation';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
 import { doneCount, mayActOnWholeList } from '../model/listDetail';
 import { ContextualListItemComposer } from './ContextualListItemComposer';
@@ -95,6 +96,7 @@ export function ListDetailScreen({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
+  const openItemDetails = useSettledNavigation(setOpenItemId);
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({
     onSaved: view.refresh,
@@ -153,7 +155,33 @@ export function ListDetailScreen({
         onRetry={view.refetch}
         onLoadMore={view.loadMore}
         onAdd={() => setAddOpen(true)}
-        onOpenItem={(item) => setOpenItemId(item.itemId)}
+        {...(list === undefined || !addOpen
+          ? {}
+          : {
+              addEditor: (
+                <ContextualListItemComposer
+                  open
+                  listName={list.title}
+                  isAdding={add.isAdding}
+                  {...(add.errorMessage === undefined
+                    ? {}
+                    : { errorMessage: add.errorMessage })}
+                  {...(add.errorRequestId === undefined
+                    ? {}
+                    : { errorRequestId: add.errorRequestId })}
+                  onClose={() => {
+                    add.dismissError();
+                    setAddOpen(false);
+                  }}
+                  onAdd={async (fields) => {
+                    const itemId = await add.add(listId, fields);
+                    if (itemId !== undefined) view.refresh();
+                    return itemId;
+                  }}
+                />
+              ),
+            })}
+        onOpenItem={(item) => openItemDetails(item.itemId)}
         onToggleChecked={(item, next) =>
           items.save(item, {
             state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
@@ -161,27 +189,6 @@ export function ListDetailScreen({
         }
         onDrop={reorder.drop}
       />
-
-      {list === undefined ? null : (
-        <ContextualListItemComposer
-          open={addOpen}
-          listName={list.title}
-          isAdding={add.isAdding}
-          {...(add.errorMessage === undefined ? {} : { errorMessage: add.errorMessage })}
-          {...(add.errorRequestId === undefined
-            ? {}
-            : { errorRequestId: add.errorRequestId })}
-          onClose={() => {
-            add.dismissError();
-            setAddOpen(false);
-          }}
-          onAdd={async (fields) => {
-            const itemId = await add.add(listId, fields);
-            if (itemId !== undefined) view.refresh();
-            return itemId;
-          }}
-        />
-      )}
 
       {list === undefined || openItem === undefined ? null : (
         <ItemSheet

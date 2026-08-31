@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   type ScrollView as RNScrollView,
   ScrollView,
@@ -43,6 +43,15 @@ export interface ScreenShellProps {
   /** Pagination/analytics for the ScrollView this container owns. */
   onScroll?: ScrollViewProps['onScroll'];
   scrollEventThrottle?: number;
+  /**
+   * Keeps a final inline editor wholly above the software keyboard.
+   *
+   * The focused input alone can be visible while controls below it are still occluded. This
+   * remains a container concern: the screen declares that its final child is one editor, and
+   * the owned ScrollView performs the keyboard/content-size correction without screen-level
+   * offsets.
+   */
+  keepEndVisibleWithKeyboard?: boolean;
   testID?: string;
 }
 
@@ -73,6 +82,7 @@ export function ScreenShell({
   bodySpacing = 'standard',
   onScroll,
   scrollEventThrottle,
+  keepEndVisibleWithKeyboard = false,
   testID,
 }: ScreenShellProps) {
   const theme = useTheme();
@@ -87,6 +97,15 @@ export function ScreenShell({
    */
   const { height: viewportHeight } = useWindowDimensions();
   useScrollToFocusedInput(scrollRef, keyboard, viewportHeight, contentHeight);
+  useEffect(() => {
+    // A rapid add changes only content size while the keyboard and editor remain mounted.
+    void contentHeight;
+    if (!keepEndVisibleWithKeyboard || keyboard <= 0) return;
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [contentHeight, keepEndVisibleWithKeyboard, keyboard]);
 
   const column = {
     width: '100%',

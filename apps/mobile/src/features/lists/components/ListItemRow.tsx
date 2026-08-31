@@ -45,6 +45,7 @@ export function ListItemRow({
   const committedCheckedRef = useRef(committedChecked);
   const pendingToggles = useRef(0);
   const toggleRevision = useRef(0);
+  const deferredCommittedUpdate = useRef(false);
 
   useEffect(() => {
     committedCheckedRef.current = committedChecked;
@@ -56,6 +57,9 @@ export function ListItemRow({
      */
     if (pendingToggles.current === 0) {
       setChecked(committedChecked);
+      deferredCommittedUpdate.current = false;
+    } else {
+      deferredCommittedUpdate.current = true;
     }
   }, [committedChecked]);
 
@@ -81,6 +85,10 @@ export function ListItemRow({
       })
       .finally(() => {
         pendingToggles.current = Math.max(0, pendingToggles.current - 1);
+        if (pendingToggles.current === 0 && deferredCommittedUpdate.current) {
+          deferredCommittedUpdate.current = false;
+          setChecked(committedCheckedRef.current);
+        }
       });
   };
   const place = shownPlace(list, item);

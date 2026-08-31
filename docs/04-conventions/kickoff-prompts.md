@@ -383,7 +383,7 @@ screen is built. Branch feat/P1-22-ui-primitives. Screenshot the gallery at 390p
 ```
 Pick up task P1-24 (then P1-25 in its own session). Follow the start-of-task protocol,
 then activities.md §2 and interaction-contract.md §1a.3. CLAUDE.md rule 2 is the whole
-task: Task / Plan / List item, nothing pre-selected, no inference from words, every
+task: Task / Plan / Add list, nothing pre-selected, no inference from words, every
 commit button names the exact write. The four Plan-kind forms in P1-25 follow
 activities.md §4 field-for-field. Branch feat/P1-24-add-chooser. Screenshot every
 screen you build at 390px and show me.

@@ -217,18 +217,18 @@ describe('the empty state gate', () => {
 });
 
 describe('the archived partition', () => {
-  it('splits the two groups and preserves server order within each', () => {
+  it('splits the two groups and orders each by newest List identity first', () => {
     const rows = [
-      { id: 'a', archived: false },
-      { id: 'b', archived: true },
-      { id: 'c', archived: false },
-      { id: 'd', archived: true },
+      { listId: 'lst_01A', archived: false },
+      { listId: 'lst_01B', archived: true },
+      { listId: 'lst_01C', archived: false },
+      { listId: 'lst_01D', archived: true },
     ];
 
     const { active, archived } = partitionByArchived(rows);
 
-    expect(active.map((row) => row.id)).toEqual(['a', 'c']);
-    expect(archived.map((row) => row.id)).toEqual(['b', 'd']);
+    expect(active.map((row) => row.listId)).toEqual(['lst_01C', 'lst_01A']);
+    expect(archived.map((row) => row.listId)).toEqual(['lst_01D', 'lst_01B']);
   });
 });
 

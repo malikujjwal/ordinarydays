@@ -38,7 +38,7 @@ What the app does. Behaviour is decided here; mechanics are not.
 | --- | --- |
 | [original-concept.md](01-product/original-concept.md) | You need the founder's intent. Wins over every other doc on questions of *what the product should do*. |
 | [overview.md](01-product/overview.md) | Onboarding, or you need the principles as testable rules. |
-| [activities.md](01-product/activities.md) | Working on creation, the explicit Task / Plan / List item choice, contextual Add entry points, any type-specific form, or the activity lifecycle. |
+| [activities.md](01-product/activities.md) | Working on creation, the explicit Task / Plan / Add list choice, contextual List-item entry point, any type-specific form, or the activity lifecycle. |
 | [today-and-tasks.md](01-product/today-and-tasks.md) | Working on the Today screen, tasks, recurrence, snooze, overdue, or passed plans. |
 | [plans-and-lists.md](01-product/plans-and-lists.md) | Working on the three-stage Plans tab including Needs a date, plan detail, explicit new-List template choice, lists, shared lists, or the explicit `Plan this item` bridge and its Just me / Choose people choice. |
 | [sharing-and-people.md](01-product/sharing-and-people.md) | Working on participants, invites, the public invite page, guests, or the People layer. |

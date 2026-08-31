@@ -159,6 +159,31 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page.getByText('Lists contract gallery')).toBeVisible();
       await expect(page).toHaveScreenshot(`overview-compact-${scheme}.png`);
     });
+
+    test(`List-card long press opens a touch-friendly action sheet ${scheme}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openTabFrame(page, 'index-chrome', scheme);
+      const card = page.locator('[data-testid^="swipeable-list-"]').first();
+      await card.dispatchEvent('pointerdown', {
+        pointerId: 1,
+        pointerType: 'touch',
+        button: 0,
+      });
+      await page.waitForTimeout(520);
+      await card.dispatchEvent('pointerup', {
+        pointerId: 1,
+        pointerType: 'touch',
+        button: 0,
+      });
+
+      const dialog = page.getByRole('dialog', { name: 'Untitled list actions' });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'Archive' })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'Delete' })).toBeVisible();
+      await expect(page).toHaveScreenshot(`index-card-actions-compact-${scheme}.png`);
+    });
   }
 
   for (const scheme of ['light', 'dark'] as const) {
@@ -454,9 +479,7 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page).toHaveScreenshot(`stages-compact-${scheme}.png`);
     });
 
-    test(`contextual composer stays anchored over its List ${scheme}`, async ({
-      page,
-    }) => {
+    test(`contextual composer renders inline in its List ${scheme}`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'context-add', scheme);
       await expect(page.getByTestId('list-contextual-add')).toBeVisible();
@@ -474,16 +497,16 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page).toHaveScreenshot(`context-add-compact-${scheme}.png`);
     });
 
-    test(`global List item keeps destination inline and unselected ${scheme}`, async ({
+    test(`global Add offers Add list without a List-item page ${scheme}`, async ({
       page,
     }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'global-add', scheme);
-      await expect(page.getByTestId('compose-list-item')).toBeVisible();
-      await expect(page.getByLabel('Title')).toHaveValue('Try Zahav');
-      await expect(page.getByLabel('Note')).toHaveValue('Ask about the tasting menu');
-      await expect(page.getByText('Add to')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Choose a list' })).toBeDisabled();
+      await expect(page.getByTestId('object-chooser')).toBeVisible();
+      await expect(page.getByRole('button', { name: /Task,/ })).toBeVisible();
+      await expect(page.getByRole('button', { name: /Plan,/ })).toBeVisible();
+      await expect(page.getByRole('button', { name: /Add list,/ })).toBeVisible();
+      await expect(page.getByTestId('compose-list-item')).toHaveCount(0);
       await expect(page.getByText('Which list?')).toHaveCount(0);
       await expect(page).toHaveScreenshot(`global-add-compact-${scheme}.png`);
     });

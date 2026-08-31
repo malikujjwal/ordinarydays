@@ -1,5 +1,5 @@
 import { Text, Touchable, useTheme } from '@od/ui';
-import { useCallback } from 'react';
+import { Fragment, useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
 import ReanimatedSwipeable, {
   type SwipeableMethods,
@@ -9,6 +9,7 @@ import {
   type ListSwipeAction,
   listAccessibilityActions,
 } from '../model/listSwipeActions';
+import { ListCardActionsSheet } from './ListCardActionsSheet';
 import { ListIndexRow, type ListIndexRowProps } from './ListIndexRow';
 
 /**
@@ -23,7 +24,7 @@ import { ListIndexRow, type ListIndexRowProps } from './ListIndexRow';
  *
  * ## Left-swipe only, and no full-swipe commit
  *
- * §3.2 gives the index row `Archive` · `Delete` on swipe left and nothing on swipe right or
+ * §3.2 gives the index row `Archive` · `Delete` on swipe left and the same action sheet on
  * long press. Neither column has a full-swipe shortcut: `Delete` is destructive and takes the
  * §1a.1 confirmation, and `Archive` is not offered as one either — a card that vanished on an
  * over-swipe would be the one gesture on this screen that acts without a tap.
@@ -97,35 +98,68 @@ export function SwipeableListCard({
   ...rowProps
 }: SwipeableListCardProps) {
   const accessibilityActions = listAccessibilityActions(actions);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const longPressed = useRef(false);
+
+  const openActions =
+    actions.length === 0
+      ? undefined
+      : () => {
+          longPressed.current = true;
+          setActionsOpen(true);
+        };
+
+  const activate = () => {
+    if (longPressed.current) {
+      longPressed.current = false;
+      return;
+    }
+    rowProps.onPress();
+  };
 
   return (
-    <ReanimatedSwipeable
-      enabled={actions.length > 0}
-      testID={`swipeable-list-${rowProps.list.listId}`}
-      friction={1}
-      overshootFriction={1}
-      // No overshoot on either side: nothing here commits on a full swipe.
-      overshootRight={false}
-      animationOptions={{ reduceMotion: ReduceMotion.System }}
-      {...(actions.length === 0
-        ? {}
-        : {
-            renderRightActions: (
-              _progress: SharedValue<number>,
-              _translation: SharedValue<number>,
-              methods: SwipeableMethods,
-            ) => <ActionPanel actions={actions} methods={methods} onAction={onAction} />,
-          })}
-    >
-      <View
-        accessibilityActions={[...accessibilityActions]}
-        onAccessibilityAction={({ nativeEvent }) => {
-          const selected = actions.find(({ name }) => name === nativeEvent.actionName);
-          if (selected !== undefined) onAction(selected);
-        }}
+    <Fragment>
+      <ReanimatedSwipeable
+        enabled={actions.length > 0}
+        testID={`swipeable-list-${rowProps.list.listId}`}
+        friction={1}
+        overshootFriction={1}
+        // No overshoot on either side: nothing here commits on a full swipe.
+        overshootRight={false}
+        animationOptions={{ reduceMotion: ReduceMotion.System }}
+        {...(actions.length === 0
+          ? {}
+          : {
+              renderRightActions: (
+                _progress: SharedValue<number>,
+                _translation: SharedValue<number>,
+                methods: SwipeableMethods,
+              ) => (
+                <ActionPanel actions={actions} methods={methods} onAction={onAction} />
+              ),
+            })}
       >
-        <ListIndexRow {...rowProps} />
-      </View>
-    </ReanimatedSwipeable>
+        <View
+          accessibilityActions={[...accessibilityActions]}
+          onAccessibilityAction={({ nativeEvent }) => {
+            const selected = actions.find(({ name }) => name === nativeEvent.actionName);
+            if (selected !== undefined) onAction(selected);
+          }}
+        >
+          <ListIndexRow
+            {...rowProps}
+            onPress={activate}
+            {...(openActions === undefined ? {} : { onLongPress: openActions })}
+          />
+        </View>
+      </ReanimatedSwipeable>
+      <ListCardActionsSheet
+        open={actionsOpen}
+        listTitle={rowProps.list.title}
+        actions={actions}
+        onClose={() => setActionsOpen(false)}
+        onAction={onAction}
+      />
+    </Fragment>
   );
 }

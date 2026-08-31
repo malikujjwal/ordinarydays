@@ -291,12 +291,12 @@ user.
 
 > **Empty-state action reconciliation — 2026-08-12.** The fully empty Today state follows
 > the product-wide one-action contract: its sole action is `Add`, opening the same unselected
-> **Task / Plan / List item** chooser as global `+`. The older two-button wording is retired;
+> **Task / Plan / Add list** chooser as global `+`. The older two-button wording is retired;
 > Today does not add a second `Open Lists` action to this state.
 
 | Situation | Rendered |
 | --- | --- |
-| Nothing at all today, and no undated tasks | Full-screen state: heading `Nothing planned today`, body `Add something you want to do, or check your Lists.`, and one `Add` action. `Add` opens the same unselected **Task / Plan / List item** chooser as global `+`. No section headings are rendered. This state is rendered even when Plans → Needs a date is full: an undecided plan is not a reason to say something is planned today, and Today never counts or mentions that stage (§3.2). |
+| Nothing at all today, and no undated tasks | Full-screen state: heading `Nothing planned today`, body `Add something you want to do, or check your Lists.`, and one `Add` action. `Add` opens the same unselected **Task / Plan / Add list** chooser as global `+`. No section headings are rendered. This state is rendered even when Plans → Needs a date is full: an undecided plan is not a reason to say something is planned today, and Today never counts or mentions that stage (§3.2). |
 | Nothing at all today, but there are undated tasks | The ANYTIME section renders normally with them. Above it, a one-line note: `Nothing scheduled today.` No UP NEXT, SCHEDULE or EARLIER TODAY headings. |
 | SCHEDULE empty, ANYTIME non-empty, EARLIER TODAY non-empty | SCHEDULE heading is rendered with the single row `Nothing left scheduled today.` UP NEXT is not rendered. |
 | SCHEDULE non-empty, ANYTIME empty | ANYTIME is not rendered at all. The inline `+ Add a task` quick-add row (see [`activities.md`](activities.md#71-quick-add-behaviours)) still appears at the foot of the list. |
@@ -422,7 +422,7 @@ generated occurrences; today's and past occurrences remain resolvable, and an ex
 future completion remains reversible for compatibility. Opening a future occurrence's detail
 does not bypass the rule: its primary completion action is absent until that date.
 
-Task creation is explicit. Global `+` asks **Task / Plan / List item**; choosing Task opens
+Task creation is explicit. Global `+` asks **Task / Plan / Add list**; choosing Task opens
 this form with `objectKind: 'task'`, `type: 'task'`. Today's contextual `+ Add a task` answers that choice in its
 label and opens the Task form directly. Words and capture cannot turn a selected Task into
 a Plan or ListItem, and the final creation action is `Save task`. The client always sends

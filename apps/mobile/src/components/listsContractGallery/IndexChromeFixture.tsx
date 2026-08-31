@@ -13,6 +13,7 @@ import { TabScreen } from '@/components/TabScreen';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
 import { ListsIndexScroll } from '@/features/lists/components/ListsIndexScroll';
 import { SwipeableListCard } from '@/features/lists/components/SwipeableListCard';
+import { listSwipeActions } from '@/features/lists/model/listSwipeActions';
 import { LIST_ID, NOW, PRESET_LISTS, preset, STAGED_LIST, TIMEZONE } from './fixtures';
 
 export interface IndexChromeFixtureProps {
@@ -75,7 +76,7 @@ export function IndexChromeFixture({ state }: IndexChromeFixtureProps) {
                   now={NOW}
                   timezone={TIMEZONE}
                   onPress={() => {}}
-                  actions={[]}
+                  actions={listSwipeActions('owner')}
                   onAction={() => {}}
                 />
               ))}

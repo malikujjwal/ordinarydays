@@ -40,9 +40,9 @@ import { updatedLine } from '../model/updatedLine';
  *
  * ## Nothing on the card mutates
  *
- * Tapping it opens the list (U1). There is no checkbox, no menu and no long-press: the index is
- * not reorderable (`interaction-contract.md` §3.2 — `ListIndex` stores no rank, ADR-042), and
- * the swipe actions belong to the wrapper, not to the card.
+ * Tapping it opens the list (U1). There is no checkbox or menu on the card. The index is not
+ * reorderable (`interaction-contract.md` §3.2 — `ListIndex` stores no rank, ADR-042); swipe,
+ * long-press and accessibility actions belong to the wrapper, not to the card renderer.
  */
 export interface ListIndexRowProps {
   list: List;
@@ -50,6 +50,8 @@ export interface ListIndexRowProps {
   now: Instant;
   timezone: TimeZone;
   onPress: () => void;
+  /** Mobile index actions. Swipe/accessibility remain equivalent paths to the same callback. */
+  onLongPress?: () => void;
   /** Archived rows render de-emphasised in their own group; the data is identical. */
   dimmed?: boolean;
   testID?: string;
@@ -60,6 +62,7 @@ export function ListIndexRow({
   now,
   timezone,
   onPress,
+  onLongPress,
   dimmed = false,
   testID,
 }: ListIndexRowProps) {
@@ -78,6 +81,7 @@ export function ListIndexRow({
       radius="lg"
       surfaceTone={collectionTone}
       onPress={onPress}
+      {...(onLongPress === undefined ? {} : { onLongPress })}
       /**
        * One accessible element carrying the whole card, per `interaction-contract.md` §6: the
        * three lines are one thing to a screen reader, and three separate nodes would be three

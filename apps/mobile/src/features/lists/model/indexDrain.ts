@@ -73,14 +73,18 @@ export function mayShowEmptyState(input: {
  * drain. Archived rows are a separate de-emphasised group rather than a mix, so the two are
  * returned apart rather than as one flagged array.
  */
-export function partitionByArchived<T extends { readonly archived: boolean }>(
+export function partitionByArchived<
+  T extends { readonly archived: boolean; readonly listId: string },
+>(
   rows: readonly T[],
 ): { readonly active: readonly T[]; readonly archived: readonly T[] } {
   const active: T[] = [];
   const archived: T[] = [];
-  // One pass, and order preserved within each group: the index renders in **server pointer
-  // order** and never re-sorts (ADR-042 — `ListIndex` stores no rank, so there is nothing a
-  // client sort could be faithful to).
+  // The canonical `lst_` ULID begins with its creation timestamp. Descending identity order
+  // is therefore newest-created first without confusing item activity with creation or adding
+  // a second stored rank to an index that is deliberately not reorderable.
   for (const row of rows) (row.archived ? archived : active).push(row);
+  active.sort((left, right) => right.listId.localeCompare(left.listId));
+  archived.sort((left, right) => right.listId.localeCompare(left.listId));
   return { active, archived };
 }

@@ -16,6 +16,7 @@ import { StyleSheet, View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { TabScreen } from '@/components/TabScreen';
 import { useLists } from '../hooks/useLists';
+import { useSettledNavigation } from '../hooks/useSettledNavigation';
 import { archivedListToast } from '../model/archiveUndoToast';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
 import {
@@ -91,6 +92,7 @@ export function ListsScreen({
   const effectiveViewerUserId = viewerUserId ?? view.viewerUserId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const openList = useSettledNavigation(onOpenList);
   const [pendingDestructive, setPendingDestructive] = useState<
     { readonly list: List; readonly action: 'delete' | 'leave' } | undefined
   >(undefined);
@@ -174,7 +176,7 @@ export function ListsScreen({
         list={list}
         now={now}
         timezone={view.timezone}
-        onPress={() => onOpenList(list.listId)}
+        onPress={() => openList(list.listId)}
         dimmed={dimmed}
         testID={`list-card-${list.listId}`}
         actions={
@@ -305,7 +307,16 @@ export function ListsScreen({
         )}
 
         {showArchived && archived.length > 0 ? (
-          <View style={{ gap: theme.space[2] }}>
+          <View
+            testID="lists-archived-section"
+            style={{
+              gap: theme.space[2],
+              marginTop: theme.space[5],
+              paddingTop: theme.space[5],
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.borderStrong,
+            }}
+          >
             <SectionHeader title="Archived" count={archived.length} />
             <ListCardGrid>{archived.map((list) => renderCard(list, true))}</ListCardGrid>
           </View>

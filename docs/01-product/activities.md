@@ -72,12 +72,12 @@ in its label and skips only that already-answered choice.
 
 | Surface | Affordance |
 | --- | --- |
-| Today | Global `+`, bottom-right, above the tab bar. Opens **Task / Plan / List item**. After a choice, today may pre-fill `schedule.date`; it never pre-selects the choice. The ANYTIME section also has contextual `+ Add a task`. |
+| Today | Global `+`, bottom-right, above the tab bar. Opens **Task / Plan / Add list**. After a Task or Plan choice, today may pre-fill `schedule.date`; it never pre-selects the choice. The ANYTIME section also has contextual `+ Add a task`. |
 | Plans | Global `+`. Opens the same three choices. After Task or Plan is chosen, a date currently in view may pre-fill `schedule.date`. |
-| Lists (list detail) | Contextual `+ Add an item` at the bottom fixes **List item** and the current list as its destination. The global `+` still opens all three choices. |
+| Lists (list detail) | Contextual `+ Add an item` at the bottom fixes **List item** and the current list as its destination. The global `+` still opens Task / Plan / Add list. |
 | Plan detail | Contextual `+ Add prep task` fixes **Task** and pre-fills `parentActivityId`. |
 | Web | The global `+`, plus the global keyboard shortcut `N` (§7.2), both opening the same chooser. |
-| iOS share sheet | Holds the shared URL or image locally, then asks **Task / Plan / List item**. Plan also asks its kind; List item asks its destination. Only then does capture inspect the payload (Phase 9, P9-11). |
+| iOS share sheet | This external capture flow is not global Add. It holds the shared URL or image locally, then asks **Task / Plan / List item**. Plan also asks its kind; List item asks its destination. Only then does capture inspect the payload (Phase 9, P9-11). |
 
 ### 2.2 The global object chooser
 
@@ -93,8 +93,8 @@ Opening global `+` or pressing `N` presents one required, unselected choice:
 │  Something you need to do                        │
 │  Plan                                          › │
 │  Something you intend to make happen             │
-│  List item                                     › │
-│  Something you want to keep track of             │
+│  Add list                                      › │
+│  A collection for things you want to keep track of│
 └──────────────────────────────────────────────────┘
 ```
 
@@ -111,7 +111,10 @@ content. Each row determines the stored object before capture starts:
 | --- | --- | --- |
 | **Task** | None | Task form; every create request sends `objectKind: 'task'`, `type: 'task'`. |
 | **Plan** | **General / Meal / Watch / Event**, with none selected | The matching Plan form sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
-| **List item** | A destination list, unless a contextual list already fixed it | List-item form; its final button names that list. |
+| **Add list** | One of the seven List creation types, with none selected | The ordinary List catalogue, followed by its editable title step. |
+
+List-item creation is deliberately absent from this global chooser. It begins with the
+contextual `+ Add an item` inside an open List, where the destination is already explicit.
 
 The Plan-kind step asks `What kind of plan?` and lists the four kinds in the order above,
 with nothing selected:
@@ -805,7 +808,7 @@ The user-facing contract:
 | Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. The labelled action fixes `{ objectKind: 'task', type: 'task' }` before any words are accepted, opens the Task form directly with today's date and no time, and finishes with `Save task`. It never opens the global chooser or infers Task versus Plan from the title. |
 | Inline add on a list | The list detail's `+ Add an item` row creates a `ListItem` in that list, never an Activity. Return commits with the accessible action `Add to <list name>` and re-focuses. |
 | Inline add of a prep task | The plan's `+ Add prep task` row creates a `task` with `parentActivityId` set. |
-| Global `+` from Today | Opens **Task / Plan / List item**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |
+| Global `+` from Today | Opens **Task / Plan / Add list**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |
 | Global `+` from Plans on a date | Opens the same chooser. After Task or Plan is chosen, the form may pre-fill the date in view. |
 | Remembered choices | Object and Plan-kind choices always appear in the fixed documented order, unselected. Last-used values never reorder, pre-select, or bypass them. |
 | Duplicate | `POST /v1/activities/:id/duplicate` copies `objectKind`, title, type, details, location and notes. It does **not** copy schedule, reminders, participants, expenses, attachments, prep children, generated or attached lists, or completion state. The copy opens in the edit state with the title suffixed ` (copy)`. |
@@ -829,12 +832,12 @@ React Native Web builds share one codebase, so these are web-only behaviours gua
 
 | Key | Context | Action |
 | --- | --- | --- |
-| `N` | Anywhere outside a text field | Open the global **Task / Plan / List item** chooser |
+| `N` | Anywhere outside a text field | Open the global **Task / Plan / Add list** chooser |
 | `T` / `P` / `L` | Anywhere outside a text field | Go to Today / Plans / Lists |
-| `Return` | Selected Task, Plan, or List-item form, title focused | Activate `Save task`, `Save plan`, or `Add to <list name>` when valid |
+| `Return` | Selected Task or Plan form, or contextual List-item form, title focused | Activate `Save task`, `Save plan`, or `Add to <list name>` when valid |
 | `Cmd/Ctrl + Return` | Any selected creation form | Activate its visible named write button |
 | `Esc` | Any sheet or Add screen | Cancel, with the discard prompt if dirty |
-| `Alt + 1`–`3` | Global object chooser | Choose Task, Plan, or List item, in that order |
+| `Alt + 1`–`3` | Global object chooser | Choose Task, Plan, or Add list, in that order |
 | `Alt + 1`–`4` | Plan-kind chooser | Choose General, Meal, Watch, Event, in that order |
 | `Cmd/Ctrl + V` | A selected creation form | If the clipboard holds a URL, switch to Link mode; if it holds an image, switch to Screenshot mode. The chooser never inspects the clipboard. |
 | `↑` / `↓` | Any row list | Move focus between rows |

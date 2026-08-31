@@ -76,9 +76,9 @@ they were entered:
 
 | Explicit action | Text entered | Result |
 | --- | --- | --- |
-| Global `+` → **List item** → `Restaurants to try` | `Try Zahav` | One ListItem in `Restaurants to try`; no Activity. |
+| `Restaurants to try` → **Add an item** | `Try Zahav` | One ListItem in `Restaurants to try`; no Activity. |
 | Global `+` → **Plan** → **Event** | `Try Zahav` | One undated Event Plan in **Needs a date**; no ListItem. |
-| Global `+` → **List item** → `Movies to watch` | `Watch Severance` | One ListItem in `Movies to watch`; no Activity. |
+| `Movies to watch` → **Add an item** | `Watch Severance` | One ListItem in `Movies to watch`; no Activity. |
 | Global `+` → **Plan** → **Watch** | `Watch Severance` | One undated Watch Plan in **Needs a date**; no ListItem. |
 | Global `+` → **Task** | `Watch Severance` | One Task in **ANYTIME**. The verb does not override the Task choice. |
 | **Plan** → **Watch**, then People picker → Alice | `Watch Severance Friday 8 PM` | One Friday Watch Plan shared with Alice. Typing `with Alice` alone would not add her. |
@@ -243,7 +243,7 @@ line of guidance, at most one action.
 | Past | `Nothing here` | `Plans that have happened show up here.` | — |
 | All three empty | `No plans` | `Add something you want to do, on its own or with someone.` | `Add` |
 
-Both `Add` actions open the same global **Task / Plan / List item** chooser with nothing
+Both `Add` actions open the same global **Task / Plan / Add list** chooser with nothing
 selected. Being on the Plans tab never pre-selects Plan or skips the Plan-kind choice.
 
 #### 1.3.4 The calendar navigator
@@ -869,17 +869,13 @@ Rules:
 4. There is no `/suggest-template` call, debounce, term catalogue, string matching, model
    call, confidence, or offline fallback. The catalogue ships with the client and works
    identically offline.
-5. If this flow was opened from global **List item** through `New list`, successful creation
-   returns to the unchanged item composer with Title and Note intact, the new List visibly
-   selected, and `Add to <new list name>` as the final action.
-6. Assistive technology announces each choice as `<style>. <description>`, then announces
+5. Assistive technology announces each choice as `<style>. <description>`, then announces
    `List name, pre-filled with <title>` on the title step. Focus never skips the explicit
    style selection.
 
-Global `+` → **List item** opens one composer containing Title, optional Note and the required
-inline `Add to` section. No List is selected and no intermediate `Which list?` step exists.
-Choosing `New list` enters the catalogue above and returns to that same draft with the new
-destination selected. Capture controls stay unavailable until a destination is explicit.
+Global `+` → **Add list** enters the same unselected catalogue above. Successful creation
+closes the global Add flow; it does not open or return to a global List-item composer. List
+items are created only through the contextual action inside their destination List.
 
 > **What the frames fix, and what the sheet primitive does** — settled 2026-08-27 (founder),
 > on the divergence raised in P3-26's PR.
@@ -938,7 +934,7 @@ Two more rules:
 
 | Operation | Rule |
 | --- | --- |
-| **Add item** | Persistent `+ Add an item` row at the foot opens a compact composer over the still-visible List. The current List fixes the destination; no chooser or `New list` appears. Title and optional multiline Note end with `Add to <list name>`. Return performs the same single `POST /v1/lists/:id/items`, then clears both fields and re-focuses Title on success; failures retain both fields. |
+| **Add item** | Persistent `+ Add an item` row at the foot opens a compact composer inline in the List's scrolling measure. The header and current content remain visible, and the composer can scroll above the software keyboard as the List grows. The current List fixes the destination; no chooser or `New list` appears. Title and optional multiline Note end with `Add to <list name>`. Return performs the same single `POST /v1/lists/:id/items`, then clears both fields and re-focuses Title on success; failures retain both fields. |
 | **Check / uncheck** | Only in checkbox mode. Tapping writes intrinsic `done` or `open` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
 | **Reorder** | Every item shows a neutral trailing grip on touch layouts; long-pressing the row or grip starts the same drag. Pointer layouts reveal the grip on hover/focus. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
@@ -948,7 +944,7 @@ Two more rules:
 | **Archive** | Header overflow → `Archive list`. Sends `PATCH /v1/lists/:id { archived: true }` and offers settings Undo. Archived lists leave the Lists index, keep their items, and are reachable through `Lists → ⋯ → Show archived`. Owner only on a shared list — archiving is a change to the object, not to your view of it. Restoring is one tap. |
 | **Delete** | Header overflow → `Delete list`, confirmed. **Owner only.** Deletes items and their per-viewer `LNK#` projections. Every Plan created through `Plan this item` survives; the confirmation says how many of the owner's linked Plans survive, plus the number of other members who lose the list (§1a.1). |
 | **Rename** | Inline on the header title. Available to members as well as the owner — it changes nothing but the title (§5.5). |
-| **Item detail** | Tapping opens one item shell: title, note, exposed state and enabled typed-feature editors from the registry, plus `Plan this item` and `Delete`. |
+| **Item detail** | Tapping opens one item shell: title, note, exposed state and enabled typed-feature editors from the registry, plus `Plan this item` and `Delete`. Text fields save after a short debounce while focus remains in the field; blur or the sheet's single Close flushes immediately. A trimmed-empty title is rejected and never overwrites the stored title. |
 | **Empty list** | One compact semantic List icon, `Start with one item`, the List's stored `emptyStateCopy`, and one primary `Add item` action (§5.9). No large illustration or second empty add row. |
 | **Item cap** | 500 items per list. Beyond that, `POST` returns `validation_failed` with `List is full.` |
 
@@ -961,10 +957,18 @@ lookup, a category or status. A hash collision may repeat a tone, but sorting ne
 List. All card facts, actions and accessibility labels remain identical regardless of colour.
 
 Variable-height index cards keep their intrinsic height and a fixed per-column gap. The client
-does not sort or height-balance Lists: the server sequence remains the visual and accessibility
-sequence, filling one contiguous column and then the other. Every Lists-index state shares the
-same safe-area-aware floating-navigation clearance, including archived Restore actions and the
-empty, error and loading states.
+sorts active and archived groups newest-created first using the stable time-sortable `listId`;
+it does not expose user reordering or height-balance Lists. Each sorted sequence fills one
+contiguous column and then the other. Every Lists-index state shares the same safe-area-aware
+floating-navigation clearance, including archived Restore actions and the empty, error and
+loading states.
+
+On mobile, long-pressing a Lists-index card opens a compact action sheet that duplicates the
+same Archive / Delete or Leave operations available through swipe and accessibility actions.
+The sheet changes no operation semantics: Archive remains immediate with Undo, Delete/Leave
+retain their confirmations, and the index remains non-reorderable. Active and archived groups
+are separated by the standard strong divider and spacing, so the archived heading never
+touches the final active card.
 
 The List header has fixed Back, Share and More action slots around one flexible leading-aligned
 title/edit slot. A long title may use two lines without moving those actions; a short title does
@@ -1577,8 +1581,8 @@ the episode-shaped Progress feature:
 | `features.progress.season` | integer | Current progress, shows only |
 | `features.progress.episode` | integer | Current progress, shows only |
 
-Entries are created by the list's contextual `+ Add an item` composer, or by global `+` →
-**List item** followed by an explicit destination. A **Plan → Watch** creates only a Watch Plan,
+Entries are created by the list's contextual `+ Add an item` composer. Global `+` offers
+**Add list**, not List-item creation. A **Plan → Watch** creates only a Watch Plan,
 including when it has no date. Its separate `Also add a list item to <list name>` control is
 off by default and, if turned on, the final button names both writes. All fields are free
 text or numbers; the app never looks anything up.

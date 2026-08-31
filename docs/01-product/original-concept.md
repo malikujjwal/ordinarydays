@@ -51,9 +51,11 @@ solo; coordinated work is a General or guided Plan.
 ## 2. Unified Add experience
 
 A prominent **Add** button should be available throughout the application. Global Add asks
-one plain-language question first: **Task / Plan / List item**. Plan then asks
-**General / Meal / Watch / Event**; List item asks for its destination list. None
-is selected or inferred, and General is a visible choice rather than a fallback.
+one plain-language question first: **Task / Plan / Add list**. Plan then asks
+**General / Meal / Watch / Event**; Add list opens the ordinary unselected List-type
+catalogue. None is selected or inferred, and General is a visible choice rather than a
+fallback. List items are added contextually inside their destination List rather than from a
+global List-item page.
 
 Only after that selection can the user type naturally, take a photo, upload a screenshot,
 or paste a link. Capture may suggest compatible fields on the selected form, but never the
