@@ -132,6 +132,18 @@ export class NetworkError extends Error {
   }
 }
 
+function withRequestId(
+  cause: unknown,
+  requestId: string,
+  fallbackMessage: string,
+): NetworkError {
+  if (cause instanceof NetworkError) {
+    if (cause.requestId !== undefined) return cause;
+    return new NetworkError(cause.message, cause.cause, requestId);
+  }
+  return new NetworkError(fallbackMessage, cause, requestId);
+}
+
 /**
  * Whether an error is worth trying again. Exported because TanStack Query's retry predicate
  * uses it too (`tech-stack.md` §3.4), and one definition beats two that drift.
@@ -507,7 +519,17 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
       }
     }
 
-    const raw = await response.text();
+    let raw: string;
+    try {
+      raw = await response.text();
+    } catch (cause) {
+      // Reading the body is still transport work: the socket may fail after the headers have
+      // arrived. The request loop decides whether an aborted managed signal belongs to the
+      // caller or to the client deadline; every other stream failure is retryable and keeps
+      // the correlation id already sent in the request headers.
+      if (options.signal?.aborted === true) throw cause;
+      throw withRequestId(cause, requestId, 'The response could not be read.');
+    }
     let body: unknown;
     try {
       body = raw === '' ? undefined : JSON.parse(raw);
@@ -567,13 +589,20 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
        * last thing a seam with a single-flight refresh behind it should expose.
        */
       try {
-        const [token, identity] = await withinRequestDeadline(
-          Promise.all([
-            config.tokenProvider.getToken(),
-            config.tokenProvider.getIdentity(),
-          ]),
-          managedSignal,
-        );
+        let token: string | undefined;
+        let identity: string | undefined;
+        try {
+          [token, identity] = await withinRequestDeadline(
+            Promise.all([
+              config.tokenProvider.getToken(),
+              config.tokenProvider.getIdentity(),
+            ]),
+            managedSignal,
+          );
+        } catch (cause) {
+          if (signal.aborted) throw managedSignal.abortError(cause);
+          throw withRequestId(cause, requestId, 'Authentication could not be completed.');
+        }
 
         let attempt = 0;
         for (;;) {
@@ -588,7 +617,16 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
             // the exact unbounded in-flight state the deadline exists to prevent.
             if (signal.aborted) throw managedSignal.abortError(error);
             if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
-            await withinRequestDeadline(sleep(backoffDelayMs(attempt)), managedSignal);
+            try {
+              await withinRequestDeadline(sleep(backoffDelayMs(attempt)), managedSignal);
+            } catch (cause) {
+              if (signal.aborted) throw managedSignal.abortError(cause);
+              throw withRequestId(
+                cause,
+                requestId,
+                'The request retry could not be scheduled.',
+              );
+            }
             attempt += 1;
           }
         }

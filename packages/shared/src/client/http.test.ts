@@ -242,6 +242,26 @@ describe('request deadline', () => {
     }
   });
 
+  it('adds the request id when authentication fails before transport starts', async () => {
+    const authFailure = new NetworkError('The token could not be loaded.', undefined);
+    const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }], {
+      tokenProvider: {
+        getToken: () => Promise.reject(authFailure),
+        getIdentity: () => Promise.resolve('usr_a'),
+      },
+    });
+
+    const error = await client.request(health()).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({
+      message: authFailure.message,
+      requestId: REQUEST_ID,
+    });
+    expect(isRetryable(error)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
   it('preserves caller cancellation as a non-retryable abort', async () => {
     const caller = new AbortController();
     let enteredFetch: () => void = () => undefined;
@@ -300,6 +320,20 @@ describe('request deadline', () => {
     } finally {
       timeout.mockRestore();
     }
+  });
+
+  it('adds the request id when retry backoff itself fails', async () => {
+    const backoffFailure = new TypeError('The timer service failed.');
+    const { client, calls } = makeClient([{ status: 503 }], {
+      sleep: () => Promise.reject(backoffFailure),
+    });
+
+    const error = await client.request(health()).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ requestId: REQUEST_ID });
+    expect(isRetryable(error)).toBe(true);
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -650,6 +684,27 @@ describe('error mapping', () => {
 
     expect(error).toBeInstanceOf(NetworkError);
     expect(error).toMatchObject({ requestId: REQUEST_ID });
+  });
+
+  it('wraps a response-body stream failure with the request id', async () => {
+    const bodyFailure = new TypeError('The response stream closed.');
+    const fetch: FetchLike = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () => Promise.resolve(undefined),
+        text: () => Promise.reject(bodyFailure),
+      });
+    const { client } = makeClient([], { fetch });
+
+    const error = await client
+      .request({ ...health(), method: 'POST' })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ requestId: REQUEST_ID });
+    expect(isRetryable(error)).toBe(true);
   });
 
   it('lets an abort surface as itself rather than as a network fault', async () => {
