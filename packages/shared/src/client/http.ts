@@ -154,6 +154,7 @@ const MAX_DELAY_MS = 2_000;
 
 interface ManagedRequestSignal {
   readonly signal: AbortSignal;
+  readonly abortError: (cause?: unknown) => Error;
   readonly dispose: () => void;
 }
 
@@ -169,10 +170,14 @@ function requestAbortReason(signal: AbortSignal): Error {
  * backoff. The losing promise keeps its own lifecycle, but it always has rejection handlers
  * attached, so a late failure cannot become an unhandled rejection after the request retires.
  */
-function withinRequestDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(requestAbortReason(signal));
+function withinRequestDeadline<T>(
+  work: Promise<T>,
+  requestSignal: ManagedRequestSignal,
+): Promise<T> {
+  const { signal } = requestSignal;
+  if (signal.aborted) return Promise.reject(requestSignal.abortError());
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(requestAbortReason(signal));
+    const onAbort = () => reject(requestSignal.abortError());
     signal.addEventListener('abort', onAbort, { once: true });
     void work.then(
       (value) => {
@@ -198,23 +203,46 @@ function withinRequestDeadline<T>(work: Promise<T>, signal: AbortSignal): Promis
  */
 function managedRequestSignal(caller: AbortSignal | undefined): ManagedRequestSignal {
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineExpired = false;
   let deadline: AbortSignal;
   if (typeof AbortSignal.timeout === 'function') {
     deadline = AbortSignal.timeout(CLIENT_REQUEST_TIMEOUT_MS);
   } else {
     const controller = new AbortController();
-    deadlineTimer = setTimeout(() => controller.abort(), CLIENT_REQUEST_TIMEOUT_MS);
+    deadlineTimer = setTimeout(() => {
+      deadlineExpired = true;
+      controller.abort();
+    }, CLIENT_REQUEST_TIMEOUT_MS);
     deadline = controller.signal;
   }
 
+  const markDeadlineExpired = () => {
+    deadlineExpired = true;
+  };
+  deadline.addEventListener('abort', markDeadlineExpired, { once: true });
+
+  const abortError = (cause?: unknown): Error => {
+    // A caller-owned cancellation means "stop" and must never become a Retry prompt. Only
+    // the deadline created in this function is a transient transport failure.
+    if (caller?.aborted === true) return requestAbortReason(caller);
+    if (deadlineExpired || deadline.aborted) {
+      return new NetworkError('The request timed out.', cause ?? deadline.reason);
+    }
+    return requestAbortReason(caller ?? deadline);
+  };
+
   const clearDeadline = () => {
+    deadline.removeEventListener('abort', markDeadlineExpired);
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     deadlineTimer = undefined;
   };
-  if (caller === undefined) return { signal: deadline, dispose: clearDeadline };
+  if (caller === undefined) {
+    return { signal: deadline, abortError, dispose: clearDeadline };
+  }
   if (typeof AbortSignal.any === 'function') {
     return {
       signal: AbortSignal.any([caller, deadline]),
+      abortError,
       dispose: clearDeadline,
     };
   }
@@ -228,6 +256,7 @@ function managedRequestSignal(caller: AbortSignal | undefined): ManagedRequestSi
   }
   return {
     signal: combined.signal,
+    abortError,
     dispose: () => {
       caller.removeEventListener('abort', abort);
       deadline.removeEventListener('abort', abort);
@@ -534,7 +563,7 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
             config.tokenProvider.getToken(),
             config.tokenProvider.getIdentity(),
           ]),
-          signal,
+          managedSignal,
         );
 
         let attempt = 0;
@@ -542,15 +571,15 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
           try {
             return await withinRequestDeadline(
               send(boundedOptions, requestId, token, identity),
-              signal,
+              managedSignal,
             );
           } catch (error) {
             // The ten-second client deadline is for the whole request, not each retry. Once
             // it fires, retrying with a fresh ten seconds would put a durable intent back into
             // the exact unbounded in-flight state the deadline exists to prevent.
-            if (signal.aborted) throw error;
+            if (signal.aborted) throw managedSignal.abortError(error);
             if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
-            await withinRequestDeadline(sleep(backoffDelayMs(attempt)), signal);
+            await withinRequestDeadline(sleep(backoffDelayMs(attempt)), managedSignal);
             attempt += 1;
           }
         }

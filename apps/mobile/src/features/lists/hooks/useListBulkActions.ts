@@ -64,6 +64,24 @@ function bulkFailureToast(
   };
 }
 
+function bulkUndoFailureToast(
+  error: unknown,
+  action: 'clear-done' | 'uncheck-all',
+  retry: () => void,
+): ToastMessage {
+  return {
+    message:
+      action === 'clear-done'
+        ? "Couldn't undo clearing checked items."
+        : "Couldn't undo unchecking items.",
+    tone: 'error',
+    ...(error instanceof ApiError && error.requestId !== undefined
+      ? { requestId: error.requestId }
+      : {}),
+    ...(isRetryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
+  };
+}
+
 export function useListBulkActions(onChanged: () => void): ListBulkActions {
   const clock = useClock();
   const show = useToast((state) => state.show);
@@ -92,10 +110,25 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
               duration,
               undoExpiresAt: result.undoExpiresAt,
               onUndo: () => {
-                dismiss();
-                void undoListOperation(apiClient, listId, result.undoToken, randomUUID())
-                  .then(() => onChanged())
-                  .catch(() => show({ message: "Couldn't undo that.", tone: 'error' }));
+                // Undo acceptance creates one replay identity. Every Retry is the same
+                // compensation, so it must reuse that key just like the forward action.
+                const idempotencyKey = randomUUID();
+                const undo = () => {
+                  // The first call has already consumed the Undo offer; later calls own the
+                  // visible failure toast and must clear it before retrying.
+                  dismiss();
+                  void undoListOperation(
+                    apiClient,
+                    listId,
+                    result.undoToken,
+                    idempotencyKey,
+                  )
+                    .then(() => onChanged())
+                    .catch((error: unknown) =>
+                      show(bulkUndoFailureToast(error, action, undo)),
+                    );
+                };
+                undo();
               },
               onCommit: () => undefined,
             }),

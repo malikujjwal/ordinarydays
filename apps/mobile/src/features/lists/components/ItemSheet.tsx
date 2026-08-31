@@ -185,7 +185,7 @@ export function ItemSheet({
   const [editingSubItem, setEditingSubItem] = useState<string>();
   const previousItem = useRef(item);
   const latestItem = useRef(item);
-  const lastRequestedTitle = useRef(item.title);
+  const lastDispatchedTitle = useRef(item.title);
   latestItem.current = item;
   const titleSave = useDebouncedAction();
   const noteSave = useDebouncedAction();
@@ -208,7 +208,7 @@ export function ItemSheet({
     const previous = previousItem.current;
     const changedItem = previous.itemId !== item.itemId;
     if (changedItem || previous.title !== item.title) {
-      lastRequestedTitle.current = item.title;
+      lastDispatchedTitle.current = item.title;
     }
     const previousProgress = previous.features?.progress;
     const previousPlace = previous.features?.place;
@@ -581,22 +581,21 @@ export function ItemSheet({
             value={title}
             onChangeText={(value) => {
               setTitle(value);
-              const nextTitle = value.trim();
-              if (nextTitle === '' || nextTitle === lastRequestedTitle.current) {
-                // Replace a pending valid edit with an intentional no-op. In particular,
-                // blurring an invalid blank and restoring the last requested title must not
-                // issue the same PATCH again while its refresh is still on the way back.
-                titleSave.schedule(() => undefined);
-                return;
-              }
-              lastRequestedTitle.current = nextTitle;
               titleSave.schedule(() => {
+                const nextTitle = value.trim();
+                if (nextTitle === '' || nextTitle === lastDispatchedTitle.current) {
+                  return;
+                }
                 const current = latestItem.current;
                 const patch = titlePatch(current, value);
                 if (patch === undefined) return;
+                // A value is de-duplicated only once its write actually leaves this field.
+                // Pending drafts remain replaceable, so valid → blank → valid inside one
+                // debounce window cannot cancel the only write of the valid value.
+                lastDispatchedTitle.current = nextTitle;
                 void actions.save(current, patch).then((accepted) => {
-                  if (!accepted && lastRequestedTitle.current === nextTitle) {
-                    lastRequestedTitle.current = latestItem.current.title;
+                  if (!accepted && lastDispatchedTitle.current === nextTitle) {
+                    lastDispatchedTitle.current = latestItem.current.title;
                   }
                 });
               });

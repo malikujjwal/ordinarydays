@@ -101,6 +101,35 @@ describe('the canonical item editor shell', () => {
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
   });
 
+  it('still saves a restored valid title when blank input interrupted its debounce', () => {
+    vi.useFakeTimers();
+    const subject = item();
+    mount(subject);
+    const title = screen.getByLabelText('Title');
+
+    fireEvent.change(title, { target: { value: 'The Bear season 4' } });
+    fireEvent.change(title, { target: { value: '   ' } });
+    fireEvent.change(title, { target: { value: 'The Bear season 4' } });
+    act(() => vi.advanceTimersByTime(400));
+
+    expect(calls.save).toHaveBeenCalledOnce();
+    expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
+  });
+
+  it('still saves when only trailing whitespace changes before the debounce', () => {
+    vi.useFakeTimers();
+    const subject = item();
+    mount(subject);
+    const title = screen.getByLabelText('Title');
+
+    fireEvent.change(title, { target: { value: 'The Bear season 4' } });
+    fireEvent.change(title, { target: { value: 'The Bear season 4 ' } });
+    act(() => vi.advanceTimersByTime(400));
+
+    expect(calls.save).toHaveBeenCalledOnce();
+    expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
+  });
+
   it('flushes an in-focus field edit through the single close path', () => {
     vi.useFakeTimers();
     const subject = item();

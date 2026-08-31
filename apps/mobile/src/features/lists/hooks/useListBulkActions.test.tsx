@@ -1,4 +1,4 @@
-import { ApiError } from '@od/shared/client';
+import { ApiError, NetworkError } from '@od/shared/client';
 import { instant } from '@od/shared/schemas';
 import { fixedClock, type Instant } from '@od/shared/time';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -29,11 +29,20 @@ vi.mock('./useListIndexMutations', () => ({
 
 const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const NOW = instant.parse('2026-08-31T16:00:00.000Z');
-const receipt = {
-  affectedCount: 2,
-  undoToken: 'undo-bulk',
-  undoExpiresAt: instant.parse('2026-08-31T16:00:10.000Z'),
-};
+function bulkReceipt(
+  overrides: Partial<{
+    affectedCount: number;
+    undoToken: string;
+    undoExpiresAt: Instant;
+  }> = {},
+) {
+  return {
+    affectedCount: 2,
+    undoToken: 'undo-bulk',
+    undoExpiresAt: instant.parse('2026-08-31T16:00:10.000Z'),
+    ...overrides,
+  };
+}
 
 function setup(now: Instant = NOW) {
   const onChanged = vi.fn();
@@ -56,6 +65,7 @@ afterEach(() => vi.useRealTimers());
 describe('List bulk actions', () => {
   it('clears the checked set, refreshes, and expires its List-detail toast', async () => {
     vi.useFakeTimers();
+    const receipt = bulkReceipt();
     calls.clear.mockResolvedValue(receipt);
     const mounted = setup();
 
@@ -80,6 +90,7 @@ describe('List bulk actions', () => {
 
   it('unchecks the checked set without deleting it and expires its toast', async () => {
     vi.useFakeTimers();
+    const receipt = bulkReceipt();
     calls.uncheck.mockResolvedValue(receipt);
     const mounted = setup();
 
@@ -142,6 +153,30 @@ describe('List bulk actions', () => {
     });
   });
 
+  it('offers Retry for a client deadline failure from either bulk action', async () => {
+    calls.clear.mockRejectedValue(new NetworkError('The request timed out.', undefined));
+    calls.uncheck.mockRejectedValue(
+      new NetworkError('The request timed out.', undefined),
+    );
+    const mounted = setup();
+
+    await act(async () => {
+      await mounted.result.current.clearDone(LIST_ID);
+    });
+    expect(useToast.getState().current).toMatchObject({
+      message: "Couldn't clear checked items.",
+      action: { label: 'Retry' },
+    });
+
+    await act(async () => {
+      await mounted.result.current.uncheckAll(LIST_ID);
+    });
+    expect(useToast.getState().current).toMatchObject({
+      message: "Couldn't uncheck items.",
+      action: { label: 'Retry' },
+    });
+  });
+
   it('reuses the original idempotency key when Clear checked is retried', async () => {
     calls.uuid
       .mockReset()
@@ -149,7 +184,7 @@ describe('List bulk actions', () => {
       .mockReturnValue('replacement-key');
     calls.clear
       .mockRejectedValueOnce(new ApiError('internal', 'Unavailable.', 503, 'req-bulk'))
-      .mockResolvedValueOnce({ ...receipt, affectedCount: 0 });
+      .mockResolvedValueOnce(bulkReceipt({ affectedCount: 0 }));
     const mounted = setup();
 
     await act(async () => {
@@ -176,6 +211,7 @@ describe('List bulk actions', () => {
 
   it('shortens the Clear checked offer to the server deadline after a slow response', async () => {
     vi.useFakeTimers();
+    const receipt = bulkReceipt();
     calls.clear.mockResolvedValue(receipt);
     const mounted = setup(instant.parse('2026-08-31T16:00:04.000Z'));
 
@@ -192,6 +228,7 @@ describe('List bulk actions', () => {
 
   it('shortens the Uncheck all offer to the server deadline after a slow response', async () => {
     vi.useFakeTimers();
+    const receipt = bulkReceipt();
     calls.uncheck.mockResolvedValue(receipt);
     const mounted = setup(instant.parse('2026-08-31T16:00:07.500Z'));
 
@@ -207,6 +244,7 @@ describe('List bulk actions', () => {
   });
 
   it('does not offer either bulk Undo after the server deadline has passed', async () => {
+    const receipt = bulkReceipt();
     calls.clear.mockResolvedValue(receipt);
     calls.uncheck.mockResolvedValue(receipt);
     const mounted = setup(instant.parse('2026-08-31T16:00:10.000Z'));
@@ -220,5 +258,55 @@ describe('List bulk actions', () => {
       await mounted.result.current.uncheckAll(LIST_ID);
     });
     expect(useToast.getState().current).toBeUndefined();
+  });
+
+  it('names a failed bulk Undo, carries its request id, and reuses its key on Retry', async () => {
+    calls.uuid
+      .mockReset()
+      .mockReturnValueOnce('bulk-key')
+      .mockReturnValueOnce('undo-key')
+      .mockReturnValue('replacement-key');
+    calls.clear.mockResolvedValue(bulkReceipt());
+    calls.undo
+      .mockRejectedValueOnce(new ApiError('internal', 'Unavailable.', 503, 'req-undo'))
+      .mockResolvedValueOnce({});
+    const mounted = setup();
+
+    await act(async () => {
+      await mounted.result.current.clearDone(LIST_ID);
+    });
+    const offer = useToast.getState().current;
+    if (offer?.kind !== 'undo') throw new Error('Expected a bulk Undo offer');
+    act(() => useToast.getState().undo(offer.id));
+
+    await waitFor(() =>
+      expect(useToast.getState().current).toMatchObject({
+        kind: 'message',
+        message: "Couldn't undo clearing checked items.",
+        requestId: 'req-undo',
+        action: { label: 'Retry' },
+      }),
+    );
+    const failure = useToast.getState().current;
+    if (failure?.kind !== 'message') throw new Error('Expected an Undo failure');
+    act(() => failure.action?.onPress());
+
+    await waitFor(() => expect(calls.undo).toHaveBeenCalledTimes(2));
+    expect(calls.undo).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      LIST_ID,
+      'undo-bulk',
+      'undo-key',
+    );
+    expect(calls.undo).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      LIST_ID,
+      'undo-bulk',
+      'undo-key',
+    );
+    expect(calls.uuid).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(useToast.getState().current).toBeUndefined());
   });
 });

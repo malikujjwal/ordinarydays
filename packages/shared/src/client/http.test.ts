@@ -142,7 +142,9 @@ describe('request deadline', () => {
     await fetching;
     deadline.abort();
 
-    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    const error = await request.catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(isRetryable(error)).toBe(true);
     expect(attempts).toBe(1);
     timeout.mockRestore();
   });
@@ -198,7 +200,9 @@ describe('request deadline', () => {
       const request = client.request(health()).catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(10_000);
 
-      await expect(request).resolves.toMatchObject({ name: 'AbortError' });
+      const error = await request;
+      expect(error).toBeInstanceOf(NetworkError);
+      expect(isRetryable(error)).toBe(true);
       expect(attempts).toBe(1);
     } finally {
       vi.useRealTimers();
@@ -223,16 +227,44 @@ describe('request deadline', () => {
       const request = client.request(health()).catch((error: unknown) => error);
       deadline.abort();
 
-      await expect(
-        Promise.race([
-          request,
-          new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
-        ]),
-      ).resolves.toMatchObject({ name: 'AbortError' });
+      const error = await Promise.race([
+        request,
+        new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
+      ]);
+      expect(error).toBeInstanceOf(NetworkError);
+      expect(isRetryable(error)).toBe(true);
       expect(calls).toHaveLength(0);
     } finally {
       timeout.mockRestore();
     }
+  });
+
+  it('preserves caller cancellation as a non-retryable abort', async () => {
+    const caller = new AbortController();
+    let enteredFetch: () => void = () => undefined;
+    const fetching = new Promise<void>((resolve) => {
+      enteredFetch = resolve;
+    });
+    const fetch: FetchLike = (_url, init) => {
+      enteredFetch();
+      return new Promise((_resolve, reject) => {
+        const rejectAbort = () => reject(init?.signal?.reason);
+        if (init?.signal?.aborted === true) rejectAbort();
+        else init?.signal?.addEventListener('abort', rejectAbort, { once: true });
+      });
+    };
+    const { client } = makeClient([], { fetch });
+
+    const request = client
+      .request({ ...health(), signal: caller.signal })
+      .catch((error: unknown) => error);
+    await fetching;
+    caller.abort();
+    const error = await request;
+
+    expect(error).toMatchObject({ name: 'AbortError' });
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect(isRetryable(error)).toBe(false);
   });
 
   it('rejects at the deadline while a retry is waiting in backoff', async () => {
@@ -254,12 +286,12 @@ describe('request deadline', () => {
       await sleeping;
       deadline.abort();
 
-      await expect(
-        Promise.race([
-          request,
-          new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
-        ]),
-      ).resolves.toMatchObject({ name: 'AbortError' });
+      const error = await Promise.race([
+        request,
+        new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
+      ]);
+      expect(error).toBeInstanceOf(NetworkError);
+      expect(isRetryable(error)).toBe(true);
       expect(calls).toHaveLength(1);
     } finally {
       timeout.mockRestore();
