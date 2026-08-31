@@ -1,5 +1,5 @@
 import { ScreenShell, Text, useTheme } from '@od/ui';
-import { ScrollView } from 'react-native';
+import { View } from 'react-native';
 import { ListItemRow } from '@/features/lists/components/ListItemRow';
 import { Frame } from './Frame';
 import { itemFixture, preset } from './fixtures';
@@ -9,9 +9,7 @@ export function ItemsFixture() {
   const theme = useTheme();
   return (
     <ScreenShell measure="reading">
-      <ScrollView
-        contentContainerStyle={{ gap: theme.space[6], paddingBottom: theme.space[10] }}
-      >
+      <View style={{ gap: theme.space[6], paddingBottom: theme.space[10] }}>
         <Text variant="title">Typed item summaries</Text>
         <Frame title="Watch">
           <ListItemRow list={preset(3)} item={itemFixture(0)} onOpen={() => {}} />
@@ -28,7 +26,7 @@ export function ItemsFixture() {
         <Frame title="Empty configured feature">
           <ListItemRow list={preset(5)} item={itemFixture(4)} onOpen={() => {}} />
         </Frame>
-      </ScrollView>
+      </View>
     </ScreenShell>
   );
 }

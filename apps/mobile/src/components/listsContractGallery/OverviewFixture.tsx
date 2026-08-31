@@ -1,5 +1,5 @@
 import { ScreenShell, Text, useTheme } from '@od/ui';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
 import { LIST_ID, NOW, PRESET_LISTS, STAGED_LIST, TIMEZONE } from './fixtures';
@@ -28,9 +28,7 @@ export function OverviewFixture() {
   ];
   return (
     <ScreenShell measure="standard">
-      <ScrollView
-        contentContainerStyle={{ gap: theme.space[6], paddingBottom: theme.space[10] }}
-      >
+      <View style={{ gap: theme.space[6], paddingBottom: theme.space[10] }}>
         <Text variant="title">Lists contract gallery</Text>
         <ListCardGrid>
           {[...PRESET_LISTS, ...generic].map((list) => (
@@ -44,7 +42,7 @@ export function OverviewFixture() {
             </View>
           ))}
         </ListCardGrid>
-      </ScrollView>
+      </View>
     </ScreenShell>
   );
 }
