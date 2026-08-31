@@ -29,6 +29,7 @@ interface Call {
   method: string | undefined;
   headers: Record<string, string>;
   body: string | undefined;
+  signal: AbortSignal | undefined;
 }
 
 /**
@@ -50,6 +51,7 @@ function stubFetch(
       method: init?.method,
       headers: init?.headers ?? {},
       body: init?.body,
+      signal: init?.signal,
     });
     const outcome = outcomes[Math.min(calls.length - 1, outcomes.length - 1)];
     if (outcome === undefined) throw new Error('stubFetch called with no outcomes');
@@ -98,6 +100,108 @@ const health = () => ({
   method: 'GET' as const,
   path: '/v1/health',
   schema: healthResponse,
+});
+
+describe('request deadline', () => {
+  it('gives every API attempt a ten-second abort signal when the caller supplies none', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }]);
+
+    await client.request(health());
+
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0]?.signal?.aborted).toBe(false);
+    timeout.mockRestore();
+  });
+
+  it('aborts a hung transport at the shared deadline without opening a retry window', async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    let attempts = 0;
+    const fetch: FetchLike = (_url, init) => {
+      attempts += 1;
+      return new Promise((_resolve, reject) => {
+        const rejectAbort = () => {
+          const error = new Error('The request timed out.');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        if (init?.signal?.aborted === true) rejectAbort();
+        else init?.signal?.addEventListener('abort', rejectAbort, { once: true });
+      });
+    };
+    const { client } = makeClient([], { fetch });
+
+    const request = client.request(health());
+    deadline.abort();
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(attempts).toBe(1);
+    timeout.mockRestore();
+  });
+
+  it('bounds a request on React Native where AbortSignal has no static helpers', async () => {
+    const timeout = AbortSignal.timeout;
+    const any = AbortSignal.any;
+    Object.defineProperties(AbortSignal, {
+      timeout: { configurable: true, value: undefined },
+      any: { configurable: true, value: undefined },
+    });
+    try {
+      const caller = new AbortController();
+      const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }]);
+
+      await expect(
+        client.request({ ...health(), signal: caller.signal }),
+      ).resolves.toEqual(HEALTH_BODY);
+      expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
+      expect(calls[0]?.signal).not.toBe(caller.signal);
+    } finally {
+      Object.defineProperties(AbortSignal, {
+        timeout: { configurable: true, value: timeout },
+        any: { configurable: true, value: any },
+      });
+    }
+  });
+
+  it('aborts a hung React Native transport when the fallback deadline expires', async () => {
+    const timeout = AbortSignal.timeout;
+    const any = AbortSignal.any;
+    Object.defineProperties(AbortSignal, {
+      timeout: { configurable: true, value: undefined },
+      any: { configurable: true, value: undefined },
+    });
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const fetch: FetchLike = (_url, init) => {
+        attempts += 1;
+        return new Promise((_resolve, reject) => {
+          const rejectAbort = () => {
+            const error = new Error('The request timed out.');
+            error.name = 'AbortError';
+            reject(error);
+          };
+          if (init?.signal?.aborted === true) rejectAbort();
+          else init?.signal?.addEventListener('abort', rejectAbort, { once: true });
+        });
+      };
+      const { client } = makeClient([], { fetch });
+
+      const request = client.request(health()).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(request).resolves.toMatchObject({ name: 'AbortError' });
+      expect(attempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperties(AbortSignal, {
+        timeout: { configurable: true, value: timeout },
+        any: { configurable: true, value: any },
+      });
+    }
+  });
 });
 
 describe('headers', () => {

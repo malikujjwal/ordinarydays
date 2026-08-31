@@ -1,4 +1,5 @@
 export interface NetInfoState {
+  type?: string;
   isConnected: boolean | null;
   isInternetReachable: boolean | null;
 }

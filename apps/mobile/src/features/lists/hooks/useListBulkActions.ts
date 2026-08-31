@@ -34,8 +34,8 @@ import { clearedItemsToast, uncheckedItemsToast } from '../model/bulkUndoToast';
  * purpose and one screen owning both numbers is how they drift.
  */
 export interface ListBulkActions {
-  clearDone: (listId: string) => void;
-  uncheckAll: (listId: string) => void;
+  clearDone: (listId: string) => Promise<boolean>;
+  uncheckAll: (listId: string) => Promise<boolean>;
   archive: (list: List) => void;
   remove: (list: List) => void;
 }
@@ -47,14 +47,18 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
   const { onArchive, onDelete } = useListIndexMutations();
 
   const run = useCallback(
-    (listId: string, action: 'clear-done' | 'uncheck-all', idempotencyKey: string) => {
+    async (
+      listId: string,
+      action: 'clear-done' | 'uncheck-all',
+      idempotencyKey: string,
+    ): Promise<boolean> => {
       // The accepted action owns the singleton toast slot before this request can settle.
       dismiss();
       const call = action === 'clear-done' ? clearCheckedListItems : uncheckAllListItems;
-      void call(apiClient, listId, idempotencyKey)
-        .then((result) => {
-          onChanged();
-          if (result.affectedCount === 0) return;
+      try {
+        const result = await call(apiClient, listId, idempotencyKey);
+        onChanged();
+        if (result.affectedCount > 0) {
           showUndo(
             (action === 'clear-done' ? clearedItemsToast : uncheckedItemsToast)({
               affectedCount: result.affectedCount,
@@ -67,17 +71,24 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
               onCommit: () => undefined,
             }),
           );
-        })
-        .catch((error: unknown) => {
-          show({
-            message:
-              error instanceof ApiError && error.status < 500
-                ? error.message
-                : 'Something went wrong.',
-            tone: 'error',
-            action: { label: 'Retry', onPress: () => run(listId, action, randomUUID()) },
-          });
+        }
+        return true;
+      } catch (error) {
+        show({
+          message:
+            error instanceof ApiError && error.status < 500
+              ? error.message
+              : 'Something went wrong.',
+          tone: 'error',
+          action: {
+            label: 'Retry',
+            onPress: () => {
+              void run(listId, action, randomUUID());
+            },
+          },
         });
+        return false;
+      }
     },
     [dismiss, onChanged, show, showUndo],
   );

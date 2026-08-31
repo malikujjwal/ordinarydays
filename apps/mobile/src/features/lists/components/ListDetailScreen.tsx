@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useAddListItem } from '@/hooks/useAddListItem';
@@ -82,6 +82,11 @@ export interface ListDetailScreenProps {
   onOpenActivity?: (activityId: string) => void;
 }
 
+interface PendingBulkPreview {
+  readonly action: 'clear-done' | 'uncheck-all';
+  readonly itemIds: ReadonlySet<string>;
+}
+
 export function ListDetailScreen({
   listId,
   onBack,
@@ -95,6 +100,7 @@ export function ListDetailScreen({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
+  const [pendingBulk, setPendingBulk] = useState<PendingBulkPreview>();
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({
     onSaved: view.refresh,
@@ -135,13 +141,61 @@ export function ListDetailScreen({
    * drew none is the flicker §1a.1's "applies immediately, optimistically" exists to prevent.
    */
   const list = settings.view;
+  const previewCount = pendingBulk?.itemIds.size ?? 0;
+  const presentedItemCount =
+    pendingBulk?.action === 'clear-done'
+      ? Math.max(0, view.itemCount - previewCount)
+      : view.itemCount;
+  const presentedList =
+    list === undefined || pendingBulk === undefined
+      ? list
+      : {
+          ...list,
+          itemCount: presentedItemCount,
+          doneCount: Math.max(0, list.doneCount - previewCount),
+        };
+  const presentedItems =
+    pendingBulk === undefined
+      ? reorder.items
+      : pendingBulk.action === 'clear-done'
+        ? reorder.items.filter((item) => !pendingBulk.itemIds.has(item.itemId))
+        : reorder.items.map((item) =>
+            pendingBulk.itemIds.has(item.itemId)
+              ? { ...item, state: 'open' as const }
+              : item,
+          );
+
+  useEffect(() => {
+    if (pendingBulk === undefined) return;
+    const settled = [...pendingBulk.itemIds].every((itemId) => {
+      const current = view.items.find((item) => item.itemId === itemId);
+      return pendingBulk.action === 'clear-done'
+        ? current === undefined
+        : current?.state !== 'done';
+    });
+    if (settled) setPendingBulk(undefined);
+  }, [pendingBulk, view.items]);
+
+  const runBulk = (action: PendingBulkPreview['action']) => {
+    const itemIds = new Set(
+      view.items.filter((item) => item.state === 'done').map((item) => item.itemId),
+    );
+    if (itemIds.size === 0) return;
+    setMenuOpen(false);
+    setPendingBulk({ action, itemIds });
+    const request =
+      action === 'clear-done' ? bulk.clearDone(listId) : bulk.uncheckAll(listId);
+    void Promise.resolve(request).then((accepted) => {
+      if (!accepted) setPendingBulk(undefined);
+    });
+  };
 
   return (
     <View style={{ flex: 1 }}>
       <ListDetailSurface
-        list={list}
-        items={reorder.items}
-        itemCount={view.itemCount}
+        list={presentedList}
+        items={presentedItems}
+        itemCount={presentedItemCount}
         complete={view.complete}
         status={view.status}
         isOffline={view.isOffline}
@@ -218,15 +272,9 @@ export function ListDetailScreen({
            * wrong: it is offered only when its count is the whole list's, and that count is
            * what pays for there being no confirmation dialog (§P3-10).
            */
-          checkedCount={mayActOnWholeList(progress) ? doneCount(view.items) : 0}
-          onClearDone={() => {
-            setMenuOpen(false);
-            bulk.clearDone(listId);
-          }}
-          onUncheckAll={() => {
-            setMenuOpen(false);
-            bulk.uncheckAll(listId);
-          }}
+          checkedCount={mayActOnWholeList(progress) ? doneCount(presentedItems) : 0}
+          onClearDone={() => runBulk('clear-done')}
+          onUncheckAll={() => runBulk('uncheck-all')}
           onArchive={() => {
             setMenuOpen(false);
             bulk.archive(list);

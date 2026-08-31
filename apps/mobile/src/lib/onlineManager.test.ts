@@ -1,6 +1,6 @@
 import { onlineManager, QueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   installOnlineManager,
   localReachabilityConfiguration,
@@ -70,4 +70,40 @@ describe('local native reachability configuration', () => {
       uninstall();
     },
   );
+
+  it('stops the native subscription when the shell service uninstalls', () => {
+    Object.defineProperty(Platform, 'OS', { value: 'ios' });
+    const uninstall = installOnlineManager(new QueryClient());
+    uninstall();
+    onlineManager.setOnline(false);
+
+    emitNetInfoState({
+      type: 'wifi',
+      isConnected: true,
+      isInternetReachable: true,
+    });
+
+    expect(onlineManager.isOnline()).toBe(false);
+  });
+
+  it('does not report interface churn when semantic connectivity stays online', () => {
+    Object.defineProperty(Platform, 'OS', { value: 'ios' });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const uninstall = installOnlineManager(new QueryClient());
+
+    emitNetInfoState({
+      type: 'wifi',
+      isConnected: true,
+      isInternetReachable: true,
+    });
+    emitNetInfoState({
+      type: 'cellular',
+      isConnected: true,
+      isInternetReachable: true,
+    });
+
+    expect(info).toHaveBeenCalledTimes(1);
+    uninstall();
+    info.mockRestore();
+  });
 });

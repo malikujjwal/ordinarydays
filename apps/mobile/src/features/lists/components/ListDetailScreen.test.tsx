@@ -199,10 +199,45 @@ describe('the configuration-driven List detail', () => {
     fireEvent.click(screen.getByTestId('list-clear-checked'));
 
     expect(mocks.clearDone).toHaveBeenCalledWith(LIST.listId);
+  });
+
+  it('removes the checked rows immediately while Clear checked is in flight', () => {
+    mocks.clearDone.mockReturnValue(new Promise(() => undefined));
+    mount();
+
+    fireEvent.click(screen.getByTestId('list-detail-menu'));
+    fireEvent.click(screen.getByTestId('list-clear-checked'));
+
+    expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull();
+    expect(screen.getByTestId('list-overview').textContent).toBe('2 items · 0 checked');
+  });
+
+  it('unchecks the checked rows immediately while Uncheck all is in flight', () => {
+    mocks.uncheckAll.mockReturnValue(new Promise(() => undefined));
+    mount();
+
     fireEvent.click(screen.getByTestId('list-detail-menu'));
     fireEvent.click(screen.getByTestId('list-uncheck-all'));
 
     expect(mocks.uncheckAll).toHaveBeenCalledWith(LIST.listId);
+    expect(
+      screen
+        .getByTestId('list-item-itm_01J8XKQ2M4N5P6R7S8T9V0W1X4-checkbox')
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('restores the checked rows when Clear checked is rejected', async () => {
+    mocks.clearDone.mockResolvedValue(false);
+    mount();
+
+    fireEvent.click(screen.getByTestId('list-detail-menu'));
+    fireEvent.click(screen.getByTestId('list-clear-checked'));
+
+    expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Ship' })).toBeTruthy(),
+    );
   });
 
   it('shows only the compact empty action and stored guidance when there are no items', () => {

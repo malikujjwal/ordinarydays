@@ -60,6 +60,7 @@ export function shouldWarnBeforeUnload(client: QueryClient): boolean {
  * queries.
  */
 export function installOnlineManager(client: QueryClient): () => void {
+  let stopConnectivity: (() => void) | undefined;
   onlineManager.setEventListener((setOnline) => {
     if (Platform.OS === 'web') {
       const onOnline = () => setOnline(true);
@@ -67,10 +68,12 @@ export function installOnlineManager(client: QueryClient): () => void {
       window.addEventListener('online', onOnline);
       window.addEventListener('offline', onOffline);
       setOnline(navigator.onLine);
-      return () => {
+      const stop = () => {
         window.removeEventListener('online', onOnline);
         window.removeEventListener('offline', onOffline);
       };
+      stopConnectivity = stop;
+      return stop;
     }
 
     const reachability = localReachabilityConfiguration(
@@ -81,8 +84,11 @@ export function installOnlineManager(client: QueryClient): () => void {
       NetInfo.configure(reachability);
     }
 
-    return NetInfo.addEventListener((state) => {
+    let previousOnline: boolean | undefined;
+    const stop = NetInfo.addEventListener((state) => {
       const online = state.isConnected === true && state.isInternetReachable !== false;
+      if (online === previousOnline) return;
+      previousOnline = online;
       if (__DEV__) {
         console.info('native_connectivity_changed', {
           type: state.type,
@@ -93,6 +99,8 @@ export function installOnlineManager(client: QueryClient): () => void {
       }
       setOnline(online);
     });
+    stopConnectivity = stop;
+    return stop;
   });
 
   const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -103,6 +111,8 @@ export function installOnlineManager(client: QueryClient): () => void {
   if (Platform.OS === 'web') window.addEventListener('beforeunload', beforeUnload);
 
   return () => {
+    stopConnectivity?.();
+    stopConnectivity = undefined;
     if (Platform.OS === 'web') window.removeEventListener('beforeunload', beforeUnload);
   };
 }

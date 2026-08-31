@@ -147,9 +147,64 @@ export function isRetryable(error: unknown): boolean {
 
 /** Retries after the first attempt, so at most four requests leave the device. */
 export const MAX_RETRIES = 3;
+export const CLIENT_REQUEST_TIMEOUT_MS = 10_000;
 
 const BASE_DELAY_MS = 200;
 const MAX_DELAY_MS = 2_000;
+
+interface ManagedRequestSignal {
+  readonly signal: AbortSignal;
+  readonly dispose: () => void;
+}
+
+/**
+ * One deadline for the whole logical request, including retries.
+ *
+ * Browsers and Node provide the standard static helpers. React Native 0.81 installs
+ * `abort-controller@3`, whose `AbortSignal` has neither `timeout` nor `any`, so the native
+ * fallback builds the same semantics from the controller API it does provide. The disposer
+ * matters on that path: a successful request must not leave a ten-second timer or listeners
+ * attached to a caller-owned signal.
+ */
+function managedRequestSignal(caller: AbortSignal | undefined): ManagedRequestSignal {
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadline: AbortSignal;
+  if (typeof AbortSignal.timeout === 'function') {
+    deadline = AbortSignal.timeout(CLIENT_REQUEST_TIMEOUT_MS);
+  } else {
+    const controller = new AbortController();
+    deadlineTimer = setTimeout(() => controller.abort(), CLIENT_REQUEST_TIMEOUT_MS);
+    deadline = controller.signal;
+  }
+
+  const clearDeadline = () => {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    deadlineTimer = undefined;
+  };
+  if (caller === undefined) return { signal: deadline, dispose: clearDeadline };
+  if (typeof AbortSignal.any === 'function') {
+    return {
+      signal: AbortSignal.any([caller, deadline]),
+      dispose: clearDeadline,
+    };
+  }
+
+  const combined = new AbortController();
+  const abort = () => combined.abort();
+  if (caller.aborted || deadline.aborted) abort();
+  else {
+    caller.addEventListener('abort', abort, { once: true });
+    deadline.addEventListener('abort', abort, { once: true });
+  }
+  return {
+    signal: combined.signal,
+    dispose: () => {
+      caller.removeEventListener('abort', abort);
+      deadline.removeEventListener('abort', abort);
+      clearDeadline();
+    },
+  };
+}
 
 /**
  * Full-jitter exponential backoff: a delay drawn uniformly from `[0, min(cap, base·2^n))`.
@@ -419,6 +474,9 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
       // inbound `X-Request-Id` — so a retry and its original correlate in the logs rather
       // than looking like two unrelated requests.
       const requestId = newRequestId();
+      const managedSignal = managedRequestSignal(options.signal);
+      const { signal } = managedSignal;
+      const boundedOptions: RequestOptions<S> = { ...options, signal };
       const retryable = isRetryableRequest(
         options.method,
         options.replayProtected === true,
@@ -440,20 +498,28 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
        * did do is make the number of provider calls depend on transport luck, which is the
        * last thing a seam with a single-flight refresh behind it should expose.
        */
-      const [token, identity] = await Promise.all([
-        config.tokenProvider.getToken(),
-        config.tokenProvider.getIdentity(),
-      ]);
+      try {
+        const [token, identity] = await Promise.all([
+          config.tokenProvider.getToken(),
+          config.tokenProvider.getIdentity(),
+        ]);
 
-      let attempt = 0;
-      for (;;) {
-        try {
-          return await send(options, requestId, token, identity);
-        } catch (error) {
-          if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
-          await sleep(backoffDelayMs(attempt));
-          attempt += 1;
+        let attempt = 0;
+        for (;;) {
+          try {
+            return await send(boundedOptions, requestId, token, identity);
+          } catch (error) {
+            // The ten-second client deadline is for the whole request, not each retry. Once
+            // it fires, retrying with a fresh ten seconds would put a durable intent back into
+            // the exact unbounded in-flight state the deadline exists to prevent.
+            if (signal.aborted) throw error;
+            if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
+            await sleep(backoffDelayMs(attempt));
+            attempt += 1;
+          }
         }
+      } finally {
+        managedSignal.dispose();
       }
     },
   };
