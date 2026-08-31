@@ -158,6 +158,7 @@ export function ListDetailSurface({
               keyOf={(item) => item.itemId}
               labelOf={(item) => item.title}
               rangeOf={(itemId) => reorderRange(list, items, itemId)}
+              handleAppearance="quiet"
               onDrop={onDrop}
               testID="list-detail-items"
               renderItem={(item) => (

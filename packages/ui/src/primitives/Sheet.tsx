@@ -326,7 +326,13 @@ export function Sheet({
             style={{ flexGrow: detent === 'fit' ? 0 : 1, flexShrink: 1 }}
             contentContainerStyle={{ gap: theme.space[6] }}
             automaticallyAdjustKeyboardInsets
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            keyboardDismissMode={
+              Platform.OS === 'ios'
+                ? 'interactive'
+                : Platform.OS === 'web'
+                  ? 'none'
+                  : 'on-drag'
+            }
             keyboardShouldPersistTaps="handled"
             scrollEventThrottle={16}
             onScroll={(event) => {

@@ -2493,16 +2493,16 @@ adapter, not another List behaviour or screen branch.
 Global `+` → **Add list** opens the ordinary unselected catalogue. It never mounts a global
 List-item form. List-item creation remains contextual to the destination List.
 
-**The open List must read as reorderable content.** Implement `design-system.md` §7.2b: content
-starts directly below the header with the compact overview (computed count at left, grip plus
-`Drag handles to reorder` at right), every touch row has a
-persistent neutral trailing grip owned by the drag wrapper, and the in-list add control is the
-final row in the same measure with `Add an item` / `to <list name>`. The grip and whole-row
-long-press start the same reorder; the body remains the item-detail target. The contextual
-control opens the compact destination-fixed composer inline in the same scrolling List measure
-with Title, optional Note, and `Add to <list name>`, keeping it reachable above the software
-keyboard as the List grows. At large text the overview and row metadata reflow before
-truncating.
+**The open List must read as reorderable content.** Implement `design-system.md` §7.2b: its
+navigation line keeps Back leading and Share/More trailing, with the editable title on its own
+line immediately below. Content starts directly below that header with the compact computed
+count overview and no reorder helper copy. Every touch row has a persistent neutral trailing
+grip owned by the drag wrapper, and the in-list add control is the final row in the same measure
+with `Add an item` / `to <list name>`. The grip and whole-row long-press start the same reorder;
+the body remains the item-detail target. The contextual control opens the compact
+destination-fixed composer inline in the same scrolling List measure with Title, optional Note,
+and `Add to <list name>`, keeping it reachable above the software keyboard as the List grows.
+At large text the overview and row metadata reflow before truncating.
 
 **Plan adapters, not List purpose.** `Plan this item` continues to ask General / Meal / Watch /
 Event with nothing preselected. The explicit Plan kind chooses a one-time copy adapter:

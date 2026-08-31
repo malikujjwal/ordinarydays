@@ -90,6 +90,7 @@ export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProp
               keyOf={(item) => item.itemId}
               labelOf={(item) => item.title}
               rangeOf={(itemId) => stateGroupReorderRange(items, itemId)}
+              handleAppearance="quiet"
               onDrop={(itemId, within) => {
                 const flat = stateGroupDropIndex(items, itemId, within);
                 if (flat !== undefined) onDrop(itemId, flat);

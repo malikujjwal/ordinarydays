@@ -59,12 +59,19 @@ describe('renaming is inline on the title', () => {
   it('shows the title as a control, and no field until it is activated', () => {
     mount();
 
+    const navigation = screen.getByTestId('list-header-navigation-line');
+    const titleLine = screen.getByTestId('list-header-title-line');
+    const titleControl = screen.getByRole('button', { name: 'Rename Groceries' });
     expect(screen.getByText('Groceries')).toBeDefined();
     expect(screen.queryByLabelText('List name')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Rename Groceries' })).toBeTruthy();
+    expect(titleControl).toBeTruthy();
     expect(screen.getByTestId('list-title-pencil')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
-    expect(screen.getByTestId('list-header-back-slot')).toBeTruthy();
+    expect(navigation.contains(screen.getByRole('button', { name: 'Back' }))).toBe(true);
+    expect(navigation.contains(screen.getByRole('button', { name: 'Share' }))).toBe(true);
+    expect(navigation.contains(screen.getByRole('button', { name: 'More' }))).toBe(true);
+    expect(navigation.contains(titleControl)).toBe(false);
+    expect(titleLine.contains(titleControl)).toBe(true);
     expect(screen.getByTestId('list-header-title-slot').getAttribute('style')).toContain(
       'flex: 1',
     );
@@ -72,7 +79,7 @@ describe('renaming is inline on the title', () => {
     expect(screen.getByTestId('list-header-more-slot')).toBeTruthy();
   });
 
-  it('lets a long title use two lines without displacing fixed action slots', () => {
+  it('lets a long title use two lines below fixed navigation actions', () => {
     mount({
       list: list({ title: 'A deliberately long list title that needs two lines' }),
     });
@@ -86,6 +93,13 @@ describe('renaming is inline on the title', () => {
     expect(screen.getByTestId('list-header-share-slot').getAttribute('style')).toContain(
       'flex-shrink: 0',
     );
+    expect(
+      screen.getByTestId('list-header-navigation-line').contains(
+        screen.getByRole('button', {
+          name: 'Rename A deliberately long list title that needs two lines',
+        }),
+      ),
+    ).toBe(false);
   });
 
   it('swaps the title for a focused field pre-filled with the current name', () => {

@@ -240,7 +240,12 @@ describe('the configuration-driven List detail', () => {
     expect(scrollContent).toBeInstanceOf(HTMLElement);
     expect(scrollContent?.getAttribute('style')).toContain('padding-top: 8px');
     expect(screen.getByText('3 items · 1 checked')).toBeTruthy();
-    expect(screen.getByText('Drag handles to reorder')).toBeTruthy();
+    expect(screen.queryByText('Drag handles to reorder')).toBeNull();
+    expect(screen.getByTestId('list-overview').textContent).toBe('3 items · 1 checked');
+    expect(
+      getComputedStyle(screen.getByRole('button', { name: 'Reorder Write tests' }))
+        .backgroundColor,
+    ).toBe('rgba(0, 0, 0, 0)');
     expect(screen.getByRole('button', { name: 'Add an item' })).toBeTruthy();
     expect(screen.getByText('to Launch')).toBeTruthy();
   });

@@ -586,7 +586,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
 | `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
-| `SettingRow` | `label`, `summary?`, `value?`, `note?`, `selected?`, `switchValue?`, `role` (`button` \| `checkbox` \| `switch`), `opens?`, `expanded?`, `icon?`, `density` (`standard` \| `compact`), `danger?`, `separated?`, `onPress?`, `disabled?` | The utility-row family: inert/read-only, default, pressed, selected, expanded, checked/unchecked switch, disabled and focus-visible. `standard` has a 72 pt floor; transient action-menu `compact` has the content-row 56 pt floor. `icon` is a recognition aid, `danger` changes ink rather than filling the row, and `separated` adds token spacing before a consequential action. The entire row is one target; switch rows use the shared token-owned track/thumb with checked state and reduced-motion-safe transition, while choice rows use selected state plus a check and navigation/disclosure rows use a truthful chevron. |
+| `SettingRow` | `label`, `summary?`, `value?`, `note?`, `selected?`, `switchValue?`, `role` (`button` \| `checkbox` \| `switch`), `opens?`, `expanded?`, `icon?`, `iconTone?` (`neutral` \| `success` \| `danger`), `density` (`standard` \| `compact`), `danger?`, `separated?`, `onPress?`, `disabled?` | The utility-row family: inert/read-only, default, pressed, selected, expanded, checked/unchecked switch, disabled and focus-visible. `standard` has a 72 pt floor; transient action-menu `compact` has the content-row 56 pt floor. `icon` is a recognition aid; an optional semantic `iconTone` places it on the shared 36 pt soft tile without caller-owned colour. `danger` changes ink rather than filling the row, and `separated` adds token spacing before a consequential action. The entire row is one target; switch rows use the shared token-owned track/thumb with checked state and reduced-motion-safe transition, while choice rows use selected state plus a check and navigation/disclosure rows use a truthful chevron. |
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
 | `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
@@ -988,14 +988,16 @@ An open List is a content surface, not a second collection card and not a sparse
 Content begins immediately after the standard header: no cover, oversized title block, empty
 spacer or duplicate List name may sit between the header and the first useful line.
 
-The header is one leading 44 pt Back slot, one flexible leading-aligned title/edit slot, one
-fixed Share slot and one trailing 44 pt More slot. Unequal actions never optically centre the
-title. The pencil stays vertically aligned with the title inside the same editable control;
-the title may grow to two lines before clipping, while Share and More never shrink or leave the
-viewport. Rename still commits on Return or blur and adds no Save/Cancel pair.
+The header follows the Activity-detail two-line hierarchy. Its navigation line has one leading
+44 pt Back slot and a trailing action group containing the fixed Share slot and one 44 pt More
+slot. The editable List title is a separate leading-aligned line immediately below. The pencil
+stays vertically aligned with the title inside the same editable control; the title may grow to
+two lines before clipping, while Back, Share, More and Pencil never shrink or leave the viewport.
+Rename still commits on Return or blur and adds no Save/Cancel pair.
 
 ```text
-‹  Groceries ✎                              Share  ⋯
+‹                                             Share  ⋯
+Groceries ✎
 4 items · 2 checked
 ──────────────────────────────────────────────────────
 ☐  Paper towels
@@ -1007,10 +1009,11 @@ viewport. Rename still commits on Return or blur and adds no Save/Cancel pair.
    to Groceries
 ```
 
-The compact overview bridges title and content. Its left side uses the same computed grammar as
-the index card; its right side is the neutral grip glyph plus `Drag handles to reorder`. It is
-wrapping information in `textSecondary`, never a button, progress bar or sticky toolbar. When
-the List is empty the approved compact empty state replaces the overview and rows.
+The compact overview bridges title and content using the same computed count grammar as the
+index card. It is muted information in `textSecondary`, never a button, progress bar, reorder
+instruction or sticky toolbar. Persistent visible row grips are the reorder discoverability
+mechanism. When the List is empty the approved compact empty state replaces the overview and
+rows.
 
 Items use the common 56 pt-minimum `Row`: checkbox when exposed, body, populated typed-feature
 summary or disclosure, then a 44 pt trailing grip hit target. The grip stays visibly neutral

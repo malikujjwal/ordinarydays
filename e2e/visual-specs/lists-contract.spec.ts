@@ -13,6 +13,7 @@ async function openFrame(
     | 'context-add'
     | 'global-add'
     | 'item-details'
+    | 'item-state-place'
     | 'index-menu'
     | 'detail-menu'
     | 'detail-menu-empty'
@@ -405,11 +406,63 @@ test.describe('P3-33 production List contracts', () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'checklist', scheme);
       await expect(page.getByText('3 items · 1 checked')).toBeVisible();
-      await expect(page.getByText('Drag handles to reorder')).toBeVisible();
+      await expect(page.getByText('Drag handles to reorder')).toHaveCount(0);
       await expect(page.getByRole('button', { name: 'Add an item' })).toBeVisible();
       await expect(page).toHaveScreenshot(`checklist-compact-${scheme}.png`);
     });
   }
+
+  test('checkbox State and populated Place match the compact dark target', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openFrame(page, 'item-state-place', 'dark');
+    await expect(page.getByRole('dialog', { name: 'Item details' })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Mark as done, Not completed' }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Ember & Grain, 48 Cedar Lane' }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit place' })).toBeVisible();
+    await expect(page.getByLabel('Address')).toHaveCount(0);
+    await expect(page).toHaveScreenshot('item-state-place-compact-dark.png');
+  });
+
+  test('State and Place reflow without clipping at 320 and largest text', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 844 });
+    await openFrame(page, 'item-state-place');
+    await emulateLargestText(page);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(320);
+    await page.getByTestId('item-sheet-body').evaluate((body) => {
+      body.scrollTop = body.scrollHeight;
+    });
+    await expect(page.getByRole('button', { name: 'Delete item' })).toBeInViewport({
+      ratio: 1,
+    });
+  });
+
+  test('Item Details stays clear of the compact software keyboard', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installKeyboardViewport(page, 0);
+    await openFrame(page, 'item-state-place');
+    await page.getByLabel('Note').focus();
+    await expect(page.getByLabel('Note')).toBeFocused();
+    await setKeyboardInset(page, 280);
+    await expectAboveKeyboard(page, 'item-sheet', 280);
+
+    await setKeyboardInset(page, 0);
+    await page.getByRole('button', { name: 'Edit place' }).click();
+    const address = page.getByLabel('Address');
+    await address.focus();
+    await setKeyboardInset(page, 280);
+    await expect(address).toBeFocused();
+    await expectAboveKeyboard(page, 'item-sheet', 280);
+  });
 
   test('checklist grips retain 44-point targets at 320', async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 844 });
@@ -546,5 +599,21 @@ test.describe('P3-33 production List contracts', () => {
     await expect(page.getByText('8 ingredients')).toBeVisible();
     await expect(page.getByText(/No ingredients/i)).toHaveCount(0);
     await expect(page).toHaveScreenshot('items-compact-light.png');
+  });
+});
+
+test.describe('P3-33 compact touch capture', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('populated checkbox List keeps persistent mobile grips', async ({ page }) => {
+    await openFrame(page, 'checklist', 'dark');
+    await expect(
+      page.getByRole('button', { name: 'Reorder Paper towels' }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reorder Yogurt' })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Reorder Coffee filters' }),
+    ).toBeVisible();
+    await expect(page).toHaveScreenshot('list-detail-touch-compact-dark.png');
   });
 });

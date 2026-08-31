@@ -3,6 +3,7 @@ import { DeleteFixture } from './DeleteFixture';
 import { GlobalComposerFixture } from './GlobalComposerFixture';
 import { IndexChromeFixture } from './IndexChromeFixture';
 import { ItemDetailsFixture } from './ItemDetailsFixture';
+import { ItemStatePlaceFixture } from './ItemStatePlaceFixture';
 import { ItemsFixture } from './ItemsFixture';
 import { ListHeaderMenuFixture } from './ListHeaderMenuFixture';
 import { ListIndexMenuFixture } from './ListIndexMenuFixture';
@@ -31,6 +32,7 @@ export function ContractFrame({ frame }: ContractFrameProps) {
   if (frame === 'long-header') return <OpenListFixture state="long-header" />;
   if (frame === 'global-add') return <GlobalComposerFixture />;
   if (frame === 'item-details') return <ItemDetailsFixture />;
+  if (frame === 'item-state-place') return <ItemStatePlaceFixture />;
   if (frame === 'index-menu') return <ListIndexMenuFixture />;
   if (frame === 'detail-menu') return <ListHeaderMenuFixture checked />;
   if (frame === 'detail-menu-empty') return <ListHeaderMenuFixture checked={false} />;

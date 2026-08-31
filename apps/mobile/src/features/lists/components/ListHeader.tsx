@@ -105,6 +105,7 @@ export function ListHeader({
   return (
     <View style={{ paddingBottom: theme.space[3] }} testID={testID}>
       <View
+        testID="list-header-navigation-line"
         style={{
           flexDirection: 'row',
           alignItems: 'center',
@@ -120,75 +121,7 @@ export function ListHeader({
             testID="list-detail-back"
           />
         </View>
-        <View testID="list-header-title-slot" style={{ flex: 1, minWidth: 0 }}>
-          {editing ? (
-            <Field
-              label="List name"
-              hideLabel
-              appearance="bare"
-              textVariant="heading"
-              autoFocus
-              value={draft}
-              onChangeText={(next) => {
-                leaving.current = false;
-                setDraft(next);
-              }}
-              maxLength={MAX_TITLE_LEN}
-              onSubmitEditing={save}
-              onBlur={save}
-              testID="list-title-field"
-            />
-          ) : (
-            <View>
-              <Touchable
-                square={false}
-                accessibilityRole="button"
-                /*
-                 * The action, not the content: a screen reader hearing only the list's name would
-                 * have no way to know the header does anything. The name is still in it, because
-                 * `Rename` alone would not say *what* is being renamed.
-                 */
-                accessibilityLabel={`Rename ${title}`}
-                disabled={list === undefined}
-                onPress={() => {
-                  leaving.current = false;
-                  setDraft(title);
-                }}
-                testID="list-title"
-                style={{
-                  minHeight: theme.layout.hitTarget,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: theme.space[2],
-                }}
-              >
-                <Text
-                  variant="title"
-                  color="textDisplay"
-                  accessibilityRole="header"
-                  numberOfLines={2}
-                >
-                  {title}
-                </Text>
-                <View
-                  aria-hidden
-                  testID="list-title-pencil"
-                  style={{
-                    width: 30,
-                    height: 30,
-                    flexShrink: 0,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: theme.radius.md,
-                    backgroundColor: theme.colors.surfaceRaised,
-                  }}
-                >
-                  <Pencil size={14} color={theme.colors.accent} />
-                </View>
-              </Touchable>
-            </View>
-          )}
-        </View>
+        <View style={{ flex: 1, minWidth: 0 }} />
         {list === undefined ? null : (
           <>
             <View
@@ -216,6 +149,84 @@ export function ListHeader({
             </View>
           </>
         )}
+      </View>
+      <View
+        testID="list-header-title-line"
+        style={{
+          minHeight: theme.layout.hitTarget,
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}
+      >
+        <View testID="list-header-title-slot" style={{ flex: 1, minWidth: 0 }}>
+          {editing ? (
+            <Field
+              label="List name"
+              hideLabel
+              appearance="bare"
+              textVariant="heading"
+              autoFocus
+              value={draft}
+              onChangeText={(next) => {
+                leaving.current = false;
+                setDraft(next);
+              }}
+              maxLength={MAX_TITLE_LEN}
+              onSubmitEditing={save}
+              onBlur={save}
+              testID="list-title-field"
+            />
+          ) : (
+            <Touchable
+              square={false}
+              accessibilityRole="button"
+              /*
+               * The action, not the content: a screen reader hearing only the list's name would
+               * have no way to know the header does anything. The name is still in it, because
+               * `Rename` alone would not say *what* is being renamed.
+               */
+              accessibilityLabel={`Rename ${title}`}
+              disabled={list === undefined}
+              onPress={() => {
+                leaving.current = false;
+                setDraft(title);
+              }}
+              testID="list-title"
+              style={{
+                alignSelf: 'flex-start',
+                maxWidth: '100%',
+                minHeight: theme.layout.hitTarget,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: theme.space[2],
+              }}
+            >
+              <Text
+                variant="title"
+                color="textDisplay"
+                accessibilityRole="header"
+                numberOfLines={2}
+              >
+                {title}
+              </Text>
+              <View
+                aria-hidden
+                testID="list-title-pencil"
+                style={{
+                  width: 30,
+                  height: 30,
+                  flexShrink: 0,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: theme.radius.md,
+                  backgroundColor: theme.colors.surfaceRaised,
+                }}
+              >
+                <Pencil size={14} color={theme.colors.accent} />
+              </View>
+            </Touchable>
+          )}
+        </View>
       </View>
     </View>
   );

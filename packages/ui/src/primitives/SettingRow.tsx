@@ -46,7 +46,7 @@ import { Touchable } from './Touchable';
  * against `accentSurface` and misses the gate, which `design-system.md` §0 states as the rule
  * and `contrast.test.ts` pins.
  */
-export interface SettingRowProps {
+interface SettingRowBaseProps {
   label: string;
   /** Below the label: this capability's current content, clamped to one line. */
   summary?: string;
@@ -82,8 +82,6 @@ export interface SettingRowProps {
   opens?: boolean;
   /** Rotates the chevron and exposes the state; for a row that opens in place. */
   expanded?: boolean;
-  /** Recognition aid for compact action-menu rows; the label remains the accessible name. */
-  icon?: ComponentType<IconProps>;
   /** Transient action menus use the content-row floor without creating another row family. */
   density?: 'standard' | 'compact';
   /** Destructive action ink; never a filled row. */
@@ -102,6 +100,21 @@ export interface SettingRowProps {
   testID?: string;
 }
 
+type SettingRowIconProps =
+  | {
+      /** Omitting the icon also omits its presentation; a tone alone has no visible meaning. */
+      icon?: undefined;
+      iconTone?: never;
+    }
+  | {
+      /** Recognition aid for compact action-menu rows; the label remains the accessible name. */
+      icon: ComponentType<IconProps>;
+      /** Optional semantic soft tile for detail controls; callers never choose raw icon colours. */
+      iconTone?: 'neutral' | 'success' | 'danger';
+    };
+
+export type SettingRowProps = SettingRowBaseProps & SettingRowIconProps;
+
 export function SettingRow({
   label,
   summary,
@@ -114,6 +127,7 @@ export function SettingRow({
   disabled = false,
   expanded,
   icon: Icon,
+  iconTone,
   density = 'standard',
   danger = false,
   separated = false,
@@ -130,6 +144,18 @@ export function SettingRow({
   const rowMinHeight = compact
     ? theme.layout.rowMinHeight
     : theme.layout.settingRowMinHeight;
+  const iconColor =
+    iconTone === 'success'
+      ? theme.colors.success
+      : iconTone === 'danger' || danger
+        ? theme.colors.danger
+        : theme.colors.textSecondary;
+  const iconSurface =
+    iconTone === 'success'
+      ? theme.colors.successSurface
+      : iconTone === 'danger'
+        ? theme.colors.accentSurface
+        : theme.colors.surfaceSunken;
 
   const content = (
     <View
@@ -148,11 +174,24 @@ export function SettingRow({
       }}
     >
       {Icon === undefined ? null : (
-        <View aria-hidden style={{ width: 24, alignItems: 'center' }}>
-          <Icon
-            size={20}
-            color={danger ? theme.colors.danger : theme.colors.textSecondary}
-          />
+        <View
+          aria-hidden
+          testID={testID === undefined ? undefined : `${testID}-icon`}
+          style={
+            iconTone === undefined
+              ? { width: 24, alignItems: 'center' }
+              : {
+                  width: 36,
+                  height: 36,
+                  flexShrink: 0,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: theme.radius.md,
+                  backgroundColor: iconSurface,
+                }
+          }
+        >
+          <Icon size={20} color={iconColor} />
         </View>
       )}
       <View style={{ flex: 1, gap: theme.space[1] }}>

@@ -126,6 +126,7 @@ describe('the canonical item editor shell', () => {
     fireEvent.change(screen.getByLabelText('Progress'), {
       target: { value: 'Page 11' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit place' }));
     fireEvent.change(screen.getByLabelText('Place'), {
       target: { value: 'Branch library' },
     });
@@ -176,13 +177,23 @@ describe('the canonical item editor shell', () => {
     expect(screen.getByText('Reading')).toBeTruthy();
   });
 
-  it('exposes checkbox state as one checkbox and never offers active', () => {
+  it('exposes checkbox state as one compact explicit action and never offers active', () => {
     const subject = item({ state: 'active' });
     mount(subject, list({ itemStateMode: { mode: 'checkbox' } }));
 
     expect(screen.queryByText('Active')).toBeNull();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Done' }));
+    expect(screen.getByText('Not completed')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as done, Not completed' }));
     expect(calls.save).toHaveBeenCalledWith(subject, { state: 'done' });
+  });
+
+  it('writes open explicitly when the compact checkbox action marks a done item incomplete', () => {
+    const subject = item({ state: 'done' });
+    mount(subject, list({ itemStateMode: { mode: 'checkbox' } }));
+
+    expect(screen.getByText('Completed')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as not done, Completed' }));
+    expect(calls.save).toHaveBeenCalledWith(subject, { state: 'open' });
   });
 
   it('shows a quiet Add affordance instead of blank episode or Place inputs', () => {
@@ -201,7 +212,7 @@ describe('the canonical item editor shell', () => {
     expect(screen.queryByText('Address')).toBeNull();
   });
 
-  it('renders populated episode Progress and Place editors without preset inspection', () => {
+  it('summarises populated Place compactly and retains its values when editing opens', () => {
     mount(
       item({
         features: {
@@ -219,6 +230,13 @@ describe('the canonical item editor shell', () => {
 
     expect(screen.getByDisplayValue('2')).toBeTruthy();
     expect(screen.getByDisplayValue('4')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Joe Coffee, 9 W 19th St' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit place' })).toBeTruthy();
+    expect(screen.queryByDisplayValue('Joe Coffee')).toBeNull();
+    expect(screen.queryByDisplayValue('9 W 19th St')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit place' }));
+
     expect(screen.getByDisplayValue('Joe Coffee')).toBeTruthy();
     expect(screen.getByDisplayValue('9 W 19th St')).toBeTruthy();
   });

@@ -7,15 +7,15 @@ import {
 import type { ListItemState, ListSubItem, ProgressValue } from '@od/shared/types';
 import {
   Button,
-  Checkbox,
+  Check,
   ChevronDown,
   ChevronUp,
   Field,
   IconButton,
   interactionTiming,
+  MapPin,
   MoreHorizontal,
   Plus,
-  Row,
   RowGroup,
   SettingRow,
   Sheet,
@@ -122,6 +122,13 @@ const createStyles = (theme: Theme) =>
       gap: theme.space[1],
     },
     subItemFields: { flex: 1, minWidth: 0, gap: theme.space[1] },
+    featureSection: { gap: theme.space[3] },
+    featureHeading: {
+      minHeight: theme.layout.hitTarget,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.space[2],
+    },
     subItemHeading: {
       minHeight: theme.layout.hitTarget,
       flexDirection: 'row',
@@ -170,7 +177,7 @@ export function ItemSheet({
   const [addingProgress, setAddingProgress] = useState(progress !== undefined);
   const [placeLabel, setPlaceLabel] = useState(place?.label ?? '');
   const [placeAddress, setPlaceAddress] = useState(place?.address ?? '');
-  const [addingPlace, setAddingPlace] = useState(place !== undefined);
+  const [editingPlace, setEditingPlace] = useState(false);
   const [subItems, setSubItems] = useState<readonly ListSubItem[]>(
     item.features?.subItems?.entries ?? [],
   );
@@ -263,11 +270,7 @@ export function ItemSheet({
         ? (nextPlace?.address ?? '')
         : current,
     );
-    setAddingPlace((current) =>
-      changedItem || current === (previousPlace !== undefined)
-        ? nextPlace !== undefined
-        : current,
-    );
+    setEditingPlace((current) => (changedItem ? false : current));
     previousItem.current = item;
   }, [item]);
 
@@ -356,15 +359,25 @@ export function ItemSheet({
       </View>
     ),
     place: () => (
-      <View key="place">
-        {!addingPlace ? (
-          <SettingRow
-            label="Place"
-            value="Add"
-            opens
-            onPress={() => setAddingPlace(true)}
-          />
-        ) : (
+      <View key="place" style={styles.featureSection}>
+        <View style={styles.featureHeading}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text variant="caption" color="textMuted">
+              Place
+            </Text>
+          </View>
+          {place === undefined || editingPlace ? null : (
+            <Button
+              label="Edit"
+              accessibilityLabel="Edit place"
+              variant="ghost"
+              size="sm"
+              flush
+              onPress={() => setEditingPlace(true)}
+            />
+          )}
+        </View>
+        {editingPlace ? (
           <View style={{ gap: theme.space[3] }}>
             <Field
               label="Place"
@@ -390,6 +403,26 @@ export function ItemSheet({
               maxLength={MAX_ADDRESS_LEN}
             />
           </View>
+        ) : place === undefined ? (
+          <SettingRow
+            label="Place"
+            value="Add"
+            icon={MapPin}
+            iconTone="neutral"
+            density="compact"
+            opens
+            onPress={() => setEditingPlace(true)}
+          />
+        ) : (
+          <SettingRow
+            label={place.label.trim() || 'Place'}
+            {...(place.address?.trim() ? { summary: place.address.trim() } : {})}
+            icon={MapPin}
+            iconTone="neutral"
+            density="compact"
+            opens
+            onPress={() => setEditingPlace(true)}
+          />
         )}
       </View>
     ),
@@ -535,7 +568,7 @@ export function ItemSheet({
         open={open}
         onClose={close}
         title="Item details"
-        detent="large"
+        detent="fit"
         testID={testID}
       >
         <View style={{ gap: theme.space[5], paddingBottom: theme.space[1] }}>
@@ -580,18 +613,18 @@ export function ItemSheet({
           {list.itemStateMode.mode === 'none' ? null : list.itemStateMode.mode ===
             'checkbox' ? (
             <RowGroup label="State" testID="item-state-editor">
-              <Row
-                title="Done"
-                leading={
-                  <Checkbox
-                    checked={item.state === 'done'}
-                    label="Done"
-                    onChange={(checked) =>
-                      void actions.save(item, { state: checked ? 'done' : 'open' })
-                    }
-                    testID="item-state-checkbox"
-                  />
+              <SettingRow
+                label={item.state === 'done' ? 'Mark as not done' : 'Mark as done'}
+                summary={item.state === 'done' ? 'Completed' : 'Not completed'}
+                icon={Check}
+                iconTone="success"
+                density="compact"
+                onPress={() =>
+                  void actions.save(item, {
+                    state: item.state === 'done' ? 'open' : 'done',
+                  })
                 }
+                testID="item-state-action"
               />
             </RowGroup>
           ) : (
@@ -612,6 +645,7 @@ export function ItemSheet({
           <SettingRow
             label="Delete item"
             icon={Trash}
+            iconTone="danger"
             density="compact"
             danger
             separated

@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { describe, expect, it, vi } from 'vitest';
 import {
   Bowl,
+  Check,
   Diamond,
   type IconProps,
   ListLines,
@@ -346,6 +347,42 @@ describe.each(schemes)(
 );
 
 describe.each(schemes)('%s scheme — compact SettingRow actions', (scheme) => {
+  it('owns the soft semantic icon tile used by compact detail controls', () => {
+    wrap(
+      <>
+        <SettingRow
+          label="Mark as done"
+          summary="Not completed"
+          icon={Check}
+          iconTone="success"
+          density="compact"
+          onPress={() => {}}
+          testID="state-row"
+        />
+        <SettingRow
+          label="Delete item"
+          icon={Diamond}
+          iconTone="danger"
+          density="compact"
+          danger
+          onPress={() => {}}
+          testID="delete-row"
+        />
+      </>,
+      scheme,
+    );
+
+    const stateIcon = screen.getByTestId('state-row-icon');
+    expect(getComputedStyle(stateIcon).width).toBe('36px');
+    expect(getComputedStyle(stateIcon).height).toBe('36px');
+    expect(getComputedStyle(stateIcon).backgroundColor).toBe(
+      cssRgb(colors[scheme].successSurface),
+    );
+    expect(getComputedStyle(screen.getByTestId('delete-row-icon')).backgroundColor).toBe(
+      cssRgb(colors[scheme].accentSurface),
+    );
+  });
+
   it('keeps icon, summary, disclosure, and danger roles in the shared row family', () => {
     wrap(
       <>
