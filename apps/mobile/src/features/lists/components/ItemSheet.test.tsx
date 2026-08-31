@@ -343,7 +343,7 @@ describe('the canonical item editor shell', () => {
     expect(
       getComputedStyle(screen.getByTestId('list-reorder-row-sub_1')).backgroundColor,
     ).toBe('rgba(0, 0, 0, 0)');
-    expect(screen.getByRole('button', { name: 'More actions for Paper' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove Paper' })).toBeTruthy();
     expect(screen.getByText('Paper')).toBeTruthy();
     expect(screen.getByText('2 sheets')).toBeTruthy();
     expect(screen.getByText('2 items')).toBeTruthy();
@@ -371,8 +371,8 @@ describe('the canonical item editor shell', () => {
     );
     calls.save.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'More actions for Paper' }));
-    expect(screen.getByRole('dialog', { name: 'Paper actions' })).toBeTruthy();
+    // Remove is a direct control on the row: a second Sheet cannot present over the item
+    // sheet's own Modal on iOS, so a menu here is a button that does nothing on device.
     fireEvent.click(screen.getByRole('button', { name: 'Remove Paper' }));
     expect(calls.save).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'The Bear' }),

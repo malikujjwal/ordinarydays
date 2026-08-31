@@ -8,13 +8,10 @@ import type { ListItemState, ListSubItem, ProgressValue } from '@od/shared/types
 import {
   Button,
   Check,
-  ChevronDown,
-  ChevronUp,
   Field,
   IconButton,
   interactionTiming,
   MapPin,
-  MoreHorizontal,
   Plus,
   RowGroup,
   SettingRow,
@@ -118,10 +115,20 @@ const createStyles = (theme: Theme) =>
       flex: 1,
       minWidth: 0,
       minHeight: theme.layout.hitTarget,
-      justifyContent: 'center',
-      gap: theme.space[1],
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.space[3],
     },
-    subItemFields: { flex: 1, minWidth: 0, gap: theme.space[1] },
+    subItemTitle: { flex: 1, minWidth: 0 },
+    subItemFields: {
+      flex: 1,
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.space[3],
+    },
+    subItemTitleField: { flex: 2, minWidth: 0 },
+    subItemSecondaryField: { flex: 1, minWidth: 0 },
     featureSection: { gap: theme.space[3] },
     featureHeading: {
       minHeight: theme.layout.hitTarget,
@@ -181,7 +188,6 @@ export function ItemSheet({
   const [subItems, setSubItems] = useState<readonly ListSubItem[]>(
     item.features?.subItems?.entries ?? [],
   );
-  const [openSubItemMenu, setOpenSubItemMenu] = useState<string>();
   const [editingSubItem, setEditingSubItem] = useState<string>();
   const previousItem = useRef(item);
   const latestItem = useRef(item);
@@ -201,8 +207,6 @@ export function ItemSheet({
     subItemsSave.flush();
     onClose();
   };
-
-  const selectedSubItem = subItems.find((entry) => entry.id === openSubItemMenu);
 
   useEffect(() => {
     const previous = previousItem.current;
@@ -467,7 +471,6 @@ export function ItemSheet({
             const from = subItems.findIndex((entry) => entry.id === itemId);
             const next = moveSubItem(subItems, from, to);
             setSubItems(next);
-            setOpenSubItemMenu(undefined);
             subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
           }}
           renderItem={(entry) => {
@@ -477,46 +480,17 @@ export function ItemSheet({
                 <View style={styles.subItemRow}>
                   {editingSubItem === entry.id ? (
                     <View style={styles.subItemFields}>
-                      <Field
-                        label={config.singularLabel}
-                        value={entry.title}
-                        hideLabel
-                        appearance="bare"
-                        autoFocus
-                        placeholder={config.singularLabel}
-                        onChangeText={(value) => {
-                          const next = subItems.map((row) =>
-                            row.id === entry.id ? { ...row, title: value } : row,
-                          );
-                          setSubItems(next);
-                          if (next.every((row) => row.title.trim() !== '')) {
-                            subItemsSave.schedule(() =>
-                              commit(subItemsPatch(latestItem.current, next)),
-                            );
-                          }
-                        }}
-                        onBlur={() => {
-                          const next = subItems.filter((row) => row.title.trim() !== '');
-                          setSubItems(next);
-                          if (!next.some((row) => row.id === entry.id)) {
-                            setEditingSubItem(undefined);
-                          }
-                          subItemsSave.now(() =>
-                            commit(subItemsPatch(latestItem.current, next)),
-                          );
-                        }}
-                      />
-                      {config.secondaryLabel === undefined ? null : (
+                      <View style={styles.subItemTitleField}>
                         <Field
-                          label={config.secondaryLabel}
-                          value={entry.secondary ?? ''}
+                          label={config.singularLabel}
+                          value={entry.title}
                           hideLabel
                           appearance="bare"
-                          textVariant="footnote"
-                          placeholder={config.secondaryLabel}
+                          autoFocus
+                          placeholder={config.singularLabel}
                           onChangeText={(value) => {
                             const next = subItems.map((row) =>
-                              row.id === entry.id ? { ...row, secondary: value } : row,
+                              row.id === entry.id ? { ...row, title: value } : row,
                             );
                             setSubItems(next);
                             if (next.every((row) => row.title.trim() !== '')) {
@@ -525,8 +499,43 @@ export function ItemSheet({
                               );
                             }
                           }}
-                          onBlur={subItemsSave.flush}
+                          onBlur={() => {
+                            const next = subItems.filter(
+                              (row) => row.title.trim() !== '',
+                            );
+                            setSubItems(next);
+                            if (!next.some((row) => row.id === entry.id)) {
+                              setEditingSubItem(undefined);
+                            }
+                            subItemsSave.now(() =>
+                              commit(subItemsPatch(latestItem.current, next)),
+                            );
+                          }}
                         />
+                      </View>
+                      {config.secondaryLabel === undefined ? null : (
+                        <View style={styles.subItemSecondaryField}>
+                          <Field
+                            label={config.secondaryLabel}
+                            value={entry.secondary ?? ''}
+                            hideLabel
+                            appearance="bare"
+                            textVariant="footnote"
+                            placeholder={config.secondaryLabel}
+                            onChangeText={(value) => {
+                              const next = subItems.map((row) =>
+                                row.id === entry.id ? { ...row, secondary: value } : row,
+                              );
+                              setSubItems(next);
+                              if (next.every((row) => row.title.trim() !== '')) {
+                                subItemsSave.schedule(() =>
+                                  commit(subItemsPatch(latestItem.current, next)),
+                                );
+                              }
+                            }}
+                            onBlur={subItemsSave.flush}
+                          />
+                        </View>
                       )}
                     </View>
                   ) : (
@@ -537,25 +546,38 @@ export function ItemSheet({
                       onPress={() => setEditingSubItem(entry.id)}
                       style={styles.subItemBody}
                     >
-                      <Text variant="subhead" color="textPrimary" numberOfLines={2}>
-                        {name}
-                      </Text>
+                      <View style={styles.subItemTitle}>
+                        <Text variant="subhead" color="textPrimary" numberOfLines={2}>
+                          {name}
+                        </Text>
+                      </View>
                       {entry.secondary?.trim() ? (
-                        <Text variant="footnote" color="textSecondary">
+                        <Text variant="footnote" color="textSecondary" numberOfLines={1}>
                           {entry.secondary}
                         </Text>
                       ) : null}
                     </Touchable>
                   )}
+                  {/*
+                   * A direct remove, not a `⋯` menu: the menu was a second `Sheet`, and iOS
+                   * silently refuses to present a Modal while the item sheet's own Modal is
+                   * up, so the button did nothing on device. Move up/down live on the drag
+                   * handle's accessibility actions already.
+                   */}
                   <IconButton
-                    icon={MoreHorizontal}
-                    label={`More actions for ${name}`}
-                    onPress={() =>
-                      setOpenSubItemMenu((current) =>
-                        current === entry.id ? undefined : entry.id,
-                      )
-                    }
-                    testID={`sub-item-${entry.id}-menu`}
+                    icon={Trash}
+                    label={`Remove ${name}`}
+                    onPress={() => {
+                      const next = subItems.filter((row) => row.id !== entry.id);
+                      setSubItems(next);
+                      setEditingSubItem((current) =>
+                        current === entry.id ? undefined : current,
+                      );
+                      subItemsSave.now(() =>
+                        commit(subItemsPatch(latestItem.current, next)),
+                      );
+                    }}
+                    testID={`sub-item-${entry.id}-remove`}
                   />
                 </View>
               </View>
@@ -678,57 +700,6 @@ export function ItemSheet({
           />
         </View>
       </Sheet>
-
-      {!open || selectedSubItem === undefined ? null : (
-        <Sheet
-          open
-          onClose={() => setOpenSubItemMenu(undefined)}
-          title={`${selectedSubItem.title.trim() || 'Sub-item'} actions`}
-          testID="sub-item-actions"
-        >
-          <View>
-            <SettingRow
-              label={`Move ${selectedSubItem.title.trim() || 'Sub-item'} up`}
-              icon={ChevronUp}
-              density="compact"
-              disabled={subItems.indexOf(selectedSubItem) === 0}
-              onPress={() => {
-                const from = subItems.indexOf(selectedSubItem);
-                const next = moveSubItem(subItems, from, from - 1);
-                setSubItems(next);
-                setOpenSubItemMenu(undefined);
-                subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
-              }}
-            />
-            <SettingRow
-              label={`Move ${selectedSubItem.title.trim() || 'Sub-item'} down`}
-              icon={ChevronDown}
-              density="compact"
-              disabled={subItems.indexOf(selectedSubItem) === subItems.length - 1}
-              onPress={() => {
-                const from = subItems.indexOf(selectedSubItem);
-                const next = moveSubItem(subItems, from, from + 1);
-                setSubItems(next);
-                setOpenSubItemMenu(undefined);
-                subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
-              }}
-            />
-            <SettingRow
-              label={`Remove ${selectedSubItem.title.trim() || 'Sub-item'}`}
-              icon={Trash}
-              density="compact"
-              danger
-              separated
-              onPress={() => {
-                const next = subItems.filter((entry) => entry.id !== selectedSubItem.id);
-                setSubItems(next);
-                setOpenSubItemMenu(undefined);
-                subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
-              }}
-            />
-          </View>
-        </Sheet>
-      )}
     </>
   );
 }
