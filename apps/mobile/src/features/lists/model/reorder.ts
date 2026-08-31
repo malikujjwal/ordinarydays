@@ -63,8 +63,9 @@ export interface ReorderPlan {
    * A provisional rank for the optimistic row. **Display only, never sent.**
    *
    * Absent when the gap cannot be split — two neighbours sharing a rank, or a gap already
-   * subdivided to the cap. Both are the repository's to repair, and neither stops the request:
-   * the row simply stays where it was until the server answers with the rank it allocated.
+   * subdivided to the cap. Both are the repository's to repair, and neither stops the request
+   * nor the move: `useReorderItems` places the row positionally, so the finger's order holds
+   * from the drop, and the server's allocated rank replaces the provisional value either way.
    */
   readonly rank?: string;
 }

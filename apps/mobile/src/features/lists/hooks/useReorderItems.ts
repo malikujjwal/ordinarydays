@@ -67,7 +67,15 @@ export interface ReorderItems {
 interface OptimisticMove {
   readonly dragId: string;
   readonly itemId: string;
-  readonly rank: string;
+  /** The insertion index the finger chose, in the order with the dragged row removed. */
+  readonly toIndex: number;
+  /**
+   * Absent when the gap could not be split (equal adjacent ranks, or one subdivided to the
+   * cap). The move still displays — {@link toIndex} places it — because a row that springs
+   * back to its old slot for a server round-trip and then jumps reads as a replay, which is
+   * exactly what it looked like before 2026-08-31.
+   */
+  readonly rank?: string;
   readonly acknowledged: boolean;
 }
 
@@ -115,15 +123,24 @@ export function useReorderItems({
   /** The drag whose request may still write. A newer drop retires the previous one. */
   const activeDrag = useRef<string | undefined>(undefined);
   const [optimistic, setOptimistic] = useState<OptimisticMove>();
-  const displayItems = useMemo(
-    () =>
-      orderedItems(
-        items.map((item) =>
-          item.itemId === optimistic?.itemId ? { ...item, rank: optimistic.rank } : item,
-        ),
-      ),
-    [items, optimistic],
-  );
+  /*
+   * The overlay is positional, not rank-sorted: the dragged row is spliced in at the index
+   * the finger chose. A rank-sorted overlay could not express a drop between two rows that
+   * share a rank, so the move would not display until the server allocated one.
+   */
+  const displayItems = useMemo(() => {
+    const sorted = orderedItems(items);
+    if (optimistic === undefined) return sorted;
+    const moved = sorted.find((entry) => entry.itemId === optimistic.itemId);
+    if (moved === undefined) return sorted;
+    const remaining = sorted.filter((entry) => entry.itemId !== optimistic.itemId);
+    remaining.splice(
+      Math.min(optimistic.toIndex, remaining.length),
+      0,
+      optimistic.rank === undefined ? moved : { ...moved, rank: optimistic.rank },
+    );
+    return remaining;
+  }, [items, optimistic]);
 
   /*
    * Keep the overlay through the request and the platform projection write. Web installs the
@@ -131,7 +148,7 @@ export function useReorderItems({
    * would replay the old order between drop and reconciliation.
    */
   useEffect(() => {
-    if (!optimistic?.acknowledged) return;
+    if (!optimistic?.acknowledged || optimistic.rank === undefined) return;
     const reconciled = items.some(
       (item) => item.itemId === optimistic.itemId && item.rank === optimistic.rank,
     );
@@ -165,14 +182,13 @@ export function useReorderItems({
       const send = () => {
         // A newer drag has taken the row since. That drag's position is the live one.
         if (activeDrag.current !== dragId) return;
-        if (plan.rank !== undefined) {
-          setOptimistic({
-            dragId,
-            itemId,
-            rank: plan.rank,
-            acknowledged: false,
-          });
-        }
+        setOptimistic({
+          dragId,
+          itemId,
+          toIndex,
+          ...(plan.rank === undefined ? {} : { rank: plan.rank }),
+          acknowledged: false,
+        });
         void patchListItem(apiClient, listId, itemId, {
           /*
            * The position, and only the position. A rank here would be the client allocating in
@@ -186,6 +202,7 @@ export function useReorderItems({
             setOptimistic({
               dragId,
               itemId,
+              toIndex,
               rank: moved.rank,
               acknowledged: true,
             });

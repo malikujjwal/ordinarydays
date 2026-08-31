@@ -112,6 +112,78 @@ describe('useReorderItems', () => {
     expect(applyRank).toHaveBeenLastCalledWith(rows[1].itemId, 'A');
   });
 
+  /**
+   * The 2026-08-31 "reorder replay": equal adjacent ranks — the restored-or-legacy
+   * duplicates `(rank, itemId)` is defensive for — make the gap unsplittable, and the
+   * overlay used to be rank-based, so the dragged row sprang back to its old slot for a
+   * full server round-trip before jumping to its destination. The move is positional
+   * now: the finger's order holds from the drop, whatever the ranks can express.
+   */
+  it('moves the row immediately even when the rank gap cannot be split', async () => {
+    const duplicates = [item('AA', 'm'), item('BB', 'm'), item('CC', 'z')] as const;
+    let resolvePatch!: (moved: ListItemView) => void;
+    calls.patch.mockReturnValue(
+      new Promise<ListItemView>((resolve) => {
+        resolvePatch = resolve;
+      }),
+    );
+    const mounted = renderHook(() =>
+      useReorderItems({
+        listId: duplicates[0].listId,
+        list: { itemStateMode: { mode: 'none' } },
+        items: duplicates,
+        applyRank: vi.fn(),
+        onMoved: vi.fn(),
+      }),
+    );
+
+    // CC lands between the two 'm' ranks: no provisional rank can exist there.
+    act(() => mounted.result.current.drop(duplicates[2].itemId, 1));
+
+    expect(mounted.result.current.items.map((entry) => entry.itemId)).toEqual([
+      duplicates[0].itemId,
+      duplicates[2].itemId,
+      duplicates[1].itemId,
+    ]);
+    expect(calls.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      duplicates[0].listId,
+      duplicates[2].itemId,
+      { afterItemId: duplicates[0].itemId },
+    );
+
+    await act(async () => {
+      resolvePatch({ ...duplicates[2], rank: 'mm' });
+      await Promise.resolve();
+    });
+    expect(mounted.result.current.items.map((entry) => entry.itemId)).toEqual([
+      duplicates[0].itemId,
+      duplicates[2].itemId,
+      duplicates[1].itemId,
+    ]);
+  });
+
+  it('returns the row to its committed position when the reorder is refused', async () => {
+    calls.patch.mockRejectedValue(new Error('The request could not be sent.'));
+    const mounted = renderHook(() =>
+      useReorderItems({
+        listId: rows[0].listId,
+        list: { itemStateMode: { mode: 'none' } },
+        items: rows,
+        applyRank: vi.fn(),
+        onMoved: vi.fn(),
+      }),
+    );
+
+    act(() => mounted.result.current.drop(rows[1].itemId, 0));
+    await waitFor(() =>
+      expect(mounted.result.current.items.map((entry) => entry.itemId)).toEqual([
+        rows[0].itemId,
+        rows[1].itemId,
+      ]),
+    );
+  });
+
   it('refuses offline drops without writing', () => {
     onlineManager.setOnline(false);
     const mounted = renderHook(() =>
