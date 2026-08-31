@@ -1,7 +1,7 @@
 import { instant } from '@od/shared/schemas';
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
@@ -250,16 +250,13 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByText('to Launch')).toBeTruthy();
   });
 
-  it('lets item press feedback settle before opening details and coalesces a double tap', () => {
-    vi.useFakeTimers();
+  it('opens item details on the first activation and coalesces a double tap', () => {
     mount();
 
     const body = screen.getByRole('button', { name: 'Write tests' });
     fireEvent.click(body);
     fireEvent.click(body);
 
-    expect(screen.queryByRole('dialog', { name: 'Item details' })).toBeNull();
-    act(() => vi.advanceTimersByTime(17));
     expect(screen.getAllByRole('dialog', { name: 'Item details' })).toHaveLength(1);
   });
 

@@ -7,10 +7,10 @@ import { apiBaseUrl } from '@/lib/apiClient';
 type NetInfoConfiguration = NonNullable<Parameters<typeof NetInfo.configure>[0]>;
 
 /**
- * Local iOS builds use the API health endpoint as their reachability probe. This lets the
- * dependency-free P2-37 proxy exercise the real persisted queue on a simulator, where
- * Maestro's airplane-mode commands are unavailable. Dev and production builds retain the
- * operating system's native reachability source.
+ * Local native builds use the API health endpoint as their reachability probe. The phone can
+ * have internet while the laptop-hosted API is unavailable; native internet reachability alone
+ * would then leave queued writes presented as active syncing forever. Dev and production builds
+ * retain the operating system's native reachability source.
  */
 export function localReachabilityConfiguration(
   profile: unknown,
@@ -77,7 +77,7 @@ export function installOnlineManager(client: QueryClient): () => void {
       Constants.expoConfig?.extra?.profile,
       apiBaseUrl,
     );
-    if (Platform.OS === 'ios' && reachability !== undefined) {
+    if (reachability !== undefined) {
       NetInfo.configure(reachability);
     }
 

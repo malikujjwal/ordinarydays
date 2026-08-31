@@ -1,7 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import { localReachabilityConfiguration } from '@/lib/onlineManager';
+import { onlineManager, QueryClient } from '@tanstack/react-query';
+import { Platform } from 'react-native';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  installOnlineManager,
+  localReachabilityConfiguration,
+} from '@/lib/onlineManager';
+import {
+  configuredNetInfo,
+  emitNetInfoState,
+  resetConfiguredNetInfo,
+} from '../../test/netinfo-stub';
 
-describe('local iOS reachability configuration', () => {
+const originalPlatform = Platform.OS;
+
+afterEach(() => {
+  Object.defineProperty(Platform, 'OS', { value: originalPlatform });
+  resetConfiguredNetInfo();
+  onlineManager.setOnline(true);
+});
+
+describe('local native reachability configuration', () => {
   it('probes the local API frequently enough for the simulator network proxy', async () => {
     const configuration = localReachabilityConfiguration(
       'local',
@@ -31,6 +49,25 @@ describe('local iOS reachability configuration', () => {
       expect(
         localReachabilityConfiguration(profile, 'https://api.example.test'),
       ).toBeUndefined();
+    },
+  );
+
+  it.each(['ios', 'android'] as const)(
+    'uses API reachability on a local %s device',
+    (platform) => {
+      Object.defineProperty(Platform, 'OS', { value: platform });
+
+      const uninstall = installOnlineManager(new QueryClient());
+
+      expect(configuredNetInfo()).toMatchObject({
+        reachabilityUrl: 'http://localhost:3000/v1/health',
+        useNativeReachability: false,
+      });
+      emitNetInfoState({ isConnected: true, isInternetReachable: false });
+      expect(onlineManager.isOnline()).toBe(false);
+      emitNetInfoState({ isConnected: true, isInternetReachable: true });
+      expect(onlineManager.isOnline()).toBe(true);
+      uninstall();
     },
   );
 });

@@ -7,7 +7,6 @@ import { useListDetail } from '../hooks/useListDetail';
 import { useListItemActions } from '../hooks/useListItemActions';
 import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
-import { useSettledNavigation } from '../hooks/useSettledNavigation';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
 import { doneCount, mayActOnWholeList } from '../model/listDetail';
 import { ContextualListItemComposer } from './ContextualListItemComposer';
@@ -96,7 +95,6 @@ export function ListDetailScreen({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
-  const openItemDetails = useSettledNavigation(setOpenItemId);
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({
     onSaved: view.refresh,
@@ -181,7 +179,9 @@ export function ListDetailScreen({
                 />
               ),
             })}
-        onOpenItem={(item) => openItemDetails(item.itemId)}
+        // This opens local overlay state, not a route. Deferring it behind a navigation frame
+        // can strand the first activation when the runtime pauses frame delivery.
+        onOpenItem={(item) => setOpenItemId(item.itemId)}
         onToggleChecked={(item, next) =>
           items.save(item, {
             state: next ? 'done' : item.state === 'done' ? 'open' : item.state,
