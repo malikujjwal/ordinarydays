@@ -100,10 +100,11 @@ export function ListItemRow({
     testID === undefined ? {} : { testID: `${testID}-${suffix}` };
   const dimmed = checkable && checked;
   /**
-   * The Today row grammar, adopted whole (founder, 2026-08-31): no divider — spacing does
-   * the job the border used to do — `bodyStrong` titles over `footnote` metadata, and the
-   * 44 pt leading control lifted so its 24 pt glyph centres on the title's first line
-   * rather than on the row. The lift derivation is `AgendaRow`'s, from the same two tokens.
+   * The Today row typography (founder, 2026-08-31): `bodyStrong` titles over `footnote`
+   * metadata, and the 44 pt leading control lifted so its 24 pt glyph centres on the
+   * title's first line rather than on the row — `AgendaRow`'s derivation, from the same
+   * two tokens. The divider stays: the founder kept Lists' row separators after seeing
+   * both, so this is Today's grammar on Lists' own hairlines.
    */
   const leadingLift = (theme.layout.hitTarget - typeScale.bodyStrong.lineHeight) / 2;
 
@@ -113,8 +114,9 @@ export function ListItemRow({
       style={{
         flexDirection: 'row',
         alignItems: 'flex-start',
-        paddingTop: theme.space[4],
-        paddingBottom: theme.space[4] + theme.space[1],
+        paddingVertical: theme.space[3],
+        borderBottomWidth: 1,
+        borderBottomColor: theme.colors.borderSubtle,
       }}
     >
       {checkable ? (
