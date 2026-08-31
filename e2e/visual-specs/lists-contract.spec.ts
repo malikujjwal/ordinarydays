@@ -171,7 +171,7 @@ test.describe('P3-33 production List contracts', () => {
         scroll.scrollTop = scroll.scrollHeight;
       });
 
-      const tab = page.getByTestId('tab-lists');
+      const tab = page.getByRole('tab', { name: 'Lists' });
       const lastActive = page.getByRole('button', { name: /^Road trip stops\./ });
       const restore = page.getByRole('button', {
         name: 'Restore Archived reading list',
@@ -204,7 +204,7 @@ test.describe('P3-33 production List contracts', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const frame of ['index-chrome-empty', 'index-chrome-loading'] as const) {
       await openTabFrame(page, frame);
-      const tabBox = await page.getByTestId('tab-lists').boundingBox();
+      const tabBox = await page.getByRole('tab', { name: 'Lists' }).boundingBox();
       const contentBox = await (frame === 'index-chrome-empty'
         ? page.getByRole('button', { name: 'New list' }).last()
         : page.getByTestId('lists-contract-loading')
