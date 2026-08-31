@@ -1,6 +1,7 @@
 import {
   ApiError,
   clearCheckedListItems,
+  isRetryable,
   uncheckAllListItems,
   undoListOperation,
 } from '@od/shared/client';
@@ -8,9 +9,14 @@ import type { List } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
 import { useListIndexMutations } from '@/features/lists/hooks/useListIndexMutations';
+import { useClock } from '@/hooks/useClock';
 import { apiClient } from '@/lib/apiClient';
-import { useToast } from '@/stores/toast';
-import { clearedItemsToast, uncheckedItemsToast } from '../model/bulkUndoToast';
+import { type ToastMessage, useToast } from '@/stores/toast';
+import {
+  clearedItemsToast,
+  remainingBulkUndoMs,
+  uncheckedItemsToast,
+} from '../model/bulkUndoToast';
 
 /**
  * The list header's two bulk actions, plus archive (§5.6, §P3-10, §P3-27).
@@ -40,7 +46,26 @@ export interface ListBulkActions {
   remove: (list: List) => void;
 }
 
+function bulkFailureToast(
+  error: unknown,
+  action: 'clear-done' | 'uncheck-all',
+  retry: () => void,
+): ToastMessage {
+  return {
+    message:
+      action === 'clear-done'
+        ? "Couldn't clear checked items."
+        : "Couldn't uncheck items.",
+    tone: 'error',
+    ...(error instanceof ApiError && error.requestId !== undefined
+      ? { requestId: error.requestId }
+      : {}),
+    ...(isRetryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
+  };
+}
+
 export function useListBulkActions(onChanged: () => void): ListBulkActions {
+  const clock = useClock();
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);
@@ -59,9 +84,13 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
         const result = await call(apiClient, listId, idempotencyKey);
         onChanged();
         if (result.affectedCount > 0) {
+          const duration = remainingBulkUndoMs(result.undoExpiresAt, clock);
+          if (duration === undefined) return true;
           showUndo(
             (action === 'clear-done' ? clearedItemsToast : uncheckedItemsToast)({
               affectedCount: result.affectedCount,
+              duration,
+              undoExpiresAt: result.undoExpiresAt,
               onUndo: () => {
                 dismiss();
                 void undoListOperation(apiClient, listId, result.undoToken, randomUUID())
@@ -74,23 +103,15 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
         }
         return true;
       } catch (error) {
-        show({
-          message:
-            error instanceof ApiError && error.status < 500
-              ? error.message
-              : 'Something went wrong.',
-          tone: 'error',
-          action: {
-            label: 'Retry',
-            onPress: () => {
-              void run(listId, action, randomUUID());
-            },
-          },
-        });
+        show(
+          bulkFailureToast(error, action, () => {
+            void run(listId, action, idempotencyKey);
+          }),
+        );
         return false;
       }
     },
-    [dismiss, onChanged, show, showUndo],
+    [clock, dismiss, onChanged, show, showUndo],
   );
 
   return {

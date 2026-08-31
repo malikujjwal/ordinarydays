@@ -1,4 +1,5 @@
 import { BULK_UNDO_OFFER_SECONDS } from '@od/shared';
+import type { Clock, Instant } from '@od/shared/time';
 import type { UndoToastMessage } from '@/stores/toast';
 
 /**
@@ -29,9 +30,25 @@ import type { UndoToastMessage } from '@/stores/toast';
 /** The ten-second window every bulk reversible action gets, in the store's own units. */
 export const BULK_UNDO_DURATION_MS = (BULK_UNDO_OFFER_SECONDS * 1000) as 10000;
 
+/** Converts the server's absolute bulk offer deadline into its remaining visible window. */
+export function remainingBulkUndoMs(
+  undoExpiresAt: Instant,
+  clock: Clock,
+): number | undefined {
+  const remaining = Math.min(
+    BULK_UNDO_DURATION_MS,
+    Date.parse(undoExpiresAt) - Date.parse(clock.now()),
+  );
+  return Number.isFinite(remaining) && remaining > 0 ? remaining : undefined;
+}
+
 export interface BulkUndoToastInput {
   /** What the server said it touched. The count the user is asked to notice. */
   readonly affectedCount: number;
+  /** Remaining server-authoritative offer window. */
+  readonly duration?: number;
+  /** Absolute server deadline, so the host can reject a late tap. */
+  readonly undoExpiresAt?: Instant;
   /** Fires the compensating call. Never a delayed commit. */
   readonly onUndo: () => void;
   /** Fires when the window closes, or when another toast replaces this one. */
@@ -48,7 +65,8 @@ export function clearedItemsToast(input: BulkUndoToastInput): UndoToastMessage {
     message: `${String(input.affectedCount)} ${
       input.affectedCount === 1 ? 'item' : 'items'
     } cleared`,
-    duration: BULK_UNDO_DURATION_MS,
+    duration: input.duration ?? BULK_UNDO_DURATION_MS,
+    ...(input.undoExpiresAt === undefined ? {} : { undoExpiresAt: input.undoExpiresAt }),
     onUndo: input.onUndo,
     onCommit: input.onCommit,
   };
@@ -60,7 +78,8 @@ export function uncheckedItemsToast(input: BulkUndoToastInput): UndoToastMessage
     message: `${String(input.affectedCount)} ${
       input.affectedCount === 1 ? 'item' : 'items'
     } unchecked`,
-    duration: BULK_UNDO_DURATION_MS,
+    duration: input.duration ?? BULK_UNDO_DURATION_MS,
+    ...(input.undoExpiresAt === undefined ? {} : { undoExpiresAt: input.undoExpiresAt }),
     onUndo: input.onUndo,
     onCommit: input.onCommit,
   };

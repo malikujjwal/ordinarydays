@@ -185,6 +185,7 @@ export function ItemSheet({
   const [editingSubItem, setEditingSubItem] = useState<string>();
   const previousItem = useRef(item);
   const latestItem = useRef(item);
+  const lastRequestedTitle = useRef(item.title);
   latestItem.current = item;
   const titleSave = useDebouncedAction();
   const noteSave = useDebouncedAction();
@@ -206,6 +207,9 @@ export function ItemSheet({
   useEffect(() => {
     const previous = previousItem.current;
     const changedItem = previous.itemId !== item.itemId;
+    if (changedItem || previous.title !== item.title) {
+      lastRequestedTitle.current = item.title;
+    }
     const previousProgress = previous.features?.progress;
     const previousPlace = previous.features?.place;
     const nextProgress = item.features?.progress;
@@ -577,7 +581,25 @@ export function ItemSheet({
             value={title}
             onChangeText={(value) => {
               setTitle(value);
-              titleSave.schedule(() => commit(titlePatch(latestItem.current, value)));
+              const nextTitle = value.trim();
+              if (nextTitle === '' || nextTitle === lastRequestedTitle.current) {
+                // Replace a pending valid edit with an intentional no-op. In particular,
+                // blurring an invalid blank and restoring the last requested title must not
+                // issue the same PATCH again while its refresh is still on the way back.
+                titleSave.schedule(() => undefined);
+                return;
+              }
+              lastRequestedTitle.current = nextTitle;
+              titleSave.schedule(() => {
+                const current = latestItem.current;
+                const patch = titlePatch(current, value);
+                if (patch === undefined) return;
+                void actions.save(current, patch).then((accepted) => {
+                  if (!accepted && lastRequestedTitle.current === nextTitle) {
+                    lastRequestedTitle.current = latestItem.current.title;
+                  }
+                });
+              });
             }}
             onBlur={titleSave.flush}
             {...(title.trim() === '' ? { error: 'Title is required.' } : {})}

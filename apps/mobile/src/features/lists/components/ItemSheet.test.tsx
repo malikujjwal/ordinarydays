@@ -43,7 +43,7 @@ function mount(subject = item(), subjectList = list(), onClose = vi.fn()) {
 }
 
 beforeEach(() => {
-  calls.save.mockReset();
+  calls.save.mockReset().mockResolvedValue(true);
   calls.remove.mockReset();
 });
 
@@ -82,6 +82,23 @@ describe('the canonical item editor shell', () => {
       subject,
       expect.objectContaining({ title: '' }),
     );
+  });
+
+  it('does not repeat an accepted title write after an invalid blank draft', () => {
+    vi.useFakeTimers();
+    const subject = item();
+    mount(subject);
+    const title = screen.getByLabelText('Title');
+
+    fireEvent.change(title, { target: { value: 'The Bear season 4' } });
+    act(() => vi.advanceTimersByTime(400));
+    fireEvent.change(title, { target: { value: '   ' } });
+    fireEvent.blur(title);
+    fireEvent.change(title, { target: { value: 'The Bear season 4' } });
+    act(() => vi.advanceTimersByTime(400));
+
+    expect(calls.save).toHaveBeenCalledTimes(1);
+    expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
   });
 
   it('flushes an in-focus field edit through the single close path', () => {

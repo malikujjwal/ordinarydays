@@ -119,8 +119,13 @@ describe('request deadline', () => {
     const deadline = new AbortController();
     const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
     let attempts = 0;
+    let enteredFetch: () => void = () => undefined;
+    const fetching = new Promise<void>((resolve) => {
+      enteredFetch = resolve;
+    });
     const fetch: FetchLike = (_url, init) => {
       attempts += 1;
+      enteredFetch();
       return new Promise((_resolve, reject) => {
         const rejectAbort = () => {
           const error = new Error('The request timed out.');
@@ -134,6 +139,7 @@ describe('request deadline', () => {
     const { client } = makeClient([], { fetch });
 
     const request = client.request(health());
+    await fetching;
     deadline.abort();
 
     await expect(request).rejects.toMatchObject({ name: 'AbortError' });
@@ -200,6 +206,63 @@ describe('request deadline', () => {
         timeout: { configurable: true, value: timeout },
         any: { configurable: true, value: any },
       });
+    }
+  });
+
+  it('rejects at the deadline while authentication is still pending', async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    try {
+      const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }], {
+        tokenProvider: {
+          getToken: () => new Promise(() => undefined),
+          getIdentity: () => Promise.resolve('usr_a'),
+        },
+      });
+
+      const request = client.request(health()).catch((error: unknown) => error);
+      deadline.abort();
+
+      await expect(
+        Promise.race([
+          request,
+          new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
+        ]),
+      ).resolves.toMatchObject({ name: 'AbortError' });
+      expect(calls).toHaveLength(0);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it('rejects at the deadline while a retry is waiting in backoff', async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    let enteredSleep: () => void = () => undefined;
+    const sleeping = new Promise<void>((resolve) => {
+      enteredSleep = resolve;
+    });
+    try {
+      const { client, calls } = makeClient([{ status: 503 }], {
+        sleep: () => {
+          enteredSleep();
+          return new Promise(() => undefined);
+        },
+      });
+
+      const request = client.request(health()).catch((error: unknown) => error);
+      await sleeping;
+      deadline.abort();
+
+      await expect(
+        Promise.race([
+          request,
+          new Promise((resolve) => setTimeout(() => resolve('still pending'), 0)),
+        ]),
+      ).resolves.toMatchObject({ name: 'AbortError' });
+      expect(calls).toHaveLength(1);
+    } finally {
+      timeout.mockRestore();
     }
   });
 });

@@ -193,10 +193,9 @@ describe('the configuration-driven List detail', () => {
 
   it('offers both done-set actions for a fully loaded checkbox list', () => {
     mount();
-    fireEvent.click(screen.getByTestId('list-detail-menu'));
-    expect(screen.getByText('Uncheck all (1)')).toBeTruthy();
-    expect(screen.getByText('Clear checked (1)')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('list-clear-checked'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('button', { name: 'Uncheck all (1)' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear checked (1)' }));
 
     expect(mocks.clearDone).toHaveBeenCalledWith(LIST.listId);
   });
@@ -205,8 +204,8 @@ describe('the configuration-driven List detail', () => {
     mocks.clearDone.mockReturnValue(new Promise(() => undefined));
     mount();
 
-    fireEvent.click(screen.getByTestId('list-detail-menu'));
-    fireEvent.click(screen.getByTestId('list-clear-checked'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear checked (1)' }));
 
     expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull();
     expect(screen.getByTestId('list-overview').textContent).toBe('2 items · 0 checked');
@@ -216,13 +215,13 @@ describe('the configuration-driven List detail', () => {
     mocks.uncheckAll.mockReturnValue(new Promise(() => undefined));
     mount();
 
-    fireEvent.click(screen.getByTestId('list-detail-menu'));
-    fireEvent.click(screen.getByTestId('list-uncheck-all'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Uncheck all (1)' }));
 
     expect(mocks.uncheckAll).toHaveBeenCalledWith(LIST.listId);
     expect(
       screen
-        .getByTestId('list-item-itm_01J8XKQ2M4N5P6R7S8T9V0W1X4-checkbox')
+        .getByRole('checkbox', { name: 'Ship, not checked' })
         .getAttribute('aria-checked'),
     ).toBe('false');
   });
@@ -231,8 +230,8 @@ describe('the configuration-driven List detail', () => {
     mocks.clearDone.mockResolvedValue(false);
     mount();
 
-    fireEvent.click(screen.getByTestId('list-detail-menu'));
-    fireEvent.click(screen.getByTestId('list-clear-checked'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear checked (1)' }));
 
     expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull();
     await waitFor(() =>

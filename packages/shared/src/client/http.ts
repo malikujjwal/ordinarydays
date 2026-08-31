@@ -157,6 +157,36 @@ interface ManagedRequestSignal {
   readonly dispose: () => void;
 }
 
+function requestAbortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error('The request timed out.');
+  error.name = 'AbortError';
+  return error;
+}
+
+/**
+ * Bounds work that cannot consume an AbortSignal itself, notably authentication and retry
+ * backoff. The losing promise keeps its own lifecycle, but it always has rejection handlers
+ * attached, so a late failure cannot become an unhandled rejection after the request retires.
+ */
+function withinRequestDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(requestAbortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(requestAbortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    void work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * One deadline for the whole logical request, including retries.
  *
@@ -499,22 +529,28 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
        * last thing a seam with a single-flight refresh behind it should expose.
        */
       try {
-        const [token, identity] = await Promise.all([
-          config.tokenProvider.getToken(),
-          config.tokenProvider.getIdentity(),
-        ]);
+        const [token, identity] = await withinRequestDeadline(
+          Promise.all([
+            config.tokenProvider.getToken(),
+            config.tokenProvider.getIdentity(),
+          ]),
+          signal,
+        );
 
         let attempt = 0;
         for (;;) {
           try {
-            return await send(boundedOptions, requestId, token, identity);
+            return await withinRequestDeadline(
+              send(boundedOptions, requestId, token, identity),
+              signal,
+            );
           } catch (error) {
             // The ten-second client deadline is for the whole request, not each retry. Once
             // it fires, retrying with a fresh ten seconds would put a durable intent back into
             // the exact unbounded in-flight state the deadline exists to prevent.
             if (signal.aborted) throw error;
             if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
-            await sleep(backoffDelayMs(attempt));
+            await withinRequestDeadline(sleep(backoffDelayMs(attempt)), signal);
             attempt += 1;
           }
         }
