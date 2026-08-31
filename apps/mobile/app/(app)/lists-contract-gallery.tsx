@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { ListsContractGalleryScreen } from '@/components/ListsContractGalleryScreen';
+import { ListsContractGalleryScreen } from '@/components/listsContractGallery/ListsContractGalleryScreen';
 
 /** Development-only parameter adapter for the production-component Lists gallery. */
 export default function ListsContractGalleryRoute() {

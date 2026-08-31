@@ -1,7 +1,6 @@
 import { type RefObject, useEffect } from 'react';
 import type { ScrollView } from 'react-native';
-
-const FOCUSED_CONTEXT_CLEARANCE = 32;
+import { space } from './tokens';
 
 function nearestScrollOwner(element: HTMLElement): HTMLElement | undefined {
   let parent = element.parentElement;
@@ -55,8 +54,7 @@ export function useScrollToFocusedInput(
           ? viewportHeight - keyboardInset
           : viewport.offsetTop + viewport.height;
       const occludedBy =
-        focused.getBoundingClientRect().bottom -
-        (visibleBottom - FOCUSED_CONTEXT_CLEARANCE);
+        focused.getBoundingClientRect().bottom - (visibleBottom - space[8]);
       if (occludedBy <= 0) return;
 
       const scrollOwner = nearestScrollOwner(focused);

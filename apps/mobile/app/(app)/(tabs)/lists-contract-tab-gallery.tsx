@@ -1,6 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
-import { ListsContractGalleryScreen } from '@/components/ListsContractGalleryScreen';
+import { ListsContractGalleryScreen } from '@/components/listsContractGallery/ListsContractGalleryScreen';
 
 const CONTRACT_INSETS = { top: 0, right: 0, bottom: 34, left: 0 } as const;
 
