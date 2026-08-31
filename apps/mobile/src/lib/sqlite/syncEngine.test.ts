@@ -4752,6 +4752,50 @@ describe('serialized native convergence guard', () => {
         expect(await outbox.all()).toEqual([]);
       });
 
+      /**
+       * The aged-queue replay (the 2026-08-31 stuck-sync incident): an edit and a delete of
+       * the same item sit queued past the Undo window, session recovery expires the delete's
+       * unaccepted offer, and the edit's settlement must then rebase a delete that
+       * legitimately has no offer row left — that state is expiry, not corruption.
+       */
+      it('settles an edit whose later delete outlived its expired Undo offer', async () => {
+        if (database === undefined) throw new Error('missing expired offer database');
+        const built = await withPendingEdit(database);
+        await transactions.run((transaction) =>
+          built.listService.deleteItem(transaction, {
+            listId: LIST_ID,
+            itemId: ITEM_ID,
+            intentId: 'delete-after-patch',
+            idempotencyKey: 'delete-after-patch',
+          }),
+        );
+        await transactions.run((transaction) =>
+          outbox.expireUnacceptedListItemDeleteUndoOffers(
+            transaction.database,
+            Date.now() + 1,
+          ),
+        );
+        const sync = itemEngine(
+          built.lists,
+          built.items,
+          {},
+          {
+            patchItem: async () => row(ITEM_ID, 'q', 'Oat milk'),
+            removeItem: async () => ({
+              affectedCount: 1,
+              undoToken: 'token-after-expiry',
+              undoExpiresAt: '2026-08-28T09:00:06.000Z',
+            }),
+          },
+        );
+
+        await sync.syncNow();
+        sync.stop();
+
+        expect(await outbox.all()).toEqual([]);
+        expect(await built.items.read(LIST_ID)).toEqual([]);
+      });
+
       /** A rejected **edit** must not take a real row off the screen. */
       it('restores server truth over a permanently rejected edit', async () => {
         if (database === undefined) throw new Error('missing item rejection database');

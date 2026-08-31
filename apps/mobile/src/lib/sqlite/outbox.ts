@@ -1086,14 +1086,20 @@ export class OutboxRepository {
        WHERE intent_id = ? AND status = 'queued';`,
       [JSON.stringify(rebasedVariables), semanticKey, successor.intentId],
     );
-    const offer = await database.run(
+    if (updated.changes !== 1) {
+      throw new OutboxInvariantError(successor.intentId);
+    }
+    /*
+     * Zero offer rows is a legitimate state, not corruption: session recovery expires an
+     * unaccepted offer past its Undo window while the delete it belonged to stays queued —
+     * an aged queue replaying after recovery hits exactly this. The rebase then has no offer
+     * snapshot to refresh, and the delete settles later without one.
+     */
+    await database.run(
       `UPDATE list_item_delete_undo_offers SET previous_json = ?
        WHERE current_intent_id = ?;`,
       [JSON.stringify(previous), successor.intentId],
     );
-    if (updated.changes !== 1 || offer.changes !== 1) {
-      throw new OutboxInvariantError(successor.intentId);
-    }
     return true;
   }
 
