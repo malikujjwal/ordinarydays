@@ -38,9 +38,10 @@ import { nextCanonicalId } from '@/lib/canonicalIds';
 /**
  * Which screen of the modal is showing. `object` is always where it opens.
  *
- * List creation leaves this draft entirely: the route opens the ordinary New List flow.
+ * `listItemForm` keeps Title, Note and the required inline destination together. Its target
+ * remains absent until the user names a List.
  */
-export type ComposeStep = 'object' | 'planKind' | 'form';
+export type ComposeStep = 'object' | 'planKind' | 'listItemForm' | 'form';
 
 /** Profile-backed values that belong to a newly chosen Event draft. */
 export interface EventDraftDefaults {
@@ -91,6 +92,8 @@ export interface ComposeDraftState {
   openTodayTask: (date: WallDate) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
+  /** The one place `target` can become a List item, and the only input is a chosen list. */
+  chooseList: (listId: string) => void;
   back: () => void;
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
@@ -133,6 +136,7 @@ const EMPTY = {
   | 'openTodayTask'
   | 'chooseObject'
   | 'choosePlanKind'
+  | 'chooseList'
   | 'back'
   | 'setTitle'
   | 'setNotes'
@@ -223,9 +227,12 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       set({ step: 'planKind', target: undefined });
       return;
     }
-    // List creation belongs to `NewListSheet`; it never becomes an Activity/ListItem target.
-    set({ step: 'object', target: undefined });
+    set({ step: 'listItemForm', target: undefined });
   },
+
+  /** Fixes a destination only after the user taps a visible List row. */
+  chooseList: (listId) =>
+    set({ step: 'listItemForm', target: { objectKind: 'listItem', listId } }),
 
   /**
    * The one place `target` can become a Plan, and where re-choosing a kind runs **P1-17's
@@ -293,7 +300,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    */
   back: () => {
     const { step, target } = get();
-    if (step === 'planKind') {
+    if (step === 'planKind' || step === 'listItemForm') {
       set({ step: 'object', target: undefined });
       return;
     }

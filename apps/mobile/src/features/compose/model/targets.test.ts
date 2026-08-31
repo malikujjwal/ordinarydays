@@ -35,8 +35,8 @@ vi.mock('expo-crypto', () => ({
  */
 
 describe('the object chooser', () => {
-  it('offers exactly Task, Plan, List, in that order', () => {
-    expect(objectChoices.map((c) => c.label)).toEqual(['Task', 'Plan', 'List']);
+  it('offers exactly Task, Plan, List item, in that order', () => {
+    expect(objectChoices.map((c) => c.label)).toEqual(['Task', 'Plan', 'List item']);
   });
 
   /**

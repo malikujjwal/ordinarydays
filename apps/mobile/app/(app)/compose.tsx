@@ -4,7 +4,9 @@ import { format } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
+import type { ListDestination } from '@/features/compose/components/ListDestinationChooser';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
+import { useLists } from '@/features/lists/hooks/useLists';
 import { apiClient } from '@/lib/apiClient';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -20,15 +22,25 @@ const profileQuery = queryOptions({
  * renders one feature component. What it supplies is `onClose` plus the edge values — the
  * user's today and their zone — so `ComposeScreen` never has to know it is a route.
  *
- * `List` opens P3-26's existing type-first creation sheet. The route is the seam that may see
- * both feature slices; compose never creates or selects a ListItem destination.
+ * The route is the allowed cross-feature seam: it supplies List destinations without compose
+ * sorting, inferring, or remembering one. New List returns here with the draft intact.
  */
 export default function ComposeRoute() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const profile = useQuery(profileQuery);
-  const resetDraft = useComposeDraft((state) => state.reset);
+  const lists = useLists();
+  const chooseList = useComposeDraft((state) => state.chooseList);
   const [creatingList, setCreatingList] = useState(false);
+  const [createdDestination, setCreatedDestination] = useState<ListDestination>();
+  const availableDestinations = lists.lists
+    .filter((list) => !list.archived)
+    .map((list) => ({ listId: list.listId, title: list.title }));
+  const listDestinations =
+    createdDestination === undefined ||
+    availableDestinations.some((list) => list.listId === createdDestination.listId)
+      ? availableDestinations
+      : [...availableDestinations, createdDestination];
 
   return (
     <>
@@ -40,15 +52,20 @@ export default function ComposeRoute() {
           const user = profile.data ?? (await queryClient.ensureQueryData(profileQuery));
           return { reservationName: user.displayName, currency: user.currency };
         }}
+        listDestinations={{
+          lists: listDestinations,
+          status: lists.status,
+          refetch: lists.refetch,
+        }}
         onCreateList={() => setCreatingList(true)}
       />
       <NewListSheet
         open={creatingList}
         onClose={() => setCreatingList(false)}
-        onCreated={() => {
+        onCreated={(created) => {
           setCreatingList(false);
-          resetDraft();
-          router.back();
+          setCreatedDestination(created);
+          chooseList(created.listId);
         }}
       />
     </>

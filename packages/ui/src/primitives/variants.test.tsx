@@ -345,6 +345,77 @@ describe.each(schemes)(
   },
 );
 
+describe.each(schemes)('%s scheme — compact SettingRow actions', (scheme) => {
+  it('keeps icon, summary, disclosure, and danger roles in the shared row family', () => {
+    wrap(
+      <>
+        <SettingRow
+          label="List settings"
+          summary="State, item details and planning"
+          icon={ListLines}
+          density="compact"
+          opens
+          onPress={() => {}}
+        />
+        <SettingRow
+          label="Delete list"
+          icon={Diamond}
+          density="compact"
+          danger
+          separated
+          onPress={() => {}}
+        />
+      </>,
+      scheme,
+    );
+
+    const settings = screen.getByRole('button', {
+      name: 'List settings, State, item details and planning',
+    });
+    expect(getComputedStyle(settings.firstElementChild as HTMLElement).minHeight).toBe(
+      '56px',
+    );
+    expect(getComputedStyle(screen.getByText('Delete list')).color).toBe(
+      cssRgb(colors[scheme].danger),
+    );
+    expect(
+      getComputedStyle(screen.getByRole('button', { name: 'Delete list' })).marginTop,
+    ).toBe(`${space[3]}px`);
+  });
+
+  it('keeps compact checkbox state and disabled actions semantic', () => {
+    const onPress = vi.fn();
+    wrap(
+      <>
+        <SettingRow
+          label="Hide archived"
+          icon={ListLines}
+          density="compact"
+          role="checkbox"
+          selected
+          onPress={() => {}}
+        />
+        <SettingRow
+          label="Move up"
+          icon={ListLines}
+          density="compact"
+          disabled
+          onPress={onPress}
+        />
+      </>,
+      scheme,
+    );
+
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Hide archived' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    screen.getByRole('button', { name: 'Move up' }).click();
+    expect(onPress).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * `flush` (P2-43): the ghost button's invisible padding stops indenting its label out of the
  * text column, and becomes hit target reaching into the gutter instead. The 44 pt floor is why

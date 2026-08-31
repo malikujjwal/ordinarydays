@@ -31,7 +31,7 @@ import { planKindChoices, planKindLabel } from '@/lib/planKinds';
  */
 
 /** The three rows of the global chooser, in their fixed order. Never reordered by history. */
-export type ObjectChoice = 'task' | 'plan' | 'list';
+export type ObjectChoice = 'task' | 'plan' | 'listItem';
 
 /**
  * `Fri, 8 Aug` — the toast table's format in `activities.md` §2.5.
@@ -57,7 +57,7 @@ export interface Choice<T> {
 }
 
 /**
- * `Task`, `Plan`, `List` — exactly these labels, exactly this order.
+ * `Task`, `Plan`, `List item` — exactly these labels, exactly this order.
  *
  * Frozen so that a caller cannot sort or splice it. The chooser "does not remember, reorder
  * or pre-select the last target"; a mutable module-level array is how the first
@@ -67,8 +67,8 @@ export const objectChoices: readonly Choice<ObjectChoice>[] = Object.freeze([
   { value: 'task', label: 'Task', subtitle: 'Something you need to do' },
   { value: 'plan', label: 'Plan', subtitle: 'Something you intend to make happen' },
   {
-    value: 'list',
-    label: 'List',
+    value: 'listItem',
+    label: 'List item',
     subtitle: 'Something you want to keep track of',
   },
 ]);

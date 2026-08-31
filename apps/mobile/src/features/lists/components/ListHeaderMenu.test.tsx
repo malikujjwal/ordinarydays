@@ -105,21 +105,24 @@ describe('ListHeaderMenu', () => {
   it('uses one full-width action-row grammar without detached archive copy or filled danger', () => {
     mount();
 
-    for (const id of [
-      'list-settings-open',
-      'list-clear-checked',
-      'list-uncheck-all',
-      'list-archive',
-      'list-delete',
+    for (const name of [
+      'List settings, State, item details and planning',
+      'Clear checked (7)',
+      'Uncheck all (7)',
+      'Archive list',
+      'Delete list',
     ]) {
-      expect(screen.getByTestId(id).getAttribute('style')).toContain('min-height: 56px');
+      const content = screen.getByRole('button', { name }).firstElementChild;
+      if (!(content instanceof HTMLElement)) throw new Error('Menu row must render');
+      expect(getComputedStyle(content).minHeight).toBe('56px');
     }
     expect(
       screen.queryByText('Archived lists keep their items and are reachable from Lists.'),
     ).toBeNull();
-    expect(getComputedStyle(screen.getByTestId('list-delete')).backgroundColor).toBe(
-      'rgba(0, 0, 0, 0)',
-    );
+    expect(
+      getComputedStyle(screen.getByRole('button', { name: 'Delete list' }))
+        .backgroundColor,
+    ).toBe('rgba(0, 0, 0, 0)');
   });
 
   it('makes list deletion discoverable from the detail overflow menu', () => {

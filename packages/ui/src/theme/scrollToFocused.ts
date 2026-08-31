@@ -22,8 +22,13 @@ export function useScrollToFocusedInput(
   keyboardInset: number,
   /** The container's own visible height, so occlusion can be judged against it. */
   viewportHeight: number,
+  /** Re-measure when rapid entry or validation changes content above the focused field. */
+  contentHeight = 0,
 ): void {
   useEffect(() => {
+    // Reading the measured size makes insertion itself a remeasurement trigger while the same
+    // input retains focus; the value is not part of the offset calculation.
+    void contentHeight;
     if (Platform.OS !== 'android' || keyboardInset <= 0) return;
 
     const scroll = scrollRef.current;
@@ -48,5 +53,5 @@ export function useScrollToFocusedInput(
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [keyboardInset, scrollRef, viewportHeight]);
+  }, [contentHeight, keyboardInset, scrollRef, viewportHeight]);
 }

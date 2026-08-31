@@ -1,6 +1,5 @@
-import { Archive, Sheet } from '@od/ui';
+import { Archive, SettingRow, Sheet } from '@od/ui';
 import { View } from 'react-native';
-import { MenuActionRow } from './MenuActionRow';
 
 /**
  * The Lists **index** header's `⋯` (`plans-and-lists.md` §5.6 — "reachable through
@@ -50,11 +49,13 @@ export function ListIndexMenu({
   return (
     <Sheet open={open} onClose={onClose} title="More" testID="list-index-menu">
       <View>
-        <MenuActionRow
+        <SettingRow
           label={showingArchived ? 'Hide archived' : 'Show archived'}
           summary={summary}
           icon={Archive}
-          checked={showingArchived}
+          density="compact"
+          role="checkbox"
+          selected={showingArchived}
           onPress={onToggleArchived}
           testID="lists-toggle-archived"
         />

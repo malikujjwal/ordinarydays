@@ -46,7 +46,6 @@ import {
   subItemsPatch,
   titlePatch,
 } from '../model/itemSheet';
-import { MenuActionRow } from './MenuActionRow';
 import { ReorderableList } from './ReorderableList';
 
 export interface ItemSheetProps {
@@ -509,9 +508,10 @@ export function ItemSheet({
 
           {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
 
-          <MenuActionRow
+          <SettingRow
             label="Delete item"
             icon={Trash}
+            density="compact"
             danger
             separated
             onPress={() => {
@@ -531,9 +531,10 @@ export function ItemSheet({
           testID="sub-item-actions"
         >
           <View>
-            <MenuActionRow
+            <SettingRow
               label={`Move ${selectedSubItem.title.trim() || 'Sub-item'} up`}
               icon={ChevronUp}
+              density="compact"
               disabled={subItems.indexOf(selectedSubItem) === 0}
               onPress={() => {
                 const from = subItems.indexOf(selectedSubItem);
@@ -543,9 +544,10 @@ export function ItemSheet({
                 commit(subItemsPatch(item, next));
               }}
             />
-            <MenuActionRow
+            <SettingRow
               label={`Move ${selectedSubItem.title.trim() || 'Sub-item'} down`}
               icon={ChevronDown}
+              density="compact"
               disabled={subItems.indexOf(selectedSubItem) === subItems.length - 1}
               onPress={() => {
                 const from = subItems.indexOf(selectedSubItem);
@@ -555,9 +557,10 @@ export function ItemSheet({
                 commit(subItemsPatch(item, next));
               }}
             />
-            <MenuActionRow
+            <SettingRow
               label={`Remove ${selectedSubItem.title.trim() || 'Sub-item'}`}
               icon={Trash}
+              density="compact"
               danger
               separated
               onPress={() => {

@@ -1,7 +1,8 @@
-import { type ReactNode, useRef } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import {
   type ScrollView as RNScrollView,
   ScrollView,
+  type ScrollViewProps,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -39,6 +40,9 @@ export interface ScreenShellProps {
   measure?: 'standard' | 'reading';
   /** Tight bridge from a standard header to immediately useful content (§7.2b). */
   bodySpacing?: 'standard' | 'compact';
+  /** Pagination/analytics for the ScrollView this container owns. */
+  onScroll?: ScrollViewProps['onScroll'];
+  scrollEventThrottle?: number;
   testID?: string;
 }
 
@@ -67,6 +71,8 @@ export function ScreenShell({
   scroll = true,
   measure = 'standard',
   bodySpacing = 'standard',
+  onScroll,
+  scrollEventThrottle,
   testID,
 }: ScreenShellProps) {
   const theme = useTheme();
@@ -74,12 +80,13 @@ export function ScreenShell({
   const compact = useBreakpoint() === 'compact';
   const keyboard = useKeyboardInset();
   const scrollRef = useRef<RNScrollView | null>(null);
+  const [contentHeight, setContentHeight] = useState(0);
   /**
    * `useWindowDimensions`, never `Dimensions.get()` at module scope (§21): the viewport changes
    * on rotation, on a browser resize, and when the keyboard itself shrinks it.
    */
   const { height: viewportHeight } = useWindowDimensions();
-  useScrollToFocusedInput(scrollRef, keyboard, viewportHeight);
+  useScrollToFocusedInput(scrollRef, keyboard, viewportHeight, contentHeight);
 
   const column = {
     width: '100%',
@@ -113,12 +120,19 @@ export function ScreenShell({
       {scroll ? (
         <ScrollView
           ref={scrollRef}
+          onScroll={onScroll}
+          scrollEventThrottle={scrollEventThrottle}
+          onContentSizeChange={(_width, height) => setContentHeight(height)}
           automaticallyAdjustKeyboardInsets
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{
             paddingTop:
-              header === undefined ? insets.top + theme.space[7] : theme.space[6],
+              header === undefined
+                ? insets.top + theme.space[7]
+                : bodySpacing === 'compact'
+                  ? theme.space[3]
+                  : theme.space[6],
             /**
              * **Enough room to scroll a field out from under the keyboard** (§20). Without the
              * inset the last field on a long screen cannot be brought into view at all — there

@@ -1,5 +1,6 @@
+import type { ComponentType } from 'react';
 import { View } from 'react-native';
-import { Check, ChevronRight } from '../icons/index';
+import { Check, ChevronRight, type IconProps } from '../icons/index';
 import { useTheme } from '../theme/index';
 import { Text } from './Text';
 import { Touchable } from './Touchable';
@@ -81,6 +82,14 @@ export interface SettingRowProps {
   opens?: boolean;
   /** Rotates the chevron and exposes the state; for a row that opens in place. */
   expanded?: boolean;
+  /** Recognition aid for compact action-menu rows; the label remains the accessible name. */
+  icon?: ComponentType<IconProps>;
+  /** Transient action menus use the content-row floor without creating another row family. */
+  density?: 'standard' | 'compact';
+  /** Destructive action ink; never a filled row. */
+  danger?: boolean;
+  /** Token separation before a consequential action such as Delete or Remove. */
+  separated?: boolean;
   /**
    * Absent makes the row **inert** — not a control at all, read-only, no target, no chevron.
    * That is a different thing from `disabled`, which is a control the user cannot use *right
@@ -104,6 +113,10 @@ export function SettingRow({
   opens = false,
   disabled = false,
   expanded,
+  icon: Icon,
+  density = 'standard',
+  danger = false,
+  separated = false,
   onPress,
   accessibilityLabel,
   testID,
@@ -113,6 +126,10 @@ export function SettingRow({
   /** The chosen row of a set. Its ink answers to `accentSurface`, not to `surface`. */
   const tinted = selected === true && switchValue === undefined;
   const effectiveRole = switchValue === undefined ? role : 'switch';
+  const compact = density === 'compact';
+  const rowMinHeight = compact
+    ? theme.layout.rowMinHeight
+    : theme.layout.settingRowMinHeight;
 
   const content = (
     <View
@@ -121,24 +138,35 @@ export function SettingRow({
         alignItems: 'center',
         // The ≥ 8 pt rule between adjacent targets, applied here so no caller has to.
         gap: theme.space[4],
-        paddingVertical: theme.space[5],
+        paddingVertical: compact ? theme.space[2] : theme.space[5],
         // Full-bleed, so the tint is the row rather than a badge sitting inside one.
         ...(tinted ? { backgroundColor: theme.colors.accentSurface } : {}),
         // One measure for every utility row, inert ones included — a list that changed height
         // depending on which rows happened to be controls would be the same defect again.
-        minHeight: theme.layout.settingRowMinHeight,
+        minHeight: rowMinHeight,
         opacity: disabled ? 0.45 : 1,
       }}
     >
+      {Icon === undefined ? null : (
+        <View aria-hidden style={{ width: 24, alignItems: 'center' }}>
+          <Icon
+            size={20}
+            color={danger ? theme.colors.danger : theme.colors.textSecondary}
+          />
+        </View>
+      )}
       <View style={{ flex: 1, gap: theme.space[1] }}>
-        <Text variant="subhead" color={interactive ? 'textPrimary' : 'textSecondary'}>
+        <Text
+          variant="subhead"
+          color={danger ? 'danger' : interactive ? 'textPrimary' : 'textSecondary'}
+        >
           {label}
         </Text>
         {summary === undefined ? null : (
           <Text
             variant="footnote"
             color={tinted ? 'textPrimary' : interactive ? 'textSecondary' : 'textMuted'}
-            numberOfLines={1}
+            numberOfLines={compact ? undefined : 1}
           >
             {summary}
           </Text>
@@ -218,8 +246,18 @@ export function SettingRow({
 
   /** Bottom rules, so a list closes on its last row rather than needing one on its container. */
   const divider = {
+    // The role-bearing wrapper owns the target floor; the content repeats it so inert rows and
+    // interactive rows retain identical rhythm.
+    minHeight: rowMinHeight,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
+    ...(separated
+      ? {
+          marginTop: theme.space[3],
+          borderTopWidth: 1,
+          borderTopColor: theme.colors.border,
+        }
+      : {}),
   } as const;
 
   if (!interactive) {
@@ -264,7 +302,11 @@ export function SettingRow({
       {...(effectiveRole !== 'button' || selected === undefined
         ? {}
         : { 'aria-pressed': selected })}
-      {...(effectiveRole === 'switch' ? { 'aria-checked': switchValue } : {})}
+      {...(effectiveRole === 'switch'
+        ? { 'aria-checked': switchValue }
+        : effectiveRole === 'checkbox' && selected !== undefined
+          ? { 'aria-checked': selected }
+          : {})}
       {...(expanded === undefined ? {} : { 'aria-expanded': expanded })}
       disabled={disabled}
       onPress={onPress}

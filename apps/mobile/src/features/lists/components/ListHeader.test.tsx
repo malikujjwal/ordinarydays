@@ -81,7 +81,10 @@ describe('renaming is inline on the title', () => {
     expect(title.getAttribute('aria-label')).toBeNull();
     expect(title.getAttribute('style')).toContain('webkit-line-clamp: 2');
     expect(screen.getByTestId('list-header-share-slot').getAttribute('style')).toContain(
-      'width: 64px',
+      'min-width: 64px',
+    );
+    expect(screen.getByTestId('list-header-share-slot').getAttribute('style')).toContain(
+      'flex-shrink: 0',
     );
   });
 

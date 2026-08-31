@@ -29,6 +29,80 @@ async function openFrame(
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: scheme });
 }
 
+async function openTabFrame(
+  page: Page,
+  frame: 'index-chrome' | 'index-chrome-empty' | 'index-chrome-loading',
+  scheme: 'light' | 'dark' = 'light',
+) {
+  await page.goto(`/lists-contract-tab-gallery?frame=${frame}&scheme=${scheme}`);
+  await page.evaluate(async () => document.fonts.ready);
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: scheme });
+}
+
+async function installKeyboardViewport(page: Page, initialInset: number) {
+  await page.addInitScript((inset) => {
+    const viewport = new EventTarget() as EventTarget & {
+      height: number;
+      offsetTop: number;
+      width: number;
+      offsetLeft: number;
+      pageLeft: number;
+      pageTop: number;
+      scale: number;
+    };
+    Object.assign(viewport, {
+      height: window.innerHeight - inset,
+      offsetTop: 0,
+      width: window.innerWidth,
+      offsetLeft: 0,
+      pageLeft: 0,
+      pageTop: 0,
+      scale: 1,
+    });
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: viewport,
+    });
+    Object.defineProperty(window, '__setContractKeyboardInset', {
+      configurable: true,
+      value: (nextInset: number) => {
+        viewport.height = window.innerHeight - nextInset;
+        viewport.dispatchEvent(new Event('resize'));
+      },
+    });
+  }, initialInset);
+}
+
+async function setKeyboardInset(page: Page, inset: number) {
+  await page.evaluate((nextInset) => {
+    (
+      window as typeof window & {
+        __setContractKeyboardInset: (value: number) => void;
+      }
+    ).__setContractKeyboardInset(nextInset);
+  }, inset);
+}
+
+async function expectAboveKeyboard(page: Page, testId: string, inset: number) {
+  await expect
+    .poll(async () => {
+      const box = await page.getByTestId(testId).boundingBox();
+      return box === null ? Number.POSITIVE_INFINITY : box.y + box.height;
+    })
+    .toBeLessThanOrEqual(844 - inset);
+}
+
+async function emulateLargestText(page: Page) {
+  await page.locator('[dir="auto"]').evaluateAll((nodes) => {
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement)) continue;
+      const style = getComputedStyle(node);
+      node.style.fontSize = `${String(Number.parseFloat(style.fontSize) * 2)}px`;
+      node.style.lineHeight = `${String(Number.parseFloat(style.lineHeight) * 2)}px`;
+    }
+  });
+}
+
 test.describe('P3-33 production List contracts', () => {
   for (const { width, gutter } of [
     { width: 320, gutter: 16 },
@@ -87,15 +161,59 @@ test.describe('P3-33 production List contracts', () => {
     });
   }
 
-  test('the final mixed-height tile scrolls completely into view at compact width', async ({
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`the final List and archived Restore clear real tab chrome ${scheme}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openTabFrame(page, 'index-chrome', scheme);
+      await page.getByTestId('lists-contract-index-scroll').evaluate((scroll) => {
+        scroll.scrollTop = scroll.scrollHeight;
+      });
+
+      const tab = page.getByTestId('tab-lists');
+      const lastActive = page.getByRole('button', { name: /^Road trip stops\./ });
+      const restore = page.getByRole('button', {
+        name: 'Restore Archived reading list',
+      });
+      const [tabBox, activeBox, restoreBox] = await Promise.all([
+        tab.boundingBox(),
+        lastActive.boundingBox(),
+        restore.boundingBox(),
+      ]);
+      if (tabBox === null || activeBox === null || restoreBox === null) {
+        throw new Error('Tab and final Lists controls must have layout boxes');
+      }
+      expect(activeBox.y + activeBox.height).toBeLessThan(tabBox.y);
+      expect(restoreBox.y + restoreBox.height).toBeLessThan(tabBox.y);
+      expect(
+        await restore.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+          );
+        }),
+      ).toBe(true);
+      await expect(page).toHaveScreenshot(`overview-last-compact-${scheme}.png`);
+    });
+  }
+
+  test('empty and loading Lists states remain above real tab chrome', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await openFrame(page, 'overview');
-    const last = page.getByRole('button', { name: /^Road trip stops\./ });
-    await last.scrollIntoViewIfNeeded();
-    await expect(last).toBeInViewport({ ratio: 1 });
-    await expect(page).toHaveScreenshot('overview-last-compact-light.png');
+    for (const frame of ['index-chrome-empty', 'index-chrome-loading'] as const) {
+      await openTabFrame(page, frame);
+      const tabBox = await page.getByTestId('tab-lists').boundingBox();
+      const contentBox = await (frame === 'index-chrome-empty'
+        ? page.getByRole('button', { name: 'New list' }).last()
+        : page.getByTestId('lists-contract-loading')
+      ).boundingBox();
+      if (tabBox === null || contentBox === null) {
+        throw new Error('Tab and terminal state content must have layout boxes');
+      }
+      expect(contentBox.y + contentBox.height).toBeLessThan(tabBox.y);
+    }
   });
 
   for (const scheme of ['light', 'dark'] as const) {
@@ -125,18 +243,77 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page).toHaveScreenshot(`long-header-compact-${scheme}.png`);
     });
 
-    test(`long List rapid add remains the final focused row ${scheme}`, async ({
+    test(`long List contextual composer stays focused above the keyboard ${scheme}`, async ({
       page,
     }) => {
       await page.setViewportSize({ width: 390, height: 844 });
+      await installKeyboardViewport(page, 336);
       await openFrame(page, 'context-add-long', scheme);
-      const editor = page.getByTestId('list-inline-add');
-      await editor.scrollIntoViewIfNeeded();
-      await expect(page.getByLabel('Item title')).toBeFocused();
-      await expect(editor).toBeInViewport({ ratio: 1 });
+      await expect(page.getByLabel('Title')).toBeFocused();
+      await expectAboveKeyboard(page, 'list-contextual-add', 336);
       await expect(page).toHaveScreenshot(`context-add-long-compact-${scheme}.png`);
     });
   }
+
+  test('keyboard resize and repeated contextual adds retain focus and clearance', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installKeyboardViewport(page, 336);
+    await openFrame(page, 'context-add-long');
+    const title = page.getByLabel('Title');
+
+    for (const value of ['Rapid item 1', 'Rapid item 2', 'Rapid item 3']) {
+      await title.fill(value);
+      await title.press('Enter');
+      await expect(title).toHaveValue('');
+      await expect(title).toBeFocused();
+      await expect(page.getByText(value)).toBeVisible();
+      await expectAboveKeyboard(page, 'list-contextual-add', 336);
+    }
+
+    await setKeyboardInset(page, 280);
+    await expectAboveKeyboard(page, 'list-contextual-add', 280);
+    await setKeyboardInset(page, 0);
+    await expect(page.getByTestId('list-contextual-add')).toBeInViewport({ ratio: 1 });
+    await expect(title).toBeFocused();
+  });
+
+  test('largest text keeps the List header and menu actions reachable', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openFrame(page, 'long-header');
+    await emulateLargestText(page);
+    await expect(page.getByRole('button', { name: 'Share' })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(page.getByRole('button', { name: 'More' })).toBeInViewport({ ratio: 1 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+    await expect(page).toHaveScreenshot('long-header-large-text-light.png');
+
+    await openFrame(page, 'detail-menu');
+    await emulateLargestText(page);
+    await page.getByTestId('list-header-menu-body').evaluate((body) => {
+      body.scrollTop = body.scrollHeight;
+    });
+    await expect(page.getByRole('button', { name: 'Delete list' })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(page).toHaveScreenshot('detail-menu-large-text-light.png');
+
+    await openFrame(page, 'item-details');
+    await emulateLargestText(page);
+    await page.getByTestId('item-sheet-body').evaluate((body) => {
+      body.scrollTop = body.scrollHeight;
+    });
+    await expect(page.getByRole('button', { name: 'Delete item' })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(page).toHaveScreenshot('item-details-large-text-light.png');
+  });
 
   test('List detail More omits inapplicable checked actions', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -212,7 +389,7 @@ test.describe('P3-33 production List contracts', () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'checklist', scheme);
       await expect(page.getByText('3 items · 1 checked')).toBeVisible();
-      await expect(page.getByText('Drag handles to reorder')).toHaveCount(0);
+      await expect(page.getByText('Drag handles to reorder')).toBeVisible();
       await expect(page.getByRole('button', { name: 'Add an item' })).toBeVisible();
       await expect(page).toHaveScreenshot(`checklist-compact-${scheme}.png`);
     });
@@ -277,22 +454,36 @@ test.describe('P3-33 production List contracts', () => {
       await expect(page).toHaveScreenshot(`stages-compact-${scheme}.png`);
     });
 
-    test(`contextual rapid add stays inline in its List ${scheme}`, async ({ page }) => {
+    test(`contextual composer stays anchored over its List ${scheme}`, async ({
+      page,
+    }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'context-add', scheme);
-      await expect(page.getByTestId('list-inline-add')).toBeVisible();
-      await expect(page.getByLabel('Item title')).toBeFocused();
-      await expect(page.getByLabel('Note')).toHaveCount(0);
-      await expect(page.getByText('Weekend packing')).toBeVisible();
+      await expect(page.getByTestId('list-contextual-add')).toBeVisible();
+      await expect(
+        page.getByRole('heading', { name: 'Add item to Weekend packing' }),
+      ).toBeVisible();
+      await expect(page.getByLabel('Title')).toBeFocused();
+      await expect(page.getByLabel('Note')).toBeVisible();
+      await expect(page.getByText('Optional')).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: 'Add to Weekend packing' }),
+      ).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
+      await expect(page.getByTestId('list-title')).toBeVisible();
       await expect(page).toHaveScreenshot(`context-add-compact-${scheme}.png`);
     });
 
-    test(`global Add offers List as an object ${scheme}`, async ({ page }) => {
+    test(`global List item keeps destination inline and unselected ${scheme}`, async ({
+      page,
+    }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'global-add', scheme);
-      await expect(page.getByTestId('object-chooser')).toBeVisible();
-      await expect(page.getByRole('button', { name: /List/ })).toBeVisible();
-      await expect(page.getByText('Add to')).toHaveCount(0);
+      await expect(page.getByTestId('compose-list-item')).toBeVisible();
+      await expect(page.getByLabel('Title')).toHaveValue('Try Zahav');
+      await expect(page.getByLabel('Note')).toHaveValue('Ask about the tasting menu');
+      await expect(page.getByText('Add to')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Choose a list' })).toBeDisabled();
       await expect(page.getByText('Which list?')).toHaveCount(0);
       await expect(page).toHaveScreenshot(`global-add-compact-${scheme}.png`);
     });

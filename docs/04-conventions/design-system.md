@@ -61,10 +61,12 @@ reflow*, not "the row stops growing". The contrast matrix is CI-enforced in
 > **A visible grabber is a behavioural promise.** A sheet that cannot be dragged must not render
 > one. This is invariant 1 applied to the surface that most often breaks it.
 
-**Two row families, two floors.** `layout.rowMinHeight` = **56** for the content `Row`;
-`layout.settingRowMinHeight` = **72** for `SettingRow`. There is no reason every family shares a
-floor: a settings group is a regular configuration measure, and at 56 its rhythm would be set by
-content length — `Repeat` alone beside `Notes`-with-summary. Both are minima; both grow.
+**Two row families, two regular floors.** `layout.rowMinHeight` = **56** for the content `Row`;
+`layout.settingRowMinHeight` = **72** for a regular `SettingRow`. There is no reason every family
+shares a floor: a settings group is a regular configuration measure, and at 56 its rhythm would
+be set by content length — `Repeat` alone beside `Notes`-with-summary. A transient action menu is
+the compact density of `SettingRow`: it uses the 56 pt floor, aligned optional icon, disclosure,
+selection and danger roles without creating a third row family. All are minima; all grow.
 
 > **On "one value token for a role".** Semantic role first, contrast gate second, exact token
 > third — in that order. `SettingRow`'s value is `textSecondary` on `surface` and
@@ -466,7 +468,7 @@ olive/ochre as reinforcement only.
 One accent per stored activity type, drawn from the refreshed families (mulberry, olive,
 ochre, rosewood, stone — no blues). Used for the row's type marker, the icon squircle on
 cards, the detail header's tint, and the explicit Plan-kind choice after the user taps
-**Plan**. The global Add sheet uses neutral **Task / Plan / List** destinations; it
+**Plan**. The global Add sheet uses neutral **Task / Plan / List item** destinations; it
 does not present type inference as an accent choice. Type colour is never used as a row
 background.
 
@@ -703,6 +705,10 @@ keyboard, which is the one control the edit cannot finish without.
 
 The safe-area inset is **dropped while the keyboard is up**: the home indicator is underneath it,
 so the space is no longer owed and paying it twice reads as a gap.
+
+`ScreenShell` keeps ownership when the body is paginated: a screen may supply its pagination
+callback and throttle, but it does not install a nested ScrollView. Content-size changes re-check
+the already-focused field, which is what keeps rapid-entry controls visible after each insertion.
 
 `useKeyboardInset()` is the single source of the number. It has a `.web.ts` fork because React
 Native Web's `Keyboard` module never fires; the browser reports the same fact through
@@ -989,10 +995,10 @@ viewport. Rename still commits on Return or blur and adds no Save/Cancel pair.
    to Groceries
 ```
 
-The compact count line bridges title and content and uses the same computed grammar as the
-index card. It is information in `textSecondary`, never a button, progress bar, helper
-instruction or sticky toolbar. Discoverability belongs to the visible row grips. When the List
-is empty the approved compact empty state replaces the count and rows.
+The compact overview bridges title and content. Its left side uses the same computed grammar as
+the index card; its right side is the neutral grip glyph plus `Drag handles to reorder`. It is
+wrapping information in `textSecondary`, never a button, progress bar or sticky toolbar. When
+the List is empty the approved compact empty state replaces the overview and rows.
 
 Items use the common 56 pt-minimum `Row`: checkbox when exposed, body, populated typed-feature
 summary or disclosure, then a 44 pt trailing grip hit target. The grip stays visibly neutral
@@ -1003,19 +1009,18 @@ starts the same drag (`interaction-contract.md` §3.2).
 
 The add control is the final row in the same measure, not a detached FAB, screen footer or
 Lists-index action. Its plus sits in a small dashed IconTile and the two-line copy reads
-`Add an item` / `to <list name>`. It expands in place into a Title-only rapid-entry row with a
-compact `Add` action; there is no sheet, destination chooser or Note field. Return and `Add`
-perform the same single write, then clear and re-focus Title. The later Item-details sheet owns
-the normal top-aligned multiline Note field, with `Note` and trailing `Optional` above it.
-While that inline field is focused, the List scroll uses the shared live keyboard inset and
-focused-input measurement. The inset replaces the bottom safe area while the keyboard is up,
-updates as the keyboard resizes, and returns to the normal inset on dismissal; it is never
-accumulated per successful rapid add.
+`Add an item` / `to <list name>`. It opens the compact shared composer over the still-visible
+List. The current List fixes the destination; there is no chooser or `New list`. Title and the
+top-aligned multiline Note appear together, with `Note` and trailing `Optional` above the
+field, and the named write is `Add to <list name>`. Return performs that same single write,
+then clears both fields and re-focuses Title. The composer uses the shared close control and
+does not add a duplicate Cancel.
 
-Both Lists overflow sheets use one 56 pt-minimum menu-row grammar: aligned leading icon, label,
-optional subordinate summary, and a bottom divider. Only a row that opens another surface has a
-chevron. A toggle carries its state accessibly and visibly; destructive rows use danger ink and
-an icon on a transparent row, separated by a token gap, never a filled oversized button.
+Both Lists overflow sheets use the compact `SettingRow` grammar: a 56 pt minimum, aligned leading
+icon, label, optional wrapping subordinate summary, and a bottom divider. Only a row that opens
+another surface has a chevron. A toggle carries its state accessibly and visibly; destructive rows
+use danger ink and an icon on a transparent row, separated by a token gap, never a filled oversized
+button.
 
 Item details uses the compact Title field, the labelled top-aligned optional Note, then exposed
 State and enabled typed-feature groups. A configured Sub-item section uses its own vocabulary,

@@ -6,7 +6,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import type { ListsView } from '../hooks/useLists';
-import { ListsScreen, listsScrollBottomPadding } from './ListsScreen';
+import { listsScrollBottomPadding } from './ListsIndexScroll';
+import { ListsScreen } from './ListsScreen';
 
 /**
  * The Lists tab (§P3-25, `plans-and-lists.md` §5.6, §5.9).

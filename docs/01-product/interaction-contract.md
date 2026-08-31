@@ -150,29 +150,30 @@ Rules for the follow-up itself:
 
 ### 1a.3 Creation intent is selected before assistance
 
-The global `+` always opens **Task / Plan / List** in that fixed order, with nothing
+The global `+` always opens **Task / Plan / List item** in that fixed order, with nothing
 selected. A contextual control fixes intent only by naming it: `+ Add a task`,
 `+ Add an item`, or `+ Add prep task`. Plan then requires **General / Meal / Watch /
 Event**, also fixed and unselected; General is an explicit choice, never a hidden
 fallback. List item requires an explicit destination unless the current list already names
 it.
 
-The global chooser offers **Task**, **Plan**, and **List**, in that order. Choosing List opens
-the ordinary unselected `Choose a list type` → editable title → `Create list` flow. It never
-opens a List-item composer or destination chooser; `ListItem` remains only the domain name for
-items stored inside a List.
+After the user chooses **List item**, the item composer opens immediately. There is no
+intermediate `Which list?` screen. In global context the composer contains Title, optional
+Note, and a required inline `Add to` section with no List selected plus `New list`; choosing a
+List updates the named commit in place. `New list` opens the ordinary unselected catalogue and
+returns to the same composer with Title and Note intact and the new List visibly selected.
 
-In an open List, `+ Add an item` expands in place into the List-owned title-only rapid-entry
-row. The current List fixes the destination, so there is no `Add to` chooser, Note field,
-sheet, or global `New list` action. Return or `Add` writes one item, clears the title after
-success, and keeps it focused for the next item. Note is added later from Item details.
+In an open List, `+ Add an item` opens the compact List-owned composer over the still-visible
+header and content. The current List fixes the destination, so there is no destination chooser
+or `New list`. Title and optional multiline Note appear together and the final action is
+`Add to <list name>`. Return performs the same write, clears both fields after success, and
+keeps Title focused for rapid entry.
 
-Text, photos, links, and AI are enabled only after an Activity target is chosen. They may suggest
+Text, photos, links, and AI are enabled only after those choices. They may suggest
 compatible field values but never object kind, Plan kind, people, sharing, destination,
 reminder/notification state, or the save action. A reminder is set only by its visible
 control or the user's explicitly saved default; words such as `remind me` never change it.
-Final Activity controls name the write: `Save task` or `Save plan`; the contextual List row
-uses the compact `Add` action while the open List visibly supplies its destination. Every
+Final controls name the write: `Save task`, `Save plan`, or `Add to <list name>`. Every
 ListItem's `Plan this item` flow additionally requires an
 unselected **Just me / Choose people** choice; membership is never copied to the Plan,
 whether the source list is private or shared.
@@ -219,7 +220,7 @@ product spec defines settings. They do not create or specify an app-wide Setting
 | Avatar stack | Not interactive on a row | Interactive on plan detail |
 | `⋯` | 44 × 44 pt | |
 | Swipe action button | Full row height, ≥ 72 pt wide | |
-| Global `+` | 56 × 56 pt | Accessible label `Add`; always opens Task / Plan / List, never a preselected form |
+| Global `+` | 56 × 56 pt | Accessible label `Add`; always opens Task / Plan / List item, never a preselected form |
 | Today's `See all (n)` ANYTIME footer | Full row width, min height 44 pt | Pushes the **Anytime** screen; never expands rows in place. This is a pushed route, not a fourth tab. |
 
 Adjacent hit targets are separated by at least 8 pt of non-interactive space.
@@ -477,9 +478,9 @@ and `turn into` are banned from empty-state copy for exactly that reason
 | Expenses on a plan | — | — | `Add expense` alone |
 
 Every empty-state action labelled `Add` is the global Add action: it opens **Task / Plan /
-List** with nothing selected. The screen the empty state appears on does not choose the
+List item** with nothing selected. The screen the empty state appears on does not choose the
 object. `Add item` inside an open List is deliberately different: it is a contextual action,
-so it focuses the title-only inline editor fixed to that List.
+so it opens the List-item composer with that List visibly fixed.
 
 Section-level empty states on Today are specified in
 [`today-and-tasks.md`](today-and-tasks.md#25-empty-states).
@@ -720,7 +721,7 @@ Global, active when focus is not in a text field:
 
 | Key | Action |
 | --- | --- |
-| `N` | Open the global **Task / Plan / List** chooser |
+| `N` | Open the global **Task / Plan / List item** chooser |
 | `T` / `P` / `L` | Today / Plans / Lists |
 | `/` | Focus search |
 | `R` | Refresh the current screen |
@@ -750,7 +751,7 @@ Within forms and sheets:
 | `Cmd/Ctrl + Return` | Submit, from anywhere in the form |
 | `Esc` | Cancel, with the discard prompt if dirty |
 | `Tab` / `Shift + Tab` | Move through fields in visual order |
-| `Alt + 1`–`3` | On the global chooser: Task, Plan, List |
+| `Alt + 1`–`3` | On the global chooser: Task, Plan, List item |
 | `Alt + 1`–`4` | On the Plan-kind chooser: General, Meal, Watch, Event |
 
 The shortcut sheet (`?`) lists every shortcut and is the discovery mechanism. Shortcuts are

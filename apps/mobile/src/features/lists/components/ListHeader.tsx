@@ -191,7 +191,10 @@ export function ListHeader({
         </View>
         {list === undefined ? null : (
           <>
-            <View testID="list-header-share-slot" style={{ width: theme.space[11] }}>
+            <View
+              testID="list-header-share-slot"
+              style={{ minWidth: theme.space[11], flexShrink: 0 }}
+            >
               <Button
                 label="Share"
                 variant="ghost"

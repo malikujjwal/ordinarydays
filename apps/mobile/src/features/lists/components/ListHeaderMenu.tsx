@@ -1,7 +1,6 @@
 import type { List } from '@od/shared/types';
-import { Archive, Check, CheckSquare, ListLines, Sheet, Trash } from '@od/ui';
+import { Archive, Check, CheckSquare, ListLines, SettingRow, Sheet, Trash } from '@od/ui';
 import { View } from 'react-native';
-import { MenuActionRow } from './MenuActionRow';
 
 /**
  * The list header's `⋯` menu (`plans-and-lists.md` §5.6, §P3-10).
@@ -72,39 +71,44 @@ export function ListHeaderMenu({
   return (
     <Sheet open={open} onClose={onClose} title="More" testID="list-header-menu">
       <View>
-        <MenuActionRow
+        <SettingRow
           label="List settings"
           summary="State, item details and planning"
           icon={ListLines}
+          density="compact"
           opens
           onPress={onOpenSettings}
           testID="list-settings-open"
         />
         {checkable && checkedCount > 0 ? (
           <>
-            <MenuActionRow
+            <SettingRow
               label={`Clear checked (${String(checkedCount)})`}
               icon={Check}
+              density="compact"
               onPress={onClearDone}
               testID="list-clear-checked"
             />
-            <MenuActionRow
+            <SettingRow
               label={`Uncheck all (${String(checkedCount)})`}
               icon={CheckSquare}
+              density="compact"
               onPress={onUncheckAll}
               testID="list-uncheck-all"
             />
           </>
         ) : null}
-        <MenuActionRow
+        <SettingRow
           label="Archive list"
           icon={Archive}
+          density="compact"
           onPress={onArchive}
           testID="list-archive"
         />
-        <MenuActionRow
+        <SettingRow
           label="Delete list"
           icon={Trash}
+          density="compact"
           danger
           separated
           onPress={onDelete}

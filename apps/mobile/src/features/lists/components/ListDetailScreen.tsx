@@ -9,7 +9,7 @@ import { useListSettings } from '../hooks/useListSettings';
 import { useReorderItems } from '../hooks/useReorderItems';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
 import { doneCount, mayActOnWholeList } from '../model/listDetail';
-import { InlineListItemEditor } from './InlineListItemEditor';
+import { ContextualListItemComposer } from './ContextualListItemComposer';
 import { ItemSheet } from './ItemSheet';
 import { ListDetailSurface } from './ListDetailSurface';
 import { ListHeaderMenu } from './ListHeaderMenu';
@@ -153,27 +153,6 @@ export function ListDetailScreen({
         onRetry={view.refetch}
         onLoadMore={view.loadMore}
         onAdd={() => setAddOpen(true)}
-        {...(addOpen && list !== undefined
-          ? {
-              addEditor: (
-                <InlineListItemEditor
-                  isAdding={add.isAdding}
-                  {...(add.errorMessage === undefined
-                    ? {}
-                    : { errorMessage: add.errorMessage })}
-                  {...(add.errorRequestId === undefined
-                    ? {}
-                    : { errorRequestId: add.errorRequestId })}
-                  onChange={add.dismissError}
-                  onAdd={async (title) => {
-                    const itemId = await add.add(listId, { title });
-                    if (itemId !== undefined) view.refresh();
-                    return itemId;
-                  }}
-                />
-              ),
-            }
-          : {})}
         onOpenItem={(item) => setOpenItemId(item.itemId)}
         onToggleChecked={(item, next) =>
           items.save(item, {
@@ -182,6 +161,27 @@ export function ListDetailScreen({
         }
         onDrop={reorder.drop}
       />
+
+      {list === undefined ? null : (
+        <ContextualListItemComposer
+          open={addOpen}
+          listName={list.title}
+          isAdding={add.isAdding}
+          {...(add.errorMessage === undefined ? {} : { errorMessage: add.errorMessage })}
+          {...(add.errorRequestId === undefined
+            ? {}
+            : { errorRequestId: add.errorRequestId })}
+          onClose={() => {
+            add.dismissError();
+            setAddOpen(false);
+          }}
+          onAdd={async (fields) => {
+            const itemId = await add.add(listId, fields);
+            if (itemId !== undefined) view.refresh();
+            return itemId;
+          }}
+        />
+      )}
 
       {list === undefined || openItem === undefined ? null : (
         <ItemSheet
