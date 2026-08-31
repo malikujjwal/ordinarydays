@@ -14,8 +14,10 @@ import {
 import {
   type ActivityTypeName,
   type CollectionSurfaceTone,
+  type CollectionTileTone,
   type ColorScheme,
   collectionSurfaces,
+  collectionTiles,
   colors,
   type SemanticColors,
   type TypeAccent,
@@ -83,6 +85,8 @@ export interface Theme {
     track: string;
     fill: string;
   };
+  /** §5.2a's vivid tile hue for a neutral card — decorative, never semantic. */
+  collectionTile: (tone: CollectionTileTone) => { surface: string; glyph: string };
 }
 
 const ThemeContext = createContext<Theme | undefined>(undefined);
@@ -142,6 +146,7 @@ export function ThemeProvider({ children, scheme, serifFamily }: ThemeProviderPr
         tone === 'neutral'
           ? { track: palette.border, fill: palette.textSecondary }
           : { track: palette.collectionIconSurface, fill: palette.textPrimary },
+      collectionTile: (tone) => collectionTiles[active][tone],
     };
   }, [active, serifFamily]);
 

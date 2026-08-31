@@ -1,5 +1,5 @@
 import { View } from 'react-native';
-import type { CollectionSurfaceTone } from '../theme/colors';
+import type { CollectionSurfaceTone, CollectionTileTone } from '../theme/colors';
 import { useTheme } from '../theme/index';
 
 /**
@@ -19,6 +19,11 @@ export interface ProgressBarProps {
   tone?: 'accent' | 'neutral';
   /** §5.2a's surface-paired track and fill. Takes precedence over `tone`. */
   collectionTone?: Exclude<CollectionSurfaceTone, 'neutral'>;
+  /**
+   * The list's vivid tile hue as the fill, on the ordinary border track — for the card
+   * whose surface is neutral (founder, 2026-08-31). Takes precedence over both tones.
+   */
+  tileTone?: CollectionTileTone;
   /** The accessible description, e.g. `2 of 6 done`. Without it the bar is announced as bare. */
   label?: string;
   testID?: string;
@@ -28,13 +33,18 @@ export function ProgressBar({
   value,
   tone = 'accent',
   collectionTone,
+  tileTone,
   label,
   testID,
 }: ProgressBarProps) {
   const theme = useTheme();
   const clamped = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
   const collection =
-    collectionTone === undefined ? undefined : theme.collectionProgress(collectionTone);
+    tileTone !== undefined
+      ? { track: theme.colors.border, fill: theme.collectionTile(tileTone).surface }
+      : collectionTone === undefined
+        ? undefined
+        : theme.collectionProgress(collectionTone);
 
   return (
     <View

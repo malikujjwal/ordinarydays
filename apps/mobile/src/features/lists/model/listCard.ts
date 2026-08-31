@@ -1,5 +1,5 @@
 import type { ItemStateMode } from '@od/shared/types';
-import type { CollectionSurfaceTone } from '@od/ui';
+import type { CollectionTileTone } from '@od/ui';
 
 /**
  * What a Lists-index card says about a list, computed from the list's **own stored fields**
@@ -91,21 +91,27 @@ export function listTint(): 'task' {
   return 'task';
 }
 
-const COLLECTION_TONES = [
-  'collectionRose',
-  'collectionSand',
-  'collectionBlue',
-  'collectionOlive',
-] as const satisfies readonly CollectionSurfaceTone[];
+const TILE_TONES = [
+  'tileGreen',
+  'tileAmber',
+  'tileCoral',
+  'tileBlue',
+  'tilePurple',
+  'tileTeal',
+  'tileOlive',
+  'tileMagenta',
+] as const satisfies readonly CollectionTileTone[];
 
-/** Stable identity hash for §5.2a's presentation-only collection surface. */
-export function collectionToneForListId(
-  listId: string,
-): (typeof COLLECTION_TONES)[number] {
+/**
+ * Stable identity hash for §5.2a's presentation-only tile hue (founder, 2026-08-31: the
+ * card surface is neutral and the tile carries one vivid colour). Same FNV-1a hash the
+ * retired card washes used, so a list keeps one colour for life and rename changes nothing.
+ */
+export function tileToneForListId(listId: string): (typeof TILE_TONES)[number] {
   let hash = 2166136261;
   for (let index = 0; index < listId.length; index += 1) {
     hash ^= listId.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return COLLECTION_TONES[(hash >>> 0) % COLLECTION_TONES.length] ?? 'collectionRose';
+  return TILE_TONES[(hash >>> 0) % TILE_TONES.length] ?? 'tileGreen';
 }

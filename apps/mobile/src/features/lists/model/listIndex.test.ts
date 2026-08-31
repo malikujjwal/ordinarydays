@@ -13,10 +13,10 @@ import { deleteListConfirmation } from './deleteConfirmation';
 import { mayShowEmptyState, partitionByArchived, shouldDrainMore } from './indexDrain';
 import {
   checkedProgress,
-  collectionToneForListId,
   countLine,
   listTint,
   showsCheckedCount,
+  tileToneForListId,
 } from './listCard';
 import { listSwipeActions, roleFor } from './listSwipeActions';
 import { updatedLine } from './updatedLine';
@@ -109,12 +109,12 @@ describe('the icon tint', () => {
   });
 });
 
-describe('the collection-card tone', () => {
+describe('the tile tone', () => {
   it('is stable for an identity and independent of catalogue provenance', () => {
     const listId = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
-    expect(collectionToneForListId(listId)).toBe(collectionToneForListId(listId));
-    expect(collectionToneForListId(list({ templateKey: 'blank' }).listId)).toBe(
-      collectionToneForListId(list({ templateKey: 'watch-later' }).listId),
+    expect(tileToneForListId(listId)).toBe(tileToneForListId(listId));
+    expect(tileToneForListId(list({ templateKey: 'blank' }).listId)).toBe(
+      tileToneForListId(list({ templateKey: 'watch-later' }).listId),
     );
   });
 
@@ -125,8 +125,8 @@ describe('the collection-card tone', () => {
       'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3',
       'lst_01J8XKQ2M4N5P6R7S8T9V0W1X4',
     ];
-    const forward = ids.map(collectionToneForListId);
-    const reversed = [...ids].reverse().map(collectionToneForListId).reverse();
+    const forward = ids.map(tileToneForListId);
+    const reversed = [...ids].reverse().map(tileToneForListId).reverse();
 
     expect(new Set(forward).size).toBeGreaterThan(1);
     expect(reversed).toEqual(forward);

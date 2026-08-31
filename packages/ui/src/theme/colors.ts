@@ -206,6 +206,48 @@ const dark: SemanticColors = {
 
 export const colors: Record<ColorScheme, SemanticColors> = { light, dark };
 
+/**
+ * Presentation-only List icon-tile hues (§5.2a amended — founder, 2026-08-31: the card
+ * surface stays neutral and the tile carries one vivid hue). Decorative: the tile is hidden
+ * from assistive technology, and the hue never encodes List semantics — it is a stable hash
+ * of the list's id, exactly as the retired card washes were.
+ */
+export type CollectionTileTone =
+  | 'tileGreen'
+  | 'tileAmber'
+  | 'tileCoral'
+  | 'tileBlue'
+  | 'tilePurple'
+  | 'tileTeal'
+  | 'tileOlive'
+  | 'tileMagenta';
+
+export const collectionTiles: Record<
+  ColorScheme,
+  Record<CollectionTileTone, { surface: string; glyph: string }>
+> = {
+  light: {
+    tileGreen: { surface: '#4E9563', glyph: '#FFFFFF' },
+    tileAmber: { surface: '#C08A2D', glyph: '#FFFFFF' },
+    tileCoral: { surface: '#C96A5B', glyph: '#FFFFFF' },
+    tileBlue: { surface: '#4E8AB8', glyph: '#FFFFFF' },
+    tilePurple: { surface: '#8A6FBF', glyph: '#FFFFFF' },
+    tileTeal: { surface: '#3E9488', glyph: '#FFFFFF' },
+    tileOlive: { surface: '#8F8A33', glyph: '#FFFFFF' },
+    tileMagenta: { surface: '#B85E93', glyph: '#FFFFFF' },
+  },
+  dark: {
+    tileGreen: { surface: '#4E8B60', glyph: '#F7F3EA' },
+    tileAmber: { surface: '#A97F2E', glyph: '#F7F3EA' },
+    tileCoral: { surface: '#B0604F', glyph: '#F7F3EA' },
+    tileBlue: { surface: '#4B7FA6', glyph: '#F7F3EA' },
+    tilePurple: { surface: '#7E68AC', glyph: '#F7F3EA' },
+    tileTeal: { surface: '#3E877C', glyph: '#F7F3EA' },
+    tileOlive: { surface: '#847E35', glyph: '#F7F3EA' },
+    tileMagenta: { surface: '#A65684', glyph: '#F7F3EA' },
+  },
+};
+
 /** Presentation-only List-card surfaces (§5.2a); they never encode List semantics. */
 export const collectionSurfaces: Record<
   ColorScheme,

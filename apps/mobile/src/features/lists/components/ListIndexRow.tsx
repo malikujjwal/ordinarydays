@@ -13,9 +13,9 @@ import { View } from 'react-native';
 import {
   cardCountPart,
   checkedProgress,
-  collectionToneForListId,
   listTint,
   showsCheckedCount,
+  tileToneForListId,
 } from '../model/listCard';
 import { updatedPhrase } from '../model/updatedLine';
 
@@ -80,7 +80,7 @@ export function ListIndexRow({
   const glyph = templateIcon(list.icon);
   const count = cardCountPart(list);
   const progress = checkedProgress(list);
-  const collectionTone = collectionToneForListId(list.listId);
+  const tileTone = tileToneForListId(list.listId);
   // `lastItemActivityAt`, never `updatedAt`. The distinction is the whole of P3-47 and the
   // reason the field exists; `model/updatedLine.ts` records why using the other reads backwards.
   const caption = `${count} · ${updatedPhrase(list.lastItemActivityAt, now, timezone)}`;
@@ -89,7 +89,6 @@ export function ListIndexRow({
     <Card
       elevation="e2"
       radius="lg"
-      surfaceTone={collectionTone}
       onPress={onPress}
       {...(onLongPress === undefined
         ? {}
@@ -103,14 +102,14 @@ export function ListIndexRow({
       {...(testID === undefined ? {} : { testID })}
     >
       <View style={{ gap: theme.space[2], opacity: dimmed ? 0.6 : 1 }}>
-        <IconTile icon={glyph} tint={listTint()} treatment="collection" />
+        <IconTile icon={glyph} tint={listTint()} collectionTone={tileTone} />
         <Text variant="heading" numberOfLines={2}>
           {list.title}
         </Text>
         {progress === undefined ? null : (
           <ProgressBar
             value={progress}
-            collectionTone={collectionTone}
+            tileTone={tileTone}
             label={count}
             {...(testID === undefined ? {} : { testID: `${testID}-progress` })}
           />

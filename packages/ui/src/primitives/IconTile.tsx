@@ -1,6 +1,6 @@
 import { View } from 'react-native';
 import type { IconProps } from '../icons/index';
-import type { ActivityTypeName } from '../theme/colors';
+import type { ActivityTypeName, CollectionTileTone } from '../theme/colors';
 import { useTheme } from '../theme/index';
 
 /**
@@ -16,6 +16,12 @@ export interface IconTileProps {
   size?: number;
   /** `dashed` is the small contextual-create affordance from §7.2b. */
   treatment?: 'filled' | 'dashed' | 'collection';
+  /**
+   * §5.2a's vivid List-tile hue (founder, 2026-08-31): the card surface stays neutral and
+   * the tile carries the colour. Takes precedence over `tint` and `treatment` fills;
+   * decorative only — the tile is already hidden from assistive technology.
+   */
+  collectionTone?: CollectionTileTone;
   testID?: string;
 }
 
@@ -24,10 +30,13 @@ export function IconTile({
   tint,
   size = 44,
   treatment = 'filled',
+  collectionTone,
   testID,
 }: IconTileProps) {
   const theme = useTheme();
   const accent = theme.typeAccent(tint);
+  const tile =
+    collectionTone === undefined ? undefined : theme.collectionTile(collectionTone);
 
   return (
     <View
@@ -44,18 +53,20 @@ export function IconTile({
         width: size,
         height: size,
         borderRadius: theme.radius.md,
-        ...(treatment === 'dashed'
-          ? {
-              borderWidth: 1,
-              borderStyle: 'dashed' as const,
-              borderColor: theme.colors.borderStrong,
-            }
-          : {
-              backgroundColor:
-                treatment === 'collection'
-                  ? theme.colors.collectionIconSurface
-                  : accent.surface,
-            }),
+        ...(tile !== undefined
+          ? { backgroundColor: tile.surface }
+          : treatment === 'dashed'
+            ? {
+                borderWidth: 1,
+                borderStyle: 'dashed' as const,
+                borderColor: theme.colors.borderStrong,
+              }
+            : {
+                backgroundColor:
+                  treatment === 'collection'
+                    ? theme.colors.collectionIconSurface
+                    : accent.surface,
+              }),
         alignItems: 'center',
         justifyContent: 'center',
       }}
@@ -63,11 +74,13 @@ export function IconTile({
       <Icon
         size={Math.round(size * 0.55)}
         color={
-          treatment === 'dashed'
-            ? theme.colors.textAction
-            : treatment === 'collection'
-              ? theme.colors.textPrimary
-              : accent.accent
+          tile !== undefined
+            ? tile.glyph
+            : treatment === 'dashed'
+              ? theme.colors.textAction
+              : treatment === 'collection'
+                ? theme.colors.textPrimary
+                : accent.accent
         }
       />
     </View>
