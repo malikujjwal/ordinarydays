@@ -204,6 +204,33 @@ describe('needs a date', () => {
     expect(batched[0]?.[0]).toEqual(['act_01J8XKQ2M4N5P6R7S8T9V0W1X2']);
   });
 
+  it('drops malformed projected avatars while preserving valid neighbours', async () => {
+    const row = {
+      ...indexRow('act_01J8XKQ2M4N5P6R7S8T9V0W1X2'),
+      participantAvatars: [
+        { personId: 'psn_alice', displayName: 'Alice' },
+        { personId: 'psn_missing_name' },
+        { personId: 'psn_bad_url', displayName: 'Bad URL', avatarUrl: 'not-a-url' },
+      ],
+    } as StoredItem;
+    const { dependencies, calls } = deps({
+      listBucket: vi.fn(async (_u: string, bucket: string, options = {}) => {
+        calls.push({ bucket, options: options as Record<string, unknown> });
+        return bucket === 'P' ? { items: [row] } : { items: [] };
+      }) as unknown as PlansDependencies['listBucket'],
+      batchActivities: vi.fn(async () => [
+        plan(),
+      ]) as PlansDependencies['batchActivities'],
+    });
+
+    const data = await getPlans(USER, { mode: 'initial', tz: TZ }, NOW, dependencies);
+
+    if (data.mode !== 'initial') throw new Error('expected the initial arm');
+    expect(data.needsDate[0]?.participantAvatars).toEqual([
+      { personId: 'psn_alice', displayName: 'Alice' },
+    ]);
+  });
+
   /** The count must not grow with the number of rows — that is what "no fan-out" means. */
   it('hydrates fifty rows in the same number of reads as one', async () => {
     const ids = Array.from(

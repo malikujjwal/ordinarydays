@@ -1,9 +1,10 @@
 import { MAX_ACTIVE_SERIES, MAX_AGENDA_DAYS, MAX_NEEDS_DATE_ROWS } from '@od/shared';
 import { expandRecurrence } from '@od/shared/recurrence';
-import { plansPastCursorPayload } from '@od/shared/schemas';
+import { agendaParticipantAvatar, plansPastCursorPayload } from '@od/shared/schemas';
 import type {
   Activity,
   AgendaItem,
+  AgendaParticipantAvatar,
   NeedsDateItem,
   PlansData,
   PlansDay,
@@ -305,11 +306,14 @@ function projectNeedsDateBase(
   );
 }
 
-function projectedAvatars(row: StoredItem | undefined) {
+function projectedAvatars(row: StoredItem | undefined): AgendaParticipantAvatar[] {
   const avatars = row?.participantAvatars;
-  return Array.isArray(avatars)
-    ? (avatars as { personId: string; displayName: string; avatarUrl?: string }[])
-    : [];
+  if (!Array.isArray(avatars)) return [];
+  return avatars.filter(isAgendaParticipantAvatar);
+}
+
+function isAgendaParticipantAvatar(value: unknown): value is AgendaParticipantAvatar {
+  return agendaParticipantAvatar.safeParse(value).success;
 }
 
 interface UpcomingResult {

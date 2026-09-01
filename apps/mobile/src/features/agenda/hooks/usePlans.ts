@@ -4,6 +4,7 @@ import {
   mergePlansResponse,
   type PlansDateStore,
 } from '@od/shared/client';
+import { MAX_AGENDA_DAYS } from '@od/shared/constants';
 import { addWallDays } from '@od/shared/recurrence';
 import type { NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
@@ -39,8 +40,8 @@ export type { NeedsDateRowData } from '../model/plansApply';
  * its error state with Retry while Today's local agenda remains untouched.
  */
 
-/** One bounded window request spans at most 62 inclusive dates (`MAX_AGENDA_DAYS`). */
-const WINDOW_DAYS = 62;
+/** One bounded window request spans at most `MAX_AGENDA_DAYS` inclusive dates. */
+const WINDOW_DAYS = MAX_AGENDA_DAYS;
 
 /**
  * The needs-a-date row: an ordinary `AgendaItem` plus the stage's three extra fields.

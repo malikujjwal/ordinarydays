@@ -1,7 +1,7 @@
 import type { PlansDateStore } from '@od/shared/client';
 import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
-import { format, parseISO } from 'date-fns';
+import { format, getYear, parseISO } from 'date-fns';
 import {
   type OccupiedDay,
   sectionsFromOccupiedDays,
@@ -44,7 +44,7 @@ export function upcomingSectionsFromStore(
 }
 
 export interface PastDay {
-  readonly date: string;
+  readonly date: WallDate;
   readonly label: string;
   readonly items: AgendaItem[];
 }
@@ -56,13 +56,14 @@ export interface PastMonthSection {
 }
 
 /** `Wed 12 Aug` — the muted day heading Past draws (§7.3's day-card grammar). */
-const pastDayHeading = (date: string): string =>
+const pastDayHeading = (date: WallDate): string =>
   format(parseISO(`${date}T12:00:00`), 'EEE d MMM');
 
 /** `August` within the current year, `August 2025` beyond it — the sticky month header. */
-function pastMonthTitle(date: string, today: string): string {
+function pastMonthTitle(date: WallDate, today: WallDate): string {
   const parsed = parseISO(`${date}T12:00:00`);
-  return format(parsed, date.slice(0, 4) === today.slice(0, 4) ? 'MMMM' : 'MMMM yyyy');
+  const todayDate = parseISO(`${today}T12:00:00`);
+  return format(parsed, getYear(parsed) === getYear(todayDate) ? 'MMMM' : 'MMMM yyyy');
 }
 
 /**
@@ -85,7 +86,7 @@ export function pastSectionsFromStore(
 
   const sections: PastMonthSection[] = [];
   for (const day of days) {
-    const month = day.date.slice(0, 7);
+    const month = format(parseISO(`${day.date}T12:00:00`), 'yyyy-MM');
     const current = sections.at(-1);
     if (current?.month === month) {
       current.data.push(day);

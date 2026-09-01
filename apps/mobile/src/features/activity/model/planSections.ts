@@ -1,4 +1,5 @@
-import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
+import { instant } from '@od/shared/schemas';
+import { type TimeZone, toWallDate, type WallDate } from '@od/shared/time';
 import type { ActivityChild, SourceListSummary } from '@od/shared/types';
 
 /**
@@ -76,10 +77,10 @@ export function addToPlanChips(input: {
  */
 export function relativeUpdateTime(
   createdAt: string,
-  today: string,
+  today: WallDate,
   timezone: TimeZone,
 ): string {
-  const createdDate = toWallDate(createdAt as Instant, timezone);
+  const createdDate = toWallDate(instant.parse(createdAt), timezone);
   if (createdDate >= today) return 'today';
   const created = Date.parse(`${createdDate}T00:00:00Z`);
   const now = Date.parse(`${today}T00:00:00Z`);
