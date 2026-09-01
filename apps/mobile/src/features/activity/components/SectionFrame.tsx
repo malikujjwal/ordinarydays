@@ -1,4 +1,4 @@
-import { SectionHeader, Text, useTheme } from '@od/ui';
+import { SectionHeader, Text, Touchable, useTheme } from '@od/ui';
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
 
@@ -10,11 +10,18 @@ import { View } from 'react-native';
 export interface SectionFrameProps {
   label: string;
   trailing?: string;
+  onTrailingPress?: () => void;
   children: ReactNode;
   testID?: string;
 }
 
-export function SectionFrame({ label, trailing, children, testID }: SectionFrameProps) {
+export function SectionFrame({
+  label,
+  trailing,
+  onTrailingPress,
+  children,
+  testID,
+}: SectionFrameProps) {
   const theme = useTheme();
   return (
     <View style={{ gap: theme.space[2] }} {...(testID === undefined ? {} : { testID })}>
@@ -27,10 +34,21 @@ export function SectionFrame({ label, trailing, children, testID }: SectionFrame
         }}
       >
         <SectionHeader title={label} />
-        {trailing === undefined ? null : (
+        {trailing === undefined ? null : onTrailingPress === undefined ? (
           <Text variant="footnoteStrong" color="textSecondary">
             {trailing}
           </Text>
+        ) : (
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel={trailing}
+            onPress={onTrailingPress}
+            style={{ minHeight: theme.layout.hitTarget, justifyContent: 'center' }}
+          >
+            <Text variant="footnoteStrong" color="textSecondary">
+              {trailing}
+            </Text>
+          </Touchable>
         )}
       </View>
       {children}

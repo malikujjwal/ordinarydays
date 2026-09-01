@@ -2833,12 +2833,12 @@ describe('the Plan detail anatomy (P3-37)', () => {
   it('previews incomplete Prep rows and reveals completed rows through Show all', async () => {
     mountAnatomy({ children: [child(1), child(2, 'completed'), child(3)] });
     await screen.findByTestId('section-prep');
-    expect(screen.getByText('1 of 3')).toBeDefined();
+    expect(screen.getByText('1 of 3 done')).toBeDefined();
     expect(screen.getByText('Prep 1')).toBeDefined();
     expect(screen.getByText('Prep 3')).toBeDefined();
     expect(screen.queryByText('Prep 2')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('prep-show-all'));
+    fireEvent.click(screen.getByRole('button', { name: '1 of 3 done' }));
     expect(screen.getByText('Prep 2')).toBeDefined();
   });
 

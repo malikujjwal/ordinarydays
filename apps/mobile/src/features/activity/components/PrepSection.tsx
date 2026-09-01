@@ -82,6 +82,7 @@ export function PrepSection({
     <SectionFrame
       label="Preparation"
       trailing={prepProgress(prepTasks)}
+      {...(expanded ? {} : { onTrailingPress: () => setExpanded(true) })}
       testID="section-prep"
     >
       {shown.map((child) => (

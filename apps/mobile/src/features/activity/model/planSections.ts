@@ -26,10 +26,10 @@ export function peekRows<T>(rows: readonly T[], expanded: boolean): PeekedRows<T
   return { shown: rows.slice(0, PEEK_ROWS), showAllCount: rows.length };
 }
 
-/** `2 of 5` — the PREP header's ratio, exact because the collection is model-capped. */
+/** `2 of 5 done` — the PREP header's tappable counter, exact and model-capped. */
 export function prepProgress(children: readonly ActivityChild[]): string {
   const done = children.filter((child) => child.status === 'completed').length;
-  return `${done} of ${children.length}`;
+  return `${done} of ${children.length} done`;
 }
 
 /** `8 items · 3 checked` — the LISTS row's drillable counts (P3-25's one vocabulary). */

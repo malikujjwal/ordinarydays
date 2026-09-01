@@ -1,6 +1,6 @@
 import type { TimeZone, WallDate } from '@od/shared/time';
 import { describe, expect, it } from 'vitest';
-import { relativeUpdateTime } from './planSections';
+import { prepProgress, relativeUpdateTime } from './planSections';
 
 const TODAY = '2026-08-06' as WallDate;
 const SYDNEY = 'Australia/Sydney' as TimeZone;
@@ -12,5 +12,16 @@ describe('relativeUpdateTime', () => {
 
   it('rejects an unvalidated stored timestamp before timezone conversion', () => {
     expect(() => relativeUpdateTime('not-an-instant', TODAY, SYDNEY)).toThrow();
+  });
+});
+
+describe('prepProgress', () => {
+  it('uses the canonical tappable counter copy', () => {
+    expect(
+      prepProgress([
+        { activityId: 'act_1', title: 'Pack', status: 'completed' },
+        { activityId: 'act_2', title: 'Book', status: 'scheduled' },
+      ]),
+    ).toBe('1 of 2 done');
   });
 });
