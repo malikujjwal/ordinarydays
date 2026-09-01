@@ -1375,6 +1375,20 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         );
       `),
   },
+  {
+    version: 25,
+    name: 'activity-update-cursor-generation-fence',
+    /**
+     * Every continuation cursor belongs to the strong detail head that issued it. Persisting
+     * the generation lets the serialized writer reject a response whose old request crossed
+     * a newer head installation, including across process death.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE activity_update_feed_state
+          ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

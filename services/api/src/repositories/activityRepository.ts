@@ -656,13 +656,28 @@ export async function batchGetActivityMeta(
   return rows.map(parseActivity);
 }
 
+/** A storage-validated exact caller/activity grant. Raw index projections never cross this seam. */
+export interface ActivityIndexGrant {
+  readonly activityId: string;
+}
+
 /** Exact caller/activity index grant used by bounded Activity detail authorization. */
 export async function getActivityIndex(
   userId: string,
   activityId: string,
   options: { readonly consistentRead?: boolean } = {},
-): Promise<StoredItem | undefined> {
-  return getItem<StoredItem>(activityIndex(userId, activityId), options);
+): Promise<ActivityIndexGrant | undefined> {
+  const key = activityIndex(userId, activityId);
+  const row = await getItem<StoredItem>(key, options);
+  if (
+    row?.entity !== ENTITY.index ||
+    row.activityId !== activityId ||
+    row.pk !== key.pk ||
+    row.sk !== key.sk
+  ) {
+    return undefined;
+  }
+  return { activityId };
 }
 
 function parseActivity(value: unknown): Activity {

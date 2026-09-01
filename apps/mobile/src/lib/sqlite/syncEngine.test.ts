@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiError, NetworkError } from '@od/shared/client';
 import { type CreateActivityInput, instant } from '@od/shared/schemas';
-import type { Activity, List } from '@od/shared/types';
+import type { Activity, ActivityUpdate, List } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -36,6 +36,14 @@ const OTHER = 'act_01J0000000000000000000000B';
 const THIRD = 'act_01J0000000000000000000000C';
 const REMINDER = 'rem_01J0000000000000000000000A';
 const clock = { today: '2026-08-19', currentMinute: '08:00' };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((onResolve) => {
+    resolve = onResolve;
+  });
+  return { promise, resolve };
+}
 
 /**
  * The engine as the coordinator may hold it: authoritative recovery is real, but the `request`
@@ -344,6 +352,85 @@ describe('serialized native convergence guard', () => {
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
         .lastActivityAt,
     ).toBe(second.createdAt);
+  });
+
+  it('discards a continuation response that crosses a newer persisted head generation', async () => {
+    const oldHead: ActivityUpdate = {
+      updateId: 'upd_01J0000000000000000000000D',
+      activityId: ACTIVITY,
+      kind: 'user',
+      authorUserId: OWNER,
+      body: 'Old head',
+      createdAt: '2026-08-19T11:00:00.000Z',
+      schemaVersion: 1,
+    };
+    const acknowledged: ActivityUpdate = {
+      ...oldHead,
+      updateId: 'upd_01J0000000000000000000000E',
+      body: 'Acknowledged locally',
+      createdAt: '2026-08-19T12:00:00.000Z',
+    };
+    const staleOlder: ActivityUpdate = {
+      ...oldHead,
+      updateId: 'upd_01J0000000000000000000000F',
+      body: 'Stale older row',
+      createdAt: '2026-08-18T12:00:00.000Z',
+    };
+    const newHead: ActivityUpdate = {
+      ...oldHead,
+      updateId: 'upd_01J0000000000000000000000G',
+      body: 'New head',
+      createdAt: '2026-08-20T12:00:00.000Z',
+    };
+    const seed = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (seed === undefined) throw new Error('missing update-generation fixture');
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, {
+        ...seed,
+        updates: [oldHead],
+        updatesCursor: 'cur_old',
+      }),
+    );
+    await transactions.run(async (transaction) => {
+      await activities.queueUpdatePost(
+        transaction,
+        ACTIVITY,
+        'acknowledged-before-new-head',
+        acknowledged.body,
+        1,
+      );
+      await activities.settlePostedUpdate(transaction, 'acknowledged-before-new-head', {
+        update: acknowledged,
+        lastActivityAt: acknowledged.createdAt,
+      });
+    });
+
+    const oldResponse = deferred<{ updates: ActivityUpdate[]; cursor: undefined }>();
+    const activityUpdates = vi
+      .fn()
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockResolvedValueOnce({ updates: [], cursor: undefined });
+    const engine = syncEngine({ pull: { ...pullAdapter(), activityUpdates } });
+    const loadingOldPage = engine.pullActivityUpdates(ACTIVITY);
+    await vi.waitFor(() => expect(activityUpdates).toHaveBeenCalledTimes(1));
+
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, {
+        ...seed,
+        updates: [newHead],
+        updatesCursor: 'cur_new',
+      }),
+    );
+    oldResponse.resolve({ updates: [staleOlder], cursor: undefined });
+    await loadingOldPage;
+
+    expect(await activities.readUpdates(ACTIVITY)).toEqual({
+      updates: [newHead, acknowledged],
+      cursor: 'cur_new',
+    });
+
+    await engine.pullActivityUpdates(ACTIVITY);
+    expect(await activities.readUpdates(ACTIVITY)).toEqual({ updates: [newHead] });
   });
 
   it('reads occurrence date and capabilities from committed Agenda rows', async () => {

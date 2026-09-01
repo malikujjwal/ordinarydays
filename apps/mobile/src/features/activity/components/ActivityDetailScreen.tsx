@@ -1086,7 +1086,9 @@ function Loaded({
   const feed = useActivityUpdates(activity.activityId, {
     updates: embeddedUpdates,
     cursor: detail.detail?.updatesCursor,
-    ...(detail.dataUpdatedAt === undefined ? {} : { revision: detail.dataUpdatedAt }),
+    ...(detail.detailGeneration === undefined
+      ? {}
+      : { revision: detail.detailGeneration }),
   });
   const updateCount = feed.updates.length + feed.pending.length;
   /**

@@ -99,7 +99,7 @@ describe('bounded META/index detail access', () => {
   });
 
   it('admits the exact direct caller grant with a strong keyed read', async () => {
-    vi.mocked(repository.getActivityIndex).mockResolvedValue({ entity: 'ActivityIndex' });
+    vi.mocked(repository.getActivityIndex).mockResolvedValue({ activityId: PLAN });
 
     await expect(
       assertActivityReadAccessFromMeta(PARTICIPANT, activity()),
@@ -135,7 +135,7 @@ describe('bounded META/index detail access', () => {
   it('inherits through the exact parent participant grant', async () => {
     vi.mocked(repository.getActivityIndex)
       .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ entity: 'ActivityIndex' });
+      .mockResolvedValueOnce({ activityId: PLAN });
     vi.mocked(repository.getActivityMeta).mockResolvedValue(
       activity({ ownerId: STRANGER }),
     );

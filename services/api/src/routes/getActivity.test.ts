@@ -95,6 +95,8 @@ const seed = (
       return { Item: partition.find((row) => row.sk === key.sk) as never };
     }
     if (String(key.pk).startsWith('USER#') && key.sk === `IDX#${ACT}`) {
+      const exact = partition.find((row) => row.pk === key.pk && row.sk === key.sk);
+      if (exact !== undefined) return { Item: exact as never };
       const userId = String(key.pk).slice('USER#'.length);
       const granted = partition.some(
         (row) => row.entity === 'Participant' && row.userId === userId,
@@ -843,6 +845,28 @@ describe('a caller with no relationship', () => {
         .every((call) => call.args[0].input.ConsistentRead === true),
     ).toBe(true);
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
+  });
+
+  it('treats a malformed exact-key index row as no grant and reads no sections', async () => {
+    const stranger = 'usr_stranger';
+    seed([
+      meta(),
+      {
+        pk: `USER#${stranger}`,
+        sk: `IDX#${ACT}`,
+        entity: 'ListIndex',
+        activityId: ACT,
+        schemaVersion: 1,
+      },
+    ]);
+
+    const res = await get(asUser(stranger));
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error.code).toBe('not_found');
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
   });
 
   /** A malformed id resolves to nothing and answers 404, rather than a second status. */

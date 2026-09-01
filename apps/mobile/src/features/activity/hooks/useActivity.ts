@@ -51,10 +51,33 @@ import { activityDetailKey, activityKey } from '@/lib/queryKeys';
  */
 export { activityKey };
 
+const DETAIL_FETCH_GENERATION = '__odDetailFetchGeneration';
+let latestDetailFetchGeneration = 0;
+
+type ActivityDetailCache = ActivityDetail & {
+  readonly [DETAIL_FETCH_GENERATION]?: number;
+};
+
+function detailFetchGeneration(detail: ActivityDetail | undefined): number | undefined {
+  if (detail === undefined) return undefined;
+  const generation = Reflect.get(detail, DETAIL_FETCH_GENERATION);
+  return typeof generation === 'number' ? generation : undefined;
+}
+
+/** Tags only successful strong detail reads; object-spread cache projections retain the tag. */
+function authoritativeDetail(
+  detail: ActivityDetail,
+  previous: ActivityDetail | undefined,
+): ActivityDetailCache {
+  latestDetailFetchGeneration =
+    Math.max(latestDetailFetchGeneration, detailFetchGeneration(previous) ?? 0) + 1;
+  return { ...detail, [DETAIL_FETCH_GENERATION]: latestDetailFetchGeneration };
+}
+
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';
-  /** Monotonic client generation for reconciling embedded authoritative collections. */
-  dataUpdatedAt?: number;
+  /** Advances only after a successful authoritative detail read, never a local cache write. */
+  detailGeneration?: number;
   detail?: ActivityDetail;
   /** `interaction-contract.md` §5.3 copy for the screen-level failure. */
   message?: string;
@@ -110,7 +133,11 @@ export function useActivityDetail(
 
   const query = useQuery({
     queryKey,
-    queryFn: ({ signal }) => getActivity(apiClient, target, signal),
+    queryFn: async ({ signal }) =>
+      authoritativeDetail(
+        await getActivity(apiClient, target, signal),
+        queryClient.getQueryData<ActivityDetail>(queryKey),
+      ),
     /**
      * `always`, overriding the app-wide `offlineFirst`, for the reason written out in
      * `useHealth`: under `offlineFirst` a network-class failure pauses the query rather than
@@ -139,7 +166,10 @@ export function useActivityDetail(
          * cache first so the screen shows the other person's version even if the re-apply
          * itself then fails.
          */
-        const fresh = await getActivity(apiClient, target);
+        const fresh = authoritativeDetail(
+          await getActivity(apiClient, target),
+          queryClient.getQueryData<ActivityDetail>(queryKey),
+        );
         queryClient.setQueryData(queryKey, fresh);
 
         const resolution = resolveConflict(current.activity, fresh.activity, input);
@@ -261,10 +291,11 @@ export function useActivityDetail(
   });
 
   const failure = query.error === null ? undefined : describe(query.error);
+  const generation = detailFetchGeneration(query.data);
 
   return {
     status: query.status,
-    dataUpdatedAt: query.dataUpdatedAt,
+    ...(generation === undefined ? {} : { detailGeneration: generation }),
     refetch: () => void query.refetch(),
     isSaving:
       mutation.isPending || scheduleMutation.isPending || convertMutation.isPending,

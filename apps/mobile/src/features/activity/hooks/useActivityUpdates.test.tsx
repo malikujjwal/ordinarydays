@@ -1,5 +1,5 @@
 import { ApiError } from '@od/shared/client';
-import type { ActivityUpdate } from '@od/shared/types';
+import type { ActivityDetail, ActivityUpdate } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -7,12 +7,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { activityUpdateMutationKeys } from '@/lib/mutationKeys';
 import { activityUpdatesKey } from './keys';
+import { useActivityDetail } from './useActivity';
 import { useActivityUpdates } from './useActivityUpdates';
 
 const clients = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   remove: vi.fn(),
+  getDetail: vi.fn(),
+  patch: vi.fn(),
   uuid: vi.fn(),
 }));
 
@@ -21,6 +24,8 @@ vi.mock('@od/shared/client', async (importOriginal) => ({
   getActivityUpdates: clients.get,
   postActivityUpdate: clients.post,
   deleteActivityUpdate: clients.remove,
+  getActivity: clients.getDetail,
+  patchActivity: clients.patch,
 }));
 vi.mock('expo-crypto', () => ({ randomUUID: clients.uuid }));
 
@@ -66,10 +71,110 @@ beforeEach(() => {
   clients.get.mockReset();
   clients.post.mockReset();
   clients.remove.mockReset();
+  clients.getDetail.mockReset();
+  clients.patch.mockReset();
   clients.uuid.mockReset();
 });
 
 describe('useActivityUpdates web query ownership', () => {
+  it('keeps overlays and older pages across local detail writes, then reconciles a real refetch', async () => {
+    const client = queryClient();
+    const oldHead = update(1);
+    const older = update(2);
+    const acknowledged = update(3);
+    const refreshedHead = update(4);
+    const detail = (
+      title: string,
+      updates: readonly ActivityUpdate[],
+      updatesCursor?: string,
+    ): ActivityDetail => ({
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: 'usr_01J0000000000000000000000B',
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title,
+        details: { kind: 'custom' },
+        participantCount: 0,
+        childCount: 0,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        icsSequence: 0,
+        createdAt: '2026-08-10T00:00:00.000Z',
+        lastActivityAt: '2026-08-10T00:00:00.000Z',
+        updatedAt: '2026-08-10T00:00:00.000Z',
+        schemaVersion: 1,
+      },
+      reminders: [],
+      updates: [...updates],
+      ...(updatesCursor === undefined ? {} : { updatesCursor }),
+    });
+    const initial = detail('Before edit', [oldHead], 'cur_old');
+    const refreshed = detail('After strong refetch', [refreshedHead]);
+    clients.getDetail.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+    clients.patch.mockResolvedValue({ ...initial.activity, title: 'Local title edit' });
+    clients.get.mockResolvedValue({ updates: [older], cursor: 'cur_tail' });
+    clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
+    clients.post.mockResolvedValue({
+      update: acknowledged,
+      lastActivityAt: acknowledged.createdAt,
+    });
+
+    const mounted = renderHook(
+      () => {
+        const activity = useActivityDetail(ACTIVITY);
+        const updates = useActivityUpdates(ACTIVITY, {
+          updates: activity.detail?.updates ?? [],
+          cursor: activity.detail?.updatesCursor,
+          ...(activity.detailGeneration === undefined
+            ? {}
+            : { revision: activity.detailGeneration }),
+        });
+        return { activity, updates };
+      },
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() => expect(mounted.result.current.activity.status).toBe('success'));
+    const firstGeneration = mounted.result.current.activity.detailGeneration;
+
+    await act(async () => {
+      expect(await mounted.result.current.updates.post('Note 3')).toBe(true);
+    });
+    act(() => mounted.result.current.updates.loadMore());
+    await waitFor(() =>
+      expect(mounted.result.current.updates.updates).toEqual([
+        acknowledged,
+        older,
+        oldHead,
+      ]),
+    );
+
+    await act(async () => {
+      expect(
+        await mounted.result.current.activity.patch({ title: 'Local title edit' }),
+      ).toBe(true);
+    });
+    expect(mounted.result.current.activity.detailGeneration).toBe(firstGeneration);
+    expect(mounted.result.current.updates.updates).toEqual([
+      acknowledged,
+      older,
+      oldHead,
+    ]);
+    expect(mounted.result.current.updates.cursor).toBe('cur_tail');
+
+    act(() => mounted.result.current.activity.refetch());
+    await waitFor(() =>
+      expect(mounted.result.current.activity.detail?.activity.title).toBe(
+        'After strong refetch',
+      ),
+    );
+    expect(mounted.result.current.activity.detailGeneration).not.toBe(firstGeneration);
+    await waitFor(() =>
+      expect(mounted.result.current.updates.updates).toEqual([refreshedHead]),
+    );
+  });
+
   it('keeps an acknowledged deletion in the query cache across remounts', async () => {
     const client = queryClient();
     const stale = update(1);
@@ -234,6 +339,57 @@ describe('useActivityUpdates web query ownership', () => {
     act(() => mounted.result.current.loadMore());
     await waitFor(() => expect(clients.get).toHaveBeenCalledTimes(2));
     expect(mounted.result.current.updates).toEqual([refreshedHead]);
+  });
+
+  it('discards an old continuation that resolves after a newer strong head', async () => {
+    const client = queryClient();
+    const oldHead = update(1);
+    const staleOlder = update(2);
+    const acknowledged = update(3);
+    const newHead = update(4);
+    const stalePage = deferred<{
+      updates: readonly ActivityUpdate[];
+      cursor: undefined;
+    }>();
+    clients.get
+      .mockReturnValueOnce(stalePage.promise)
+      .mockResolvedValueOnce({ updates: [], cursor: undefined });
+    clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
+    clients.post.mockResolvedValue({
+      update: acknowledged,
+      lastActivityAt: acknowledged.createdAt,
+    });
+    const mounted = renderHook(({ embedded }) => useActivityUpdates(ACTIVITY, embedded), {
+      initialProps: {
+        embedded: { updates: [oldHead], cursor: 'cur_old', revision: 1 },
+      },
+      wrapper: wrapper(client),
+    });
+
+    await act(async () => {
+      expect(await mounted.result.current.post('Note 3')).toBe(true);
+    });
+    act(() => mounted.result.current.loadMore());
+    await waitFor(() =>
+      expect(clients.get).toHaveBeenCalledWith(expect.anything(), ACTIVITY, 'cur_old'),
+    );
+
+    mounted.rerender({
+      embedded: { updates: [newHead], cursor: 'cur_new', revision: 2 },
+    });
+    await waitFor(() =>
+      expect(mounted.result.current.updates).toEqual([newHead, acknowledged]),
+    );
+    stalePage.resolve({ updates: [staleOlder], cursor: undefined });
+    await waitFor(() => expect(mounted.result.current.isLoadingMore).toBe(false));
+
+    expect(mounted.result.current.updates).toEqual([newHead, acknowledged]);
+    expect(mounted.result.current.cursor).toBe('cur_new');
+    expect(mounted.result.current.updates).not.toContainEqual(staleOlder);
+
+    act(() => mounted.result.current.loadMore());
+    await waitFor(() => expect(mounted.result.current.cursor).toBeUndefined());
+    expect(mounted.result.current.updates).toEqual([newHead]);
   });
 
   it('retires an acknowledged post when a later complete strong feed omits it', async () => {

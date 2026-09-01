@@ -214,6 +214,11 @@ function materialize(cache: ActivityUpdatesCache): ActivityUpdate[] {
 
 type PostVariables = ActivityUpdatePostVariables;
 
+interface ContinuationRequest {
+  readonly cursor: string;
+  readonly headIdentity: string;
+}
+
 export function useActivityUpdates(
   activityId: string,
   embedded: {
@@ -226,7 +231,7 @@ export function useActivityUpdates(
   const [failure, setFailure] = useState<ActivityUpdatesFailure>();
   const [failedPost, setFailedPost] = useState<PostVariables>();
   const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
-  const [failedCursor, setFailedCursor] = useState<string>();
+  const [failedContinuation, setFailedContinuation] = useState<ContinuationRequest>();
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => activityUpdatesKey(activityId), [activityId]);
   const cached = useQuery({
@@ -247,12 +252,19 @@ export function useActivityUpdates(
   }, [cached, feed, queryClient, queryKey]);
 
   const loadMoreMutation = useMutation({
-    mutationFn: (cursor: string) => getActivityUpdates(apiClient, activityId, cursor),
-    onSuccess: (page) => {
+    mutationFn: (request: ContinuationRequest) =>
+      getActivityUpdates(apiClient, activityId, request.cursor),
+    onSuccess: (page, request) => {
       queryClient.setQueryData<ActivityUpdatesCache>(
         queryKey,
         (current = initialCache(embedded)) => {
           const baseline = reconcileEmbedded(current, embedded);
+          if (
+            baseline.headIdentity !== request.headIdentity ||
+            baseline.cursor !== request.cursor
+          ) {
+            return baseline;
+          }
           const pageIds = new Set(page.updates.map((entry) => entry.updateId));
           let acknowledged = baseline.acknowledged.filter(
             (entry) => !pageIds.has(entry.updateId),
@@ -285,11 +297,11 @@ export function useActivityUpdates(
           };
         },
       );
-      setFailedCursor(undefined);
+      setFailedContinuation(undefined);
       setFailure(undefined);
     },
-    onError: (caught, cursor) => {
-      setFailedCursor(cursor);
+    onError: (caught, request) => {
+      setFailedContinuation(request);
       setFailure(describeFailure(caught, 'load'));
     },
   });
@@ -363,8 +375,13 @@ export function useActivityUpdates(
 
   const loadMore = useCallback(() => {
     if (feed.cursor === undefined || loadMoreMutation.isPending) return;
-    loadMoreMutation.mutate(feed.cursor);
-  }, [feed.cursor, loadMoreMutation]);
+    loadMoreMutation.mutate({
+      cursor: feed.cursor,
+      headIdentity:
+        feed.headIdentity ??
+        headIdentity({ updates: feed.head, cursor: feed.headCursor }),
+    });
+  }, [feed.cursor, feed.head, feed.headCursor, feed.headIdentity, loadMoreMutation]);
 
   const post = useCallback(
     async (body: string): Promise<boolean> => {
@@ -403,8 +420,8 @@ export function useActivityUpdates(
 
   const retryFailure = useCallback(async (): Promise<boolean> => {
     try {
-      if (failure?.action === 'load' && failedCursor !== undefined) {
-        await loadMoreMutation.mutateAsync(failedCursor);
+      if (failure?.action === 'load' && failedContinuation !== undefined) {
+        await loadMoreMutation.mutateAsync(failedContinuation);
         return true;
       }
       if (failure?.action === 'post' && failedPost !== undefined) {
@@ -425,7 +442,7 @@ export function useActivityUpdates(
   }, [
     activityId,
     deleteMutation,
-    failedCursor,
+    failedContinuation,
     failedDelete,
     failedPost,
     failure?.action,

@@ -297,15 +297,37 @@ describe('bounded Activity-detail repository reads', () => {
       activityRepository.getActivityIndex(ALICE, first.activityId, {
         consistentRead: true,
       }),
-    ).resolves.toMatchObject({
-      ...keys.activityIndex(ALICE, first.activityId),
-      activityId: first.activityId,
-    });
+    ).resolves.toEqual({ activityId: first.activityId });
     await expect(
       activityRepository.getActivityIndex(BEN, first.activityId, {
         consistentRead: true,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { entity: 'ListIndex', activityId: undefined },
+    { entity: 'ActivityIndex', activityId: 'act_wrong_identity' },
+  ])('fails closed on a malformed exact-key Activity grant %#', async (malformed) => {
+    const activity = canonicalActivity(`act_${idToken(302)}`, false);
+    await activityRepository.createActivity(ALICE, activity);
+    await putRows([
+      {
+        ...keys.activityIndex(BEN, activity.activityId),
+        entity: malformed.entity,
+        activityId: malformed.activityId ?? activity.activityId,
+        schemaVersion: 1,
+      },
+    ]);
+
+    await expect(
+      activityRepository.getActivityIndex(BEN, activity.activityId, {
+        consistentRead: true,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      authz.assertActivityReadAccessFromMeta(BEN, activity),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 
   it('hydrates the maximum List and legacy-child set in three strong physical batches', async () => {

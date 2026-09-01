@@ -996,14 +996,36 @@ describe('projectDetail', () => {
       schedule: {
         date: '2026-08-09',
         time: '19:30',
+        endTime: '21:00',
         timezone: 'America/New_York',
         scheduledAtUtc: '2026-08-09T23:30:00.000Z',
+        endAtUtc: '2026-08-10T01:00:00.000Z',
       },
       recurrence: {
         mode: 'fixed',
         segments: [{ freq: 'weekly', byWeekday: [0], effectiveFrom: '2026-08-01' }],
       },
-      location: { label: 'Home' },
+      location: {
+        label: 'Home',
+        address: '1 Main Street',
+        lat: 40.7128,
+        lng: -74.006,
+        mapUrl: 'https://example.com/map',
+      },
+      details: {
+        kind: 'event',
+        description: 'Doors at seven',
+        priceCents: 2500,
+        currency: 'USD',
+        ticketUrl: 'https://example.com/tickets',
+        organiser: 'Neighbourhood Hall',
+        reservation: {
+          name: 'Alex',
+          time: '19:00',
+          partySize: 2,
+          reference: 'TABLE-7',
+        },
+      },
       parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB',
       listItemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1XC',
       listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD',
@@ -1027,6 +1049,75 @@ describe('projectDetail', () => {
     expect(activity.schedule?.scheduledAtUtc).toBe('2026-08-09T23:30:00.000Z');
     expect(activity.recurrence?.mode).toBe('fixed');
   });
+
+  it.each([
+    [{ objectKind: 'task', type: 'task', details: { kind: 'task' } }],
+    [{ objectKind: 'plan', type: 'meal', details: { kind: 'meal' } }],
+    [
+      {
+        objectKind: 'plan',
+        type: 'meal',
+        details: {
+          kind: 'meal',
+          mealSlot: 'dinner',
+          ingredients: [
+            {
+              ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MA',
+              name: 'Tomatoes',
+              quantity: '2',
+              addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1MB',
+            },
+          ],
+          recipeUrl: 'https://example.com/recipe',
+        },
+      },
+    ],
+    [
+      {
+        objectKind: 'plan',
+        type: 'watch',
+        details: { kind: 'watch', mediaTitle: 'Arrival' },
+      },
+    ],
+    [
+      {
+        objectKind: 'plan',
+        type: 'watch',
+        details: {
+          kind: 'watch',
+          mediaTitle: 'Severance',
+          mediaKind: 'show',
+          season: 2,
+          episode: 3,
+          episodeTitle: 'Who Is Alive?',
+          service: 'Apple TV+',
+        },
+      },
+    ],
+    [{ objectKind: 'plan', type: 'custom', details: { kind: 'custom' } }],
+    [
+      {
+        objectKind: 'plan',
+        type: 'custom',
+        details: {
+          kind: 'custom',
+          shortcutId: 'sct_01J8XKQ2M4N5P6R7S8T9V0W1MC',
+        },
+      },
+    ],
+  ])(
+    'projects schema-owned detail variants without explicit undefined keys',
+    (variant) => {
+      const { activity } = projectDetail(
+        [{ ...meta, ...variant }],
+        'usr_a',
+        detailTarget,
+      );
+
+      expect(activity.details).toEqual(variant.details);
+      expect(Object.values(activity.details)).not.toContain(undefined);
+    },
+  );
 
   /**
    * **The two exceptions to "project every field", and the reason is the contract.**

@@ -2,7 +2,10 @@ import type { PlansDateStore } from '@od/shared/client';
 import { describeRecurrence } from '@od/shared/recurrence';
 import { activity as activitySchema, type NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
-import type { Activity, AgendaItem } from '@od/shared/types';
+import type { AgendaItem } from '@od/shared/types';
+
+/** The schema-owned wire shape; callers need no assertion into an independently named type. */
+type ParsedActivity = ReturnType<typeof activitySchema.parse>;
 
 /** The schema-validated needs-a-date row shape consumed by the Plans hook and projections. */
 export type NeedsDateRowData = AgendaItem & {
@@ -50,7 +53,10 @@ export interface PlansProjectionClock {
  * `capabilities`, and the `isPast` clock rule — with cross-reference comments both sides;
  * server-only enrichments (subtitle, location, note excerpt) arrive on reconciliation.
  */
-function itemFromActivity(activity: Activity, clock: PlansProjectionClock): AgendaItem {
+function itemFromActivity(
+  activity: ParsedActivity,
+  clock: PlansProjectionClock,
+): AgendaItem {
   const date = activity.schedule?.date;
   const time = activity.schedule?.time;
   const endTime = activity.schedule?.endTime;
@@ -109,7 +115,7 @@ function byTimeThenId(
 
 export function applyPlansCreate(
   current: PlansProjectionState,
-  activity: Activity,
+  activity: ParsedActivity,
   clock: PlansProjectionClock,
 ): PlansProjectionState | undefined {
   const date = activity.schedule?.date;
@@ -171,11 +177,9 @@ export function applyPlansRemove(
 }
 
 /** The Activity inside a create/duplicate success payload, however the endpoint wraps it. */
-export function createdActivityFrom(data: unknown): Activity | undefined {
+export function createdActivityFrom(data: unknown): ParsedActivity | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
-  const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
+  const candidate = 'activity' in data ? Reflect.get(data, 'activity') : data;
   const parsed = activitySchema.safeParse(candidate);
-  // Boundary-safe: the wire schema allows explicit undefined optionals while the domain type
-  // uses exact optionals; validation is the guarantee, this cast only bridges that TS shape.
-  return parsed.success ? (parsed.data as Activity) : undefined;
+  return parsed.success ? parsed.data : undefined;
 }

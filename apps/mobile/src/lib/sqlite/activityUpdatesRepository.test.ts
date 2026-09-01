@@ -74,6 +74,13 @@ describe('native Activity updates projection', () => {
   let outbox: OutboxRepository;
   let service: ActivityTransactionService;
 
+  async function continuationPosition() {
+    const position = await activities.readUpdateFeedPosition(ACTIVITY);
+    if (position?.cursor === undefined)
+      throw new Error('Expected a continuation cursor.');
+    return { cursor: position.cursor, generation: position.generation };
+  }
+
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'ordinarydays-activity-updates-'));
     database = await createNodeSqliteFactory(directory).open('updates.sqlite');
@@ -217,8 +224,9 @@ describe('native Activity updates projection', () => {
     await transactions.run((transaction) =>
       activities.putCanonical(transaction, detail(head.createdAt, [head], 'cur_old')),
     );
+    const oldPosition = await continuationPosition();
     await transactions.run((transaction) =>
-      activities.installUpdatePage(transaction, ACTIVITY, {
+      activities.installUpdatePage(transaction, ACTIVITY, oldPosition, {
         updates: [older],
         cursor: 'cur_tail',
       }),
@@ -233,8 +241,9 @@ describe('native Activity updates projection', () => {
       cursor: 'cur_new',
     });
 
+    const refreshedPosition = await continuationPosition();
     await transactions.run((transaction) =>
-      activities.installUpdatePage(transaction, ACTIVITY, {
+      activities.installUpdatePage(transaction, ACTIVITY, refreshedPosition, {
         updates: [],
         cursor: undefined,
       }),
@@ -276,8 +285,9 @@ describe('native Activity updates projection', () => {
       locallyAcknowledged,
     );
 
+    const refreshedPosition = await continuationPosition();
     await transactions.run((transaction) =>
-      activities.installUpdatePage(transaction, ACTIVITY, {
+      activities.installUpdatePage(transaction, ACTIVITY, refreshedPosition, {
         updates: [],
         cursor: undefined,
       }),

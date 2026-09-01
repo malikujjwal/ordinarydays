@@ -336,6 +336,24 @@ export class ActivityRepository {
     };
   }
 
+  /** The cursor and strong-head generation must be captured as one SQLite row. */
+  async readUpdateFeedPosition(
+    activityId: string,
+  ): Promise<
+    { readonly cursor: string | undefined; readonly generation: number } | undefined
+  > {
+    const state = await this.reader.first(
+      `SELECT next_cursor, generation FROM activity_update_feed_state
+       WHERE activity_id = ?;`,
+      [activityId],
+    );
+    if (state === undefined) return undefined;
+    return {
+      cursor: text(state, 'next_cursor'),
+      generation: number(state, 'generation') ?? 0,
+    };
+  }
+
   async readUpdatesProjection(activityId: string): Promise<ActivityUpdatesProjection> {
     const [page, operations] = await Promise.all([
       this.readUpdates(activityId),
@@ -600,8 +618,21 @@ export class ActivityRepository {
   async installUpdatePage(
     transaction: TransactionContext,
     activityId: string,
+    expected: { readonly cursor: string; readonly generation: number },
     page: ActivityUpdatePage,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const current = await transaction.database.first(
+      `SELECT next_cursor, generation FROM activity_update_feed_state
+       WHERE activity_id = ?;`,
+      [activityId],
+    );
+    if (
+      current === undefined ||
+      text(current, 'next_cursor') !== expected.cursor ||
+      (number(current, 'generation') ?? 0) !== expected.generation
+    ) {
+      return false;
+    }
     for (const update of page.updates) {
       if (update.activityId !== activityId) {
         throw new Error('Activity update page crossed activity boundary.');
@@ -622,6 +653,7 @@ export class ActivityRepository {
     await this.putUpdateCursor(transaction.database, activityId, page.cursor);
     await this.finishUpdateReconciliation(transaction.database, activityId, page.cursor);
     transaction.changed(this.updatesScope(activityId));
+    return true;
   }
 
   /**
@@ -854,6 +886,7 @@ export class ActivityRepository {
         transaction.database,
         detail.activity.activityId,
         detail.updatesCursor,
+        true,
       );
       await this.finishUpdateReconciliation(
         transaction.database,
@@ -984,12 +1017,15 @@ export class ActivityRepository {
     database: SqliteExecutor,
     activityId: string,
     cursor: string | undefined,
+    advanceGeneration = false,
   ): Promise<void> {
     await database.run(
-      `INSERT INTO activity_update_feed_state (activity_id, next_cursor)
-       VALUES (?, ?)
-       ON CONFLICT(activity_id) DO UPDATE SET next_cursor=excluded.next_cursor;`,
-      [activityId, cursor ?? null],
+      `INSERT INTO activity_update_feed_state (activity_id, next_cursor, generation)
+       VALUES (?, ?, ?)
+       ON CONFLICT(activity_id) DO UPDATE SET
+         next_cursor=excluded.next_cursor,
+         generation=activity_update_feed_state.generation + excluded.generation;`,
+      [activityId, cursor ?? null, advanceGeneration ? 1 : 0],
     );
   }
 

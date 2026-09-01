@@ -133,7 +133,7 @@ describe('versioned SQLite migrations', () => {
   it('seeks targeted Agenda writes by activity and occurrence before viewer date', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
 
-    const previousMigrations = FOUNDATION_MIGRATIONS.slice(0, -1);
+    const previousMigrations = FOUNDATION_MIGRATIONS.slice(0, 4);
     await runMigrations(database, previousMigrations);
     await runMigrations(database, FOUNDATION_MIGRATIONS);
 
@@ -631,7 +631,7 @@ describe('versioned SQLite migrations', () => {
 
   it('adds durable local-failure streak fields without changing existing intents', async () => {
     if (database === undefined) throw new Error('missing migration test database');
-    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, -1));
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 15));
     await database.run(
       `INSERT INTO outbox_intents (
          intent_id, mutation_key_json, variables_json, entity_id, ordering_key,
@@ -786,5 +786,23 @@ describe('versioned SQLite migrations', () => {
         [parentId],
       ),
     ).toEqual([]);
+  });
+
+  it('adds a generation fence to an existing update cursor without losing it', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 24));
+    await database.run(
+      `INSERT INTO activity_update_feed_state (activity_id, next_cursor)
+       VALUES ('act_existing_feed', 'cur_existing');`,
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT next_cursor, generation FROM activity_update_feed_state
+         WHERE activity_id = 'act_existing_feed';`,
+      ),
+    ).toEqual({ next_cursor: 'cur_existing', generation: 0 });
   });
 });

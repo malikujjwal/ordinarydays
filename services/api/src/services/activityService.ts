@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import {
+  assertNever,
   blockerMessage,
   type ChangeResult,
   type ChangeTarget,
@@ -33,7 +34,6 @@ import type {
   Gsi1Bucket,
   ListItemActivityLink,
   MealIngredient,
-  Occurrence,
   OccurrenceDetailProjection,
   Recurrence,
   RecurrenceSegment,
@@ -99,6 +99,9 @@ import {
   assertActivityReadAccessFromMeta,
   assertPatchableFields,
 } from './authz.js';
+
+type ParsedActivity = ReturnType<typeof activitySchema.parse>;
+type ParsedOccurrence = ReturnType<typeof occurrenceSchema.parse>;
 
 /**
  * The activity rules that must not live in a handler or a repository (P1-10).
@@ -1148,7 +1151,7 @@ export async function convertRecurrence(
   const parsedOccurrence = occurrenceSchema.safeParse(rawOccurrence);
   const selected = projectOccurrenceDetail(
     current,
-    parsedOccurrence.success ? (parsedOccurrence.data as Occurrence) : undefined,
+    parsedOccurrence.success ? parsedOccurrence.data : undefined,
     input.occurrenceDate,
   );
 
@@ -2104,7 +2107,7 @@ export function projectDetail(
 ): ActivityDetail {
   const meta = partition.find((row) => row.sk === 'META');
   if (meta === undefined) throw new AppError('not_found', 'Activity not found.');
-  const projected = toActivity(activitySchema.parse(meta) as Activity);
+  const projected = toActivity(activitySchema.parse(meta));
   const ownerMayAct = projected.ownerId === userId;
 
   const occurrence =
@@ -2118,9 +2121,7 @@ export function projectDetail(
                 row.activityId === projected.activityId &&
                 row.date === target.date,
             );
-            return raw === undefined
-              ? undefined
-              : (occurrenceSchema.parse(raw) as Occurrence);
+            return raw === undefined ? undefined : occurrenceSchema.parse(raw);
           })(),
           target.date,
         )
@@ -2145,7 +2146,7 @@ export function projectDetail(
 
 function projectOccurrenceDetail(
   activity: Activity,
-  override: Occurrence | undefined,
+  override: ParsedOccurrence | undefined,
   nominalDate: string,
 ): OccurrenceDetailProjection {
   if (
@@ -2218,6 +2219,97 @@ function isReminderRow(row: StoredItem): boolean {
   return row.entity === 'Reminder';
 }
 
+function projectStoredDetails(details: ParsedActivity['details']): ActivityDetails {
+  switch (details.kind) {
+    case 'task':
+      return { kind: 'task' };
+    case 'meal':
+      return {
+        kind: 'meal',
+        ...(details.mealSlot === undefined ? {} : { mealSlot: details.mealSlot }),
+        ...(details.ingredients === undefined
+          ? {}
+          : {
+              ingredients: details.ingredients.map((ingredient) => ({
+                ingredientId: ingredient.ingredientId,
+                name: ingredient.name,
+                ...(ingredient.quantity === undefined
+                  ? {}
+                  : { quantity: ingredient.quantity }),
+                ...(ingredient.addedToListId === undefined
+                  ? {}
+                  : { addedToListId: ingredient.addedToListId }),
+              })),
+            }),
+        ...(details.recipeUrl === undefined ? {} : { recipeUrl: details.recipeUrl }),
+      };
+    case 'watch':
+      return {
+        kind: 'watch',
+        mediaTitle: details.mediaTitle,
+        ...(details.mediaKind === undefined ? {} : { mediaKind: details.mediaKind }),
+        ...(details.season === undefined ? {} : { season: details.season }),
+        ...(details.episode === undefined ? {} : { episode: details.episode }),
+        ...(details.episodeTitle === undefined
+          ? {}
+          : { episodeTitle: details.episodeTitle }),
+        ...(details.service === undefined ? {} : { service: details.service }),
+      };
+    case 'event': {
+      const reservation =
+        details.reservation === undefined
+          ? undefined
+          : {
+              ...(details.reservation.name === undefined
+                ? {}
+                : { name: details.reservation.name }),
+              ...(details.reservation.time === undefined
+                ? {}
+                : { time: details.reservation.time }),
+              ...(details.reservation.partySize === undefined
+                ? {}
+                : { partySize: details.reservation.partySize }),
+              ...(details.reservation.reference === undefined
+                ? {}
+                : { reference: details.reservation.reference }),
+            };
+      return {
+        kind: 'event',
+        ...(details.description === undefined
+          ? {}
+          : { description: details.description }),
+        ...(details.priceCents === undefined ? {} : { priceCents: details.priceCents }),
+        ...(details.currency === undefined ? {} : { currency: details.currency }),
+        ...(details.ticketUrl === undefined ? {} : { ticketUrl: details.ticketUrl }),
+        ...(details.organiser === undefined ? {} : { organiser: details.organiser }),
+        ...(reservation === undefined ? {} : { reservation }),
+      };
+    }
+    case 'custom':
+      return {
+        kind: 'custom',
+        ...(details.shortcutId === undefined ? {} : { shortcutId: details.shortcutId }),
+      };
+    default:
+      return assertNever(details, 'ActivityDetails');
+  }
+}
+
+function projectStoredSchedule(
+  schedule: NonNullable<ParsedActivity['schedule']>,
+): ActivitySchedule {
+  return {
+    date: schedule.date,
+    timezone: schedule.timezone,
+    ...(schedule.time === undefined ? {} : { time: schedule.time }),
+    ...(schedule.endTime === undefined ? {} : { endTime: schedule.endTime }),
+    ...(schedule.scheduledAtUtc === undefined
+      ? {}
+      : { scheduledAtUtc: schedule.scheduledAtUtc }),
+    ...(schedule.endAtUtc === undefined ? {} : { endAtUtc: schedule.endAtUtc }),
+  };
+}
+
 /**
  * Both projections are built **field by field, never by spreading** — the same rule as
  * `toUser` and `toDevice`. A stored row carries `pk`, `sk` and `entity`, and every future
@@ -2237,18 +2329,32 @@ function isReminderRow(row: StoredItem): boolean {
  * which is the wrong direction for a default to point. **Phase 3 adds them back with the
  * access check, not before**, and the test below fails if they are added without it.
  */
-function toActivity(stored: Activity): Activity {
-  return {
+function toActivity(stored: ParsedActivity): Activity {
+  const projected = {
     activityId: stored.activityId,
     ownerId: stored.ownerId,
     status: stored.status,
-    objectKind: stored.objectKind,
-    type: stored.type,
     title: stored.title,
     ...(stored.notes === undefined ? {} : { notes: stored.notes }),
-    ...(stored.schedule === undefined ? {} : { schedule: stored.schedule }),
+    ...(stored.schedule === undefined
+      ? {}
+      : { schedule: projectStoredSchedule(stored.schedule) }),
     ...(stored.recurrence === undefined ? {} : { recurrence: stored.recurrence }),
-    ...(stored.location === undefined ? {} : { location: stored.location }),
+    ...(stored.location === undefined
+      ? {}
+      : {
+          location: {
+            label: stored.location.label,
+            ...(stored.location.address === undefined
+              ? {}
+              : { address: stored.location.address }),
+            ...(stored.location.lat === undefined ? {} : { lat: stored.location.lat }),
+            ...(stored.location.lng === undefined ? {} : { lng: stored.location.lng }),
+            ...(stored.location.mapUrl === undefined
+              ? {}
+              : { mapUrl: stored.location.mapUrl }),
+          },
+        }),
     ...(stored.parentActivityId === undefined
       ? {}
       : { parentActivityId: stored.parentActivityId }),
@@ -2257,7 +2363,7 @@ function toActivity(stored: Activity): Activity {
     ...(stored.primaryAttachmentId === undefined
       ? {}
       : { primaryAttachmentId: stored.primaryAttachmentId }),
-    details: stored.details,
+    details: projectStoredDetails(stored.details),
     participantCount: stored.participantCount,
     childCount: stored.childCount,
     expenseTotalCents: stored.expenseTotalCents,
@@ -2270,7 +2376,10 @@ function toActivity(stored: Activity): Activity {
     lastActivityAt: stored.lastActivityAt,
     updatedAt: stored.updatedAt,
     schemaVersion: stored.schemaVersion,
-  } as Activity;
+  };
+  return stored.objectKind === 'task'
+    ? { ...projected, objectKind: 'task', type: 'task' }
+    : { ...projected, objectKind: 'plan', type: stored.type };
 }
 
 function toReminder(row: StoredItem): Reminder {

@@ -452,13 +452,19 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const pullUpdates = this.pull.activityUpdates;
     if (pullUpdates === undefined)
       throw new Error('Native Updates transport is not ready.');
-    const current = await this.activities.readUpdates(activityId);
-    if (current.cursor === undefined) return current;
+    const position = await this.activities.readUpdateFeedPosition(activityId);
+    if (position?.cursor === undefined) return this.activities.readUpdates(activityId);
+    const { cursor, generation } = position;
     const page = await this.serialNetwork((signal) =>
-      pullUpdates(activityId, current.cursor, signal),
+      pullUpdates(activityId, cursor, signal),
     );
     await this.transactions.run((transaction) =>
-      this.activities.installUpdatePage(transaction, activityId, page),
+      this.activities.installUpdatePage(
+        transaction,
+        activityId,
+        { cursor, generation },
+        page,
+      ),
     );
     return this.activities.readUpdates(activityId);
   }

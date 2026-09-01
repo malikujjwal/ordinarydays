@@ -4,12 +4,10 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'apps/mobile/app/(app)/gallery.tsx'
-      - 'apps/mobile/app/(app)/lists-contract-gallery.tsx'
-      - 'apps/mobile/src/components/listsContractGallery/**'
-      - 'apps/mobile/src/components/ConfirmDialog.tsx'
-      - 'apps/mobile/src/features/compose/**'
-      - 'apps/mobile/src/features/lists/**'
+      # The gallery captures production routes through the real tab/shared shell. Keeping the
+      # whole mobile app in scope makes that transitive dependency boundary closed as routes,
+      # providers and safe-area/tab layout evolve.
+      - 'apps/mobile/**'
       - 'packages/shared/src/lists/**'
       - 'packages/shared/src/schemas/list.ts'
       - 'packages/shared/src/types/list.ts'

@@ -1,6 +1,7 @@
 import type { Activity } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import {
+  type ActivityIndexGrant,
   activityFromPartition,
   batchGetActivityMeta,
   getActivityIndex,
@@ -326,7 +327,7 @@ export async function assertActivityReadAccessFromPartition(
 export async function assertActivityReadAccessFromMeta(
   userId: string,
   activity: Activity,
-  options: { readonly preloadedDirectIndex?: StoredItem | null } = {},
+  options: { readonly preloadedDirectIndex?: ActivityIndexGrant | null } = {},
 ): Promise<ActivityAccess> {
   if (activity.ownerId === userId) {
     return { activity, isOwner: true, viaParent: false };

@@ -695,26 +695,6 @@ export interface UserListEntry {
   readonly index: ListIndex;
 }
 
-/**
- * The trimmed rows plan detail's LISTS section renders (P3-37, access pattern 4).
- *
- * One bounded `BatchGetItem` over the caller's `USER#<id>` / `LIST#<id>` pointers and the
- * corresponding `LIST#<id>` / `META` keys — never one read per List and never a Query over
- * anything. Plan participation and List membership are independent grants, so a META row is
- * emitted only when its caller-owned pointer is present in the same strong read. Results are
- * keyed back by `listId` so the caller can restore the partition's own `SOURCE_LIST#` order.
- * A missing pointer or META is simply absent from the map.
- *
- * Deliberately tolerant of the stored shape: a summary is navigation, and a legacy aggregate
- * that would fail the full parse should still name itself on the plan that made it.
- */
-export async function batchGetSourceListSummaries(
-  userId: string,
-  listIds: readonly string[],
-): Promise<Map<string, SourceListSummary>> {
-  return (await batchGetDetailHydration(userId, listIds, [])).sourceLists;
-}
-
 export interface DetailBatchHydration {
   readonly sourceLists: Map<string, SourceListSummary>;
   readonly childRestoredStatuses: Map<string, 'saved' | 'scheduled'>;
