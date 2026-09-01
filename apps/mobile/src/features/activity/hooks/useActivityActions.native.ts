@@ -9,30 +9,12 @@ import { useClock } from '@/hooks/useClock';
 import { nextCanonicalId } from '@/lib/canonicalIds';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
-
-export interface ActivityActions {
-  duplicate: () => Promise<Activity | undefined>;
-  remove: () => Promise<boolean>;
-  skip: (scope: ActivityScope) => Promise<boolean>;
-  snooze: (scope: ActivityScope, until: string, renderedDate: string) => Promise<boolean>;
-  resolvePassed: (
-    outcome: ActivityOutcome,
-    scope: ActivityScope,
-    onProjected: (resolved: boolean) => void,
-  ) => void;
-  undoResolution: (
-    scope: ActivityScope,
-    onProjected?: (resolved: boolean) => void,
-  ) => void;
-  setChildCompletion: (child: ActivityChild, completed: boolean) => Promise<boolean>;
-  isBusy: boolean;
-  isCompleting: boolean;
-  isUndoing: boolean;
-  errorMessage: string | undefined;
-  errorRequestId: string | undefined;
-  retryError: () => void;
-  dismissError: () => void;
-}
+import {
+  ACTION_FAILED,
+  ACTIVITY_GONE,
+  type ActivityActions,
+  OUTCOME_RECORDED,
+} from '../model/activityActions';
 
 export function useActivityActions(activityId: string): ActivityActions {
   const state = requireActiveNativeState();
@@ -44,7 +26,7 @@ export function useActivityActions(activityId: string): ActivityActions {
   const lastCompletion = useRef<string | undefined>(undefined);
   const retryRef = useRef<(() => void) | undefined>(undefined);
 
-  const fail = useCallback((retry?: () => void, message = "Couldn't do that.") => {
+  const fail = useCallback((retry?: () => void, message = ACTION_FAILED) => {
     retryRef.current = retry;
     setError(message);
   }, []);
@@ -102,7 +84,7 @@ export function useActivityActions(activityId: string): ActivityActions {
       try {
         const detail = await state.activities.read({ kind: 'activity', activityId });
         if (detail === undefined) {
-          fail(retry, "This isn't here any more.");
+          fail(retry, ACTIVITY_GONE);
           return undefined;
         }
         return detail.activity.schedule === undefined
@@ -133,7 +115,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     }, retry);
     if (result === undefined || !resultOk(result.write, retry)) return undefined;
     if (result.copy === undefined) {
-      fail(retry, "This isn't here any more.");
+      fail(retry, ACTIVITY_GONE);
       return undefined;
     }
     return result.copy;
@@ -215,7 +197,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         retryRef.current = undefined;
         onProjected(true);
         useToast.getState().showUndo({
-          message: 'Outcome recorded',
+          message: OUTCOME_RECORDED,
           onCommit: () => undefined,
           onUndo: () => {
             const inverseIntentId = randomUUID();

@@ -1,12 +1,7 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
 import { ApiError } from '@od/shared/client';
 import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/schemas';
-import type {
-  Activity,
-  ActivityChild,
-  ActivityDetail,
-  ActivityOutcome,
-} from '@od/shared/types';
+import type { Activity, ActivityDetail } from '@od/shared/types';
 import { type ActivityScope, scopeToWire, targetsWholeSeries } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
@@ -23,6 +18,14 @@ import type {
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { startUndoable } from '@/lib/startUndoable';
 import { useToast } from '@/stores/toast';
+import {
+  type ActivityActions,
+  describeActionFailure,
+  OUTCOME_RECORDED,
+} from '../model/activityActions';
+
+export type { ActivityActions } from '../model/activityActions';
+
 import { activityKey } from './useActivity';
 
 /**
@@ -38,57 +41,6 @@ import { activityKey } from './useActivity';
  * kind change is a `PATCH` with `If-Match` exactly like a title edit, and having two mutations
  * on one resource is how two `updatedAt` values start disagreeing.
  */
-export interface ActivityActions {
-  duplicate: () => Promise<Activity | undefined>;
-  remove: () => Promise<boolean>;
-  /**
-   * Stores a skip at an explicit scope; it never deletes the Activity.
-   *
-   * Widened from occurrence-only because `today-and-tasks.md` §5.4 puts a skip on "any task"
-   * as well as any recurring occurrence — a one-off skips itself. The series guard that the
-   * narrower type used to give structurally is now the same runtime one completion uses.
-   */
-  skip: (scope: ActivityScope) => Promise<boolean>;
-  /**
-   * Moves this activity, or this occurrence, later the same day. One `OCC#` row for a series
-   * and META snooze fields for a one-off — the scope is explicit for the reason ADR-053 makes
-   * it explicit.
-   */
-  snooze: (
-    scope: ActivityScope,
-    until: string,
-    /** The day the row is rendered on, so the agenda projection can find it. */
-    renderedDate: string,
-  ) => Promise<boolean>;
-  resolvePassed: (
-    outcome: ActivityOutcome,
-    scope: ActivityScope,
-    onProjected: (resolved: boolean) => void,
-  ) => void;
-  /**
-   * Reverses a completion from the detail screen.
-   *
-   * Separate from `resolvePassed`'s undo, which is the six-second toast. This is the permanent
-   * affordance: a completed row on Today keeps its `Undo` swipe action for as long as it is
-   * completed, and the detail screen — the one surface that can *record* a completion — could
-   * not reverse one at all.
-   */
-  undoResolution: (
-    scope: ActivityScope,
-    onProjected?: (resolved: boolean) => void,
-  ) => void;
-  /** Complete or uncomplete one non-recurring Prep task from its parent's section. */
-  setChildCompletion: (child: ActivityChild, completed: boolean) => Promise<boolean>;
-  isBusy: boolean;
-  /** The two halves stay separate so an optimistic Complete never disables its own Undo. */
-  isCompleting: boolean;
-  isUndoing: boolean;
-  /** `interaction-contract.md` §5.3 copy for whichever action failed. */
-  errorMessage: string | undefined;
-  errorRequestId: string | undefined;
-  retryError: () => void;
-  dismissError: () => void;
-}
 
 /**
  * A completion that would land on a series rather than on one of its days.
@@ -107,18 +59,6 @@ function isUnscopedSeries(
   scope: ActivityScope,
 ): boolean {
   return targetsWholeSeries(snapshot?.activity.recurrence !== undefined, scope);
-}
-
-function describe(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.status === 403) {
-      return 'Only the person who made this plan can change that.';
-    }
-    if (error.status === 404) return "This isn't here any more.";
-    if (error.status >= 500) return 'Something went wrong.';
-    return error.message;
-  }
-  return "Couldn't do that.";
 }
 
 export function useActivityActions(activityId: string): ActivityActions {
@@ -376,7 +316,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           },
           failUndo: useToast.getState().failUndo,
         },
-        message: 'Outcome recorded',
+        message: OUTCOME_RECORDED,
         failureMessage: "Couldn't record that outcome.",
         compensationFailureMessage: "Couldn't undo that outcome.",
       });
@@ -520,7 +460,9 @@ export function useActivityActions(activityId: string): ActivityActions {
     isCompleting: completeMutation.isPending,
     isUndoing: uncompleteMutation.isPending,
     errorMessage:
-      failure === null || failure === undefined ? undefined : describe(failure),
+      failure === null || failure === undefined
+        ? undefined
+        : describeActionFailure(failure),
     errorRequestId: failure instanceof ApiError ? failure.requestId : undefined,
     retryError: () => {
       const retry = retryRef.current;

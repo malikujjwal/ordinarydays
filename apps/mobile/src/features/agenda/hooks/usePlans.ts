@@ -4,7 +4,6 @@ import {
   mergePlansResponse,
   type PlansDateStore,
 } from '@od/shared/client';
-import { MAX_AGENDA_DAYS } from '@od/shared/constants';
 import { addWallDays } from '@od/shared/recurrence';
 import type { NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
@@ -12,7 +11,6 @@ import type { AgendaItem } from '@od/shared/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
-import { describeApiFailure } from '@/lib/apiFailure';
 import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
 import { usePlanActivityFloors } from '@/lib/planActivityFloors';
 import {
@@ -21,6 +19,7 @@ import {
   createdActivityFrom,
   type NeedsDateRowData,
 } from '../model/plansApply';
+import { describePlansFailure, PLANS_WINDOW_DAYS } from '../model/plansFeed';
 import { plansProjectionKey } from './keys';
 
 export type { NeedsDateRowData } from '../model/plansApply';
@@ -40,9 +39,6 @@ export type { NeedsDateRowData } from '../model/plansApply';
  * agenda, not `#P`), so the rebuilt Plans tab is online-first everywhere; offline it shows
  * its error state with Retry while Today's local agenda remains untouched.
  */
-
-/** One bounded window request spans at most `MAX_AGENDA_DAYS` inclusive dates. */
-const WINDOW_DAYS = MAX_AGENDA_DAYS;
 
 /**
  * The needs-a-date row: an ordinary `AgendaItem` plus the stage's three extra fields.
@@ -90,8 +86,6 @@ export interface PlansView {
   readonly message?: string;
   readonly requestId?: string;
 }
-
-const describe = (error: unknown) => describeApiFailure(error, "Couldn't load this.");
 
 /**
  * The mutation keys whose success creates an Activity this tab must project: ordinary
@@ -186,7 +180,7 @@ export function usePlans(
       : {
           ...queriedState,
           status: query.data === undefined ? 'error' : 'success',
-          failure: describe(query.error),
+          failure: describePlansFailure(query.error),
         };
   /** Mirror for callbacks that must read current rows synchronously (snapshot capture). */
   const stateRef = useRef(state);
@@ -461,7 +455,7 @@ export function usePlans(
       mode: 'upcoming_window',
       tz: timezone,
       upcomingFrom: from,
-      upcomingTo: addWallDays(from, WINDOW_DAYS - 1) as WallDate,
+      upcomingTo: addWallDays(from, PLANS_WINDOW_DAYS - 1) as WallDate,
     })
       .then((data) => {
         if (!mounted.current) return;
@@ -493,7 +487,7 @@ export function usePlans(
         if (!mounted.current) return;
         setState((current) => ({
           ...current,
-          failure: describe(error),
+          failure: describePlansFailure(error),
           upcomingStalled: true,
         }));
       })
@@ -523,7 +517,7 @@ export function usePlans(
       })
       .catch((error: unknown) => {
         if (!mounted.current) return;
-        setState((current) => ({ ...current, failure: describe(error) }));
+        setState((current) => ({ ...current, failure: describePlansFailure(error) }));
       })
       .finally(() => {
         if (mounted.current) setLoadingPast(false);
