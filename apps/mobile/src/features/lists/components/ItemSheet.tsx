@@ -703,14 +703,16 @@ export function ItemSheet({
               close();
               const draftTitle = title.trim();
               const draftNote = note.trim();
-              // Both fields fall back to the stored row when the sheet's draft is blank —
-              // an empty field means "nothing typed here", never "erase the stored value
-              // from the copy" (the flushed save owns the actual write).
-              const storedNote = item.note?.trim() ?? '';
-              const noteForBridge = draftNote !== '' ? draftNote : storedNote;
+              /*
+               * The drafts are the truth the user is looking at — the field is seeded from
+               * the row and kept in sync, so a blank note draft means the item has no note
+               * *now* (including one the user just cleared; falling back to the stored row
+               * would resurrect it into the Plan). Title differs: blank is not a valid
+               * title, so a cleared title falls back rather than bridging an invalid one.
+               */
               onPlanItem({
                 title: draftTitle === '' ? item.title : draftTitle,
-                ...(noteForBridge === '' ? {} : { note: noteForBridge }),
+                ...(draftNote === '' ? {} : { note: draftNote }),
               });
             }}
             testID="item-sheet-plan"

@@ -219,6 +219,55 @@ it('restores a skipped occurrence on a failed undoSkip, never a fabricated statu
   expect(row?.status).toBe('skipped_occurrence');
 });
 
+it('moves a rescheduled one-off to its new date from the authoritative response', async () => {
+  stubFetch(
+    body({
+      upcoming: [{ date: '2026-08-08', items: [upcomingRow(A, 'scheduled')] }],
+    }),
+  );
+  const { client, wrapper } = harness();
+  const { result } = renderHook(() => usePlans('America/New_York', TODAY, '12:00'), {
+    wrapper,
+  });
+  await waitFor(() => expect(result.current.status).toBe('success'));
+
+  const rescheduled = {
+    activityId: A,
+    ownerId: 'usr_local_dev',
+    objectKind: 'plan',
+    type: 'event',
+    status: 'scheduled',
+    title: A,
+    schedule: { date: '2026-08-20', time: '19:00', timezone: 'America/New_York' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    details: { kind: 'event' },
+    icsSequence: 1,
+    createdAt: '2026-08-01T10:00:00.000Z',
+    lastActivityAt: '2026-08-06T10:00:00.000Z',
+    updatedAt: '2026-08-06T10:00:00.000Z',
+    schemaVersion: 1,
+  };
+  const mutation = client.getMutationCache().build(client, {
+    mutationKey: [...activityMutationKeys.schedule],
+    mutationFn: () => Promise.resolve(rescheduled),
+  });
+  await act(async () => {
+    await mutation.execute({
+      activityId: A,
+      input: { date: '2026-08-20' },
+      idempotencyKey: 'k4',
+    });
+  });
+
+  expect(result.current.store.byDate.get('2026-08-08' as WallDate)).toEqual([]);
+  expect(result.current.store.byDate.get('2026-08-20' as WallDate)?.[0]?.activityId).toBe(
+    A,
+  );
+});
+
 it('projects a negative passed-plan outcome as skipped, not completed', async () => {
   stubFetch(
     body({

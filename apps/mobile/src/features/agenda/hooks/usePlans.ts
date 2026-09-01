@@ -341,6 +341,13 @@ export function usePlans(
           if (projected === undefined) return current;
           const date = activity.schedule?.date;
           const window = current.upcomingWindow;
+          /**
+           * A date beyond the loaded window extends `through` so the row renders at once
+           * and the tab cannot claim an emptiness it disproved itself. Known trade-off,
+           * recorded: dates between the old and new `through` are not exhausted, so a gap
+           * line drawn across them over-claims until the windows walk forward — accepted
+           * against the alternative of the user's own create being invisible.
+           */
           const upcomingWindow =
             date !== undefined && window !== undefined && date > window.through
               ? { ...window, through: date as WallDate }
@@ -459,17 +466,28 @@ export function usePlans(
     })
       .then((data) => {
         if (!mounted.current || generation.current !== attempt) return;
-        setState((current) => ({
-          ...current,
-          store: mergePlansResponse(current.store, data),
-          upcomingWindow: {
-            from: current.upcomingWindow?.from ?? (data.upcomingWindow.from as WallDate),
-            through: data.upcomingWindow.through as WallDate,
-            nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
-          },
-          failure: undefined,
-          upcomingStalled: false,
-        }));
+        setState((current) => {
+          /**
+           * Monotonic: a projection may have extended `through` past this response's window
+           * (a create landing months out); letting the response walk it backwards would
+           * filter the just-created row out of the stage it was shown in seconds ago.
+           */
+          const responseThrough = data.upcomingWindow.through as WallDate;
+          const held = current.upcomingWindow?.through;
+          return {
+            ...current,
+            store: mergePlansResponse(current.store, data),
+            upcomingWindow: {
+              from:
+                current.upcomingWindow?.from ?? (data.upcomingWindow.from as WallDate),
+              through:
+                held !== undefined && held > responseThrough ? held : responseThrough,
+              nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
+            },
+            failure: undefined,
+            upcomingStalled: false,
+          };
+        });
       })
       .catch((error: unknown) => {
         if (!mounted.current) return;

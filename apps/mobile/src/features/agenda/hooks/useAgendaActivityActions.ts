@@ -64,8 +64,9 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     mutationKey: activityMutationKeys.schedule,
   });
 
+  /** Returns whether the tick was accepted for dispatch (both refusals are synchronous). */
   const toggleComplete = useCallback(
-    (item: AgendaItem, checked: boolean) => {
+    (item: AgendaItem, checked: boolean): boolean => {
       /**
        * **A series row with no day is not something this checkbox may complete.**
        *
@@ -79,13 +80,13 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
        * rather than into nothing happening, and an offline mutation queued here would still
        * carry the unscoped body to a server that will refuse it.
        */
-      if (wouldCompleteWholeSeries(item)) return;
+      if (wouldCompleteWholeSeries(item)) return false;
 
       /**
        * Generated future occurrences remain previews until their day. Keep Undo available
        * for legacy data, but never create a future occurrence completion from any caller.
        */
-      if (checked && isFutureRecurringOccurrence(item, options.today)) return;
+      if (checked && isFutureRecurringOccurrence(item, options.today)) return false;
 
       const anytimeSnapshots = queryClient.getQueriesData<ActivityListCache>({
         queryKey: ['activities', 'saved'],
@@ -173,6 +174,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           ? "Couldn't complete this task."
           : "Couldn't undo this completion.",
       });
+      return true;
     },
     [complete, options, queryClient, uncomplete],
   );

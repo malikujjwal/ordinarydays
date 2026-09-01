@@ -25,7 +25,6 @@ import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import { type NeedsDateRowData, usePlans } from '../hooks/usePlans';
 import { pastSectionsFromStore, upcomingSectionsFromStore } from '../model/plansStages';
 import type { UpcomingListItem, UpcomingMonthSection } from '../model/plansWindow';
-import { isFutureRecurringOccurrence, wouldCompleteWholeSeries } from '../model/rowScope';
 import { AgendaRow } from './AgendaRow';
 import { NeedsDateCard } from './NeedsDateCard';
 
@@ -174,14 +173,18 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
    * The tap projects **synchronously and on both platforms** — native has no MutationCache
    * for `usePlans`' subscription to observe, so the direct call is the channel that works
    * everywhere; on web the `pending` event then patches the same value (a no-op) and the
-   * lifecycle handles rollback and Undo. The two guards are the action layer's own,
-   * consulted here so a refused tick projects nothing.
+   * lifecycle handles rollback and Undo. The action layer itself reports acceptance, so
+   * every refusal it knows about — including native's commit gate — projects nothing.
+   *
+   * Known native limitation (recorded, device-matrix gate): a write the server later
+   * refuses, or an Undo from the toast, settles through the SQLite coordinator without a
+   * MutationCache event, so this store reconciles on the next refetch rather than reverting
+   * live. Web reverts through the mutation lifecycle.
    */
   const toggleComplete = (item: AgendaItem, checked: boolean) => {
-    if (wouldCompleteWholeSeries(item)) return;
-    if (checked && isFutureRecurringOccurrence(item, today)) return;
-    plans.projectCompletion(item, checked);
-    actions.toggleComplete(item, checked);
+    if (actions.toggleComplete(item, checked)) {
+      plans.projectCompletion(item, checked);
+    }
   };
 
   const refresh = (
@@ -280,11 +283,16 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
       if (upcomingSections.length === 0) {
         /**
          * A zero-row window with a non-null `nextFrom` is the server saying "the next row
-         * is out there" (§P3-20): while the advance can still chase it, the screen shows a
-         * refreshable loading state — never a false `No upcoming plans`. Only an upcoming
-         * failure drops through to the empty state, with the banner carrying the retry.
+         * is out there" (§P3-20): the screen shows a refreshable loading state — never a
+         * false `No upcoming plans`. It drops through to the empty state only when the
+         * stalled advance's failure banner is on screen to explain it; a stalled advance
+         * whose banner a later success cleared keeps the refreshable skeleton instead,
+         * so the false empty is unreachable in every combination.
          */
-        if (plans.upcomingWindow?.nextFrom != null && !plans.upcomingStalled) {
+        if (
+          plans.upcomingWindow?.nextFrom != null &&
+          !(plans.upcomingStalled && plans.message !== undefined)
+        ) {
           return refreshableEmpty(
             'plans-upcoming-advancing',
             <Skeleton shape="card" count={2} />,
