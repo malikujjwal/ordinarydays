@@ -3020,14 +3020,15 @@ newest first, with `+ Write an update` at the foot.
   refetches for reconciliation, but an older eventually consistent GSI1 projection may not
   overwrite a newer locally known `lastActivityAt`; monotonic merge wins until the index
   catches up.
-- A locally acknowledged post or delete is an overlay, not permanent canonical evidence. A
-  later detail head starts a reconciliation generation; only after that strong cursor chain
-  reaches exhaustion may an acknowledged post omitted by every page be retired. Seeing a
-  post clears its marker immediately; seeing a delete target retains the local delete mask.
-  A write acknowledged after reconciliation began belongs to the next generation and cannot
-  be discarded by the older chain. Native persists the generation bit in SQLite; web keeps
-  it in the Activity updates cache. Mutation hooks consume the registered shared mutation
-  recipes so web and native cannot silently diverge on acknowledgement behavior.
+- A write's own response is shown until the next authoritative detail read contains it, and
+  that strong read is the whole reconciliation. Web: a successful post or delete invalidates
+  the detail query and keeps the response row (or delete mask) only until an embedded head
+  accounts for it. Native: the acknowledgement is installed in the same SQLite transaction
+  as the outbox settlement; a detail response that was already in flight when a write
+  settled does not replace the local feed, and the next read converges. There are no overlay
+  tables or generation counters. The `activity_update_acknowledgements` table and the
+  `generation` column created by migrations 23–25 stay in the contiguous migration plan but
+  are unused.
 
 **Tests.** Render: newest first from an unsorted fixture; the §2.2 visibility matrix
 (private + 0 entries hidden, private + n shown, shared + 0 shown); a system entry has no

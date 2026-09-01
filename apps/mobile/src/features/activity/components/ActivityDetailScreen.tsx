@@ -1078,17 +1078,13 @@ function Loaded({
   const children = detail.detail?.children ?? [];
   const sourceLists = detail.detail?.sourceLists ?? [];
   const attachments = detail.detail?.attachments ?? [];
-  const embeddedUpdates = detail.detail?.updates ?? [];
   /**
    * The live feed over the embedded first page (P3-40): optimistic posts, deletes and the
    * cursor continuation, reconciled against whatever page the next detail refetch embeds.
    */
   const feed = useActivityUpdates(activity.activityId, {
-    updates: embeddedUpdates,
+    updates: detail.detail?.updates,
     cursor: detail.detail?.updatesCursor,
-    ...(detail.detailGeneration === undefined
-      ? {}
-      : { revision: detail.detailGeneration }),
   });
   const updateCount = feed.updates.length + feed.pending.length;
   /**

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiError, NetworkError } from '@od/shared/client';
 import { type CreateActivityInput, instant } from '@od/shared/schemas';
-import type { Activity, ActivityUpdate, List } from '@od/shared/types';
+import type { Activity, ActivityDetail, ActivityUpdate, List } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -354,7 +354,7 @@ describe('serialized native convergence guard', () => {
     ).toBe(second.createdAt);
   });
 
-  it('discards a continuation response that crosses a newer persisted head generation', async () => {
+  it('keeps a settled post when a detail response was already in flight', async () => {
     const oldHead: ActivityUpdate = {
       updateId: 'upd_01J0000000000000000000000D',
       activityId: ACTIVITY,
@@ -364,17 +364,11 @@ describe('serialized native convergence guard', () => {
       createdAt: '2026-08-19T11:00:00.000Z',
       schemaVersion: 1,
     };
-    const acknowledged: ActivityUpdate = {
+    const settled: ActivityUpdate = {
       ...oldHead,
       updateId: 'upd_01J0000000000000000000000E',
-      body: 'Acknowledged locally',
+      body: 'Settled while a detail read was in flight',
       createdAt: '2026-08-19T12:00:00.000Z',
-    };
-    const staleOlder: ActivityUpdate = {
-      ...oldHead,
-      updateId: 'upd_01J0000000000000000000000F',
-      body: 'Stale older row',
-      createdAt: '2026-08-18T12:00:00.000Z',
     };
     const newHead: ActivityUpdate = {
       ...oldHead,
@@ -383,7 +377,7 @@ describe('serialized native convergence guard', () => {
       createdAt: '2026-08-20T12:00:00.000Z',
     };
     const seed = await activities.read({ kind: 'activity', activityId: ACTIVITY });
-    if (seed === undefined) throw new Error('missing update-generation fixture');
+    if (seed === undefined) throw new Error('missing update fixture');
     await transactions.run((transaction) =>
       activities.putCanonical(transaction, {
         ...seed,
@@ -391,46 +385,50 @@ describe('serialized native convergence guard', () => {
         updatesCursor: 'cur_old',
       }),
     );
+
+    const inFlight = deferred<ActivityDetail>();
+    const activity = vi
+      .fn()
+      .mockReturnValueOnce(inFlight.promise)
+      .mockResolvedValueOnce({
+        ...seed,
+        updates: [newHead, settled, oldHead],
+        updatesCursor: 'cur_new',
+      });
+    const engine = syncEngine({ pull: { ...pullAdapter(), activity } });
+    const target = { kind: 'activity' as const, activityId: ACTIVITY };
+    const stalePull = engine.pullActivity(target);
+    await vi.waitFor(() => expect(activity).toHaveBeenCalledTimes(1));
+
+    // The outbox settles a post while that detail response is still on the wire.
     await transactions.run(async (transaction) => {
       await activities.queueUpdatePost(
         transaction,
         ACTIVITY,
-        'acknowledged-before-new-head',
-        acknowledged.body,
+        'settled-in-flight',
+        settled.body,
         1,
       );
-      await activities.settlePostedUpdate(transaction, 'acknowledged-before-new-head', {
-        update: acknowledged,
-        lastActivityAt: acknowledged.createdAt,
+      await activities.settlePostedUpdate(transaction, 'settled-in-flight', {
+        update: settled,
+        lastActivityAt: settled.createdAt,
       });
     });
 
-    const oldResponse = deferred<{ updates: ActivityUpdate[]; cursor: undefined }>();
-    const activityUpdates = vi
-      .fn()
-      .mockReturnValueOnce(oldResponse.promise)
-      .mockResolvedValueOnce({ updates: [], cursor: undefined });
-    const engine = syncEngine({ pull: { ...pullAdapter(), activityUpdates } });
-    const loadingOldPage = engine.pullActivityUpdates(ACTIVITY);
-    await vi.waitFor(() => expect(activityUpdates).toHaveBeenCalledTimes(1));
-
-    await transactions.run((transaction) =>
-      activities.putCanonical(transaction, {
-        ...seed,
-        updates: [newHead],
-        updatesCursor: 'cur_new',
-      }),
-    );
-    oldResponse.resolve({ updates: [staleOlder], cursor: undefined });
-    await loadingOldPage;
-
+    // The stale page is not installed; the settled post stays visible.
+    inFlight.resolve({ ...seed, updates: [oldHead], updatesCursor: 'cur_stale' });
+    await stalePull;
     expect(await activities.readUpdates(ACTIVITY)).toEqual({
-      updates: [newHead, acknowledged],
-      cursor: 'cur_new',
+      updates: [settled, oldHead],
+      cursor: 'cur_old',
     });
 
-    await engine.pullActivityUpdates(ACTIVITY);
-    expect(await activities.readUpdates(ACTIVITY)).toEqual({ updates: [newHead] });
+    // The next authoritative read converges the feed.
+    await engine.pullActivity(target);
+    expect(await activities.readUpdates(ACTIVITY)).toEqual({
+      updates: [newHead, settled, oldHead],
+      cursor: 'cur_new',
+    });
   });
 
   it('reads occurrence date and capabilities from committed Agenda rows', async () => {

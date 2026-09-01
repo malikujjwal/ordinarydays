@@ -74,11 +74,10 @@ describe('native Activity updates projection', () => {
   let outbox: OutboxRepository;
   let service: ActivityTransactionService;
 
-  async function continuationPosition() {
-    const position = await activities.readUpdateFeedPosition(ACTIVITY);
-    if (position?.cursor === undefined)
-      throw new Error('Expected a continuation cursor.');
-    return { cursor: position.cursor, generation: position.generation };
+  async function continuationCursor() {
+    const cursor = (await activities.readUpdates(ACTIVITY)).cursor;
+    if (cursor === undefined) throw new Error('Expected a continuation cursor.');
+    return cursor;
   }
 
   beforeEach(async () => {
@@ -131,7 +130,7 @@ describe('native Activity updates projection', () => {
     ).toBe(confirmed.createdAt);
   });
 
-  it('survives restart and rejects a stale detail timestamp until convergence', async () => {
+  it('survives restart and keeps the monotonic Plans timestamp under any later head', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     const first = update('A', '2026-08-19T11:00:00.000Z');
     const confirmed = update('B', '2026-08-19T12:00:00.000Z');
@@ -159,6 +158,8 @@ describe('native Activity updates projection', () => {
     activities = new ActivityRepository(database, subscriptions);
 
     expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([confirmed, first]);
+    // A detail head is authoritative for the feed (the API reads it strongly), while the
+    // Plans ordering timestamp stays a monotonic floor that an older value cannot lower.
     await transactions.run((transaction) =>
       activities.putCanonical(transaction, detail(first.createdAt, [first], 'cur_1')),
     );
@@ -166,7 +167,7 @@ describe('native Activity updates projection', () => {
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
         .lastActivityAt,
     ).toBe(confirmed.createdAt);
-    expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([confirmed, first]);
+    expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([first]);
 
     await transactions.run((transaction) =>
       activities.putCanonical(
@@ -224,7 +225,7 @@ describe('native Activity updates projection', () => {
     await transactions.run((transaction) =>
       activities.putCanonical(transaction, detail(head.createdAt, [head], 'cur_old')),
     );
-    const oldPosition = await continuationPosition();
+    const oldPosition = await continuationCursor();
     await transactions.run((transaction) =>
       activities.installUpdatePage(transaction, ACTIVITY, oldPosition, {
         updates: [older],
@@ -241,7 +242,7 @@ describe('native Activity updates projection', () => {
       cursor: 'cur_new',
     });
 
-    const refreshedPosition = await continuationPosition();
+    const refreshedPosition = await continuationCursor();
     await transactions.run((transaction) =>
       activities.installUpdatePage(transaction, ACTIVITY, refreshedPosition, {
         updates: [],
@@ -251,48 +252,53 @@ describe('native Activity updates projection', () => {
     expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([head]);
   });
 
-  it('retires a local post acknowledgement after a complete later feed omits it', async () => {
+  it('keeps the local feed when a detail response predates a settled post', async () => {
     const first = update('A', '2026-08-19T11:00:00.000Z');
-    const locallyAcknowledged = update('B', '2026-08-19T12:00:00.000Z');
+    const settled = update('B', '2026-08-19T12:00:00.000Z');
     const refreshedHead = update('C', '2026-08-20T12:00:00.000Z');
     await transactions.run((transaction) =>
       activities.putCanonical(transaction, detail(first.createdAt, [first], 'cur_old')),
     );
+    const fetchedAt = activities.updatesVersion(ACTIVITY);
     await transactions.run(async (transaction) => {
       await activities.queueUpdatePost(
         transaction,
         ACTIVITY,
-        'acknowledged-before-refresh',
-        locallyAcknowledged.body,
+        'settled-in-flight',
+        settled.body,
         1,
       );
-      await activities.settlePostedUpdate(transaction, 'acknowledged-before-refresh', {
-        update: locallyAcknowledged,
-        lastActivityAt: locallyAcknowledged.createdAt,
+      await activities.settlePostedUpdate(transaction, 'settled-in-flight', {
+        update: settled,
+        lastActivityAt: settled.createdAt,
       });
     });
-    expect((await activities.readUpdates(ACTIVITY)).updates).toContainEqual(
-      locallyAcknowledged,
-    );
 
-    await transactions.run((transaction) =>
+    // A response fetched before the post settled installs everything but its feed page...
+    const accepted = await transactions.run((transaction) =>
       activities.putCanonical(
         transaction,
         detail(refreshedHead.createdAt, [refreshedHead], 'cur_refreshed'),
+        { updatesVersion: fetchedAt },
       ),
     );
-    expect((await activities.readUpdates(ACTIVITY)).updates).toContainEqual(
-      locallyAcknowledged,
-    );
+    expect(accepted).toBe(true);
+    expect(await activities.readUpdates(ACTIVITY)).toEqual({
+      updates: [settled, first],
+      cursor: 'cur_old',
+    });
 
-    const refreshedPosition = await continuationPosition();
+    // ...and the next read converges the feed.
     await transactions.run((transaction) =>
-      activities.installUpdatePage(transaction, ACTIVITY, refreshedPosition, {
-        updates: [],
-        cursor: undefined,
-      }),
+      activities.putCanonical(
+        transaction,
+        detail(refreshedHead.createdAt, [refreshedHead, settled], 'cur_next'),
+      ),
     );
-    expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([refreshedHead]);
+    expect(await activities.readUpdates(ACTIVITY)).toEqual({
+      updates: [refreshedHead, settled],
+      cursor: 'cur_next',
+    });
   });
 
   it('keeps post and delete projections durable until atomic acknowledgement', async () => {

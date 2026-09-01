@@ -1,35 +1,15 @@
 import type { ActivityUpdate } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { describeApiFailure } from '@/lib/apiFailure';
 import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
-import type {
-  ActivityUpdatesFailure,
-  ActivityUpdatesView,
-  PendingUpdate,
-} from './useActivityUpdates';
-
-function describeFailure(
-  error: unknown,
-  action: ActivityUpdatesFailure['action'],
-): ActivityUpdatesFailure {
-  const fallback =
-    action === 'load'
-      ? "Couldn't load older updates."
-      : action === 'post'
-        ? "Couldn't post this update."
-        : "Couldn't delete this update.";
-  return { action, ...describeApiFailure(error, fallback) };
-}
-
-/** Newest first; the id tiebreak keeps two same-instant entries in one stable order. */
-function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
-  return [...entries].sort((a, b) =>
-    a.createdAt === b.createdAt
-      ? b.updateId.localeCompare(a.updateId)
-      : b.createdAt.localeCompare(a.createdAt),
-  );
-}
+import {
+  type ActivityUpdatesFailure,
+  type ActivityUpdatesView,
+  describeUpdatesFailure as describeFailure,
+  EMPTY_UPDATES,
+  newestFirst,
+  type PendingUpdate,
+} from '../model/updatesFeed';
 
 /**
  * Native P3-40 adapter. Confirmed entries, pending posts, delete masks, paging state, and the
@@ -39,11 +19,11 @@ function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
 export function useActivityUpdates(
   activityId: string,
   embedded: {
-    updates: readonly ActivityUpdate[];
+    updates: readonly ActivityUpdate[] | undefined;
     cursor: string | undefined;
-    revision?: number;
   },
 ): ActivityUpdatesView {
+  const seedUpdates = embedded.updates ?? EMPTY_UPDATES;
   const state = requireActiveNativeState();
   const version = useSyncExternalStore(
     (listener) => state.activities.subscribeUpdates(activityId, listener),
@@ -55,7 +35,7 @@ export function useActivityUpdates(
     cursor: string | undefined;
     pending: readonly PendingUpdate[];
   }>(() => ({
-    updates: newestFirst(embedded.updates),
+    updates: newestFirst(seedUpdates),
     cursor: embedded.cursor,
     pending: [],
   }));
@@ -74,7 +54,7 @@ export function useActivityUpdates(
   if (liveActivity.current !== activityId) {
     liveActivity.current = activityId;
     setPage({
-      updates: newestFirst(embedded.updates),
+      updates: newestFirst(seedUpdates),
       cursor: embedded.cursor,
       pending: [],
     });
