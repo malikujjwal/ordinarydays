@@ -19,8 +19,8 @@ describe('prepProgress', () => {
   it('uses the canonical tappable counter copy', () => {
     expect(
       prepProgress([
-        { activityId: 'act_1', title: 'Pack', status: 'completed' },
-        { activityId: 'act_2', title: 'Book', status: 'scheduled' },
+        { activityId: 'act_1', title: 'Pack', status: 'completed', isRecurring: false },
+        { activityId: 'act_2', title: 'Book', status: 'scheduled', isRecurring: false },
       ]),
     ).toBe('1 of 2 done');
   });

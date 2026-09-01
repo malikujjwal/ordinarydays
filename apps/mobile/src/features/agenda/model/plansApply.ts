@@ -175,5 +175,7 @@ export function createdActivityFrom(data: unknown): Activity | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
   const parsed = activitySchema.safeParse(candidate);
-  return parsed.success ? parsed.data : undefined;
+  // Boundary-safe: the wire schema allows explicit undefined optionals while the domain type
+  // uses exact optionals; validation is the guarantee, this cast only bridges that TS shape.
+  return parsed.success ? (parsed.data as Activity) : undefined;
 }
