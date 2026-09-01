@@ -45,22 +45,22 @@ export interface UpNextCardWithStateProps extends UpNextCardProps {
 const CARD_ACTIONS = new Set(['complete', 'snooze']);
 
 /**
- * Today's one hero surface, in the anatomy `design-system.md` §7.1 draws (P2-44, restructured on
- * the founder's 2026-08-17 frames — which agree with §7.1 exactly, so this is the diagram
- * implemented rather than a new decision):
+ * Today's one hero surface, in the anatomy `design-system.md` §7.1 draws (P2-44; restructured
+ * again on the founder's 2026-08-31 frame):
  *
  * ```
- *  UP NEXT · IN 2H 15M                      caption, textAction — inside the card
- *   ◇  Dentist appointment                  type marker · bodyStrong
- *      2:30 PM · Jefferson Dental Center    subhead
- *      Complete   Snooze                    footnoteStrong text actions
+ *  2:30 │ UP NEXT · IN 2H 15M               time rail: heading + caption meridiem · rule
+ *   PM  │  ◇  Dentist appointment           type marker · bodyStrong
+ *       │     Jefferson Dental Center       subhead — the place alone; the rail owns the time
+ *       │     Complete   Snooze             footnoteStrong text actions
  *  upNextSurface fill · 3 pt accentDeep left border
  * ```
  *
- * Three things the first build got wrong, each of which made it outsize the day beneath it: the
- * eyebrow sat **outside** as a `SectionHeader`, the time was a `heading`-sized block of its own,
- * and the card was outlined on all four sides. §7.1 puts the eyebrow inside, folds the time onto
- * the subtitle line, and rules the card with a left border alone.
+ * The 2026-08-31 frame moves the time out of the subtitle line into a left rail with a
+ * hairline rule beside it — the timeline's own rail grammar, promoted into the card. Every
+ * element is the same as before; only the arrangement changed. The rail is one accessible
+ * element carrying the full formatted time, so a screen reader hears `2:30 PM` once rather
+ * than two fragments.
  *
  * Its body is still the canonical `AgendaRow` — one row implementation, per P2-21.
  *
@@ -107,6 +107,9 @@ export function UpNextCardWithState({
   const actions = allAgendaSwipeActions(agendaSwipeActions(selection.item)).filter(
     (action) => CARD_ACTIONS.has(action.name),
   );
+  const formattedTime = formatWallTime(selection.time);
+  // `2:30 PM` splits into the rail's two lines; a 24-hour locale simply has no second line.
+  const [railTime, ...railMeridiem] = formattedTime.split(' ');
 
   return (
     <View testID="today-up-next">
@@ -158,77 +161,115 @@ export function UpNextCardWithState({
          * pt of their own slack above the words. A uniform gap paid for that twice and left the
          * band between the recurrence badge and `Complete` looking like a hole.
          */}
-        <View pointerEvents="box-none">
+        <View pointerEvents="box-none" style={{ flexDirection: 'row' }}>
           {/**
-           * One eyebrow, inside the card, carrying both the label and the countdown. It replaced a
-           * `SectionHeader` above the card plus a `heading`-sized time inside it — two lines of
-           * chrome for one fact, which is most of why the card dwarfed the rows under it.
+           * The time rail (founder, 2026-08-31): the timeline's own left-rail grammar,
+           * promoted into the card. One accessible element, so a screen reader hears
+           * `2:30 PM` once rather than the two visual lines it is drawn as.
            */}
-          <Text
-            variant="caption"
-            color="textAction"
+          <View
+            accessible
+            accessibilityLabel={formattedTime}
             pointerEvents="none"
-            testID="up-next-eyebrow"
+            testID="up-next-time-rail"
+            style={{ alignItems: 'center', paddingTop: theme.space[1] }}
           >
-            {`Up next · ${selection.relativeTime}`}
-          </Text>
-
-          <View pointerEvents="box-none" style={{ marginTop: theme.space[5] }}>
-            <SwipeableRowWithState
-              item={selection.item}
-              subtitleColor="textPrimary"
-              subtitlePrefix={formatWallTime(selection.time)}
-              divider={false}
-              dense
-              intentState={intentState}
-              completion={completion}
-              onOpen={onOpen}
-              {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
-              {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
-              {...(onAction === undefined ? {} : { onAction })}
-            />
-          </View>
-
-          {intentState.recurrenceEdit.inert ? (
-            <View
-              testID="up-next-recurrence-state"
-              pointerEvents="none"
-              style={{
-                minHeight: theme.layout.hitTarget,
-                marginTop: theme.space[1],
-                justifyContent: 'center',
-              }}
-            >
-              <Text variant="footnote" color="textSecondary">
-                {intentState.recurrenceEdit.message}
+            <Text variant="heading" color="textAction" aria-hidden>
+              {railTime}
+            </Text>
+            {railMeridiem.length === 0 ? null : (
+              <Text variant="caption" color="textSecondary" aria-hidden>
+                {railMeridiem.join(' ')}
               </Text>
-            </View>
-          ) : actions.length === 0 || onAction === undefined ? null : (
-            <View
-              testID="up-next-quick-actions"
-              pointerEvents="box-none"
-              style={{
-                marginTop: theme.space[1],
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                gap: theme.space[5],
-              }}
+            )}
+          </View>
+          {/* Decorative rule between the rail and the content, per the 2026-08-31 frame. */}
+          <View
+            aria-hidden
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            pointerEvents="none"
+            style={{
+              width: 1,
+              alignSelf: 'stretch',
+              backgroundColor: theme.colors.border,
+              marginHorizontal: theme.space[4],
+            }}
+          />
+
+          <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0 }}>
+            {/**
+             * One eyebrow, inside the card, carrying both the label and the countdown. It
+             * replaced a `SectionHeader` above the card plus a `heading`-sized time inside
+             * it — two lines of chrome for one fact, which is most of why the card once
+             * dwarfed the rows under it. The rail's time is the row's, relocated — the
+             * subtitle line below carries the place alone now.
+             */}
+            <Text
+              variant="caption"
+              color="textAction"
+              pointerEvents="none"
+              testID="up-next-eyebrow"
             >
-              {actions.map((action) => (
-                <Button
-                  key={action.name}
-                  label={action.label}
-                  variant="ghost"
-                  size="sm"
-                  flush
-                  disabled={mutationInert || completionLocked}
-                  onPress={() => onAction(selection.item, action)}
-                  testID={`up-next-action-${action.name}`}
-                />
-              ))}
+              {`Up next · ${selection.relativeTime}`}
+            </Text>
+
+            <View pointerEvents="box-none" style={{ marginTop: theme.space[5] }}>
+              <SwipeableRowWithState
+                item={selection.item}
+                subtitleColor="textPrimary"
+                divider={false}
+                dense
+                intentState={intentState}
+                completion={completion}
+                onOpen={onOpen}
+                {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
+                {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
+                {...(onAction === undefined ? {} : { onAction })}
+              />
             </View>
-          )}
+
+            {intentState.recurrenceEdit.inert ? (
+              <View
+                testID="up-next-recurrence-state"
+                pointerEvents="none"
+                style={{
+                  minHeight: theme.layout.hitTarget,
+                  marginTop: theme.space[1],
+                  justifyContent: 'center',
+                }}
+              >
+                <Text variant="footnote" color="textSecondary">
+                  {intentState.recurrenceEdit.message}
+                </Text>
+              </View>
+            ) : actions.length === 0 || onAction === undefined ? null : (
+              <View
+                testID="up-next-quick-actions"
+                pointerEvents="box-none"
+                style={{
+                  marginTop: theme.space[1],
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: theme.space[5],
+                }}
+              >
+                {actions.map((action) => (
+                  <Button
+                    key={action.name}
+                    label={action.label}
+                    variant="ghost"
+                    size="sm"
+                    flush
+                    disabled={mutationInert || completionLocked}
+                    onPress={() => onAction(selection.item, action)}
+                    testID={`up-next-action-${action.name}`}
+                  />
+                ))}
+              </View>
+            )}
+          </View>
         </View>
       </Card>
     </View>
