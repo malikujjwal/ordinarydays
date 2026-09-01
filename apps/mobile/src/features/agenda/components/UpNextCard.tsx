@@ -182,31 +182,28 @@ export function UpNextCardWithState({
            * promoted into the card. One accessible element, so a screen reader hears
            * `2:30 PM` once rather than the two visual lines it is drawn as.
            */}
+          {/**
+           * Sized to its numerals, not to the timeline rail's fixed column — that column
+           * is measured for `footnote` text, and under `heading` numerals it left the
+           * time swimming in dead width (founder, 2026-08-31). The margin pair beside it
+           * no longer needs an integer rail: it is one element whose two edges share a
+           * fractional pixel phase wherever they land.
+           */}
           <View
             accessible
             accessibilityLabel={formattedTime}
             pointerEvents="none"
             testID="up-next-time-rail"
-            /**
-             * Fixed width, like the timeline's own rail (§7.1): sized to the text, the
-             * rail's fractional width pushed everything after it to fractional pixel
-             * offsets, and the two margin rules rasterised at different weights and
-             * shades (founder reports, 2026-08-31). An integer rail keeps every rule on
-             * whole device pixels — and the margin no longer shifts when the time does.
-             */
-            style={{ width: theme.space[11], paddingTop: theme.space[1] }}
+            style={{ alignItems: 'center', paddingTop: theme.space[1] }}
           >
-            {/* The block hugs the rail's left edge; the meridiem centres under the time. */}
-            <View style={{ alignSelf: 'flex-start', alignItems: 'center' }}>
-              <Text variant="heading" color="textAction" aria-hidden>
-                {railTime}
+            <Text variant="heading" color="textAction" aria-hidden>
+              {railTime}
+            </Text>
+            {railMeridiem.length === 0 ? null : (
+              <Text variant="caption" color="textSecondary" aria-hidden>
+                {railMeridiem.join(' ')}
               </Text>
-              {railMeridiem.length === 0 ? null : (
-                <Text variant="caption" color="textSecondary" aria-hidden>
-                  {railMeridiem.join(' ')}
-                </Text>
-              )}
-            </View>
+            )}
           </View>
           {/**
            * The planner margin: two rules, close together, per the 2026-08-31 frame.
@@ -224,7 +221,7 @@ export function UpNextCardWithState({
             style={{
               width: 4,
               alignSelf: 'stretch',
-              marginRight: theme.space[4],
+              marginHorizontal: theme.space[4],
               borderLeftWidth: 1,
               borderRightWidth: 1,
               borderColor: theme.colors.border,
