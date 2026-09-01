@@ -4,20 +4,20 @@ import {
   postActivityUpdate,
 } from '@od/shared/client';
 import type { ActivityUpdate } from '@od/shared/types';
+import { useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
-import { usePlanActivityFloor } from '@/stores/planActivityFloor';
+import { raisePlanActivityFloor } from '@/stores/planActivityFloor';
 
 /**
  * The plan's Updates feed (P3-40, `plans-and-lists.md` §2.1 row 9).
  *
  * Seeded from the page the detail response **embeds** — opening a plan issues no second
  * request (P3-37's one-request rule) — and continued through `GET .../updates?cursor=` only
- * when the user reveals more. Like `usePlans`, this speaks HTTP on both platforms: the feed
- * has no SQLite projection (ADR-057 covers the agenda), so posting and deleting are
- * online-first everywhere.
+ * when the user reveals more. This is the web adapter: the native sibling installs the feed,
+ * cursor, and authoritative Plans timestamp in SQLite before presenting confirmation.
  *
  * ## The optimistic post, and what makes it safe
  *
@@ -86,7 +86,7 @@ export function useActivityUpdates(
   const [cursor, setCursor] = useState<string | undefined>(embedded.cursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
-  const raiseFloor = usePlanActivityFloor((state) => state.raise);
+  const queryClient = useQueryClient();
 
   /**
    * A **different activity** under the same mounted screen (a `router.replace` between plans
@@ -167,7 +167,7 @@ export function useActivityUpdates(
           randomUUID(),
         );
         // The floor is per-activity truth, so it is raised even if the screen moved on.
-        raiseFloor(requested, result.lastActivityAt);
+        raisePlanActivityFloor(queryClient, requested, result.lastActivityAt);
         if (liveActivity.current !== requested) return true;
         setPosted((current) => [result.update, ...current]);
         setError(undefined);
@@ -181,7 +181,7 @@ export function useActivityUpdates(
         }
       }
     },
-    [activityId, pending.length, raiseFloor],
+    [activityId, pending.length, queryClient],
   );
 
   const remove = useCallback(

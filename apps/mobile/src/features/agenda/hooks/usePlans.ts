@@ -9,12 +9,12 @@ import { addWallDays } from '@od/shared/recurrence';
 import type { NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
-import { usePlanActivityFloor } from '@/stores/planActivityFloor';
+import { usePlanActivityFloors } from '@/stores/planActivityFloor';
 import {
   applyPlansCreate,
   applyPlansRemove,
@@ -148,21 +148,63 @@ const EMPTY: PlansState = {
   upcomingStalled: false,
 };
 
+const plansProjectionKey = (timezone: string) =>
+  ['plans', 'projection', timezone] as const;
+
+async function loadInitialPlans(timezone: string): Promise<PlansState> {
+  const data = await getPlans(apiClient, { mode: 'initial', tz: timezone });
+  return {
+    status: 'success',
+    needsDate: installNeedsDate(data.needsDate),
+    // The initial arm is the whole screen, so rebuilding from empty removes deleted rows.
+    store: mergePlansResponse(emptyPlansStore, data),
+    upcomingWindow: {
+      from: data.upcomingWindow.from as WallDate,
+      through: data.upcomingWindow.through as WallDate,
+      nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
+    },
+    pastCursor: data.pastPage.nextCursor,
+    failure: undefined,
+    upcomingStalled: false,
+  };
+}
+
 export function usePlans(
   timezone: string,
   today: WallDate,
   /** `HH:mm` in the viewer's zone, for the projected rows' `isPast` (§4.3-injected). */
   currentMinute: string,
 ): PlansView {
-  const [state, setState] = useState<PlansState>(EMPTY);
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(() => plansProjectionKey(timezone), [timezone]);
+  const query = useQuery({
+    queryKey,
+    queryFn: () => loadInitialPlans(timezone),
+  });
+  const queriedState = query.data ?? EMPTY;
+  const state: PlansState =
+    query.error === null
+      ? queriedState
+      : {
+          ...queriedState,
+          status: query.data === undefined ? 'error' : 'success',
+          failure: describe(query.error),
+        };
   /** Mirror for callbacks that must read current rows synchronously (snapshot capture). */
   const stateRef = useRef(state);
   stateRef.current = state;
-  const [refreshing, setRefreshing] = useState(false);
+  const setState = useCallback(
+    (update: (current: PlansState) => PlansState) => {
+      queryClient.setQueryData<PlansState>(queryKey, (current) => {
+        const next = update(current ?? EMPTY);
+        stateRef.current = next;
+        return next;
+      });
+    },
+    [queryClient, queryKey],
+  );
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
   const [loadingPast, setLoadingPast] = useState(false);
-  /** Drops a stale response after a newer refresh restarted the store. */
-  const generation = useRef(0);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -172,47 +214,10 @@ export function usePlans(
     };
   }, []);
 
-  const initial = useCallback(async () => {
-    const attempt = ++generation.current;
-    try {
-      const data = await getPlans(apiClient, { mode: 'initial', tz: timezone });
-      if (!mounted.current || generation.current !== attempt) return;
-      setState({
-        status: 'success',
-        needsDate: installNeedsDate(data.needsDate),
-        // From empty, not from the previous store: the initial arm is the whole screen, and
-        // rebuilding is what lets a deleted plan disappear from a date the arm covers.
-        store: mergePlansResponse(emptyPlansStore, data),
-        upcomingWindow: {
-          from: data.upcomingWindow.from as WallDate,
-          through: data.upcomingWindow.through as WallDate,
-          nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
-        },
-        pastCursor: data.pastPage.nextCursor,
-        failure: undefined,
-        upcomingStalled: false,
-      });
-    } catch (error) {
-      if (!mounted.current || generation.current !== attempt) return;
-      setState((current) => ({
-        ...current,
-        status: current.status === 'success' ? 'success' : 'error',
-        failure: describe(error),
-      }));
-    }
-  }, [timezone]);
-
-  useEffect(() => {
-    setState(EMPTY);
-    void initial();
-  }, [initial]);
-
+  const refetchQuery = query.refetch;
   const refetch = useCallback(() => {
-    setRefreshing(true);
-    void initial().finally(() => {
-      if (mounted.current) setRefreshing(false);
-    });
-  }, [initial]);
+    void refetchQuery();
+  }, [refetchQuery]);
 
   /**
    * Creates land here by **projection of the 201 response**, not by refetch — `/v1/plans`'
@@ -221,7 +226,6 @@ export function usePlans(
    * itself on save, so this listens on the process-wide mutation cache the way the agenda's
    * projection does, rather than on any component that is about to unmount.
    */
-  const queryClient = useQueryClient();
   /** The caller's injected clock (§4.3), read through refs so a tick is not a resubscribe. */
   const clockRef = useRef({ today, currentMinute });
   clockRef.current = { today, currentMinute };
@@ -293,7 +297,7 @@ export function usePlans(
       });
       return taken;
     },
-    [],
+    [setState],
   );
 
   /**
@@ -448,13 +452,12 @@ export function usePlans(
         completionSnapshots.current.delete(event.mutation.mutationId);
       }
     });
-  }, [queryClient, patchStatus]);
+  }, [queryClient, patchStatus, setState]);
 
   const loadMoreUpcoming = useCallback(() => {
     const window = state.upcomingWindow;
     if (window === undefined || window.nextFrom === null || loadingUpcoming) return;
     const from = window.nextFrom;
-    const attempt = generation.current;
     setLoadingUpcoming(true);
     void getPlans(apiClient, {
       mode: 'upcoming_window',
@@ -463,8 +466,9 @@ export function usePlans(
       upcomingTo: addWallDays(from, WINDOW_DAYS - 1) as WallDate,
     })
       .then((data) => {
-        if (!mounted.current || generation.current !== attempt) return;
+        if (!mounted.current) return;
         setState((current) => {
+          if (current.upcomingWindow?.nextFrom !== from) return current;
           /**
            * Monotonic: a projection may have extended `through` past this response's window
            * (a create landing months out); letting the response walk it backwards would
@@ -498,16 +502,15 @@ export function usePlans(
       .finally(() => {
         if (mounted.current) setLoadingUpcoming(false);
       });
-  }, [state.upcomingWindow, loadingUpcoming, timezone]);
+  }, [state.upcomingWindow, loadingUpcoming, timezone, setState]);
 
   const loadMorePast = useCallback(() => {
     const cursor = state.pastCursor;
     if (cursor === undefined || loadingPast) return;
-    const attempt = generation.current;
     setLoadingPast(true);
     void getPlans(apiClient, { mode: 'past_cursor', tz: timezone, cursor })
       .then((data) => {
-        if (!mounted.current || generation.current !== attempt) return;
+        if (!mounted.current) return;
         setState((current) =>
           // The cursor may have been rebuilt by a refresh while this page was in flight.
           current.pastCursor !== cursor
@@ -527,7 +530,7 @@ export function usePlans(
       .finally(() => {
         if (mounted.current) setLoadingPast(false);
       });
-  }, [state.pastCursor, loadingPast, timezone]);
+  }, [state.pastCursor, loadingPast, timezone, setState]);
 
   /**
    * The §P3-40 monotonic merge: `#P` sorts on `lastActivityAt` and is read back through an
@@ -541,7 +544,7 @@ export function usePlans(
    * only while the client holds an authoritative value newer than the projection, because
    * that is the one moment the server's order is provably behind the order it defines.
    */
-  const floors = usePlanActivityFloor((s) => s.floors);
+  const floors = usePlanActivityFloors();
   const needsDate = useMemo(() => {
     let changed = false;
     const clamped = state.needsDate.map((row) => {
@@ -562,7 +565,7 @@ export function usePlans(
     pastCursor: state.pastCursor,
     isLoadingMoreUpcoming: loadingUpcoming,
     isLoadingMorePast: loadingPast,
-    isRefreshing: refreshing,
+    isRefreshing: query.isRefetching,
     loadMoreUpcoming,
     loadMorePast,
     refetch,

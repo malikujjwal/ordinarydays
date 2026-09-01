@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { createOfflineQueryClient } from '@/lib/queryClient';
-import { usePlanActivityFloor } from '@/stores/planActivityFloor';
+import { readPlanActivityFloor } from '@/stores/planActivityFloor';
 import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
@@ -3091,10 +3091,6 @@ describe('the Add-list entry points (P3-39)', () => {
  * visibility matrix.
  */
 describe('the Updates section (P3-40)', () => {
-  beforeEach(() => {
-    usePlanActivityFloor.setState({ floors: {} });
-  });
-
   const systemUpdate = (index: number, createdAt: string) => ({
     updateId: `upd_01J0000000000000000000P4${40 + index}`,
     activityId: ID,
@@ -3148,6 +3144,7 @@ describe('the Updates section (P3-40)', () => {
         </ClockProvider>
       </SafeAreaProvider>,
     );
+    return queryClient;
   }
 
   it('renders newest first from an unsorted embedded page', async () => {
@@ -3204,13 +3201,17 @@ describe('the Updates section (P3-40)', () => {
 
   it('posts optimistically: the entry renders at the head before the response lands', async () => {
     const stored = userUpdate(9, '2026-08-12T12:00:00.000Z');
-    mountUpdates({ updates: [systemUpdate(1, '2026-08-10T10:00:00.000Z')] }, plan(), {
-      status: 201,
-      body: {
-        data: { update: stored, lastActivityAt: stored.createdAt },
-        meta: { requestId: 'req_test' },
+    const queryClient = mountUpdates(
+      { updates: [systemUpdate(1, '2026-08-10T10:00:00.000Z')] },
+      plan(),
+      {
+        status: 201,
+        body: {
+          data: { update: stored, lastActivityAt: stored.createdAt },
+          meta: { requestId: 'req_test' },
+        },
       },
-    });
+    );
     await screen.findByTestId('section-updates');
 
     fireEvent.click(screen.getByRole('button', { name: 'Write an update' }));
@@ -3232,7 +3233,7 @@ describe('the Updates section (P3-40)', () => {
     expect(request?.body).toEqual({ body: 'Note 9' });
 
     // The authoritative lastActivityAt was raised into the Plans floor (§P3-40's merge).
-    expect(usePlanActivityFloor.getState().floors[ID]).toBe(stored.createdAt);
+    expect(readPlanActivityFloor(queryClient, ID)).toBe(stored.createdAt);
   });
 
   it('pages through the cursor on near-end scroll only after the section is revealed', async () => {

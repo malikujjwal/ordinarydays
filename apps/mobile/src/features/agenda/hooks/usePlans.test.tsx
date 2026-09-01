@@ -3,9 +3,9 @@ import type { AgendaItem } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { activityMutationKeys } from '@/lib/mutationKeys';
-import { usePlanActivityFloor } from '@/stores/planActivityFloor';
+import { raisePlanActivityFloor } from '@/stores/planActivityFloor';
 import { type NeedsDateRowData, usePlans } from './usePlans';
 
 /**
@@ -121,10 +121,6 @@ async function runMutation(
   });
 }
 
-beforeEach(() => {
-  usePlanActivityFloor.setState({ floors: {} });
-});
-
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -138,7 +134,7 @@ it('moves a row up when the floor rises and holds it against a stale refetch', a
       ],
     }),
   );
-  const { wrapper } = harness();
+  const { client, wrapper } = harness();
   const { result } = renderHook(() => usePlans('America/New_York', TODAY, '12:00'), {
     wrapper,
   });
@@ -146,9 +142,11 @@ it('moves a row up when the floor rises and holds it against a stale refetch', a
   expect(result.current.needsDate.map((row) => row.activityId)).toEqual([B, A]);
 
   act(() => {
-    usePlanActivityFloor.getState().raise(A, '2026-08-03T09:00:00.000Z');
+    raisePlanActivityFloor(client, A, '2026-08-03T09:00:00.000Z');
   });
-  expect(result.current.needsDate.map((row) => row.activityId)).toEqual([A, B]);
+  await waitFor(() =>
+    expect(result.current.needsDate.map((row) => row.activityId)).toEqual([A, B]),
+  );
 
   act(() => {
     result.current.refetch();
@@ -160,8 +158,8 @@ it('moves a row up when the floor rises and holds it against a stale refetch', a
 
 it('lets a genuinely newer server value win over an older floor', async () => {
   stubFetch(body({ needsDate: [needsDateRow(B, '2026-08-02T10:00:00.000Z')] }));
-  usePlanActivityFloor.getState().raise(B, '2026-08-01T00:00:00.000Z');
-  const { wrapper } = harness();
+  const { client, wrapper } = harness();
+  raisePlanActivityFloor(client, B, '2026-08-01T00:00:00.000Z');
   const { result } = renderHook(() => usePlans('America/New_York', TODAY, '12:00'), {
     wrapper,
   });
@@ -262,7 +260,9 @@ it('moves a rescheduled one-off to its new date from the authoritative response'
     });
   });
 
-  expect(result.current.store.byDate.get('2026-08-08' as WallDate)).toEqual([]);
+  await waitFor(() =>
+    expect(result.current.store.byDate.get('2026-08-08' as WallDate)).toEqual([]),
+  );
   expect(result.current.store.byDate.get('2026-08-20' as WallDate)?.[0]?.activityId).toBe(
     A,
   );
@@ -286,6 +286,8 @@ it('projects a negative passed-plan outcome as skipped, not completed', async ()
     { activityId: A, input: { outcome: 'didnt_happen' }, idempotencyKey: 'k3' },
     'resolve',
   );
-  const row = result.current.store.byDate.get('2026-08-05' as WallDate)?.[0];
-  expect(row?.status).toBe('skipped');
+  await waitFor(() => {
+    const row = result.current.store.byDate.get('2026-08-05' as WallDate)?.[0];
+    expect(row?.status).toBe('skipped');
+  });
 });

@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { type QueryClient, useQuery } from '@tanstack/react-query';
 
 /**
  * The client's floor under each Plan's `lastActivityAt` (P3-40).
@@ -6,29 +6,52 @@ import { create } from 'zustand';
  * `POST /v1/activities/:id/updates` answers with the authoritative `lastActivityAt`, but the
  * Plans tab's needs-a-date stage is read back through GSI1, which is eventually consistent —
  * a refetch issued after the post can answer with a projection **older than the write the
- * caller just made**, putting the row it just touched back where it was. This store keeps the
+ * caller just made**, putting the row it just touched back where it was. This cache entry keeps the
  * newest authoritative value the client has seen per activity, and `usePlans` merges
  * monotonically against it: a fetched row's `lastActivityAt` may only ever be raised to the
  * floor, never used to lower it. The floor loses nothing when it is stale — a fetched value
  * newer than the floor simply wins.
  *
- * A store rather than hook state because the write happens on the detail screen and the read
- * on the Plans tab: two mounted screens, one fact. Stores are composition points, so this is
- * also how the two features share it without importing each other.
+ * TanStack rather than component state because the write happens on the detail screen and the
+ * read on the Plans tab: two mounted screens, one server-authored fact. The native adapter
+ * persists the equivalent fence on the Activity row in SQLite.
  */
-interface PlanActivityFloorState {
-  readonly floors: Readonly<Record<string, string>>;
-  /** Raises the floor; an older value than the current floor is ignored. */
-  raise: (activityId: string, lastActivityAt: string) => void;
+const PLAN_ACTIVITY_FLOORS_KEY = ['plans', 'activity-floors'] as const;
+
+export type PlanActivityFloors = Readonly<Record<string, string>>;
+
+export function usePlanActivityFloors(): PlanActivityFloors {
+  return useQuery({
+    queryKey: PLAN_ACTIVITY_FLOORS_KEY,
+    queryFn: () => Promise.resolve<PlanActivityFloors>({}),
+    initialData: {},
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+  }).data;
 }
 
-export const usePlanActivityFloor = create<PlanActivityFloorState>((set) => ({
-  floors: {},
-  raise: (activityId, lastActivityAt) =>
-    set((state) => {
-      const current = state.floors[activityId];
-      // ISO-8601 UTC instants compare correctly as strings.
-      if (current !== undefined && current >= lastActivityAt) return state;
-      return { floors: { ...state.floors, [activityId]: lastActivityAt } };
-    }),
-}));
+/** Raises one floor in TanStack's web cache; an older acknowledgement is a no-op. */
+export function raisePlanActivityFloor(
+  queryClient: QueryClient,
+  activityId: string,
+  lastActivityAt: string,
+): void {
+  queryClient.setQueryData<PlanActivityFloors>(
+    PLAN_ACTIVITY_FLOORS_KEY,
+    (current = {}) => {
+      const held = current[activityId];
+      return held !== undefined && held >= lastActivityAt
+        ? current
+        : { ...current, [activityId]: lastActivityAt };
+    },
+  );
+}
+
+export function readPlanActivityFloor(
+  queryClient: QueryClient,
+  activityId: string,
+): string | undefined {
+  return queryClient.getQueryData<PlanActivityFloors>(PLAN_ACTIVITY_FLOORS_KEY)?.[
+    activityId
+  ];
+}
