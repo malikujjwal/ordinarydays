@@ -63,7 +63,6 @@ export function useActivityUpdates(
   const [failure, setFailure] = useState<ActivityUpdatesFailure>();
   const [failedPost, setFailedPost] = useState<ActivityUpdatePostVariables>();
   const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
-  const [failedCursor, setFailedCursor] = useState<string>();
 
   /**
    * Adjust-on-prop-change, as state so a discarded render re-runs it. A different activity
@@ -84,7 +83,6 @@ export function useActivityUpdates(
     setFailure(undefined);
     setFailedPost(undefined);
     setFailedDelete(undefined);
-    setFailedCursor(undefined);
   } else if (seed.head !== head || seed.cursor !== embedded.cursor) {
     setSeed({ activityId, head, cursor: embedded.cursor });
     const ids = new Set(head.map((entry) => entry.updateId));
@@ -96,9 +94,12 @@ export function useActivityUpdates(
   /** Guards async callbacks: a response that started under a previous activity is dropped. */
   const liveActivity = useRef(activityId);
   liveActivity.current = activityId;
-  /** The head a continuation was requested against; a page for an older head is dropped. */
-  const liveHead = useRef(head);
-  liveHead.current = head;
+  /**
+   * The chain a continuation was requested against. A page (or failure) for an older chain
+   * is dropped: a strong refetch restarted paging from its own cursor.
+   */
+  const liveChain = useRef({ head, cursor: embedded.cursor });
+  liveChain.current = { head, cursor: embedded.cursor };
 
   const refreshDetail = useCallback(
     () => queryClient.invalidateQueries({ queryKey: activityKey(activityId) }),
@@ -168,24 +169,23 @@ export function useActivityUpdates(
   const loadPage = useCallback(
     async (requestedCursor: string): Promise<boolean> => {
       const requested = activityId;
-      const requestedHead = liveHead.current;
+      const requestedChain = liveChain.current;
+      const stillCurrent = () =>
+        liveActivity.current === requested &&
+        liveChain.current.head === requestedChain.head &&
+        liveChain.current.cursor === requestedChain.cursor;
       setLoadingMore(true);
       try {
         const page = await getActivityUpdates(apiClient, activityId, requestedCursor);
-        if (liveActivity.current !== requested) return false;
-        // A strong refetch installed a new head (and cursor) while this page was in flight:
-        // the page belongs to the old chain and would resurrect deletes or skip entries.
-        if (liveHead.current !== requestedHead) return false;
+        // A strong refetch installed a new head while this page was in flight: the page
+        // belongs to the old chain and would resurrect deletes or skip entries.
+        if (!stillCurrent()) return false;
         setOlder((current) => dedupe([...current, ...page.updates]));
         setCursor(page.cursor);
-        setFailedCursor(undefined);
         setFailure(undefined);
         return true;
       } catch (caught) {
-        if (liveActivity.current === requested) {
-          setFailedCursor(requestedCursor);
-          setFailure(describeUpdatesFailure(caught, 'load'));
-        }
+        if (stillCurrent()) setFailure(describeUpdatesFailure(caught, 'load'));
         return false;
       } finally {
         if (liveActivity.current === requested) setLoadingMore(false);
@@ -239,8 +239,10 @@ export function useActivityUpdates(
 
   const retryFailure = useCallback(async (): Promise<boolean> => {
     try {
-      if (failure?.action === 'load' && failedCursor !== undefined) {
-        return loadPage(failedCursor);
+      if (failure?.action === 'load') {
+        // Always the live cursor: a refetch since the failure restarted the chain.
+        if (cursor === undefined) return false;
+        return loadPage(cursor);
       }
       if (failure?.action === 'post' && failedPost !== undefined) {
         // The same idempotency key, so a retry after a lost response cannot post twice.
@@ -254,15 +256,7 @@ export function useActivityUpdates(
     } catch {
       return false;
     }
-  }, [
-    failedCursor,
-    failedDelete,
-    failedPost,
-    failure?.action,
-    loadPage,
-    postMutation,
-    remove,
-  ]);
+  }, [cursor, failedDelete, failedPost, failure?.action, loadPage, postMutation, remove]);
 
   const dismissError = useCallback(() => setFailure(undefined), []);
 

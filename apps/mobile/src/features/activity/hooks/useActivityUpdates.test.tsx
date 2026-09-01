@@ -275,6 +275,45 @@ describe('useActivityUpdates (web)', () => {
     expect(result.current.cursor).toBe('cur_2');
   });
 
+  it('retries a failed page against the live cursor after a refetch restarted the chain', async () => {
+    clients.get
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ updates: [update(1)], cursor: undefined });
+    const { result, rerender } = render(queryClient(), {
+      updates: [update(3)],
+      cursor: 'cur_1',
+    });
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.errorAction).toBe('load'));
+
+    rerender({ updates: [update(4), update(3)], cursor: 'cur_2' });
+    await expect(act(() => result.current.retryFailure())).resolves.toBe(true);
+
+    expect(clients.get).toHaveBeenLastCalledWith(expect.anything(), ACTIVITY, 'cur_2');
+    await waitFor(() =>
+      expect(bodies(result.current.updates)).toEqual(['Note 4', 'Note 3', 'Note 1']),
+    );
+  });
+
+  it('drops a page whose chain changed by cursor alone', async () => {
+    const page = deferred<{ updates: ActivityUpdate[]; cursor: string | undefined }>();
+    clients.get.mockReturnValueOnce(page.promise);
+    const head = [update(3)];
+    const { result, rerender } = render(queryClient(), {
+      updates: head,
+      cursor: 'cur_1',
+    });
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.isLoadingMore).toBe(true));
+
+    rerender({ updates: head, cursor: 'cur_2' });
+    page.resolve({ updates: [update(2)], cursor: 'cur_stale' });
+    await waitFor(() => expect(result.current.isLoadingMore).toBe(false));
+
+    expect(bodies(result.current.updates)).toEqual(['Note 3']);
+    expect(result.current.cursor).toBe('cur_2');
+  });
+
   it('treats an absent embedded page as one stable empty head', () => {
     const { result, rerender } = render(queryClient(), {
       updates: undefined,
