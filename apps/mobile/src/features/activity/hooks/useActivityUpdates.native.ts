@@ -38,7 +38,11 @@ function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
  */
 export function useActivityUpdates(
   activityId: string,
-  embedded: { updates: readonly ActivityUpdate[]; cursor: string | undefined },
+  embedded: {
+    updates: readonly ActivityUpdate[];
+    cursor: string | undefined;
+    revision?: number;
+  },
 ): ActivityUpdatesView {
   const state = requireActiveNativeState();
   const version = useSyncExternalStore(
@@ -104,8 +108,10 @@ export function useActivityUpdates(
   useEffect(() => {
     // Reading the subscription revision makes each committed repository publication reload.
     void version;
-    void readCommitted(activityId);
-  }, [activityId, readCommitted, version]);
+    void readCommitted(activityId).catch((caught: unknown) => {
+      if (isCurrent(activityId)) setFailure(describeFailure(caught, 'load'));
+    });
+  }, [activityId, isCurrent, readCommitted, version]);
 
   const loadMore = useCallback(() => {
     const cursor = page.cursor;

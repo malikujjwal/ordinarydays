@@ -1,9 +1,9 @@
-import {
-  deleteActivityUpdate,
-  getActivityUpdates,
-  postActivityUpdate,
-} from '@od/shared/client';
-import type { ActivityUpdate } from '@od/shared/types';
+import { getActivityUpdates } from '@od/shared/client';
+import type {
+  ActivityUpdate,
+  DeletedActivityUpdate,
+  PostActivityUpdateResult,
+} from '@od/shared/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -106,21 +106,50 @@ interface ActivityUpdatesCache {
   readonly acknowledged: readonly ActivityUpdate[];
   /** Acknowledged deletes that an older detail projection must not resurrect. */
   readonly deletedUpdateIds: readonly string[];
+  /** Pre-refresh local posts that a complete strong cursor chain may prove absent. */
+  readonly reconcilingAcknowledgedIds?: readonly string[];
+  /** Pre-refresh delete masks whose target has not appeared in the current strong chain. */
+  readonly reconcilingDeletedUpdateIds?: readonly string[];
   /** Cursor that arrived with `head`, used to detect a newer embedded projection. */
   readonly headCursor: string | undefined;
+  /** Value identity prevents render-created arrays from impersonating a fresh server head. */
+  readonly headIdentity?: string;
   readonly cursor: string | undefined;
+}
+
+function headIdentity(embedded: {
+  updates: readonly ActivityUpdate[];
+  cursor: string | undefined;
+  revision?: number;
+}): string {
+  return JSON.stringify([
+    embedded.revision ?? null,
+    embedded.cursor ?? null,
+    embedded.updates.map((entry) => [
+      entry.updateId,
+      entry.kind,
+      entry.authorUserId ?? null,
+      entry.body,
+      entry.createdAt,
+      entry.schemaVersion,
+    ]),
+  ]);
 }
 
 function initialCache(embedded: {
   updates: readonly ActivityUpdate[];
   cursor: string | undefined;
+  revision?: number;
 }): ActivityUpdatesCache {
   return {
     head: embedded.updates,
     older: [],
     acknowledged: [],
     deletedUpdateIds: [],
+    reconcilingAcknowledgedIds: [],
+    reconcilingDeletedUpdateIds: [],
     headCursor: embedded.cursor,
+    headIdentity: headIdentity(embedded),
     cursor: embedded.cursor,
   };
 }
@@ -132,20 +161,44 @@ function initialCache(embedded: {
  */
 function reconcileEmbedded(
   current: ActivityUpdatesCache,
-  embedded: { updates: readonly ActivityUpdate[]; cursor: string | undefined },
+  embedded: {
+    updates: readonly ActivityUpdate[];
+    cursor: string | undefined;
+    revision?: number;
+  },
 ): ActivityUpdatesCache {
-  if (current.head === embedded.updates && current.headCursor === embedded.cursor) {
+  const nextHeadIdentity = headIdentity(embedded);
+  const currentHeadIdentity =
+    current.headIdentity ??
+    headIdentity({ updates: current.head, cursor: current.headCursor });
+  if (currentHeadIdentity === nextHeadIdentity) {
     return current;
   }
   const embeddedIds = new Set(embedded.updates.map((entry) => entry.updateId));
+  let acknowledged = current.acknowledged.filter(
+    (entry) => !embeddedIds.has(entry.updateId),
+  );
+  let deletedUpdateIds = current.deletedUpdateIds;
+  let reconcilingAcknowledgedIds = acknowledged.map((entry) => entry.updateId);
+  let reconcilingDeletedUpdateIds = deletedUpdateIds.filter((id) => !embeddedIds.has(id));
+  if (embedded.cursor === undefined) {
+    const absentPosts = new Set(reconcilingAcknowledgedIds);
+    const absentDeletes = new Set(reconcilingDeletedUpdateIds);
+    acknowledged = acknowledged.filter((entry) => !absentPosts.has(entry.updateId));
+    deletedUpdateIds = deletedUpdateIds.filter((id) => !absentDeletes.has(id));
+    reconcilingAcknowledgedIds = [];
+    reconcilingDeletedUpdateIds = [];
+  }
   return {
     ...current,
     head: embedded.updates,
     older: [],
-    acknowledged: current.acknowledged.filter(
-      (entry) => !embeddedIds.has(entry.updateId),
-    ),
+    acknowledged,
+    deletedUpdateIds,
+    reconcilingAcknowledgedIds,
+    reconcilingDeletedUpdateIds,
     headCursor: embedded.cursor,
+    headIdentity: nextHeadIdentity,
     cursor: embedded.cursor,
   };
 }
@@ -163,7 +216,11 @@ type PostVariables = ActivityUpdatePostVariables;
 
 export function useActivityUpdates(
   activityId: string,
-  embedded: { updates: readonly ActivityUpdate[]; cursor: string | undefined },
+  embedded: {
+    updates: readonly ActivityUpdate[];
+    cursor: string | undefined;
+    revision?: number;
+  },
 ): ActivityUpdatesView {
   const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
   const [failure, setFailure] = useState<ActivityUpdatesFailure>();
@@ -182,7 +239,11 @@ export function useActivityUpdates(
   const feed = reconcileEmbedded(cached, embedded);
 
   useEffect(() => {
-    if (feed !== cached) queryClient.setQueryData(queryKey, feed);
+    if (feed !== cached) {
+      queryClient.setQueryData<ActivityUpdatesCache>(queryKey, (current) =>
+        current === cached ? feed : current,
+      );
+    }
   }, [cached, feed, queryClient, queryKey]);
 
   const loadMoreMutation = useMutation({
@@ -190,11 +251,39 @@ export function useActivityUpdates(
     onSuccess: (page) => {
       queryClient.setQueryData<ActivityUpdatesCache>(
         queryKey,
-        (current = initialCache(embedded)) => ({
-          ...current,
-          older: dedupe([...current.older, ...page.updates]),
-          cursor: page.cursor,
-        }),
+        (current = initialCache(embedded)) => {
+          const baseline = reconcileEmbedded(current, embedded);
+          const pageIds = new Set(page.updates.map((entry) => entry.updateId));
+          let acknowledged = baseline.acknowledged.filter(
+            (entry) => !pageIds.has(entry.updateId),
+          );
+          let deletedUpdateIds = baseline.deletedUpdateIds;
+          let reconcilingAcknowledgedIds = (
+            baseline.reconcilingAcknowledgedIds ?? []
+          ).filter((id) => !pageIds.has(id));
+          let reconcilingDeletedUpdateIds = (
+            baseline.reconcilingDeletedUpdateIds ?? []
+          ).filter((id) => !pageIds.has(id));
+          if (page.cursor === undefined) {
+            const absentPosts = new Set(reconcilingAcknowledgedIds);
+            const absentDeletes = new Set(reconcilingDeletedUpdateIds);
+            acknowledged = acknowledged.filter(
+              (entry) => !absentPosts.has(entry.updateId),
+            );
+            deletedUpdateIds = deletedUpdateIds.filter((id) => !absentDeletes.has(id));
+            reconcilingAcknowledgedIds = [];
+            reconcilingDeletedUpdateIds = [];
+          }
+          return {
+            ...baseline,
+            older: dedupe([...baseline.older, ...page.updates]),
+            acknowledged,
+            deletedUpdateIds,
+            reconcilingAcknowledgedIds,
+            reconcilingDeletedUpdateIds,
+            cursor: page.cursor,
+          };
+        },
       );
       setFailedCursor(undefined);
       setFailure(undefined);
@@ -205,15 +294,8 @@ export function useActivityUpdates(
     },
   });
 
-  const postMutation = useMutation({
+  const postMutation = useMutation<PostActivityUpdateResult, unknown, PostVariables>({
     mutationKey: activityUpdateMutationKeys.post,
-    mutationFn: (variables: PostVariables) =>
-      postActivityUpdate(
-        apiClient,
-        variables.activityId,
-        variables.body,
-        variables.idempotencyKey,
-      ),
     onMutate: (variables) => {
       setPending((current) => [
         { localId: variables.localId, body: variables.body },
@@ -243,10 +325,13 @@ export function useActivityUpdates(
     },
   });
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useMutation<
+    DeletedActivityUpdate,
+    unknown,
+    ActivityUpdateDeleteVariables,
+    ActivityUpdatesCache | undefined
+  >({
     mutationKey: activityUpdateMutationKeys.delete,
-    mutationFn: (variables: ActivityUpdateDeleteVariables) =>
-      deleteActivityUpdate(apiClient, variables.activityId, variables.updateId),
     onMutate: (variables: ActivityUpdateDeleteVariables) => {
       const update = feed.head
         .concat(feed.older, feed.acknowledged)

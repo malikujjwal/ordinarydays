@@ -6,6 +6,9 @@ on:
     paths:
       - 'apps/mobile/app/(app)/gallery.tsx'
       - 'apps/mobile/app/(app)/lists-contract-gallery.tsx'
+      - 'apps/mobile/src/components/listsContractGallery/**'
+      - 'apps/mobile/src/components/ConfirmDialog.tsx'
+      - 'apps/mobile/src/features/compose/**'
       - 'apps/mobile/src/features/lists/**'
       - 'packages/shared/src/lists/**'
       - 'packages/shared/src/schemas/list.ts'
@@ -14,6 +17,7 @@ on:
       - 'e2e/visual-specs/**'
       - 'e2e/playwright.lists-visual.config.ts'
       - 'e2e/build-lists-visual-app.mjs'
+      - 'e2e/lists-visual-global-setup.mjs'
       - 'e2e/compare-png.swift'
       - 'scripts/run-lists-ios-visuals.mjs'
       - 'apps/mobile/e2e/visual-baselines/**'

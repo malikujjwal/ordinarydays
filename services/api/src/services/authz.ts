@@ -326,13 +326,15 @@ export async function assertActivityReadAccessFromPartition(
 export async function assertActivityReadAccessFromMeta(
   userId: string,
   activity: Activity,
+  options: { readonly preloadedDirectIndex?: StoredItem | null } = {},
 ): Promise<ActivityAccess> {
   if (activity.ownerId === userId) {
     return { activity, isOwner: true, viaParent: false };
   }
-  const direct = await getActivityIndex(userId, activity.activityId, {
-    consistentRead: true,
-  });
+  const direct =
+    options.preloadedDirectIndex === undefined
+      ? await getActivityIndex(userId, activity.activityId, { consistentRead: true })
+      : (options.preloadedDirectIndex ?? undefined);
   if (direct !== undefined) {
     return { activity, isOwner: false, viaParent: false };
   }

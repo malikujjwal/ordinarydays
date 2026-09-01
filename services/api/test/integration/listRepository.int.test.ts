@@ -4,6 +4,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import {
   BatchGetCommand,
+  BatchWriteCommand,
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
@@ -129,6 +130,20 @@ function sameKey(
   return left?.pk === right.pk && left?.sk === right.sk;
 }
 
+async function putRows(rows: readonly Record<string, unknown>[]): Promise<void> {
+  for (let start = 0; start < rows.length; start += 25) {
+    const pending = rows
+      .slice(start, start + 25)
+      .map((Item) => ({ PutRequest: { Item } }));
+    const result = await documents.send(
+      new BatchWriteCommand({ RequestItems: { [TEST_TABLE]: pending } }),
+    );
+    if ((result.UnprocessedItems?.[TEST_TABLE] ?? []).length > 0) {
+      throw new Error('DynamoDB Local left detail-hydration fixture rows unprocessed.');
+    }
+  }
+}
+
 describe('canonical list storage and list index', () => {
   it('stores the owner pointer as role and addedAt only, beside storage metadata', async () => {
     const list = await createSubject();
@@ -228,6 +243,211 @@ describe('canonical list storage and list index', () => {
         expectedUpdatedAt: LATER,
       }),
     ).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('bounded Activity-detail repository reads', () => {
+  const idToken = (index: number) =>
+    `01J8XKQ2M4N5P6R7S8T9V0${String(index).padStart(4, '0')}`;
+  const activityRow = (activityId: string, scheduled: boolean) => ({
+    ...keys.activityMeta(activityId),
+    entity: 'Activity',
+    activityId,
+    ownerId: ALICE,
+    objectKind: 'task',
+    type: 'task',
+    status: 'completed',
+    title: `Child ${activityId}`,
+    details: { kind: 'task' },
+    ...(scheduled ? { schedule: { date: '2026-08-24', timezone: 'UTC' } } : {}),
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: NOW,
+    lastActivityAt: NOW,
+    updatedAt: NOW,
+    schemaVersion: 1,
+  });
+  const canonicalActivity = (activityId: string, scheduled: boolean): Activity => {
+    const {
+      pk: _pk,
+      sk: _sk,
+      entity: _entity,
+      ...activity
+    } = activityRow(activityId, scheduled);
+    return activity as Activity;
+  };
+
+  it('batch-reads canonical Activity META and exact caller indexes against DynamoDB Local', async () => {
+    const first = canonicalActivity(`act_${idToken(300)}`, false);
+    const second = canonicalActivity(`act_${idToken(301)}`, true);
+    await activityRepository.createActivity(ALICE, first);
+    await activityRepository.createActivity(ALICE, second);
+
+    await expect(activityRepository.batchGetActivityMeta([])).resolves.toEqual([]);
+    await expect(
+      activityRepository.batchGetActivityMeta(
+        [first.activityId, first.activityId, 'act_missing', second.activityId],
+        { consistentRead: true },
+      ),
+    ).resolves.toEqual(expect.arrayContaining([first, second]));
+    await expect(
+      activityRepository.getActivityIndex(ALICE, first.activityId, {
+        consistentRead: true,
+      }),
+    ).resolves.toMatchObject({
+      ...keys.activityIndex(ALICE, first.activityId),
+      activityId: first.activityId,
+    });
+    await expect(
+      activityRepository.getActivityIndex(BEN, first.activityId, {
+        consistentRead: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('hydrates the maximum List and legacy-child set in three strong physical batches', async () => {
+    const listIds = Array.from({ length: 100 }, (_, index) => `lst_${idToken(index)}`);
+    const childIds = Array.from(
+      { length: 50 },
+      (_, index) => `act_${idToken(index + 100)}`,
+    );
+    await putRows([
+      ...listIds.flatMap((listId, index) => [
+        {
+          ...keys.listPointer(ALICE, listId),
+          entity: 'ListIndex',
+          userId: ALICE,
+          listId,
+          role: 'owner',
+          schemaVersion: 2,
+        },
+        {
+          ...keys.listMeta(listId),
+          entity: 'List',
+          listId,
+          title: `List ${String(index).padStart(3, '0')}`,
+          icon: 'list',
+          itemCount: index,
+          doneCount: 0,
+          schemaVersion: 2,
+        },
+      ]),
+      ...childIds.map((activityId, index) => activityRow(activityId, index % 2 === 0)),
+    ]);
+    const send = vi.spyOn(ddbModule.ddb, 'send');
+
+    const hydrated = await repository.batchGetDetailHydration(ALICE, listIds, childIds);
+
+    expect(hydrated.sourceLists.size).toBe(100);
+    expect(hydrated.childRestoredStatuses.size).toBe(50);
+    expect(hydrated.childRestoredStatuses.get(childIds[0] ?? '')).toBe('scheduled');
+    expect(hydrated.childRestoredStatuses.get(childIds[1] ?? '')).toBe('saved');
+    const batches = send.mock.calls.filter(
+      ([command]) => command instanceof BatchGetCommand,
+    );
+    expect(batches).toHaveLength(3);
+    expect(
+      batches
+        .map(([command]) =>
+          command instanceof BatchGetCommand
+            ? command.input.RequestItems?.[TEST_TABLE]?.Keys?.length
+            : undefined,
+        )
+        .sort((left, right) => Number(left) - Number(right)),
+    ).toEqual([50, 100, 100]);
+    await expect(
+      repository.batchGetDetailHydration(BEN, listIds, []),
+    ).resolves.toMatchObject({
+      sourceLists: new Map(),
+    });
+  });
+
+  it('omits missing and malformed hydration rows instead of crossing a tenant boundary', async () => {
+    const malformedListId = `lst_${idToken(400)}`;
+    const missingListId = `lst_${idToken(401)}`;
+    const malformedChildId = `act_${idToken(402)}`;
+    const missingChildId = `act_${idToken(403)}`;
+    await putRows([
+      {
+        ...keys.listPointer(ALICE, malformedListId),
+        entity: 'ListIndex',
+        userId: ALICE,
+        listId: malformedListId,
+        schemaVersion: 2,
+      },
+      {
+        ...keys.listMeta(malformedListId),
+        entity: 'List',
+        listId: malformedListId,
+        icon: 'list',
+        itemCount: 0,
+        doneCount: 0,
+        schemaVersion: 2,
+      },
+      {
+        ...keys.activityMeta(malformedChildId),
+        entity: 'Activity',
+        activityId: malformedChildId,
+        ownerId: ALICE,
+        schemaVersion: 1,
+      },
+    ]);
+
+    const hydrated = await repository.batchGetDetailHydration(
+      ALICE,
+      [malformedListId, missingListId],
+      [malformedChildId, missingChildId],
+    );
+
+    expect(hydrated.sourceLists).toEqual(new Map());
+    expect(hydrated.childRestoredStatuses).toEqual(new Map());
+  });
+
+  it('reads capped source pointers in key order and materializes legacy child restoration', async () => {
+    const parentId = `act_${idToken(500)}`;
+    const listIds = Array.from(
+      { length: 101 },
+      (_, index) => `lst_${idToken(index + 600)}`,
+    );
+    const childId = `act_${idToken(800)}`;
+    await putRows([
+      ...listIds.map((listId) => ({
+        ...keys.sourceList(parentId, listId),
+        entity: 'SourceList',
+        activityId: parentId,
+        listId,
+        schemaVersion: 1,
+      })),
+      {
+        ...keys.childPointer(parentId, childId),
+        entity: 'ChildPointer',
+        childActivityId: childId,
+        title: 'Legacy dated child',
+        status: 'completed',
+        rank: 'a0',
+        isRecurring: false,
+        schemaVersion: 1,
+      },
+      activityRow(childId, true),
+    ]);
+
+    const sourceIds = await repository.listSourceListIds(parentId);
+    expect(sourceIds).toEqual([...listIds].sort().slice(0, 100));
+    const stored = await activityRepository.listStoredPrepTaskPointers(parentId);
+    expect(stored).toEqual([expect.objectContaining({ childActivityId: childId })]);
+    expect(stored[0]).not.toHaveProperty('restoredStatus');
+    const hydration = await repository.batchGetDetailHydration(ALICE, [], [childId]);
+    expect(
+      activityRepository.materializePrepTaskPointers(
+        stored,
+        hydration.childRestoredStatuses,
+      ),
+    ).toEqual([
+      expect.objectContaining({ childActivityId: childId, restoredStatus: 'scheduled' }),
+    ]);
   });
 });
 

@@ -53,6 +53,8 @@ export { activityKey };
 
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';
+  /** Monotonic client generation for reconciling embedded authoritative collections. */
+  dataUpdatedAt?: number;
   detail?: ActivityDetail;
   /** `interaction-contract.md` §5.3 copy for the screen-level failure. */
   message?: string;
@@ -262,6 +264,7 @@ export function useActivityDetail(
 
   return {
     status: query.status,
+    dataUpdatedAt: query.dataUpdatedAt,
     refetch: () => void query.refetch(),
     isSaving:
       mutation.isPending || scheduleMutation.isPending || convertMutation.isPending,

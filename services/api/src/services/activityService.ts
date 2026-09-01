@@ -15,6 +15,7 @@ import type {
 } from '@od/shared/schemas';
 import {
   activityChild as activityChildSchema,
+  activity as activitySchema,
   occurrence as occurrenceSchema,
   recurrence as recurrenceSchema,
   reminderInputsForSchedule,
@@ -48,6 +49,7 @@ import {
   CoverAttachmentUnavailableError,
   deleteActivity as deleteActivityRows,
   detachChildFromParent,
+  getActivityIndex,
   getActivityMeta,
   getActivityPartition,
   getActivityPartitionStrong,
@@ -1073,7 +1075,7 @@ export async function patchActivity(
    * It is wrong for the *response*, which is why the same allow-list `GET` uses runs here.
    * Caught by a route test asserting the body has no `pk`, which the first version failed.
    */
-  return toActivity(next as unknown as StoredItem);
+  return toActivity(next);
 }
 
 const VIEWER_LINK_WRITE_ATTEMPTS = 3;
@@ -1897,12 +1899,15 @@ export async function getActivityDetail(
    */
   now: string,
 ): Promise<ActivityDetail> {
-  const activity = await getActivityMeta(target.activityId, { consistentRead: true });
+  const [activity, directIndex] = await Promise.all([
+    getActivityMeta(target.activityId, { consistentRead: true }),
+    getActivityIndex(userId, target.activityId, { consistentRead: true }),
+  ]);
   if (activity === undefined) throw new AppError('not_found', 'Activity not found.');
-  const access = await assertActivityReadAccessFromMeta(userId, activity);
-  const projectedActivity = toActivity(activity as unknown as StoredItem);
-
-  const mayAct = access.isOwner || access.viaParent;
+  const access = await assertActivityReadAccessFromMeta(userId, activity, {
+    preloadedDirectIndex: directIndex ?? null,
+  });
+  const projectedActivity = toActivity(activity);
   /**
    * The feed's first page, from its **own bounded Query** rather than filtered out of the
    * partition above (§2.3, P3-19).
@@ -1917,28 +1922,21 @@ export async function getActivityDetail(
    */
   /**
    * The PREP collection from its bounded pointers (P3-37, pattern 16), and the LISTS
-   * section's id-only `SOURCE_LIST#` projections resolved
-   * through **one** bounded `BatchGetItem` restored to stored order — never one read per
-   * List. A List deleted since the projection was written simply drops out; P3-50's clear
-   * owns the projection's lifecycle, not this read.
+   * section's id-only `SOURCE_LIST#` projections resolved through one logical bounded
+   * hydration restored to stored order. Its maximum 250 keys become at most three parallel
+   * physical `BatchGetItem`s — never one read per List. A List deleted since the projection
+   * was written simply drops out; P3-50's clear owns the projection's lifecycle, not this
+   * read.
    */
   /**
-   * The bounded section reads run in one parallel round after META/authority. The **only**
+   * The bounded section reads run in one parallel dependency wave after META/authority. The **only**
    * ordering that matters is in the attachments arm: the caller's bounded pending-upload drain must land
    * before the attachments are projected (§2.3, access pattern 4, P3-22) — opening a plan is
    * when an interrupted confirmation is noticed, and the drain is what turns a verified copy
    * into the linked row this same read then returns. The drain runs for the **caller**, not
    * the owner: pending records are keyed by uploader.
    */
-  const [
-    feed,
-    reminders,
-    storedChildren,
-    sourceListIds,
-    completedOccurrenceCount,
-    occurrence,
-    attachments,
-  ] = await Promise.all([
+  const sectionsPromise = Promise.all([
     listActivityUpdates(target.activityId),
     listRemindersForUser(target.activityId, userId, { consistentRead: true }),
     listStoredPrepTaskPointers(target.activityId),
@@ -1947,14 +1945,47 @@ export async function getActivityDetail(
     target.kind === 'occurrence'
       ? getOccurrence(target.activityId, target.date, { consistentRead: true })
       : Promise.resolve(null),
-    drainPendingUploads(userId, Date.parse(now)).then(() =>
-      listAttachments(target.activityId),
-    ),
-  ]);
-  const legacyChildIds = storedChildren
-    .filter((child) => child.restoredStatus === undefined)
-    .map((child) => child.childActivityId);
-  const hydration = await batchGetDetailHydration(userId, sourceListIds, legacyChildIds);
+    drainPendingUploads(userId, Date.parse(now)),
+  ]).then(
+    async ([
+      feed,
+      reminders,
+      storedChildren,
+      sourceListIds,
+      completedOccurrenceCount,
+      occurrence,
+    ]) => {
+      const legacyChildIds = storedChildren
+        .filter((child) => child.restoredStatus === undefined)
+        .map((child) => child.childActivityId);
+      const [hydration, attachments] = await Promise.all([
+        batchGetDetailHydration(userId, sourceListIds, legacyChildIds),
+        listAttachments(target.activityId),
+      ]);
+      return {
+        feed,
+        reminders,
+        storedChildren,
+        sourceListIds,
+        completedOccurrenceCount,
+        occurrence,
+        hydration,
+        attachments,
+      };
+    },
+  );
+  const sections = await sectionsPromise;
+  const {
+    feed,
+    reminders,
+    storedChildren,
+    sourceListIds,
+    completedOccurrenceCount,
+    occurrence,
+    hydration,
+    attachments,
+  } = sections;
+  const mayAct = access.isOwner || access.viaParent;
   const children = materializePrepTaskPointers(
     storedChildren,
     hydration.childRestoredStatuses,
@@ -2073,7 +2104,7 @@ export function projectDetail(
 ): ActivityDetail {
   const meta = partition.find((row) => row.sk === 'META');
   if (meta === undefined) throw new AppError('not_found', 'Activity not found.');
-  const projected = toActivity(meta);
+  const projected = toActivity(activitySchema.parse(meta) as Activity);
   const ownerMayAct = projected.ownerId === userId;
 
   const occurrence =
@@ -2206,9 +2237,7 @@ function isReminderRow(row: StoredItem): boolean {
  * which is the wrong direction for a default to point. **Phase 3 adds them back with the
  * access check, not before**, and the test below fails if they are added without it.
  */
-function toActivity(row: StoredItem): Activity {
-  const stored = row as Activity & StoredItem;
-
+function toActivity(stored: Activity): Activity {
   return {
     activityId: stored.activityId,
     ownerId: stored.ownerId,

@@ -27,6 +27,14 @@ const ddbMock = mockClient(DynamoDBDocumentClient);
 
 let createApp: typeof CreateApp;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((onResolve) => {
+    resolve = onResolve;
+  });
+  return { promise, resolve };
+}
+
 const DEV = 'usr_local_dev';
 const OTHER = 'usr_someone_else';
 const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
@@ -342,7 +350,7 @@ describe('reading an activity you own', () => {
 
     await get(createApp());
 
-    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(1);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2);
     expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
       Key: { pk: `ACT#${ACT}`, sk: 'META' },
       ConsistentRead: true,
@@ -362,6 +370,195 @@ describe('reading an activity you own', () => {
         .filter((input) => input.Select !== 'COUNT')
         .every((input) => typeof input.Limit === 'number'),
     ).toBe(true);
+  });
+
+  it('uses exactly three dependency waves for a direct participant with hydration', async () => {
+    const partition = [meta({ ownerId: OTHER }), participantOf(DEV), sourceList()];
+    const authorityWave = deferred<void>();
+    const sectionWave = deferred<void>();
+    const hydrationWave = deferred<void>();
+    ddbMock.on(GetCommand).callsFake(async (input) => {
+      const key = input.Key as Record<string, unknown>;
+      await authorityWave.promise;
+      if (key.pk === `ACT#${ACT}` && key.sk === 'META') {
+        return { Item: partition[0] as never };
+      }
+      return {
+        Item: {
+          ...key,
+          entity: 'ActivityIndex',
+          activityId: ACT,
+          userId: DEV,
+        } as never,
+      };
+    });
+    ddbMock.on(QueryCommand).callsFake(async (input) => {
+      const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
+      const prefix = String(values[':skPrefix'] ?? '');
+      if (prefix === 'ATT#') {
+        await hydrationWave.promise;
+        return { Items: [] };
+      }
+      await sectionWave.promise;
+      if (prefix === 'OCC#') return { Count: 0 };
+      return {
+        Items: partition.filter((row) => String(row.sk).startsWith(prefix)) as never,
+      };
+    });
+    ddbMock.on(BatchGetCommand).callsFake(async () => {
+      await hydrationWave.promise;
+      return {
+        Responses: {
+          'od-main-local': [privateListMeta(), listPointer(DEV)] as never,
+        },
+      };
+    });
+
+    const response = get(asUser(DEV));
+    await vi.waitFor(() => expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2));
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
+
+    authorityWave.resolve();
+    await vi.waitFor(() => expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(6));
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
+
+    sectionWave.resolve();
+    await vi.waitFor(() => expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(7));
+    await vi.waitFor(() => expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(1));
+
+    hydrationWave.resolve();
+    await expect(response).resolves.toMatchObject({ status: 200 });
+  });
+
+  it('measures the maximum bounded command set and occurrence-count continuation', async () => {
+    const idToken = (index: number) =>
+      `01J8XKQ2M4N5P6R7S8T9V0${String(index).padStart(4, '0')}`;
+    const listIds = Array.from({ length: 100 }, (_, index) => `lst_${idToken(index)}`);
+    const childIds = Array.from(
+      { length: 50 },
+      (_, index) => `act_${idToken(index + 100)}`,
+    );
+    const sourceRows = listIds.map((listId) => ({
+      pk: `ACT#${ACT}`,
+      sk: `SOURCE_LIST#${listId}`,
+      entity: 'SourceList',
+      listId,
+      schemaVersion: 1,
+    }));
+    const childRows = childIds.map((childActivityId, index) => ({
+      pk: `ACT#${ACT}`,
+      sk: `SUB#${childActivityId}`,
+      entity: 'ChildPointer',
+      childActivityId,
+      title: `Child ${index}`,
+      status: 'completed',
+      rank: String(index).padStart(3, '0'),
+      isRecurring: false,
+    }));
+    const attachments = Array.from({ length: 20 }, (_, index) => {
+      const attachmentId = `att_${idToken(index + 200)}`;
+      return {
+        pk: `ACT#${ACT}`,
+        sk: `ATT#${attachmentId}`,
+        entity: 'Attachment',
+        attachmentId,
+        activityId: ACT,
+        key: `u/${DEV}/${attachmentId}.jpg`,
+        contentType: 'image/jpeg',
+        byteSize: 2_048,
+        createdAt: `2026-08-26T12:${String(index).padStart(2, '0')}:00.000Z`,
+        schemaVersion: 1,
+      };
+    });
+    const partition = [meta(), ...sourceRows, ...childRows];
+    seed(partition, [], attachments);
+    ddbMock.on(QueryCommand).callsFake((input) => {
+      const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
+      const prefix = String(values[':skPrefix'] ?? '');
+      if (prefix === 'UPD#') return { Items: [] };
+      if (prefix === 'ATT#') return { Items: attachments as never };
+      if (prefix === 'UPLOAD#') return { Items: [] };
+      if (prefix === 'OCC#') {
+        return input.ExclusiveStartKey === undefined
+          ? {
+              Count: 1,
+              LastEvaluatedKey: { pk: `ACT#${ACT}`, sk: 'OCC#continuation' },
+            }
+          : { Count: 1 };
+      }
+      return {
+        Items: partition.filter((row) => String(row.sk).startsWith(prefix)) as never,
+      };
+    });
+    const childMetaById = new Map(
+      childIds.map((activityId) => [
+        activityId,
+        meta({
+          pk: `ACT#${activityId}`,
+          activityId,
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          status: 'completed',
+        }),
+      ]),
+    );
+    ddbMock.on(BatchGetCommand).callsFake((input) => {
+      const keys = input.RequestItems?.['od-main-local']?.Keys ?? [];
+      const rows = keys.flatMap((key: Record<string, unknown>) => {
+        const pk = String(key.pk);
+        const sk = String(key.sk);
+        if (pk.startsWith('ACT#') && sk === 'META') {
+          const child = childMetaById.get(pk.slice('ACT#'.length));
+          return child === undefined ? [] : [child];
+        }
+        if (pk.startsWith('LIST#') && sk === 'META') {
+          const listId = pk.slice('LIST#'.length);
+          return [
+            {
+              pk,
+              sk,
+              entity: 'List',
+              listId,
+              title: `List ${listId}`,
+              icon: 'list',
+              itemCount: 0,
+              doneCount: 0,
+              schemaVersion: 2,
+            },
+          ];
+        }
+        if (pk === `USER#${DEV}` && sk.startsWith('LIST#')) {
+          const listId = sk.slice('LIST#'.length);
+          return [{ pk, sk, entity: 'ListIndex', userId: DEV, listId, schemaVersion: 2 }];
+        }
+        return [];
+      });
+      return { Responses: { 'od-main-local': rows as never } };
+    });
+
+    const response = await get(createApp());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data).toMatchObject({
+      completedOccurrenceCount: 2,
+      children: expect.any(Array),
+      sourceLists: expect.any(Array),
+      attachments: expect.any(Array),
+    });
+    expect(body.data.children).toHaveLength(50);
+    expect(body.data.sourceLists).toHaveLength(100);
+    expect(body.data.attachments).toHaveLength(20);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(8);
+    const batches = ddbMock.commandCalls(BatchGetCommand);
+    expect(batches).toHaveLength(3);
+    expect(
+      batches
+        .map((call) => call.args[0].input.RequestItems?.['od-main-local']?.Keys?.length)
+        .sort((left, right) => Number(left) - Number(right)),
+    ).toEqual([50, 100, 100]);
   });
 });
 

@@ -705,4 +705,86 @@ describe('versioned SQLite migrations', () => {
       { child_activity_id: scheduledId, restored_status: 'scheduled' },
     ]);
   });
+
+  it('invalidates a legacy child projection when its restoration state is unknowable', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 19));
+    const parentId = 'act_migration_parent_only';
+    const missingChildId = 'act_migration_missing_dated_child';
+    await database.run(
+      `INSERT INTO activity_detail_projection_state
+         (activity_id, children_installed, source_lists_installed)
+       VALUES (?, 1, 0);`,
+      [parentId],
+    );
+    await database.run(
+      `INSERT INTO activity_children
+         (parent_activity_id, child_activity_id, ordinal, title, status, is_recurring)
+       VALUES (?, ?, 0, 'Dated child cached through its parent', 'completed', 0);`,
+      [parentId, missingChildId],
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT children_installed FROM activity_detail_projection_state
+         WHERE activity_id = ?;`,
+        [parentId],
+      ),
+    ).toEqual({ children_installed: 0 });
+    expect(
+      await database.all(
+        'SELECT * FROM activity_children WHERE parent_activity_id = ?;',
+        [parentId],
+      ),
+    ).toEqual([]);
+  });
+
+  it('upgrades an already-applied acknowledgement overlay without losing its marker', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 23));
+    const parentId = 'act_previous_migration_parent';
+    await database.run(
+      `INSERT INTO activity_update_acknowledgements
+         (intent_id, activity_id, operation, target_update_id, created_at)
+       VALUES ('int_previous', ?, 'post', 'upd_previous', 42);`,
+      [parentId],
+    );
+    await database.run(
+      `INSERT INTO activity_detail_projection_state
+         (activity_id, children_installed, source_lists_installed)
+       VALUES (?, 1, 0);`,
+      [parentId],
+    );
+    await database.run(
+      `INSERT INTO activity_children
+         (parent_activity_id, child_activity_id, ordinal, title, status, is_recurring,
+          restored_status)
+       VALUES (?, 'act_missing_after_v20', 0, 'Missing child', 'completed', 0, 'saved');`,
+      [parentId],
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT intent_id, reconcile_after_exhaustion
+         FROM activity_update_acknowledgements WHERE intent_id = 'int_previous';`,
+      ),
+    ).toEqual({ intent_id: 'int_previous', reconcile_after_exhaustion: 0 });
+    expect(
+      await database.first(
+        `SELECT children_installed FROM activity_detail_projection_state
+         WHERE activity_id = ?;`,
+        [parentId],
+      ),
+    ).toEqual({ children_installed: 0 });
+    expect(
+      await database.all(
+        'SELECT * FROM activity_children WHERE parent_activity_id = ?;',
+        [parentId],
+      ),
+    ).toEqual([]);
+  });
 });

@@ -78,10 +78,12 @@ All items carry: `pk`, `sk`, `entity` (discriminator string), `createdAt`, `upda
 ### 3.1 Activity partition
 
 The canonical Activity, its child records and every reverse-projection id share one partition,
-but plan detail never reads that partition wholesale. It starts with one authoritative META
-`GetItem`, then issues bounded sort-key-prefix Queries for only the sections it projects.
-Objects that remain canonical in another aggregate—related Lists—are hydrated from returned
-`SOURCE_LIST#` ids with one bounded `BatchGetItem`, never a scan or one read per List.
+but plan detail never reads that partition wholesale. It starts with parallel authoritative
+META and exact-caller-index `GetItem`s, proves access, then issues bounded sort-key-prefix
+Queries for only the sections it projects. Objects that remain canonical in another
+aggregate—related Lists—are hydrated from returned `SOURCE_LIST#` ids with one logical strong
+batch operation, chunked into at most three parallel physical `BatchGetItem`s at the
+100-key service limit; never a scan or one read per List.
 
 | Item | `pk` | `sk` | `entity` |
 | --- | --- | --- | --- |
@@ -124,8 +126,12 @@ offline Uncomplete restore an undated terminal child to `saved` and a dated chil
 children without guessing an occurrence.
 Pointers written before `restoredStatus` was added remain readable: the bounded pointer page
 collects only missing child ids and derives their value from canonical child META rows in the
-same strong detail-hydration `BatchGetItem` used for related Lists. Ordinary child writes then
+same logical strong detail-hydration batch used for related Lists. Ordinary child writes then
 maintain the attribute transactionally; no default guesses a terminal child's prior state.
+The contiguous SQLite migration follows the same rule: when a legacy parent claims a child
+projection but the canonical child Activity is absent locally, it invalidates the parent's
+installed-child projection and removes the incomplete rows so a later authoritative detail
+install can rebuild them. It never guesses `saved` from absence.
 
 ### 3.2 User partition
 
@@ -1047,7 +1053,8 @@ That creation transaction also writes `ACT#<sourceActivityId>` /
 `SOURCE_LIST#<listId>`. This row contains ids only: it is a reverse access projection for Plan
 detail and Plan deletion, while `List.sourceActivityId` remains the only domain link. Keeping
 title and counts off the projection preserves one-write List renames and item mutations. Plan
-detail obtains the current List rows with one bounded `BatchGetItem`. Detaching or deleting a
+detail obtains the current List rows through the bounded logical detail-hydration batch (up to
+three parallel physical `BatchGetItem`s at maximum cardinality). Detaching or deleting a
 List removes the projection in the same transaction; deleting a Plan queries the projection
 ids, clears matching List back-links in bounded idempotent chunks, and never deletes a List.
 
@@ -1521,7 +1528,7 @@ before writing the code.
 | 2 | Anytime items (undated solo tasks) | `Query GSI1` `gsi1pk = U#<u>#N` |
 | 2b | Needs a date — Plans, most recently discussed first | `Query GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` |
 | 3 | Active recurring series for a user | `Query GSI1` `gsi1pk = U#<u>#R` |
-| 4 | Full plan detail (activity + first page of each section) | Strongly consistent `GetItem ACT#<a>/META` first, so `404` and owner authority are canonical; a non-owner also requires the exact strongly consistent `USER#<caller>/IDX#<a>` access grant (or documented parent grant). Drain pattern 6b before projecting attachments. Then bounded strongly consistent prefix Queries assemble the one HTTP response: newest-first `UPD#` with `Limit: 50` and cursor; caller-only `REM#`; and `PART#`, `ATT#`, `SUGG#`, `SUB#`, expenses and `SOURCE_LIST#` under their documented caps/page limits. Hydrate the bounded source-list ids with one `BatchGetItem`, never one read per List. Never `queryAll` the user-growing Activity partition. Parent-inherited access may strongly read the parent META and caller grant separately. |
+| 4 | Full plan detail (activity + first page of each section) | The direct-grant path is three dependency waves. Wave 1 strongly reads exact keys `ACT#<a>/META` and `USER#<caller>/IDX#<a>` concurrently; no collection read begins until their authorization verdict. Parent inheritance then strongly reads parent META and, if needed, its exact caller grant. Wave 2 runs the bounded strongly consistent section-prefix Queries and drain pattern 6b: newest-first `UPD#` with `Limit: 50` and cursor; caller-only `REM#`; `SUB#`, `SOURCE_LIST#`, completed-occurrence count, and the other phase-installed sections under their documented caps/pages. Wave 3 runs `ATT#` after the drain and one logical strong detail-hydration batch concurrently. Hydration contains at most 250 keys—caller grant plus META for each of at most 100 source Lists, and canonical META for at most 50 additive legacy child pointers—and therefore issues at most three 100-key physical `BatchGetItem` commands in parallel; never one read per List. The measured direct activity-only maximum is 12 physical commands, or 13 with the exact occurrence Get. Parent inheritance adds one or two exact Gets; each further 1 MB count page, `UnprocessedKeys` retry, or non-empty drain adds only its bounded continuation work. This is an explicit exception to the generic three-physical-command target while preserving one HTTP request, three normal direct-grant latency waves, model caps, and no N+1, scan, or `queryAll` over the user-growing Activity partition. |
 | 4b | Every reminder on an activity, for scheduling | Strongly consistent `Query pk = ACT#<a>`, `sk begins_with REM#`; bounded by the reminder cap, retaining every user's rows for fan-out |
 | 4c | Outstanding durable cleanup for an Activity | `Query` `pk = ACT#<a>`, `sk begins_with CLEANUP#` before a new mutation; idempotent replay instead follows the receipt's exact cleanup reference. Internal only, never serialised. |
 | 4d | Canonical agenda projection for one Activity after a recurrence PATCH | Strongly consistent base-table `Query pk = ACT#<a>` to read `META`, `OCC#`, `MOVE#`, caller reminders and participant proof without GSI discovery; expand server-side for the requested cached window and return both the canonical rows (including an authoritative empty array) and the META `updatedAt` used. Parent-inherited authorisation may read the parent separately, but target projection never comes from a GSI. |

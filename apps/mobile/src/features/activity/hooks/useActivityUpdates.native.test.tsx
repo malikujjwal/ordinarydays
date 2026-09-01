@@ -383,4 +383,25 @@ describe('native useActivityUpdates durable adapter', () => {
     expect(mounted.result.current.errorRequestId).toBe('req_native_page');
     expect(listener).toBeDefined();
   });
+
+  it('surfaces an initial SQLite read failure and retains the embedded page', async () => {
+    const readFailure = new Error('sqlite reader unavailable');
+    nativeState.current = {
+      activities: {
+        subscribeUpdates: () => () => undefined,
+        updatesVersion: () => 0,
+        readUpdatesProjection: vi.fn().mockRejectedValue(readFailure),
+      },
+      coordinator: { postUpdate: vi.fn(), deleteUpdate: vi.fn() },
+      sync: {},
+    };
+
+    const mounted = renderHook(() =>
+      useActivityUpdates(ACTIVITY, { updates: [stored], cursor: undefined }),
+    );
+
+    await waitFor(() => expect(mounted.result.current.errorAction).toBe('load'));
+    expect(mounted.result.current.errorMessage).toBe("Couldn't load older updates.");
+    expect(mounted.result.current.updates).toEqual([stored]);
+  });
 });

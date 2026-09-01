@@ -20,7 +20,7 @@ import { SerializedTransactionRunner } from './transaction';
 const OWNER = 'usr_01J0000000000000000000000A';
 const ACTIVITY = 'act_01J0000000000000000000000A';
 
-function update(sequence: 'A' | 'B', createdAt: string): ActivityUpdate {
+function update(sequence: string, createdAt: string): ActivityUpdate {
   return {
     updateId: `upd_01J0000000000000000000000${sequence}`,
     activityId: ACTIVITY,
@@ -240,6 +240,49 @@ describe('native Activity updates projection', () => {
       }),
     );
     expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([head]);
+  });
+
+  it('retires a local post acknowledgement after a complete later feed omits it', async () => {
+    const first = update('A', '2026-08-19T11:00:00.000Z');
+    const locallyAcknowledged = update('B', '2026-08-19T12:00:00.000Z');
+    const refreshedHead = update('C', '2026-08-20T12:00:00.000Z');
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, detail(first.createdAt, [first], 'cur_old')),
+    );
+    await transactions.run(async (transaction) => {
+      await activities.queueUpdatePost(
+        transaction,
+        ACTIVITY,
+        'acknowledged-before-refresh',
+        locallyAcknowledged.body,
+        1,
+      );
+      await activities.settlePostedUpdate(transaction, 'acknowledged-before-refresh', {
+        update: locallyAcknowledged,
+        lastActivityAt: locallyAcknowledged.createdAt,
+      });
+    });
+    expect((await activities.readUpdates(ACTIVITY)).updates).toContainEqual(
+      locallyAcknowledged,
+    );
+
+    await transactions.run((transaction) =>
+      activities.putCanonical(
+        transaction,
+        detail(refreshedHead.createdAt, [refreshedHead], 'cur_refreshed'),
+      ),
+    );
+    expect((await activities.readUpdates(ACTIVITY)).updates).toContainEqual(
+      locallyAcknowledged,
+    );
+
+    await transactions.run((transaction) =>
+      activities.installUpdatePage(transaction, ACTIVITY, {
+        updates: [],
+        cursor: undefined,
+      }),
+    );
+    expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([refreshedHead]);
   });
 
   it('keeps post and delete projections durable until atomic acknowledgement', async () => {

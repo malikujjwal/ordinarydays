@@ -9,7 +9,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../lib/errors.js';
 import {
   batchGetBackoffMs,
@@ -216,6 +216,22 @@ describe('batchGetItems', () => {
     expect(rows).toHaveLength(250);
     expect(rows.every((row) => row.schemaVersion === 1)).toBe(true);
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(3);
+  });
+
+  it('starts every bounded chunk in one latency wave', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    ddbMock.on(BatchGetCommand).callsFake(async () => {
+      await gate;
+      return { Responses: { 'od-main-local': [] } };
+    });
+
+    const pending = batchGetItems(keysFor(250));
+    await vi.waitFor(() => expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(3));
+    release();
+    await expect(pending).resolves.toEqual([]);
   });
 
   it('can request strongly consistent batches', async () => {

@@ -4,6 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import { activityUpdateMutationKeys } from '@/lib/mutationKeys';
+import { activityUpdatesKey } from './keys';
 import { useActivityUpdates } from './useActivityUpdates';
 
 const clients = vi.hoisted(() => ({
@@ -41,6 +44,14 @@ function wrapper(client: QueryClient) {
   };
 }
 
+function queryClient(): QueryClient {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  registerActivityMutationDefaults(client, {} as never);
+  return client;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -60,9 +71,7 @@ beforeEach(() => {
 
 describe('useActivityUpdates web query ownership', () => {
   it('keeps an acknowledged deletion in the query cache across remounts', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = queryClient();
     const stale = update(1);
     clients.remove.mockResolvedValue({ updateId: stale.updateId });
     const first = renderHook(
@@ -84,9 +93,7 @@ describe('useActivityUpdates web query ownership', () => {
   });
 
   it('calls the shared client once when transport ultimately fails and rolls back the pending post', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = queryClient();
     clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
     const response = deferred<never>();
     clients.post.mockReturnValue(response.promise);
@@ -116,18 +123,16 @@ describe('useActivityUpdates web query ownership', () => {
   });
 
   it('reuses the accepted post idempotency key for an explicit retry', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = queryClient();
     const posted = update(2);
+    const embedded = { updates: [] as readonly ActivityUpdate[], cursor: undefined };
     clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
     clients.post
       .mockRejectedValueOnce(new TypeError('response lost'))
       .mockResolvedValueOnce({ update: posted, lastActivityAt: posted.createdAt });
-    const mounted = renderHook(
-      () => useActivityUpdates(ACTIVITY, { updates: [], cursor: undefined }),
-      { wrapper: wrapper(client) },
-    );
+    const mounted = renderHook(() => useActivityUpdates(ACTIVITY, embedded), {
+      wrapper: wrapper(client),
+    });
 
     await act(async () =>
       expect(await mounted.result.current.post('Note 2')).toBe(false),
@@ -148,9 +153,7 @@ describe('useActivityUpdates web query ownership', () => {
   });
 
   it('restores the exact delete snapshot and preserves the server request id', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = queryClient();
     const first = update(1);
     const second = update(2);
     const response = deferred<never>();
@@ -182,9 +185,7 @@ describe('useActivityUpdates web query ownership', () => {
   });
 
   it('reconciles a newer embedded head without discarding an acknowledged local post', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = queryClient();
     const stale = update(1);
     const newer = update(2);
     const local = update(3);
@@ -208,9 +209,7 @@ describe('useActivityUpdates web query ownership', () => {
   });
 
   it('drops remotely deleted older entries when an authoritative head starts a new chain', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = queryClient();
     const firstHead = update(3);
     const remotelyDeletedOlder = update(1);
     const refreshedHead = update(4);
@@ -237,10 +236,77 @@ describe('useActivityUpdates web query ownership', () => {
     expect(mounted.result.current.updates).toEqual([refreshedHead]);
   });
 
-  it('preserves page failure details for an action-specific retry', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  it('retires an acknowledged post when a later complete strong feed omits it', async () => {
+    const client = queryClient();
+    const firstHead = update(1);
+    const refreshedHead = update(4);
+    const locallyAcknowledged = update(3);
+    clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
+    clients.post.mockResolvedValue({
+      update: locallyAcknowledged,
+      lastActivityAt: locallyAcknowledged.createdAt,
     });
+    clients.get.mockResolvedValue({ updates: [], cursor: undefined });
+    const mounted = renderHook(({ embedded }) => useActivityUpdates(ACTIVITY, embedded), {
+      initialProps: { embedded: { updates: [firstHead], cursor: 'cur_old' } },
+      wrapper: wrapper(client),
+    });
+
+    await act(async () => {
+      expect(await mounted.result.current.post('Note 3')).toBe(true);
+    });
+    expect(mounted.result.current.updates).toContainEqual(locallyAcknowledged);
+
+    mounted.rerender({
+      embedded: { updates: [refreshedHead], cursor: 'cur_refreshed' },
+    });
+    await waitFor(() =>
+      expect(mounted.result.current.updates).toEqual([
+        refreshedHead,
+        locallyAcknowledged,
+      ]),
+    );
+    act(() => mounted.result.current.loadMore());
+    await waitFor(() => expect(clients.get).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(client.getQueryData(activityUpdatesKey(ACTIVITY))).toMatchObject({
+        cursor: undefined,
+      }),
+    );
+    await waitFor(() => expect(mounted.result.current.cursor).toBeUndefined());
+    expect(mounted.result.current.updates).toEqual([refreshedHead]);
+  });
+
+  it('uses the registered mutation-key recipe as the post request owner', async () => {
+    const client = queryClient();
+    const posted = update(2);
+    const embedded = { updates: [] as readonly ActivityUpdate[], cursor: undefined };
+    const registeredRecipe = vi.fn().mockResolvedValue({
+      update: posted,
+      lastActivityAt: posted.createdAt,
+    });
+    client.setMutationDefaults(activityUpdateMutationKeys.post, {
+      mutationFn: registeredRecipe,
+    });
+    clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
+    const mounted = renderHook(() => useActivityUpdates(ACTIVITY, embedded), {
+      wrapper: wrapper(client),
+    });
+
+    await act(async () => expect(await mounted.result.current.post('Note 2')).toBe(true));
+
+    expect(registeredRecipe.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        activityId: ACTIVITY,
+        body: 'Note 2',
+        idempotencyKey: 'stable-idem',
+      }),
+    );
+    expect(clients.post).not.toHaveBeenCalled();
+  });
+
+  it('preserves page failure details for an action-specific retry', async () => {
+    const client = queryClient();
     clients.get.mockRejectedValue(
       new ApiError('internal', 'database detail', 503, 'req_updates_page'),
     );

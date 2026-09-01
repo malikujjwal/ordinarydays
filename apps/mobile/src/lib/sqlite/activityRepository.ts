@@ -416,8 +416,9 @@ export class ActivityRepository {
     await this.installConfirmedUpdate(transaction, result);
     await transaction.database.run(
       `INSERT OR REPLACE INTO activity_update_acknowledgements
-         (intent_id, activity_id, operation, target_update_id, created_at)
-       VALUES (?, ?, 'post', ?, ?);`,
+         (intent_id, activity_id, operation, target_update_id, created_at,
+          reconcile_after_exhaustion)
+       VALUES (?, ?, 'post', ?, ?, 0);`,
       [
         intentId,
         result.update.activityId,
@@ -452,8 +453,9 @@ export class ActivityRepository {
     await this.deleteConfirmedUpdate(transaction, activityId, updateId);
     await transaction.database.run(
       `INSERT OR REPLACE INTO activity_update_acknowledgements
-         (intent_id, activity_id, operation, target_update_id, created_at)
-       VALUES (?, ?, 'delete', ?, ?);`,
+         (intent_id, activity_id, operation, target_update_id, created_at,
+          reconcile_after_exhaustion)
+       VALUES (?, ?, 'delete', ?, ?, 0);`,
       [intentId, activityId, updateId, number(operation ?? {}, 'created_at') ?? 0],
     );
     await transaction.database.run(
@@ -610,8 +612,15 @@ export class ActivityRepository {
          WHERE activity_id = ? AND operation = 'post' AND target_update_id = ?;`,
         [activityId, update.updateId],
       );
+      await transaction.database.run(
+        `UPDATE activity_update_acknowledgements
+         SET reconcile_after_exhaustion = 0
+         WHERE activity_id = ? AND operation = 'delete' AND target_update_id = ?;`,
+        [activityId, update.updateId],
+      );
     }
     await this.putUpdateCursor(transaction.database, activityId, page.cursor);
+    await this.finishUpdateReconciliation(transaction.database, activityId, page.cursor);
     transaction.changed(this.updatesScope(activityId));
   }
 
@@ -811,6 +820,12 @@ export class ActivityRepository {
       // A strong embedded head starts a new canonical cursor chain. Keep only this device's
       // acknowledged posts as overlays until the server head itself contains them.
       await transaction.database.run(
+        `UPDATE activity_update_acknowledgements
+         SET reconcile_after_exhaustion = 1
+         WHERE activity_id = ?;`,
+        [detail.activity.activityId],
+      );
+      await transaction.database.run(
         `DELETE FROM activity_updates
          WHERE activity_id = ?
            AND NOT EXISTS (
@@ -828,8 +843,19 @@ export class ActivityRepository {
            WHERE activity_id = ? AND operation = 'post' AND target_update_id = ?;`,
           [detail.activity.activityId, update.updateId],
         );
+        await transaction.database.run(
+          `UPDATE activity_update_acknowledgements
+           SET reconcile_after_exhaustion = 0
+           WHERE activity_id = ? AND operation = 'delete' AND target_update_id = ?;`,
+          [detail.activity.activityId, update.updateId],
+        );
       }
       await this.putUpdateCursor(
+        transaction.database,
+        detail.activity.activityId,
+        detail.updatesCursor,
+      );
+      await this.finishUpdateReconciliation(
         transaction.database,
         detail.activity.activityId,
         detail.updatesCursor,
@@ -964,6 +990,32 @@ export class ActivityRepository {
        VALUES (?, ?)
        ON CONFLICT(activity_id) DO UPDATE SET next_cursor=excluded.next_cursor;`,
       [activityId, cursor ?? null],
+    );
+  }
+
+  /** Retires only overlays that predate a strong feed chain and stayed absent through its tail. */
+  private async finishUpdateReconciliation(
+    database: SqliteExecutor,
+    activityId: string,
+    cursor: string | undefined,
+  ): Promise<void> {
+    if (cursor !== undefined) return;
+    await database.run(
+      `DELETE FROM activity_updates
+       WHERE activity_id = ?
+         AND EXISTS (
+           SELECT 1 FROM activity_update_acknowledgements acknowledgement
+           WHERE acknowledgement.activity_id = activity_updates.activity_id
+             AND acknowledgement.operation = 'post'
+             AND acknowledgement.target_update_id = activity_updates.update_id
+             AND acknowledgement.reconcile_after_exhaustion = 1
+         );`,
+      [activityId],
+    );
+    await database.run(
+      `DELETE FROM activity_update_acknowledgements
+       WHERE activity_id = ? AND reconcile_after_exhaustion = 1;`,
+      [activityId],
     );
   }
 

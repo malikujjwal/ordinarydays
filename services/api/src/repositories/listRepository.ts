@@ -721,9 +721,11 @@ export interface DetailBatchHydration {
 }
 
 /**
- * The one third-round-trip batch for Plan detail: caller/List grants + List META and the
- * canonical child META rows needed only by additive legacy pointers. Keeping both key sets in
- * one BatchGet preserves the endpoint's three-round-trip budget without an N+1 fallback.
+ * Plan detail's one logical wave-3 hydration: caller/List grants + List META and the
+ * canonical child META rows needed only by additive legacy pointers. The 250-key maximum is
+ * split at DynamoDB's 100-key limit into at most three physical requests, which the shared
+ * batch primitive starts concurrently. Keeping both key sets in one logical operation avoids
+ * an N+1 fallback while preserving the endpoint's three normal direct-grant dependency waves.
  */
 export async function batchGetDetailHydration(
   userId: string,

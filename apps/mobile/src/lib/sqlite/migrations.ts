@@ -1241,6 +1241,19 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           WHERE child.activity_id = activity_children.child_activity_id
             AND child.schedule_date IS NOT NULL
         );
+        UPDATE activity_detail_projection_state
+        SET children_installed = 0
+        WHERE activity_id IN (
+          SELECT DISTINCT legacy.parent_activity_id
+          FROM activity_children legacy
+          LEFT JOIN activities child ON child.activity_id = legacy.child_activity_id
+          WHERE child.activity_id IS NULL
+        );
+        DELETE FROM activity_children
+        WHERE parent_activity_id IN (
+          SELECT activity_id FROM activity_detail_projection_state
+          WHERE children_installed = 0
+        );
       `),
   },
   {
@@ -1332,6 +1345,34 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         );
         CREATE INDEX activity_update_acknowledgements_feed
           ON activity_update_acknowledgements (activity_id, operation, target_update_id);
+      `),
+  },
+  {
+    version: 24,
+    name: 'activity-update-reconciliation-generations',
+    /**
+     * Acknowledged overlays retire only after a later strong cursor chain proves absence.
+     * Re-run the child invalidation for databases that already applied migration 20 before
+     * its missing-canonical-row correction was added during the P3-37 remediation.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE activity_update_acknowledgements
+          ADD COLUMN reconcile_after_exhaustion INTEGER NOT NULL DEFAULT 0
+            CHECK (reconcile_after_exhaustion IN (0, 1));
+        UPDATE activity_detail_projection_state
+        SET children_installed = 0
+        WHERE activity_id IN (
+          SELECT DISTINCT legacy.parent_activity_id
+          FROM activity_children legacy
+          LEFT JOIN activities child ON child.activity_id = legacy.child_activity_id
+          WHERE child.activity_id IS NULL
+        );
+        DELETE FROM activity_children
+        WHERE parent_activity_id IN (
+          SELECT activity_id FROM activity_detail_projection_state
+          WHERE children_installed = 0
+        );
       `),
   },
 ];

@@ -333,46 +333,52 @@ export async function batchGetItems<T extends StoredItem>(
   keys: readonly PageKey[],
   options: { readonly consistentRead?: boolean } = {},
 ): Promise<T[]> {
-  const items: T[] = [];
-
+  const chunks: PageKey[][] = [];
   for (let start = 0; start < keys.length; start += MAX_BATCH_GET_ITEMS) {
-    let pending = keys.slice(start, start + MAX_BATCH_GET_ITEMS);
-
-    for (
-      let attempt = 0;
-      attempt < MAX_BATCH_GET_ATTEMPTS && pending.length > 0;
-      attempt += 1
-    ) {
-      if (attempt > 0) {
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, batchGetBackoffMs(attempt - 1)),
-        );
-      }
-      const result = await ddb.send(
-        new BatchGetCommand({
-          RequestItems: {
-            [TABLE_NAME]: {
-              Keys: pending,
-              ...(options.consistentRead === true ? { ConsistentRead: true } : {}),
-            },
-          },
-        }),
-      );
-      items.push(...upgradeAll((result.Responses?.[TABLE_NAME] ?? []) as T[]));
-      pending = (result.UnprocessedKeys?.[TABLE_NAME]?.Keys ?? []) as PageKey[];
-    }
-
-    if (pending.length > 0) {
-      const error = new Error(
-        `BatchGetItem left ${pending.length} keys unprocessed after ${MAX_BATCH_GET_ATTEMPTS} attempts.`,
-      );
-      // Deliberately impersonate the AWS throttle name so the central handler returns retryable 503.
-      error.name = 'ProvisionedThroughputExceededException';
-      throw error;
-    }
+    chunks.push(keys.slice(start, start + MAX_BATCH_GET_ITEMS));
   }
+  const pages = await Promise.all(
+    chunks.map(async (chunk) => {
+      const items: T[] = [];
+      let pending = chunk;
 
-  return items;
+      for (
+        let attempt = 0;
+        attempt < MAX_BATCH_GET_ATTEMPTS && pending.length > 0;
+        attempt += 1
+      ) {
+        if (attempt > 0) {
+          await new Promise<void>((resolve) =>
+            setTimeout(resolve, batchGetBackoffMs(attempt - 1)),
+          );
+        }
+        const result = await ddb.send(
+          new BatchGetCommand({
+            RequestItems: {
+              [TABLE_NAME]: {
+                Keys: pending,
+                ...(options.consistentRead === true ? { ConsistentRead: true } : {}),
+              },
+            },
+          }),
+        );
+        items.push(...upgradeAll((result.Responses?.[TABLE_NAME] ?? []) as T[]));
+        pending = (result.UnprocessedKeys?.[TABLE_NAME]?.Keys ?? []) as PageKey[];
+      }
+
+      if (pending.length > 0) {
+        const error = new Error(
+          `BatchGetItem left ${pending.length} keys unprocessed after ${MAX_BATCH_GET_ATTEMPTS} attempts.`,
+        );
+        // Deliberately impersonate the AWS throttle name so the central handler returns retryable 503.
+        error.name = 'ProvisionedThroughputExceededException';
+        throw error;
+      }
+      return items;
+    }),
+  );
+
+  return pages.flat();
 }
 
 /**

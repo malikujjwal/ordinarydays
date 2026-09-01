@@ -1001,7 +1001,7 @@ describe('projectDetail', () => {
       },
       recurrence: {
         mode: 'fixed',
-        segments: [{ freq: 'weekly', effectiveFrom: '2026-08-01' }],
+        segments: [{ freq: 'weekly', byWeekday: [0], effectiveFrom: '2026-08-01' }],
       },
       location: { label: 'Home' },
       parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB',

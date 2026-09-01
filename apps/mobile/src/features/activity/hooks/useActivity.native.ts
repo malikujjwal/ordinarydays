@@ -43,6 +43,8 @@ function shouldRetryCapabilityHydration(error: unknown): boolean {
 
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';
+  /** SQLite subscription generation for embedded authoritative collections. */
+  dataUpdatedAt?: number;
   detail?: ActivityDetail;
   message?: string;
   requestId?: string;
@@ -324,6 +326,7 @@ export function useActivityDetail(
 
   return {
     status,
+    dataUpdatedAt: version,
     ...(detail === undefined ? {} : { detail }),
     ...(loadMessage === undefined ? {} : { message: loadMessage }),
     ...(editError === undefined ? {} : { editError }),
