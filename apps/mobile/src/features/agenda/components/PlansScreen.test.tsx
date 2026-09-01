@@ -443,3 +443,63 @@ it("opens a recurring row's detail with its occurrence scope", async () => {
   fireEvent.click(body);
   expect(onOpen).toHaveBeenCalledExactlyOnceWith(occurrence);
 });
+
+/**
+ * P3-49 — Plans consumes `RowLeading` through the same `AgendaRow` as Today, so the per-type
+ * markers land on Upcoming and Past too. Each Plan kind draws its own §5.2 glyph, `custom` is
+ * the only diamond, and a dated task keeps the checkbox.
+ */
+it('renders each Plan kind with its own type marker on Upcoming', async () => {
+  stubFetch(
+    initialBody({
+      upcoming: [
+        plansDay('2026-08-08', [
+          row(1, {
+            title: 'Renew passport',
+            time: '09:00',
+            type: 'task',
+            hasCheckbox: true,
+          }),
+          row(2, {
+            title: 'Chicken tacos',
+            time: '19:30',
+            type: 'meal',
+            hasCheckbox: false,
+          }),
+          row(3, {
+            title: 'Severance finale',
+            time: '20:00',
+            type: 'watch',
+            hasCheckbox: false,
+          }),
+          row(4, {
+            title: 'New York Trip',
+            time: '10:00',
+            type: 'event',
+            hasCheckbox: false,
+          }),
+          row(5, {
+            title: 'Standup with Priya',
+            time: '11:00',
+            type: 'custom',
+            hasCheckbox: false,
+          }),
+        ]),
+      ],
+    }),
+  );
+  mount();
+
+  await screen.findByText('Chicken tacos');
+  const glyphs = screen
+    .getAllByTestId(/^agenda-leading-marker-/)
+    .map((node) => node.getAttribute('data-testid'))
+    .sort();
+  expect(glyphs).toEqual([
+    'agenda-leading-marker-bowl',
+    'agenda-leading-marker-diamond',
+    'agenda-leading-marker-map-pin',
+    'agenda-leading-marker-play-rect',
+  ]);
+  expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+});

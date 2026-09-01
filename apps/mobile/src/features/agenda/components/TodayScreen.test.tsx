@@ -287,6 +287,67 @@ describe('TodayScreen', () => {
     second.unmount();
   });
 
+  /**
+   * P3-49 — Today consumes `RowLeading` too, so the per-type markers land here as well as
+   * on Plans. One row per kind: the task keeps its checkbox (the only mutating tap on a row),
+   * the four Plan kinds each draw their own §5.2 glyph, and `custom` is the only diamond.
+   */
+  it('renders each Plan kind with its own type marker and keeps the task checkbox', async () => {
+    stubFetch(
+      response([
+        row(1, { title: 'Renew passport', time: '19:00' }),
+        row(2, {
+          title: 'Chicken tacos',
+          time: '19:30',
+          type: 'meal',
+          hasCheckbox: false,
+        }),
+        row(3, {
+          title: 'Severance finale',
+          time: '20:00',
+          type: 'watch',
+          hasCheckbox: false,
+        }),
+        row(4, {
+          title: 'New York Trip',
+          time: '20:30',
+          type: 'event',
+          hasCheckbox: false,
+        }),
+        row(5, {
+          title: 'Standup with Priya',
+          time: '21:00',
+          type: 'custom',
+          hasCheckbox: false,
+        }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
+    const glyphs = screen
+      .getAllByTestId(/^agenda-leading-marker-/)
+      .map((node) => node.getAttribute('data-testid'))
+      .sort();
+    expect(glyphs).toEqual([
+      'agenda-leading-marker-bowl',
+      'agenda-leading-marker-diamond',
+      'agenda-leading-marker-map-pin',
+      'agenda-leading-marker-play-rect',
+    ]);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+    expect(
+      screen.getByRole('checkbox', { name: 'Renew passport, not completed' }),
+    ).toBeDefined();
+  });
+
   it('shows the fully empty Today state with one global Add action', async () => {
     const onAdd = vi.fn();
     stubFetch(response([]));

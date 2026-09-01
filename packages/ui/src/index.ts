@@ -15,6 +15,7 @@
  */
 
 export * from './icons/index';
+export * from './icons/markers';
 export { templateIcon } from './icons/templateIcon';
 export { AlertDialog, type AlertDialogProps } from './primitives/AlertDialog';
 export {
