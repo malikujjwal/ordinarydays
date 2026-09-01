@@ -78,14 +78,21 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     [completionGate],
   );
 
+  /**
+   * Returns whether the tick was **accepted for dispatch** — every refusal (series scope,
+   * future occurrence, the commit gate) is synchronous, so a caller that projects its own
+   * surface (the Plans store) can key on the answer and never project a refused write.
+   */
   const toggleComplete = useCallback(
-    (item: AgendaItem, checked: boolean) => {
-      if (wouldCompleteWholeSeries(item)) return;
-      if (checked && isFutureRecurringOccurrence(item, options.today)) return;
+    (item: AgendaItem, checked: boolean): boolean => {
+      if (wouldCompleteWholeSeries(item)) return false;
+      if (checked && isFutureRecurringOccurrence(item, options.today)) return false;
       const originalIntentId = randomUUID();
       const inverseIntentId = randomUUID();
       const viewerDate = viewerDateFor(options, item);
-      if (!completionGate.begin(item, checked, originalIntentId, viewerDate)) return;
+      if (!completionGate.begin(item, checked, originalIntentId, viewerDate)) {
+        return false;
+      }
       const wireScope = scopeToWire(scopeForRow(item));
       const scrollOffset = options.getScrollOffset?.() ?? 0;
       void state.coordinator
@@ -144,6 +151,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           completionGate.settle(item, checked, false);
           if (isCurrentSession(state)) refused(failureMessage());
         });
+      return true;
     },
     [completionGate, options, settleCompletion, state],
   );

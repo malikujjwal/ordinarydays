@@ -2,7 +2,7 @@ import type { PlansDateStore } from '@od/shared/client';
 import type { WallDate } from '@od/shared/time';
 import type { Activity } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import { applyPlansCreate, createdActivityFrom } from './plansApply';
+import { applyPlansCreate, applyPlansRemove, createdActivityFrom } from './plansApply';
 
 /**
  * The Plans tab's create projection (Phase B fix for `create-activity.spec.ts`): the 201's
@@ -105,6 +105,34 @@ describe('applyPlansCreate', () => {
       isRecurring: true,
       occurrenceDate: '2026-08-07',
     });
+  });
+});
+
+describe('applyPlansRemove', () => {
+  it('strips the row from a date while keeping the emptied key as loaded-and-empty', () => {
+    const seeded = applyPlansCreate(emptyState(), activity(), CLOCK);
+    if (seeded === undefined) throw new Error('seed projection must apply');
+
+    const next = applyPlansRemove(seeded, 'act_01J8CREATED000000000000000');
+    expect(next?.store.byDate.get('2026-08-07' as WallDate)).toEqual([]);
+  });
+
+  it('strips an undated plan from Needs a date', () => {
+    const seeded = applyPlansCreate(
+      emptyState(),
+      activity({ status: 'saved', schedule: undefined }),
+      CLOCK,
+    );
+    if (seeded === undefined) throw new Error('seed projection must apply');
+
+    const next = applyPlansRemove(seeded, 'act_01J8CREATED000000000000000');
+    expect(next?.needsDate).toEqual([]);
+  });
+
+  it('answers undefined when nothing held the row, so identities stay stable', () => {
+    expect(
+      applyPlansRemove(emptyState(), 'act_01J8CREATED000000000000000'),
+    ).toBeUndefined();
   });
 });
 

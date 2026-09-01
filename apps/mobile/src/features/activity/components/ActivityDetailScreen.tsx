@@ -71,6 +71,7 @@ import {
 } from '@/features/activity/model/planSections';
 import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
+import { useClock } from '@/hooks/useClock';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { cancelPendingCreate, usePendingCreate } from '@/hooks/usePendingIntents';
 import {
@@ -1045,12 +1046,13 @@ function Loaded({
   /**
    * Both operands of the relative stamp in the **same** frame: the instant converts through
    * the viewer's zone, so `today` must be that zone's wall date too — the screen's `today`
-   * prop is the device zone's, which differs for a traveller. Ticker-driven, so the labels
-   * roll over at the viewer's midnight; memoised per `createdAt`, so a minute tick formats
-   * nothing that has not changed day.
+   * prop is the device zone's, which differs for a traveller. Read from the injected clock
+   * per render rather than a second always-on minute ticker (the screen's own ticker stays
+   * gated to the snooze sheet): a stamp only changes at the viewer's midnight, and any
+   * re-render after it recomputes; memoised per `createdAt` below.
    */
-  const tick = useMinuteTicker();
-  const updatesToday = toWallDate(tick.instant, timezone);
+  const clock = useClock();
+  const updatesToday = toWallDate(clock.now(), timezone);
   const updateStamps = useMemo(() => {
     const stamps = new Map<string, string>();
     for (const update of feed.updates) {
@@ -1498,12 +1500,16 @@ function Loaded({
         />
       ) : null}
       {sections.some((section) => section.key === 'attachments-coming-later') ? (
-        <SettingRow
-          label="Attachments"
-          summary="Photos and files"
-          note="Coming later"
-          testID="section-attachments-coming-later"
-        />
+        // RowGroup, never a naked SettingRow: rows own their bottom hairline, and a bare
+        // one draws an orphaned rule between two framed sections (RowGroup's own warning).
+        <RowGroup>
+          <SettingRow
+            label="Attachments"
+            summary="Photos and files"
+            note="Coming later"
+            testID="section-attachments-coming-later"
+          />
+        </RowGroup>
       ) : null}
       {sections.some((section) => section.key === 'attachments') ? (
         <AttachmentsSection attachments={attachments} />
