@@ -32,7 +32,7 @@ creation choice, persisted on the Activity as `objectKind: 'plan'`; Task is pers
 | `event` | A concert, appointment, restaurant, hike, coffee, festival, or shopping trip | `event` |
 | `custom` | **General** — a Plan that does not fit the guided kinds | `custom` |
 
-The global `+` first asks **Task**, **Plan**, or **List item**. Choosing Task fixes
+The global `+` first asks **Task**, **Plan**, or **Add list**. Choosing Task fixes
 `objectKind: 'task'` and `type: 'task'`. Choosing Plan fixes `objectKind: 'plan'`, then
 requires one visible choice: **General**, **Meal**,
 **Watch**, **Event**. General maps to `custom`; it is never an omitted value
@@ -206,7 +206,7 @@ Rules:
   | --- | --- | --- |
   | Task | `Save task` | One `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`. |
   | Plan | `Save plan` | One `POST /v1/activities` with `objectKind: 'plan'` and the explicitly selected Plan kind's type. |
-  | List item | `Add to <list name>` | One `POST /v1/lists/:id/items` to the list named on the button. |
+  | Contextual List item | `Add` in the row whose field is named `Add item to <list name>` | One `POST /v1/lists/:id/items` to the open List. |
 
 - The client always includes the selected `type`. It never omits the field and never relies
   on a server default. Each write carries its normal idempotency key.
@@ -399,7 +399,7 @@ the flow and §5.8 for how the destination is chosen.
 | Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Streaming service | Single-line text with recent-values suggestions | No | 0–120, free text | The service last used by this user | `details.service` |
-| Also add to… | Toggle + destination dropdown. Once resolved, the label names both the object and list (`Also add a list item to Movies to watch`) | No | Destination must be a list whose behaviour is `watch` | **Off in every context.** The destination resolves through the **`watch` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8. It never assumes a single list named `Watchlist` exists; with none eligible the row reads `Choose or create a Watch list`. `New list` shows exactly **Watchlist / Movies to watch / TV shows** in their canonical relative order, with nothing selected; this eligibility filter follows the user's explicit Watch destination choice, never the title. `Create list` and the later `Save plan and add…` are separate confirmations | The named final action first creates the ListItem with `POST /v1/lists/:id/items`, then submits the reviewed Watch Plan through that item's `/schedule` bridge, which creates the Plan and viewer-local `LNK#<viewer>#<itemId>` pointer. The ListItem carries no global link field |
+| Also add to… | Toggle + destination dropdown. Once resolved, the label names both the object and list (`Also add a list item to Movies to watch`) | No | Destination resolves through the `watch` slot; eligibility is never inferred from a List type, feature label, or title | **Off in every context.** It never assumes a single list named `Watchlist` exists. With no eligible destination, `New list` offers the single **Watch Later** creation preset, initially unselected; `Create list` and the later `Save plan and add…` remain separate confirmations. This constraint follows the user's explicit Watch-destination control, never typed words. | The named final action first creates the ListItem with `POST /v1/lists/:id/items`, then submits the reviewed Watch Plan through that item's `/schedule` bridge, which creates the Plan and viewer-local `LNK#<viewer>#<itemId>` pointer. The ListItem carries no global link field. |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
 `details.service` is free text by design. There is no catalogue and no provider list. A
@@ -806,7 +806,7 @@ The user-facing contract:
 | Behaviour | Rule |
 | --- | --- |
 | Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. The labelled action fixes `{ objectKind: 'task', type: 'task' }` before any words are accepted, opens the Task form directly with today's date and no time, and finishes with `Save task`. It never opens the global chooser or infers Task versus Plan from the title. |
-| Inline add on a list | The list detail's `+ Add an item` row creates a `ListItem` in that list, never an Activity. Return commits with the accessible action `Add to <list name>` and re-focuses. |
+| Inline add on a list | The list detail's `+ Add an item` opens a one-title rapid-entry row and creates a `ListItem` in that list, never an Activity. Its field is named `Add item to <list name>`; Return performs `Add`, clears, and re-focuses it. Note and typed features belong to Item details. |
 | Inline add of a prep task | The plan's `+ Add prep task` row creates a `task` with `parentActivityId` set. |
 | Global `+` from Today | Opens **Task / Plan / Add list**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |
 | Global `+` from Plans on a date | Opens the same chooser. After Task or Plan is chosen, the form may pre-fill the date in view. |
@@ -834,7 +834,7 @@ React Native Web builds share one codebase, so these are web-only behaviours gua
 | --- | --- | --- |
 | `N` | Anywhere outside a text field | Open the global **Task / Plan / Add list** chooser |
 | `T` / `P` / `L` | Anywhere outside a text field | Go to Today / Plans / Lists |
-| `Return` | Selected Task or Plan form, or contextual List-item form, title focused | Activate `Save task`, `Save plan`, or `Add to <list name>` when valid |
+| `Return` | Selected Task or Plan form, or contextual List rapid-entry field focused | Activate `Save task`, `Save plan`, or the row's `Add` when valid |
 | `Cmd/Ctrl + Return` | Any selected creation form | Activate its visible named write button |
 | `Esc` | Any sheet or Add screen | Cancel, with the discard prompt if dirty |
 | `Alt + 1`–`3` | Global object chooser | Choose Task, Plan, or Add list, in that order |

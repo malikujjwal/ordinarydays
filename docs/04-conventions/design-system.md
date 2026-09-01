@@ -1040,12 +1040,11 @@ The add control is the final row in the same measure, not a detached FAB, screen
 Lists-index action. Its plus sits in a small dashed IconTile and the two-line copy reads
 `Add an item` / `to <list name>`. It opens the compact shared composer inline in the same
 scrolling List measure, so the standard header and current content remain visible and the
-composer can scroll above the software keyboard even after the List grows. The current List
-fixes the destination; there is no chooser or `New list`. Title and the top-aligned multiline
-Note appear together, with `Note` and trailing `Optional` above the field, and the named write
-is `Add to <list name>`. Return performs that same single write,
-then clears both fields and re-focuses Title. The composer uses the shared close control and
-does not add a duplicate Cancel.
+rapid-entry row can scroll above the software keyboard even after the List grows. The current
+List fixes the destination; there is no chooser or `New list`. A single `underline` field is
+accessibly named `Add item to <list name>` and sits beside `Add`; `Done adding` closes the row.
+Note and typed features belong to Item details. Return performs the same single write, then
+clears and re-focuses the title field. The row has no duplicate Cancel or modal close control.
 
 Both Lists overflow sheets use the compact `SettingRow` grammar: a 56 pt minimum, aligned leading
 icon, label, optional wrapping subordinate summary, and a bottom divider. Only a row that opens

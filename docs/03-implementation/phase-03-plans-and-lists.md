@@ -85,7 +85,8 @@ Today's Anytime list and is not a backlog with a counter on it.
 - [ ] The creation-type-first List sheet with a visible editable title and exact `Create
       list` action, plus one production item shell and a typed feature-renderer registry.
 - [ ] Global `Add list` opens the ordinary unselected List catalogue. List detail alone uses
-      `+ Add an item` and ends with `Add to <list name>`; no global List-item route exists.
+      `+ Add an item`, then a destination-labelled rapid-entry field with `Add`; no global
+      List-item route exists.
 - [ ] Prep tasks as child activities inside a plan, with `childCount`, the two-level nesting
       cap, and survival of the parent's deletion.
 - [ ] Plan → list catalogue sheet with the same seven-type explicit order as general `New
@@ -192,8 +193,8 @@ Three creation labels are cross-task contracts:
 
 - Global `+` → `Add list` opens the ordinary seven-type catalogue with nothing selected.
 - List detail uses the exact contextual action `+ Add an item`; the current List fixes the
-  destination, the inline composer stays in the scrolling List measure, and the final action
-  is `Add to <list name>`.
+  destination, and a one-title rapid-entry row stays in the scrolling List measure. Its field
+  is `Add item to <list name>`, with `Add` and `Done adding`; Note remains in Item details.
 - Plan detail uses the exact contextual action `+ Add prep task`; the parent fixes the
   relationship, the object is explicitly a Task, and the final action is `Save task`.
 
@@ -1833,10 +1834,11 @@ template or model request.
 
 ### P3-27 — List detail and its contextual item destination
 
-**Approach.** List detail renders the exact contextual action `+ Add an item`. It opens a
-compact composer inline in the scrolling List measure with Title, optional Note, the current
-List fixed, and final action `Add to <list name>`. The composer scrolls above the software
-keyboard as the List grows. Global `+` exposes `Add list` and has no List-item route.
+**Approach — amended by P3-33's accepted rapid-entry treatment.** List detail renders the
+exact contextual action `+ Add an item`. It opens one underlined title field inline in the
+scrolling List measure, accessibly named `Add item to <list name>`, with `Add` and
+`Done adding`. Note stays in Item details. The row scrolls above the software keyboard as the
+List grows. Global `+` exposes `Add list` and has no List-item route.
 
 The contextual route never uses `defaultLists`, most-recently-used, list behaviour, title words
 or template metadata to choose the destination. `defaultLists` belongs only to named flows such
@@ -2509,9 +2511,10 @@ line immediately below. Content starts directly below that header with the compa
 count overview and no reorder helper copy. Every touch row has a persistent neutral trailing
 grip owned by the drag wrapper, and the in-list add control is the final row in the same measure
 with `Add an item` / `to <list name>`. The grip and whole-row long-press start the same reorder;
-the body remains the item-detail target. The contextual control opens the compact
-destination-fixed composer inline in the same scrolling List measure with Title, optional Note,
-and `Add to <list name>`, keeping it reachable above the software keyboard as the List grows.
+the body remains the item-detail target. The contextual control opens a one-title rapid-entry
+row in that measure: `Add item to <list name>`, `Add`, and `Done adding`. Note and typed
+features stay in Item details, and the row remains reachable above the software keyboard as
+the List grows.
 At large text the overview and row metadata reflow before truncating.
 
 **Plan adapters, not List purpose.** `Plan this item` continues to ask General / Meal / Watch /
@@ -2587,7 +2590,7 @@ generic Materials/Stops example. It must not duplicate markup or CSS from the sc
 The production gallery also pins the List-specific presentation pass: varied full-card
 collection tones on the 2-up index; the Blank-first card catalogue; the compact
 `Start with one item` empty state; global Task / Plan / Add list routing into the ordinary
-unselected catalogue; contextual inline Title/Note rapid entry; the compact
+unselected catalogue; contextual one-title rapid entry with Note deferred to Item details; the compact
 open-List overview, visible row grips and in-measure add row; and the exact List settings
 hierarchy. The collection tone is derived from
 `listId` presentation and never becomes stored configuration or a template branch. The small
@@ -3652,10 +3655,10 @@ P3-26 still passes, which is what pins the accessibility fix in place.
 32. Needs-a-date rows for `custom`, `meal`, `watch`, and `event` have no checkbox or date
     chip. Tapping any needs-a-date row opens plan detail and writes nothing.
 33. Global `+` → `Add list` opens the ordinary unselected seven-type catalogue and no global
-    List-item page. List detail's `+ Add an item` fixes the current List, opens inline in that
-    List's scroll measure and ends with `Add to <list name>`. Return writes exactly one item and
-    supports rapid entry. The route consults neither typed words, a default nor a recent
-    destination.
+    List-item page. List detail's `+ Add an item` fixes the current List and opens a one-title
+    row inline in that List's scroll measure. The field names the destination, `Add` writes
+    exactly one item, `Done adding` closes, and Return writes then re-focuses for rapid entry.
+    The route consults neither typed words, a default nor a recent destination.
 34. Plan detail's `+ Add prep task` fixes `type: 'task'` and the current
     `parentActivityId`, ends with `Save task`, and never classifies the entered title.
 35. An undated Plan detail reads `Not scheduled` with `Schedule`. Before Phase 6, People is a

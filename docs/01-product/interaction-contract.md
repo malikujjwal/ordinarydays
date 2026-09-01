@@ -157,19 +157,20 @@ Event**, also fixed and unselected; General is an explicit choice, never a hidde
 fallback. `Add list` opens the ordinary unselected seven-type List catalogue. List items are
 created only from a contextual control inside the List that owns them.
 
-In an open List, `+ Add an item` opens the compact List-owned composer inline in the same
+In an open List, `+ Add an item` opens the List-owned rapid-entry row inline in the same
 scrolling measure, with the header and current content still visible. The current List fixes
-the destination, so there is no destination chooser or `New list`. Title and optional
-multiline Note appear together and the final action is `Add to <list name>`. The inline
-placement must remain scrollable above the software keyboard as the List grows. Return
-performs the same write, clears both fields after success, and keeps Title focused for rapid
-entry.
+the destination, so there is no destination chooser or `New list`. One underlined field is
+accessibly named `Add item to <list name>`; the visible action is `Add`, with `Done adding`
+beside it. Note and typed features remain in Item details. The row must remain scrollable above
+the software keyboard as the List grows. Return performs the same write, clears the title after
+success, and keeps the field focused for another item.
 
 Text, photos, links, and AI are enabled only after those choices. They may suggest
 compatible field values but never object kind, Plan kind, people, sharing, destination,
 reminder/notification state, or the save action. A reminder is set only by its visible
 control or the user's explicitly saved default; words such as `remind me` never change it.
-Final controls name the write: `Save task`, `Save plan`, or `Add to <list name>`. Every
+Final Activity controls name the write: `Save task` or `Save plan`. The rapid List-item row
+names its destination on the field and uses `Add`. Every
 ListItem's `Plan this item` flow additionally requires an
 unselected **Just me / Choose people** choice; membership is never copied to the Plan,
 whether the source list is private or shared.

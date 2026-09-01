@@ -29,7 +29,7 @@ feed it, can be produced by it, or can sit entirely outside it and still be doin
 
 | Step | What happens | Primary surfaces |
 | --- | --- | --- |
-| **Capture** | The user first names the object they are creating — **Task**, **Plan**, or **List item** — then enters its details by text, photo, screenshot, or link. | Add button, [`ai-capture.md`](ai-capture.md) |
+| **Capture** | The entry point fixes the object before details: global Add offers **Task**, **Plan**, or **Add list**; an open List offers its own List-item row. The user then enters details by text, photo, screenshot, or link. | Add button, contextual List add, [`ai-capture.md`](ai-capture.md) |
 | **Organise** | The chosen object opens with the right fields. A Plan additionally requires an explicit kind: **General**, **Meal**, **Watch**, **Event**. Words and automatic capture never make either choice. | [`activities.md`](activities.md), [`plans-and-lists.md`](plans-and-lists.md) |
 | **Schedule** | It gets a date, and optionally a time. Until then a plan waits in Plans → Needs a date; only a dated plan can reach Today. | Activity detail, list-item scheduling |
 | **Share** | People are added — to a plan, or to a list. App users get it in their app; someone invited to a plan without an account gets a link. | [`sharing-and-people.md`](sharing-and-people.md) |
@@ -153,7 +153,7 @@ Three optional edges, and that is all of them:
 
 An undated plan and an undated list item are not the same thing waiting at different stages.
 The words `Try Zahav` can title either one: choosing **Plan → Event** creates an undated
-plan; choosing **List item → Restaurants to try** creates a list item. Adding Alice later is
+plan; using `+ Add an item` inside **Restaurants to try** creates a list item. Adding Alice later is
 an explicit sharing action; her name in typed text never makes the choice. Neither object
 promotes into the other ([`plans-and-lists.md`](plans-and-lists.md) §1.2).
 
@@ -164,21 +164,22 @@ violates one of these is rejected regardless of how good the feature is.
 
 ### 4.0 Intent is explicit before assistance
 
-The global `+` opens exactly three choices: **Task**, **Plan**, and **List item**. A
-contextual action fixes that same choice in its label — `+ Add a task`, `+ Add an item`, or
+The global `+` opens exactly three choices: **Task**, **Plan**, and **Add list**. A
+contextual action fixes an item or task in its label — `+ Add a task`, `+ Add an item`, or
 `+ Add prep task`. Plan then requires an explicit **General**, **Meal**, **Watch**,
 **Event** choice. Nothing is pre-selected, including General.
 
-General `New list` likewise requires an explicit style choice from the full catalogue before
-its editable title appears. A typed destination the user already chose may show only eligible
-styles—for Watch, the three Watch styles—but still begins unselected. List names never
-select, suggest, rank, or change a template.
+General `New list` likewise requires an explicit creation-type choice from the fixed seven-type
+catalogue before its editable title appears. A Watch destination may constrain creation to the
+single Watch Later preset, still initially unselected. List names never select, suggest, rank,
+or change a preset.
 
 Only after those choices may automatic capture suggest compatible field values. It never
 suggests or changes object kind, Plan kind, people, sharing, list destination,
 reminder/notification state, or whether to save. Reminder remains a separate visible control
-or the user's explicitly saved default. Final buttons name the write: `Save task`, `Save
-plan`, or `Add to <list name>`.
+or the user's explicitly saved default. Activity buttons name the write: `Save task` or `Save
+plan`. A List rapid-entry row names its destination on `Add item to <list name>` and writes
+through its visible `Add` action.
 
 - **Testable:** the same text entered after each global choice writes the selected object;
   capture responses contain no actionable object-kind, Plan-kind, participant, sharing,
@@ -254,13 +255,13 @@ tappable, and the tap must reach the individual records that produced it.
 `ActivityType` is a closed enum of six values. There is no UI to create, rename, delete,
 reorder, colour, or nest a type. `custom` is the escape hatch and is deliberately generic.
 
-List **behaviour** is the same shape: a closed enum of three — `collection`, `watch`,
-`meals` — and there is no UI to add a fourth. List **templates** are unbounded, but they are
-shipped configuration, not a category system: the user picks one at creation and can change
-the resulting list's capabilities afterwards, but cannot define, name, or manage a template.
-See [`plans-and-lists.md`](plans-and-lists.md) §5.2 and §5.3.
+Lists have no stored purpose or behaviour enum. The fixed creation catalogue copies item-state
+presentation, typed feature configuration, icon, slot and empty guidance onto the new List;
+the preset key is provenance and never a renderer switch. A user may change the resulting
+state/feature settings, but cannot define, name, or manage creation presets. See
+[`plans-and-lists.md`](plans-and-lists.md) §5.2 and §5.3.
 
-- **Testable:** no endpoint accepts a user-defined type or behaviour string, and
+- **Testable:** no endpoint accepts a user-defined Activity type or List behaviour string, and
   `POST /v1/lists` accepts `templateKey` only from the shipped catalogue. No settings screen
   contains a type editor or a template editor. Search the client for a "manage categories"
   route: there is none.
@@ -288,7 +289,7 @@ The three jobs:
 
 | # | Job | Success looks like |
 | --- | --- | --- |
-| 1 | **"I keep losing the things I said I'd do."** Capture an intention in seconds, from anywhere, after one plain-language choice: Task, Plan, or List item. | The chosen object exists, is findable, and resurfaces at the right time without hidden routing or naming rules. |
+| 1 | **"I keep losing the things I said I'd do."** Capture an intention in seconds, from anywhere, through an explicit global or contextual entry point. | The chosen object exists, is findable, and resurfaces at the right time without hidden routing or naming rules. |
 | 2 | **"I want to actually do the things I saved."** Turn a saved intention into a dated commitment, and see the small number of things that matter today. | Today answers "what now?" in one screen and one glance, with no triage. |
 | 3 | **"Doing things with people is the hard part."** Invite people without requiring them to install anything, keep everyone on one source of truth, and settle up afterwards. | A guest RSVPs from a link in under 30 seconds; nobody has to reconstruct who paid for what. |
 
@@ -339,7 +340,7 @@ warm Lambda over a 4G connection with an iPhone 13 or newer.
 | --- | --- |
 | [`activities.md`](activities.md) | The Activity concept, the Add experience, per-type creation forms, lifecycle and completion verbs. |
 | [`today-and-tasks.md`](today-and-tasks.md) | The Today screen, tasks, recurrence, passed plans, overdue handling. |
-| [`plans-and-lists.md`](plans-and-lists.md) | The Plans tab's three stages, plan detail anatomy, what lists are for, the three list behaviours and the template catalogue, default destinations, shared lists, the optional list ↔ activity bridge, meals and watching. |
+| [`plans-and-lists.md`](plans-and-lists.md) | The Plans tab's three stages, plan detail anatomy, one configurable List model and its creation catalogue, default destinations, shared lists, the optional list ↔ activity bridge, meals and watching. |
 | [`sharing-and-people.md`](sharing-and-people.md) | Participants, invitations, guests, the public invite page, list members, the People layer. |
 | [`expenses.md`](expenses.md) | Expenses on shared plans, splits, balances, settlement. |
 | [`ai-capture.md`](ai-capture.md) | Natural-language capture, image-to-event, link parsing. Phase 8. |

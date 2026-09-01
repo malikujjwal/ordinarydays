@@ -934,7 +934,7 @@ Two more rules:
 
 | Operation | Rule |
 | --- | --- |
-| **Add item** | Persistent `+ Add an item` row at the foot opens a compact composer inline in the List's scrolling measure. The header and current content remain visible, and the composer can scroll above the software keyboard as the List grows. The current List fixes the destination; no chooser or `New list` appears. Title and optional multiline Note end with `Add to <list name>`. Return performs the same single `POST /v1/lists/:id/items`, then clears both fields and re-focuses Title on success; failures retain both fields. |
+| **Add item** | Persistent `+ Add an item` at the foot opens a rapid-entry row inline in the List's scrolling measure. The header and current content remain visible, and the row can scroll above the software keyboard as the List grows. The current List fixes the destination; no chooser or `New list` appears. One underlined field is accessibly named `Add item to <list name>`, followed by `Add` and `Done adding`; Note and typed features stay in Item details. Return performs the same single `POST /v1/lists/:id/items`, then clears and re-focuses the title field on success; failure retains it. |
 | **Check / uncheck** | Only in checkbox mode. Tapping writes intrinsic `done` or `open` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
 | **Reorder** | Every item shows a neutral trailing grip on touch layouts; long-pressing the row or grip starts the same drag. Pointer layouts reveal the grip on hover/focus. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
@@ -1708,7 +1708,7 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 | Step | User action | Writes |
 | --- | --- | --- |
 | 0 | Lists → `New list` → explicitly chooses **Watch Later** → changes the visible name to `Movies and shows` → `Create list` | `POST /v1/lists { title: 'Movies and shows', templateKey: 'watch-later' }` copies stage labels, episode Progress configuration and the `watch` slot from the preset. No words selected the preset. |
-| 1 | The list → `+ Add an item` → `Severance`, kind Show → `Add to Movies and shows` | `ListItem { itemId: itm_1, title: 'Severance', state: 'open', features: { progress: { kind: 'episode', mediaKind: 'show' } } }` |
+| 1 | The list → `+ Add an item` → `Severance` → `Add`; then Item details → Progress → Show | `ListItem { itemId: itm_1, title: 'Severance', state: 'open', features: { progress: { kind: 'episode', mediaKind: 'show' } } }` after the explicit detail edit. |
 | 2 | Item detail → sets progress S2 E4 (already watched up to there) and Watching | `PATCH /v1/lists/:id/items/itm_1` → `state: 'active'`, `features.progress: { kind: 'episode', mediaKind: 'show', season: 2, episode: 4 }` |
 | 2a | List header → `Share` → explicitly adds Alice | Alice becomes a member of the list. This does not put her on any Plan. |
 | 3 | Item detail → `Plan this item` → explicitly chooses **Watch** → required audience step → **Choose people** → Alice | The Watch form opens with `Severance`, **S2 E5**, and service Apple TV+ as compatible pre-fills. User sets Friday at 8:00 PM. Neither the Watch kind nor Alice was pre-selected. |
