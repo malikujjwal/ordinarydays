@@ -7,6 +7,7 @@ import type { ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxRepository } from '@/lib/sqlite/outbox';
 import type { OutboxPresentationStore } from '@/lib/sqlite/outboxPresentationStore';
+import type { PlansRepository } from '@/lib/sqlite/plansRepository';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import type { NativeSyncEngine } from '@/lib/sqlite/syncEngine';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -30,6 +31,8 @@ export interface NativeActivityState {
   readonly lists?: ListsRepository;
   /** The item slice behind list detail, scoped and subscribed per list (P3-27). */
   readonly listItems?: ListItemsRepository;
+  /** The three-stage Plans materialization and its monotonic Activity ordering floors. */
+  readonly plans?: PlansRepository;
   readonly outbox: OutboxRepository;
   readonly outboxPresentation: OutboxPresentationStore;
   readonly coordinator: NativeActivityActionCoordinator;

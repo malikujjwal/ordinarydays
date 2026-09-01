@@ -25,6 +25,7 @@ import {
 } from '@/lib/sqlite/nativeState';
 import { OutboxRepository } from '@/lib/sqlite/outbox';
 import { OutboxPresentationStore } from '@/lib/sqlite/outboxPresentationStore';
+import { PlansRepository } from '@/lib/sqlite/plansRepository';
 import { recoverAbandonedOutbox } from '@/lib/sqlite/sessionRecovery';
 import { SerializedNativeSyncEngine } from '@/lib/sqlite/syncEngine';
 
@@ -93,6 +94,7 @@ async function startSession(
     account.subscriptions,
     account.projections,
   );
+  const plans = new PlansRepository(account.database, account.subscriptions);
   const outbox = new OutboxRepository(account.database);
   const importer = new LegacyImporter(
     account.transactions,
@@ -146,6 +148,7 @@ async function startSession(
     lists,
     undefined,
     listItems,
+    plans,
   );
   const coordinator = new NativeActivityActionCoordinator(
     ownerUserId,
@@ -208,6 +211,7 @@ async function startSession(
     anytime,
     lists,
     listItems,
+    plans,
     outbox,
     outboxPresentation,
     coordinator,

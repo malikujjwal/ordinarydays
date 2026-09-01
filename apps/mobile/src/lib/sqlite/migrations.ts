@@ -1258,6 +1258,55 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ON activity_update_operations (activity_id, created_at, intent_id);
       `),
   },
+  {
+    version: 22,
+    name: 'native-plans-projection',
+    /**
+     * The three Plans stages are visible native domain state, not a query-cache response.
+     * Rows are normalized by timezone/date/ordinal while the schema-validated wire row is
+     * retained as JSON for fields that are presentation-only. Core identity, status, ordering
+     * and pagination fields remain independently queryable and constrained.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE native_plans_state (
+          timezone TEXT PRIMARY KEY NOT NULL,
+          upcoming_from TEXT NOT NULL,
+          upcoming_through TEXT NOT NULL,
+          upcoming_next_from TEXT,
+          past_cursor TEXT
+        );
+        CREATE TABLE native_plans_needs_date (
+          timezone TEXT NOT NULL,
+          ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+          activity_id TEXT NOT NULL,
+          last_activity_at TEXT NOT NULL,
+          item_json TEXT NOT NULL,
+          PRIMARY KEY (timezone, activity_id),
+          UNIQUE (timezone, ordinal)
+        );
+        CREATE TABLE native_plans_date_rows (
+          timezone TEXT NOT NULL,
+          date TEXT NOT NULL,
+          ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+          activity_id TEXT NOT NULL,
+          occurrence_date TEXT,
+          status TEXT NOT NULL,
+          item_json TEXT NOT NULL,
+          PRIMARY KEY (timezone, date, activity_id),
+          UNIQUE (timezone, date, ordinal)
+        );
+        CREATE INDEX native_plans_rows_activity
+          ON native_plans_date_rows (activity_id, occurrence_date, date);
+        CREATE TABLE native_plans_coverage (
+          timezone TEXT NOT NULL,
+          ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+          covered_from TEXT NOT NULL,
+          covered_through TEXT NOT NULL,
+          PRIMARY KEY (timezone, ordinal)
+        );
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

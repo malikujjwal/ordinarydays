@@ -609,6 +609,7 @@ export class ActivityRepository {
     }
     transaction.changed(this.scope(activityId));
     transaction.changed(this.updatesScope(activityId));
+    transaction.changed('plans');
   }
 
   async deleteConfirmedUpdate(

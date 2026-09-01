@@ -1,4 +1,9 @@
-import { ApiError, NetworkError } from '@od/shared/client';
+import {
+  ApiError,
+  NetworkError,
+  type PlansData,
+  type PlansRequest,
+} from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import {
   type AgendaQuery,
@@ -52,6 +57,7 @@ import {
   type OutboxRepository,
   undoOfferInverseIntentId,
 } from '@/lib/sqlite/outbox';
+import type { PlansRepository } from '@/lib/sqlite/plansRepository';
 import type {
   SerializedTransactionRunner,
   TransactionContext,
@@ -89,6 +95,7 @@ export interface NativeSyncEngine {
   syncNow(): Promise<void>;
   pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail>;
   pullActivityUpdates?(activityId: string): Promise<ActivityUpdatePage>;
+  pullPlans?(request: PlansRequest): Promise<PlansData>;
   pullAgenda(request: AgendaQuery): Promise<AgendaData>;
   pullReminderCoverage(): Promise<void>;
   prepareRejectedIntentRecovery(
@@ -354,6 +361,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     private readonly lists?: ListsRepository,
     listPushTransport?: ListPushTransport,
     private readonly listItems?: ListItemsRepository,
+    private readonly plans?: PlansRepository,
   ) {
     this.push = new ActivityPushAdapter(pushTransport, listPushTransport);
     this.reconciler = new RecurrenceReconciler(
@@ -453,6 +461,22 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       this.activities.installUpdatePage(transaction, activityId, page),
     );
     return this.activities.readUpdates(activityId);
+  }
+
+  async pullPlans(request: PlansRequest): Promise<PlansData> {
+    const plans = this.plans;
+    const pullPlans = this.pull.plans;
+    if (plans === undefined || pullPlans === undefined) {
+      throw new Error('Native Plans state is not ready.');
+    }
+    const data = await this.serialNetwork((signal) => pullPlans(request, signal));
+    if (data.mode !== request.mode) {
+      throw new Error('Native Plans response did not match its requested stage.');
+    }
+    await this.transactions.run((transaction) =>
+      plans.install(transaction, request.tz, data),
+    );
+    return data;
   }
 
   /**

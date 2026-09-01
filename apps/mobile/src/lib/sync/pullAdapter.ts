@@ -1,3 +1,4 @@
+import type { PlansData, PlansRequest } from '@od/shared/client';
 import {
   getActivity,
   getActivityUpdates,
@@ -6,6 +7,7 @@ import {
   getListItems,
   getLists,
   getMe,
+  getPlans,
   listActivities,
 } from '@od/shared/client';
 import type { AgendaQuery } from '@od/shared/schemas';
@@ -26,6 +28,7 @@ export interface ActivityPullAdapter {
   agenda(request: AgendaQuery, signal?: AbortSignal): Promise<AgendaData>;
   activity(target: ActivityDetailTarget, signal?: AbortSignal): Promise<ActivityDetail>;
   profile(signal?: AbortSignal): Promise<User>;
+  plans?(request: PlansRequest, signal?: AbortSignal): Promise<PlansData>;
   activityUpdates?(
     activityId: string,
     cursor?: string,
@@ -113,6 +116,7 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
   agenda: (request, signal) => getAgenda(apiClient, request, signal),
   activity: (target, signal) => getActivity(apiClient, target, signal),
   profile: (signal) => getMe(apiClient, signal),
+  plans: (request, signal) => getPlans(apiClient, request, signal),
   activityUpdates: (activityId, cursor, signal) =>
     getActivityUpdates(apiClient, activityId, cursor, signal),
   anytimePage: async (cursor, signal) => {
