@@ -2881,8 +2881,8 @@ children as P3-18's model-capped `Limit: 50` page; caller reminders, participant
 `SOURCE_LIST#` ids under their model caps. The `SOURCE_LIST#` ids (and any legacy child
 pointers) are hydrated by one logical `BatchGetItem` chunked at DynamoDB's 100-key limit —
 never one read per List. Later pages use their section endpoints. The invariants are one HTTP
-request, model caps, and no N+1 or whole-partition read; the exact number of DynamoDB commands
-is a test bound, not a contract. The ten sections in
+request, model caps, no N+1 or whole-partition read, and the pattern-4 ceiling of 13 physical
+commands at the model maximum; ordering within that ceiling is free to change. The ten sections in
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2.1, in fixed order,
 with the visibility rules in §2.2.
 

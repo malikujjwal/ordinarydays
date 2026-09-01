@@ -37,6 +37,8 @@ function deferred<T>() {
 
 const DEV = 'usr_local_dev';
 const OTHER = 'usr_someone_else';
+/** Physical DynamoDB commands allowed for one detail read at the model maximum. */
+const MAX_DETAIL_COMMANDS = 13;
 const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1L1';
 
@@ -547,6 +549,13 @@ describe('reading an activity you own', () => {
     expect(batchSizes.length).toBeLessThanOrEqual(3);
     expect(Math.max(...batchSizes)).toBeLessThanOrEqual(100);
     expect(batchSizes.reduce((sum, size) => sum + size, 0)).toBe(250);
+    // The documented ceiling (data-model.md pattern 4): internal reordering is free, another
+    // command is not.
+    expect(
+      ddbMock.commandCalls(GetCommand).length +
+        ddbMock.commandCalls(QueryCommand).length +
+        batchSizes.length,
+    ).toBeLessThanOrEqual(MAX_DETAIL_COMMANDS);
   });
 });
 
