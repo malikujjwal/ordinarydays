@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { createOfflineQueryClient } from '@/lib/queryClient';
+import { usePlanActivityFloor } from '@/stores/planActivityFloor';
 import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
@@ -2981,5 +2982,182 @@ describe('the Add-list entry points (P3-39)', () => {
     expect(screen.getByText('+ Add list')).toBeDefined();
     fireEvent.click(screen.getByTestId('lists-add'));
     expect(onAddList).toHaveBeenCalledWith('Zahav');
+  });
+});
+
+/**
+ * The Updates section in full (P3-40): the feed newest-first with `+ Write an update` at the
+ * foot, optimistic posting, author-only delete, cursor paging only on reveal, and the §2.2
+ * visibility matrix.
+ */
+describe('the Updates section (P3-40)', () => {
+  beforeEach(() => {
+    usePlanActivityFloor.setState({ floors: {} });
+  });
+
+  const systemUpdate = (index: number, createdAt: string) => ({
+    updateId: `upd_01J0000000000000000000P4${40 + index}`,
+    activityId: ID,
+    kind: 'system' as const,
+    body: `System ${index}`,
+    createdAt,
+    schemaVersion: 1 as const,
+  });
+
+  const userUpdate = (index: number, createdAt: string) => ({
+    updateId: `upd_01J0000000000000000000P4${50 + index}`,
+    activityId: ID,
+    kind: 'user' as const,
+    authorUserId: 'usr_01J0000000000000000000000B',
+    body: `Note ${index}`,
+    createdAt,
+    schemaVersion: 1 as const,
+  });
+
+  function mountUpdates(
+    extras: Partial<ActivityDetail>,
+    activity = plan(),
+    ...responses: Array<{ status: number; body: unknown }>
+  ) {
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(activity, [], undefined, undefined, undefined, extras),
+      },
+      ...responses,
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    registerActivityMutationDefaults(queryClient);
+    render(
+      <SafeAreaProvider>
+        <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+          <ThemeProvider scheme="light">
+            <QueryClientProvider client={queryClient}>
+              <ActivityDetailScreen
+                target={{ kind: 'activity', activityId: ID }}
+                today={TODAY}
+                onBack={() => {}}
+                onOpenActivity={() => {}}
+                onOpenList={() => {}}
+                onOpenChild={() => {}}
+              />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
+      </SafeAreaProvider>,
+    );
+  }
+
+  it('renders newest first from an unsorted embedded page', async () => {
+    mountUpdates({
+      updates: [
+        systemUpdate(1, '2026-08-08T10:00:00.000Z'),
+        userUpdate(1, '2026-08-11T10:00:00.000Z'),
+        systemUpdate(2, '2026-08-10T10:00:00.000Z'),
+      ],
+    });
+    const section = await screen.findByTestId('section-updates');
+    const bodies = Array.from(
+      section.querySelectorAll('[data-testid^="update-upd_"]'),
+    ).map((row) => row.textContent);
+    expect(bodies[0]).toContain('Note 1');
+    expect(bodies[1]).toContain('System 2');
+    expect(bodies[2]).toContain('System 1');
+  });
+
+  it('shows the section with only the composer on a shared plan with no entries', async () => {
+    mountUpdates({}, plan({ visibility: 'shared' }));
+    await screen.findByTestId('section-updates');
+    expect(screen.getByText('+ Write an update')).toBeDefined();
+    expect(screen.queryByTestId('updates-load-older')).toBeNull();
+  });
+
+  it('offers delete on an own user entry and never on a system entry', async () => {
+    const user = userUpdate(1, '2026-08-11T10:00:00.000Z');
+    const system = systemUpdate(1, '2026-08-10T10:00:00.000Z');
+    mountUpdates({ updates: [user, system] });
+    await screen.findByTestId('section-updates');
+
+    // No author name anywhere — the system entry is the event, the user entry is the caller.
+    expect(screen.queryByText(/usr_/)).toBeNull();
+    expect(screen.getByTestId(`update-delete-${user.updateId}`)).toBeDefined();
+    expect(screen.queryByTestId(`update-delete-${system.updateId}`)).toBeNull();
+  });
+
+  it('removes an own entry through Delete and issues the DELETE request', async () => {
+    const user = userUpdate(1, '2026-08-11T10:00:00.000Z');
+    mountUpdates({ updates: [user] }, plan(), {
+      status: 200,
+      body: { data: { updateId: user.updateId }, meta: { requestId: 'req_test' } },
+    });
+    await screen.findByTestId('section-updates');
+
+    fireEvent.click(screen.getByTestId(`update-delete-${user.updateId}`));
+    await waitFor(() =>
+      expect(screen.queryByTestId(`update-${user.updateId}`)).toBeNull(),
+    );
+    const request = sent.find((call) => call.method === 'DELETE');
+    expect(request?.url).toContain(`/v1/activities/${ID}/updates/${user.updateId}`);
+  });
+
+  it('posts optimistically: the entry renders at the head before the response lands', async () => {
+    const stored = userUpdate(9, '2026-08-12T12:00:00.000Z');
+    mountUpdates({ updates: [systemUpdate(1, '2026-08-10T10:00:00.000Z')] }, plan(), {
+      status: 201,
+      body: {
+        data: { update: stored, lastActivityAt: stored.createdAt },
+        meta: { requestId: 'req_test' },
+      },
+    });
+    await screen.findByTestId('section-updates');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Write an update' }));
+    fireEvent.change(screen.getByLabelText('Update'), {
+      target: { value: 'Note 9' },
+    });
+    fireEvent.click(screen.getByTestId('update-composer-post'));
+
+    // Before the response: the optimistic entry is on screen under its pending identity.
+    expect(screen.getByText('Note 9')).toBeDefined();
+
+    // After: the stored row replaces it and the composer has closed.
+    await screen.findByTestId(`update-${stored.updateId}`);
+    expect(screen.queryByTestId(/update-pending-/)).toBeNull();
+    expect(screen.queryByTestId('update-composer')).toBeNull();
+    const request = sent.find(
+      (call) => call.method === 'POST' && call.url.includes('/updates'),
+    );
+    expect(request?.body).toEqual({ body: 'Note 9' });
+
+    // The authoritative lastActivityAt was raised into the Plans floor (§P3-40's merge).
+    expect(usePlanActivityFloor.getState().floors[ID]).toBe(stored.createdAt);
+  });
+
+  it('pages through the cursor only when revealed, never on open', async () => {
+    const first = [
+      userUpdate(1, '2026-08-11T10:00:00.000Z'),
+      systemUpdate(1, '2026-08-10T10:00:00.000Z'),
+      systemUpdate(2, '2026-08-09T10:00:00.000Z'),
+      systemUpdate(3, '2026-08-08T10:00:00.000Z'),
+    ];
+    const older = systemUpdate(4, '2026-08-07T10:00:00.000Z');
+    mountUpdates({ updates: first, updatesCursor: 'cur_1' }, plan(), {
+      status: 200,
+      body: { data: { updates: [older] }, meta: { requestId: 'req_test' } },
+    });
+    await screen.findByTestId('section-updates');
+
+    // Opening issued exactly the one detail request — no cursor fetch.
+    expect(sent.filter((call) => call.url.includes('/updates'))).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId('updates-show-all'));
+    fireEvent.click(screen.getByTestId('updates-load-older'));
+    await screen.findByTestId(`update-${older.updateId}`);
+    const paged = sent.find(
+      (call) => call.method === 'GET' && call.url.includes('cursor=cur_1'),
+    );
+    expect(paged).toBeDefined();
   });
 });

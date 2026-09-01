@@ -1,12 +1,24 @@
+import { MAX_UPDATE_BODY_LEN } from '@od/shared/constants';
 import type {
   ActivityChild,
   ActivityUpdate,
   Attachment,
   SourceListSummary,
 } from '@od/shared/types';
-import { Checkbox, Chip, SectionHeader, Text, Touchable, useTheme } from '@od/ui';
+import {
+  Button,
+  Checkbox,
+  Chip,
+  Field,
+  SectionHeader,
+  Text,
+  Touchable,
+  useTheme,
+} from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { UpdateRow } from '@/features/activity/components/UpdateRow';
+import type { PendingUpdate } from '@/features/activity/hooks/useActivityUpdates';
 import {
   peekRows,
   prepProgress,
@@ -276,30 +288,80 @@ export function AttachmentsSection({
 
 export interface UpdatesSectionProps {
   updates: readonly ActivityUpdate[];
+  /** Optimistic entries awaiting their response, rendered at the head (P3-40). */
+  pending?: readonly PendingUpdate[];
   /** `2 days ago` — derived by the caller so this component never reads a clock. */
   relativeTime: (createdAt: string) => string;
-  onShowAll?: () => void;
+  /** P3-40's composer write; absent renders the read-only shell with no affordance. */
+  onPost?: (body: string) => Promise<boolean>;
+  isPosting?: boolean;
+  /** Swipe/hover Delete on the caller's own `user` entries; never offered on `system`. */
+  onDelete?: (update: ActivityUpdate) => void;
+  /** Older-history continuation: present means more entries exist past the shown page. */
+  hasOlder?: boolean;
+  onLoadOlder?: () => void;
+  isLoadingOlder?: boolean;
+  /** §5.3 failure copy for the last post/delete/page that did not land. */
+  errorMessage?: string;
 }
 
 /**
- * The read-only Updates section shell (P3-37). P3-40 brings the composer, delete, optimistic
- * posting and pagination; this renders the embedded first page under the peek rule so the
- * section holds its place in the anatomy from the first system entry.
+ * The plan's activity feed, newest first (P3-40, `plans-and-lists.md` §2.1 row 9).
+ *
+ * The first page arrives embedded in the detail response; older entries page through the
+ * cursor **only when revealed** — `Show earlier updates` appears after the peek is expanded,
+ * so opening a plan never issues a second request. The composer is one field whose final
+ * action is `Post update`; posting is optimistic and the entry appears at the head without
+ * reflowing the rest of the screen. A `system` entry renders de-emphasised with no author
+ * name and no delete affordance — the entry text is the event.
  */
-export function UpdatesSection({ updates, relativeTime }: UpdatesSectionProps) {
+export function UpdatesSection({
+  updates,
+  pending = [],
+  relativeTime,
+  onPost,
+  isPosting = false,
+  onDelete,
+  hasOlder = false,
+  onLoadOlder,
+  isLoadingOlder = false,
+  errorMessage,
+}: UpdatesSectionProps) {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState('');
   const { shown, showAllCount } = peekRows(updates, expanded);
+
+  async function submit() {
+    if (onPost === undefined || draft.trim() === '' || isPosting) return;
+    const posted = await onPost(draft);
+    if (posted) {
+      setDraft('');
+      setComposing(false);
+    }
+  }
 
   return (
     <SectionFrame
       label="Updates"
-      trailing={String(updates.length)}
+      trailing={String(updates.length + pending.length)}
       testID="section-updates"
     >
-      {shown.map((update) => (
+      {errorMessage === undefined ? null : (
         <View
-          key={update.updateId}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          testID="updates-error"
+        >
+          <Text variant="footnote" color="danger">
+            {errorMessage}
+          </Text>
+        </View>
+      )}
+      {pending.map((entry) => (
+        <View
+          key={entry.localId}
           style={{
             flexDirection: 'row',
             alignItems: 'baseline',
@@ -307,17 +369,27 @@ export function UpdatesSection({ updates, relativeTime }: UpdatesSectionProps) {
             gap: theme.space[3],
             paddingVertical: theme.space[1],
           }}
-          testID={`update-${update.updateId}`}
+          testID={`update-pending-${entry.localId}`}
         >
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="body" color="textSecondary" numberOfLines={2}>
-              {update.body}
+            <Text variant="body" color="textPrimary" numberOfLines={2}>
+              {entry.body}
             </Text>
           </View>
           <Text variant="footnote" color="textMuted">
-            {relativeTime(update.createdAt)}
+            Just now
           </Text>
         </View>
+      ))}
+      {shown.map((update) => (
+        <UpdateRow
+          key={update.updateId}
+          update={update}
+          relativeTime={relativeTime(update.createdAt)}
+          {...(onDelete === undefined || update.kind !== 'user'
+            ? {}
+            : { onDelete: () => onDelete(update) })}
+        />
       ))}
       {showAllCount === undefined ? null : (
         <ShowAllRow
@@ -325,6 +397,66 @@ export function UpdatesSection({ updates, relativeTime }: UpdatesSectionProps) {
           onPress={() => setExpanded(true)}
           testID="updates-show-all"
         />
+      )}
+      {expanded && hasOlder && onLoadOlder !== undefined ? (
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Show earlier updates"
+          onPress={onLoadOlder}
+          disabled={isLoadingOlder}
+          style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
+          testID="updates-load-older"
+        >
+          <Text variant="subhead" color="textAction">
+            {isLoadingOlder ? 'Loading…' : 'Show earlier updates'}
+          </Text>
+        </Touchable>
+      ) : null}
+      {onPost === undefined ? null : composing ? (
+        <View style={{ gap: theme.space[3] }} testID="update-composer">
+          <Field
+            label="Update"
+            accessibilityLabel="Update"
+            value={draft}
+            onChangeText={setDraft}
+            autoFocus
+            maxLength={MAX_UPDATE_BODY_LEN}
+            testID="update-composer-body"
+          />
+          <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
+            <Button
+              label="Cancel"
+              variant="ghost"
+              onPress={() => {
+                setDraft('');
+                setComposing(false);
+              }}
+              testID="update-composer-cancel"
+            />
+            <View style={{ flex: 1 }}>
+              <Button
+                label="Post update"
+                onPress={() => void submit()}
+                disabled={draft.trim() === ''}
+                loading={isPosting}
+                fullWidth
+                testID="update-composer-post"
+              />
+            </View>
+          </View>
+        </View>
+      ) : (
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Write an update"
+          onPress={() => setComposing(true)}
+          style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
+          testID="updates-add"
+        >
+          <Text variant="body" color="textAction">
+            + Write an update
+          </Text>
+        </Touchable>
       )}
     </SectionFrame>
   );

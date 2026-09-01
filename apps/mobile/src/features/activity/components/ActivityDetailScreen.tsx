@@ -53,6 +53,7 @@ import {
   kindChangePatch,
   useActivityActions,
 } from '@/features/activity/hooks/useActivityActions';
+import { useActivityUpdates } from '@/features/activity/hooks/useActivityUpdates';
 import {
   type Confirmation,
   deleteConfirmation,
@@ -1030,18 +1031,33 @@ function Loaded({
   const children = detail.detail?.children ?? [];
   const sourceLists = detail.detail?.sourceLists ?? [];
   const attachments = detail.detail?.attachments ?? [];
-  const updates = detail.detail?.updates ?? [];
+  const embeddedUpdates = detail.detail?.updates ?? [];
+  /**
+   * The live feed over the embedded first page (P3-40): optimistic posts, deletes and the
+   * cursor continuation, reconciled against whatever page the next detail refetch embeds.
+   */
+  const feed = useActivityUpdates(activity.activityId, {
+    updates: embeddedUpdates,
+    cursor: detail.detail?.updatesCursor,
+  });
+  const updateCount = feed.updates.length + feed.pending.length;
   const sections = sectionsFor(activity, {
     childCount: children.length,
     sourceListCount: sourceLists.length,
     attachmentCount: attachments.length,
-    updateCount: updates.length,
+    updateCount,
   });
   const chips = addToPlanChips({
     children,
     sourceLists,
-    updatesVisible: updatesSectionVisible(activity.visibility, updates.length),
-    // P3-40 wires the update flow; until it lands its chip stays absent.
+    updatesVisible: updatesSectionVisible(activity.visibility, updateCount),
+    /**
+     * The Update chip is structurally unreachable under §2.2: whenever the section is
+     * visible it carries its own `+ Write an update`, and when it is hidden (private, no
+     * entries) the deliberate consequence is no entry point at all. The mock draws an
+     * Update chip on a private plan — recorded as a divergence rather than followed,
+     * because P3-40's spec states the §2.2 consequence outright.
+     */
     wired: {
       prepTask: onAddPrepTask !== undefined,
       list: onAddList !== undefined,
@@ -1468,10 +1484,21 @@ function Loaded({
       {sections.some((section) => section.key === 'attachments') ? (
         <AttachmentsSection attachments={attachments} />
       ) : null}
-      {sections.some((section) => section.key === 'updates') && updates.length > 0 ? (
+      {sections.some((section) => section.key === 'updates') ? (
         <UpdatesSection
-          updates={updates}
+          updates={feed.updates}
+          pending={feed.pending}
           relativeTime={(createdAt) => relativeUpdateTime(createdAt, today)}
+          {...(pending
+            ? {}
+            : { onPost: feed.post, onDelete: (u) => void feed.remove(u) })}
+          isPosting={feed.isPosting}
+          hasOlder={feed.cursor !== undefined}
+          onLoadOlder={feed.loadMore}
+          isLoadingOlder={feed.isLoadingMore}
+          {...(feed.errorMessage === undefined
+            ? {}
+            : { errorMessage: feed.errorMessage })}
         />
       ) : null}
       {activity.objectKind === 'plan' && !pending ? (
