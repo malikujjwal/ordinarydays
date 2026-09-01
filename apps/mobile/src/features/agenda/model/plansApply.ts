@@ -1,6 +1,6 @@
 import type { PlansDateStore } from '@od/shared/client';
 import { describeRecurrence } from '@od/shared/recurrence';
-import type { NeedsDateItem } from '@od/shared/schemas';
+import { activity as activitySchema, type NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
 import type { Activity, AgendaItem } from '@od/shared/types';
 
@@ -174,8 +174,6 @@ export function applyPlansRemove(
 export function createdActivityFrom(data: unknown): Activity | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
-  if (typeof candidate !== 'object' || candidate === null) return undefined;
-  return typeof (candidate as { activityId?: unknown }).activityId === 'string'
-    ? (candidate as Activity)
-    : undefined;
+  const parsed = activitySchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
 }

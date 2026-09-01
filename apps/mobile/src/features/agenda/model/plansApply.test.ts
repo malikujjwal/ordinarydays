@@ -143,4 +143,13 @@ describe('createdActivityFrom', () => {
     expect(createdActivityFrom({ activity: bare })?.activityId).toBe(bare.activityId);
     expect(createdActivityFrom({ meta: {} })).toBeUndefined();
   });
+
+  it('rejects an Activity-like object that fails the shared boundary schema', () => {
+    expect(
+      createdActivityFrom({ ...activity(), status: 'not-a-status' }),
+    ).toBeUndefined();
+    expect(
+      createdActivityFrom({ activity: { activityId: activity().activityId } }),
+    ).toBeUndefined();
+  });
 });
