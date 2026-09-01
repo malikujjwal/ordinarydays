@@ -627,9 +627,17 @@ describe('AgendaRow structural guards', () => {
     );
 
     expect(leadingSource).toContain('if (hasCheckbox)');
-    expect(leadingSource).not.toMatch(/\btype\b/);
     /**
-     * Still `item.hasCheckbox` and still never `type` — P2-50 only adds the pending gate, and
+     * P3-49 hands the row's kind in for the marker glyph, so the word itself is allowed now.
+     * What stays forbidden is any line that decides the *control* from it — a comparison
+     * against `task`, or `hasCheckbox` and the kind on one line. The glyph lookup is the pure
+     * `typeMarker`, reached only after `hasCheckbox` has already said no.
+     */
+    expect(leadingSource).not.toMatch(/type\s*[!=]==?\s*'task'/);
+    expect(leadingSource).not.toMatch(/hasCheckbox.*\btype\b|\btype\b.*hasCheckbox/);
+    expect(leadingSource).toContain('const marker = typeMarker(type);');
+    /**
+     * Still `item.hasCheckbox` and still never the kind — P2-50 only adds the pending gate, and
      * the gate is named here so the guard documents both facts rather than being loosened to
      * a substring that would also pass for a type-derived checkbox.
      */

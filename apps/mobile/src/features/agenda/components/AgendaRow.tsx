@@ -447,6 +447,7 @@ export function AgendaRowWithIntentState({
            * leaving a greyed control as the only signal (§6.4).
            */
           hasCheckbox={item.hasCheckbox && !inert}
+          type={item.type}
           checked={checked}
           title={item.title}
           disabled={futureRecurringCompletion || completionLocked}

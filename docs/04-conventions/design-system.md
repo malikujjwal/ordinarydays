@@ -505,8 +505,21 @@ Non-task rows render a small non-interactive marker in the type's accent — out
 >
 > Cards were already right: an icon squircle renders the type's glyph, so before this
 > correction the same plan showed a map-pin on one surface and a grey diamond on another.
-> Keep the marker's 1.5 stroke visibly lighter than the checkbox border on the adjacent row —
-> it has no hit target and must not start reading as a control. On cards the same accent tints a `44 × 44` icon
+> Keep the marker's stroke visibly lighter than the checkbox border on the adjacent row —
+> it has no hit target and must not start reading as a control.
+>
+> **Marker forms (P3-49, per the Phase 3 screen board).** The registry authors every glyph on
+> a 24 viewBox at `strokeWidth: 1.5`, so scaling one to `16 × 16` renders its stroke at 1.0 px
+> — thinner than the 1.5 px checkbox border in the same column — and turns interior detail
+> (the pin's dot, the bowl's steam) into noise. The four markers are therefore separate
+> **marker forms** (`packages/ui/src/icons/markers.tsx`): the same silhouettes at **1.9**
+> viewBox units, which renders at ~1.27 px at 16 pt — present, and still lighter than the
+> checkbox — with `bowl` and `map-pin` dropping their interior. The full 1.5 forms stay on the
+> 24 pt and 44 pt surfaces (cards, the catalogue, the kind chooser). A `task` never draws a
+> marker: its icon is the checkbox, and the one case that withholds it (P2-50's unacknowledged
+> create) leaves the column reserved and empty rather than decorating it with a check-square.
+>
+> On cards the same accent tints a `44 × 44` icon
 **squircle** (`radius.md`, the type's `*Surface` tint as fill, the accent as glyph).
 
 #### 5.2a Collection-card surfaces
