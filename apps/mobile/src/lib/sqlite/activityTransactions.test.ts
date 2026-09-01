@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CreateActivityInput } from '@od/shared/schemas';
+import type { ActivityDetail } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { planFromCommittedRows } from '@/features/reminders/localSchedule.native';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -794,6 +795,69 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(
       (await outbox.all()).some((intent) => intent.intentId === 'complete-one'),
     ).toBe(false);
+  });
+
+  it('queues a participant Prep completion from the durable parent projection', async () => {
+    const parent: ActivityDetail = {
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title: 'Shared trip',
+        participantCount: 2,
+        childCount: 1,
+        expenseTotalCents: 0,
+        visibility: 'shared',
+        details: { kind: 'custom' },
+        icsSequence: 0,
+        createdAt: '2026-08-19T08:00:00.000Z',
+        lastActivityAt: '2026-08-19T08:00:00.000Z',
+        updatedAt: '2026-08-19T08:00:00.000Z',
+        schemaVersion: 1,
+      },
+      reminders: [],
+      children: [
+        {
+          activityId: OTHER,
+          title: 'Pack a bag',
+          status: 'scheduled',
+          isRecurring: false,
+        },
+      ],
+    };
+    await transactions.run((transaction) => activities.putCanonical(transaction, parent));
+
+    const accepted = await coordinator.complete(
+      OTHER,
+      'participant-child-complete',
+      { outcome: 'done' },
+      true,
+      'scheduled',
+      clock,
+      ACTIVITY,
+    );
+
+    expect(accepted).toMatchObject({ kind: 'accepted' });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
+    ).toEqual([{ ...parent.children?.[0], status: 'completed' }]);
+    expect((await outbox.all())[0]).toMatchObject({
+      entityId: OTHER,
+      variables: {
+        parentActivityId: ACTIVITY,
+        idempotencyKey: 'participant-child-complete',
+      },
+    });
+
+    await database?.close();
+    database = await createNodeSqliteFactory(directory).open('slice.sqlite');
+    activities = new ActivityRepository(database, subscriptions);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children?.[0]
+        ?.status,
+    ).toBe('completed');
   });
 
   it('shares one local transaction for identical completion taps on the same target', async () => {

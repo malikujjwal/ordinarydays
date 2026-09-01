@@ -1226,6 +1226,16 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ON activity_source_lists (activity_id, ordinal);
       `),
   },
+  {
+    version: 20,
+    name: 'activity-child-completion-projection',
+    /** The parent projection retains the status an uncomplete action must restore. */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE activity_children ADD COLUMN restored_status TEXT NOT NULL
+          DEFAULT 'scheduled' CHECK (restored_status IN ('saved', 'scheduled'));
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

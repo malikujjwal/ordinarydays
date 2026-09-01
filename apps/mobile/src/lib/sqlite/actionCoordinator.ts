@@ -151,12 +151,18 @@ export class NativeActivityActionCoordinator {
     completed: boolean,
     restoredStatus: 'saved' | 'scheduled',
     clock: ProjectionClock,
+    parentActivityId?: string,
   ): Promise<NativeActionResult> {
     const target = JSON.stringify([activityId, input.occurrenceDate ?? null]);
     const current = this.completionCommits.get(target);
     if (current?.completed === completed) return current.promise;
 
-    const variables: ActivityCompletionVariables = { activityId, idempotencyKey, input };
+    const variables: ActivityCompletionVariables = {
+      activityId,
+      idempotencyKey,
+      input,
+      ...(parentActivityId === undefined ? {} : { parentActivityId }),
+    };
     const promise = this.acceptExisting(activityId, (transaction) =>
       this.service.complete(transaction, variables, completed, restoredStatus, clock),
     );

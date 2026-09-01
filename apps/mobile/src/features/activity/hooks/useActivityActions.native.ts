@@ -216,13 +216,11 @@ export function useActivityActions(activityId: string): ActivityActions {
         setError('Open the task to choose which repeating occurrence to complete.');
         return false;
       }
-      const detail = await state.activities.read({
-        kind: 'activity',
-        activityId: child.activityId,
-      });
-      if (detail === undefined) return false;
-      const restoredStatus =
-        detail.activity.schedule?.date === undefined ? 'saved' : 'scheduled';
+      const restoredStatus = await state.activities.readChildRestoredStatus(
+        activityId,
+        child.activityId,
+      );
+      if (restoredStatus === undefined) return false;
       const result = await accepted(() =>
         state.coordinator.complete(
           child.activityId,
@@ -231,6 +229,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           completed,
           restoredStatus,
           projectionClock(),
+          activityId,
         ),
       );
       return result !== undefined && resultOk(result);

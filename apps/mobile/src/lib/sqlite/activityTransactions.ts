@@ -82,6 +82,7 @@ export interface ActivityScheduleVariables {
 
 export interface ActivityCompletionVariables {
   readonly activityId: string;
+  readonly parentActivityId?: string;
   readonly input: {
     readonly occurrenceDate?: string;
     readonly outcome?: ActivityOutcome;
@@ -721,6 +722,14 @@ export class ActivityTransactionService {
         completed ? variables.input.outcome : undefined,
         completed && !negative ? systemClock.now() : undefined,
       );
+      if (variables.parentActivityId !== undefined) {
+        await this.activities.setChildStatusLocal(
+          transaction,
+          variables.parentActivityId,
+          variables.activityId,
+          negative ? 'skipped' : completed ? 'completed' : restoredStatus,
+        );
+      }
     } else {
       await transaction.database.run(
         `INSERT INTO activity_occurrences (

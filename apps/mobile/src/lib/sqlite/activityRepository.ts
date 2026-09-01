@@ -252,6 +252,51 @@ export class ActivityRepository {
     return this.subscriptions.version(this.updatesScope(activityId));
   }
 
+  async readChildRestoredStatus(
+    parentActivityId: string,
+    childActivityId: string,
+  ): Promise<'saved' | 'scheduled' | undefined> {
+    const row = await this.reader.first(
+      `SELECT restored_status FROM activity_children
+       WHERE parent_activity_id = ? AND child_activity_id = ?;`,
+      [parentActivityId, childActivityId],
+    );
+    const status = row === undefined ? undefined : text(row, 'restored_status');
+    return status === 'saved' || status === 'scheduled' ? status : undefined;
+  }
+
+  async setChildStatusLocal(
+    transaction: TransactionContext,
+    parentActivityId: string,
+    childActivityId: string,
+    status: ActivityChild['status'],
+  ): Promise<void> {
+    const changed = await transaction.database.run(
+      `UPDATE activity_children SET status = ?,
+         restored_status = CASE
+           WHEN ? IN ('saved', 'scheduled') THEN ? ELSE restored_status END
+       WHERE parent_activity_id = ? AND child_activity_id = ?;`,
+      [status, status, status, parentActivityId, childActivityId],
+    );
+    if (changed.changes !== 1) {
+      throw new Error('The parent no longer contains this Prep task.');
+    }
+    transaction.changed(this.scope(parentActivityId));
+  }
+
+  async acceptCanonicalChildStatus(
+    transaction: TransactionContext,
+    parentActivityId: string,
+    activity: Activity,
+  ): Promise<void> {
+    await this.setChildStatusLocal(
+      transaction,
+      parentActivityId,
+      activity.activityId,
+      activity.status,
+    );
+  }
+
   async readUpdates(activityId: string): Promise<ActivityUpdatePage> {
     const rows = await this.reader.all(
       `SELECT * FROM activity_updates
@@ -1054,8 +1099,9 @@ export class ActivityRepository {
       for (const [ordinal, child] of detail.children.entries()) {
         await database.run(
           `INSERT INTO activity_children
-             (parent_activity_id, child_activity_id, ordinal, title, status, is_recurring)
-           VALUES (?, ?, ?, ?, ?, ?);`,
+             (parent_activity_id, child_activity_id, ordinal, title, status, is_recurring,
+              restored_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?);`,
           [
             activityId,
             child.activityId,
@@ -1063,6 +1109,7 @@ export class ActivityRepository {
             child.title,
             child.status,
             child.isRecurring ? 1 : 0,
+            child.status === 'saved' ? 'saved' : 'scheduled',
           ],
         );
       }
