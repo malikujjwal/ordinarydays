@@ -10,7 +10,7 @@ import { applyPlansCreate, createdActivityFrom } from './plansApply';
  * the eventually consistent GSI the tab reads.
  */
 
-const TODAY = '2026-08-06' as WallDate;
+const CLOCK = { today: '2026-08-06' as WallDate, currentMinute: '12:00' };
 
 const activity = (patch: Record<string, unknown> = {}): Activity =>
   ({
@@ -46,10 +46,10 @@ describe('applyPlansCreate', () => {
       title: 'Later dinner',
       schedule: { date: '2026-08-07', time: '21:00', timezone: 'America/New_York' },
     });
-    const seeded = applyPlansCreate(emptyState(), existing, TODAY);
+    const seeded = applyPlansCreate(emptyState(), existing, CLOCK);
     if (seeded === undefined) throw new Error('seed projection must apply');
 
-    const next = applyPlansCreate(seeded, activity(), TODAY);
+    const next = applyPlansCreate(seeded, activity(), CLOCK);
     const day = next?.store.byDate.get('2026-08-07' as WallDate);
     expect(day?.map((row) => row.title)).toEqual(['Dinner at Zahav', 'Later dinner']);
   });
@@ -58,7 +58,7 @@ describe('applyPlansCreate', () => {
     const next = applyPlansCreate(
       emptyState(),
       activity({ status: 'saved', schedule: undefined }),
-      TODAY,
+      CLOCK,
     );
     expect(next?.needsDate[0]).toMatchObject({
       activityId: 'act_01J8CREATED000000000000000',
@@ -78,15 +78,15 @@ describe('applyPlansCreate', () => {
           schedule: undefined,
           details: { kind: 'task' },
         }),
-        TODAY,
+        CLOCK,
       ),
     ).toBeUndefined();
   });
 
   it('is idempotent for a row the state already holds', () => {
-    const once = applyPlansCreate(emptyState(), activity(), TODAY);
+    const once = applyPlansCreate(emptyState(), activity(), CLOCK);
     if (once === undefined) throw new Error('first projection must apply');
-    expect(applyPlansCreate(once, activity(), TODAY)).toBeUndefined();
+    expect(applyPlansCreate(once, activity(), CLOCK)).toBeUndefined();
   });
 
   it('scopes a recurring create to its first occurrence', () => {
@@ -98,7 +98,7 @@ describe('applyPlansCreate', () => {
           segments: [{ freq: 'daily', effectiveFrom: '2026-08-07' }],
         },
       }),
-      TODAY,
+      CLOCK,
     );
     const day = next?.store.byDate.get('2026-08-07' as WallDate);
     expect(day?.[0]).toMatchObject({

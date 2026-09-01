@@ -1,8 +1,9 @@
-import { ApiError, createList } from '@od/shared/client';
+import { createList } from '@od/shared/client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
+import { describeApiFailure } from '@/lib/apiFailure';
 import { listMutationKeys } from '@/lib/mutationKeys';
 import { LISTS_KEY } from './keys';
 
@@ -42,21 +43,12 @@ export interface CreateListResult {
   dismissError: () => void;
 }
 
-/**
- * §5.3's copy, never the exception's own text for a 5xx: `Failed to fetch` describes a socket.
- * A 4xx that came back through the envelope *is* the server's user-facing sentence.
- */
+/** §5.3's copy, through the one shared formatter so the sentences cannot drift. */
 export function describeCreateFailure(error: unknown): {
   message: string;
   requestId?: string;
 } {
-  if (error instanceof ApiError) {
-    if (error.status >= 500) {
-      return { message: 'Something went wrong.', requestId: error.requestId };
-    }
-    return { message: error.message, requestId: error.requestId };
-  }
-  return { message: "Couldn't save this." };
+  return describeApiFailure(error, "Couldn't save this.");
 }
 
 export function useCreateList(): CreateListResult {

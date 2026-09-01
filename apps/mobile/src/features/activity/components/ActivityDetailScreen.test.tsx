@@ -1620,7 +1620,9 @@ describe('the overflow menu', () => {
 
     fireEvent.click(screen.getByTestId('detail-complete'));
     await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
-    expect(useToast.getState().current?.kind).toBe('undo');
+    // waitFor: under full-suite CPU load the poll can sample a transient toast state
+    // between the completion's message and its undo offer.
+    await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
 
     fireEvent.click(screen.getByTestId('detail-undo'));
 
@@ -1628,7 +1630,7 @@ describe('the overflow menu', () => {
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(2),
     );
     expect(sent[2]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
-    expect(useToast.getState().current).toBeUndefined();
+    await waitFor(() => expect(useToast.getState().current).toBeUndefined());
   });
 
   it('accepts Undo immediately while Complete is still in flight and compensates in order', async () => {

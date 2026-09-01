@@ -92,6 +92,10 @@ export function applyCreate(
 
   // Canonical overdue projection deliberately drops the old clock time: the row is a Today
   // Anytime copy and keeps the original date only as its overdue label.
+  //
+  // Boundary note: `plansApply.ts` builds a deliberately parallel literal for the Plans
+  // store (no overdue/Anytime concepts there). The `occurrenceDate` scoping rule below, the
+  // `capabilities` mapping and the `isPast` clock rule must stay aligned across both.
   const time = overdueFromDate === undefined ? activity.schedule?.time : undefined;
   const endTime = overdueFromDate === undefined ? activity.schedule?.endTime : undefined;
   const next: AgendaItem = {

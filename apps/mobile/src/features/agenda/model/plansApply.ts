@@ -28,7 +28,22 @@ const zeroRsvp = {
   pending: { count: 0, names: [] },
 } satisfies NeedsDateRowData['rsvpSummary'];
 
-function itemFromActivity(activity: Activity, today: WallDate): AgendaItem {
+/** The clock a projection reads instead of a `Date` (§4.3) — `applyCreate`'s own shape. */
+export interface PlansProjectionClock {
+  readonly today: WallDate;
+  /** `HH:mm`; lets a today-dated timed row compute `isPast` the way the agenda cache does. */
+  readonly currentMinute: string;
+}
+
+/**
+ * The row an Activity projects as. **Deliberately parallel to `applyCreate.ts`'s literal**
+ * (same directory) rather than extracted: that builder interleaves the agenda's
+ * overdue/Anytime special cases this store has no concept of, and the two encode their own
+ * boundary. Kept field-compatible on the load-bearing pieces — `occurrenceDate` scoping,
+ * `capabilities`, and the `isPast` clock rule — with cross-reference comments both sides;
+ * server-only enrichments (subtitle, location, note excerpt) arrive on reconciliation.
+ */
+function itemFromActivity(activity: Activity, clock: PlansProjectionClock): AgendaItem {
   const date = activity.schedule?.date;
   const time = activity.schedule?.time;
   const endTime = activity.schedule?.endTime;
@@ -59,7 +74,13 @@ function itemFromActivity(activity: Activity, today: WallDate): AgendaItem {
     ...(activity.parentActivityId === undefined
       ? {}
       : { parentActivityId: activity.parentActivityId }),
-    isPast: date !== undefined && date < today,
+    // The same rule as `applyCreate`: past by date, or past by time once today's slot ends.
+    isPast:
+      date !== undefined &&
+      (date < clock.today ||
+        (date === clock.today &&
+          time !== undefined &&
+          (endTime ?? time) <= clock.currentMinute)),
   };
 }
 
@@ -82,7 +103,7 @@ function byTimeThenId(
 export function applyPlansCreate(
   current: PlansProjectionState,
   activity: Activity,
-  today: WallDate,
+  clock: PlansProjectionClock,
 ): PlansProjectionState | undefined {
   const date = activity.schedule?.date;
 
@@ -99,7 +120,7 @@ export function applyPlansCreate(
     // Undated Tasks belong to Today's Anytime, not to this tab.
     if (activity.objectKind !== 'plan') return undefined;
     const row: NeedsDateRowData = {
-      ...itemFromActivity(activity, today),
+      ...itemFromActivity(activity, clock),
       lastActivityAt: activity.lastActivityAt,
       suggestionCount: 0,
       rsvpSummary: zeroRsvp,
@@ -107,11 +128,39 @@ export function applyPlansCreate(
     return { ...current, needsDate: [row, ...current.needsDate] };
   }
 
-  const item = itemFromActivity(activity, today);
+  const item = itemFromActivity(activity, clock);
   const byDate = new Map(current.store.byDate);
   const day = [...(byDate.get(date as WallDate) ?? []), item].sort(byTimeThenId);
   byDate.set(date as WallDate, day);
   return { ...current, store: { ...current.store, byDate } };
+}
+
+/**
+ * Strips every trace of one Activity from both stages — the delete projection, and the
+ * removal half of a reschedule (the insert half is {@link applyPlansCreate} again). Returns
+ * `undefined` when nothing held the row, so callers keep every identity stable.
+ */
+export function applyPlansRemove(
+  current: PlansProjectionState,
+  activityId: string,
+): PlansProjectionState | undefined {
+  let changed = false;
+  const needsDate = current.needsDate.filter((row) => {
+    if (row.activityId !== activityId) return true;
+    changed = true;
+    return false;
+  });
+  const byDate = new Map(current.store.byDate);
+  for (const [date, rows] of byDate) {
+    const next = rows.filter((row) => row.activityId !== activityId);
+    if (next.length !== rows.length) {
+      changed = true;
+      // The emptied key stays: inside a covered interval, empty means loaded-and-empty.
+      byDate.set(date, next);
+    }
+  }
+  if (!changed) return undefined;
+  return { needsDate, store: { ...current.store, byDate } };
 }
 
 /** The Activity inside a create/duplicate success payload, however the endpoint wraps it. */

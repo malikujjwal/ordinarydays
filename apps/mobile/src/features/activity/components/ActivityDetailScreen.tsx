@@ -1,7 +1,7 @@
 import type { ChangeTarget } from '@od/shared';
 import { addWallDays, describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
-import { type TimeZone, toWallTime } from '@od/shared/time';
+import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetailTarget,
@@ -27,7 +27,7 @@ import {
   useTheme,
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
@@ -1042,6 +1042,27 @@ function Loaded({
     cursor: detail.detail?.updatesCursor,
   });
   const updateCount = feed.updates.length + feed.pending.length;
+  /**
+   * Both operands of the relative stamp in the **same** frame: the instant converts through
+   * the viewer's zone, so `today` must be that zone's wall date too — the screen's `today`
+   * prop is the device zone's, which differs for a traveller. Ticker-driven, so the labels
+   * roll over at the viewer's midnight; memoised per `createdAt`, so a minute tick formats
+   * nothing that has not changed day.
+   */
+  const tick = useMinuteTicker();
+  const updatesToday = toWallDate(tick.instant, timezone);
+  const updateStamps = useMemo(() => {
+    const stamps = new Map<string, string>();
+    for (const update of feed.updates) {
+      if (!stamps.has(update.createdAt)) {
+        stamps.set(
+          update.createdAt,
+          relativeUpdateTime(update.createdAt, updatesToday, timezone),
+        );
+      }
+    }
+    return stamps;
+  }, [feed.updates, updatesToday, timezone]);
   const sections = sectionsFor(activity, {
     childCount: children.length,
     sourceListCount: sourceLists.length,
@@ -1421,6 +1442,9 @@ function Loaded({
           }
 
           if (section.state === 'coming-later') {
+            // Attachments' discovery row belongs at its §2.1 slot (section 8, after
+            // Lists), not among the settings rows — rendered in the lower stack below.
+            if (section.key === 'attachments-coming-later') return null;
             return (
               <SettingRow
                 key={section.key}
@@ -1473,6 +1497,14 @@ function Loaded({
             : { onAddList: () => onAddList(activity.title) })}
         />
       ) : null}
+      {sections.some((section) => section.key === 'attachments-coming-later') ? (
+        <SettingRow
+          label="Attachments"
+          summary="Photos and files"
+          note="Coming later"
+          testID="section-attachments-coming-later"
+        />
+      ) : null}
       {sections.some((section) => section.key === 'attachments') ? (
         <AttachmentsSection attachments={attachments} />
       ) : null}
@@ -1480,7 +1512,10 @@ function Loaded({
         <UpdatesSection
           updates={feed.updates}
           pending={feed.pending}
-          relativeTime={(createdAt) => relativeUpdateTime(createdAt, today, timezone)}
+          relativeTime={(createdAt) =>
+            updateStamps.get(createdAt) ??
+            relativeUpdateTime(createdAt, updatesToday, timezone)
+          }
           {...(pending
             ? {}
             : { onPost: feed.post, onDelete: (u) => void feed.remove(u) })}

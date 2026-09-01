@@ -106,6 +106,7 @@ export function UpdatesSection({
         <ActionRow
           label={`Show all ${showAllCount}`}
           accessibilityLabel={`Show all ${showAllCount}`}
+          variant="subhead"
           onPress={() => setExpanded(true)}
           testID="updates-show-all"
         />
@@ -114,6 +115,7 @@ export function UpdatesSection({
         <ActionRow
           label={isLoadingOlder ? 'Loading…' : 'Show earlier updates'}
           accessibilityLabel="Show earlier updates"
+          variant="subhead"
           onPress={onLoadOlder}
           disabled={isLoadingOlder}
           testID="updates-load-older"
