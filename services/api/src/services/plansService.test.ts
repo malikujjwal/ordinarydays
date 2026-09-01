@@ -96,6 +96,13 @@ describe('which streams each mode starts', () => {
     const scheduled = calls.filter((c) => c.bucket === 'S');
     expect(scheduled.some((c) => c.options.ascending === false)).toBe(true);
     expect(scheduled.some((c) => c.options.ascending !== false)).toBe(true);
+    /**
+     * P3-20's documented initial-mode budget exception is fixed, not open-ended: at the
+     * Plans coordinator seam there are exactly four bucket calls, while shared agenda
+     * assembly remains one separately owned operation. A fifth call is a budget regression.
+     */
+    expect(calls).toHaveLength(4);
+    expect(dependencies.assemble).toHaveBeenCalledTimes(1);
   });
 
   it('an upcoming continuation reads neither needs-a-date nor past', async () => {
