@@ -1051,6 +1051,51 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toEqual([{ ...parent.children?.[0], status: 'completed' }]);
   });
 
+  it('removes the parent pointer when the child is canonically absent', async () => {
+    const timestamp = '2026-08-19T08:00:00.000Z';
+    const parent: ActivityDetail = {
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title: 'Shared trip',
+        participantCount: 1,
+        childCount: 1,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        details: { kind: 'custom' },
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+      children: [
+        {
+          activityId: OTHER,
+          title: 'Pack a bag',
+          status: 'completed',
+          restoredStatus: 'scheduled',
+          isRecurring: false,
+        },
+      ],
+    };
+    await transactions.run((transaction) => activities.putCanonical(transaction, parent));
+
+    // A strong detail read of the child answered 404: it was deleted elsewhere.
+    const accepted = await transactions.run((transaction) =>
+      activities.acceptCanonicalDeletion(transaction, OTHER),
+    );
+
+    expect(accepted).toBe(true);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
+    ).toEqual([]);
+  });
+
   it('restores dated and undated completed Prep tasks exactly after an offline restart', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     const timestamp = '2026-08-19T08:00:00.000Z';

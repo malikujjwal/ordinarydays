@@ -2455,11 +2455,11 @@ already-applied migration, and an unserialized read transaction on the writer co
 Meanwhile the web builds of the same screens had been exercised for days.
 
 **Decision.** The native projection surface stays exactly as migration 25 leaves it. No new
-native projection, migration or reconciliation mechanism is added for Phase 3 screens until
+native projection or reconciliation mechanism is added for Phase 3 screens until
 the Plans tab, plan detail and Updates have been used on a phone through the normal flows and
 the log-trace review at the Phase 3 checkpoint has run. Defects found on the device are fixed
-in place. Migrations that have been committed are never edited; a correction is a new
-migration. The unused overlay tables from migrations 23–25 are left in the plan (contiguity
+in place; such a fix may add a corrective migration (an index or a constraint — migration 26,
+the child-keyed Prep pointer index, is one) but never edits a committed migration. The unused overlay tables from migrations 23–25 are left in the plan (contiguity
 rule) and dropped in a later migration once no development database depends on them.
 
 **Consequences.** Native screens may lag web by one reconciliation until the checkpoint;

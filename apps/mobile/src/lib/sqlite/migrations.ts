@@ -1389,6 +1389,19 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
       `),
   },
+  {
+    version: 26,
+    name: 'activity-children-by-child',
+    /**
+     * A completion reaches a Prep task from Today or its own detail, which know only the
+     * child; the parent-leading indexes could not serve that lookup (ADR-057's indexed-query
+     * rule). A corrective migration under ADR-059, not a new projection.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE INDEX activity_children_by_child ON activity_children (child_activity_id);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

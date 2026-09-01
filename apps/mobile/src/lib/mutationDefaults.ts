@@ -74,11 +74,17 @@ export interface PatchActivityVariables {
 }
 
 export type ScheduleActivityVariables = ActivityPostVariables<ScheduleActivityInput>;
-export type CompleteActivityVariables = ActivityPostVariables<CompleteActivityInput>;
+/** A Prep task's completion names the parent whose Prep section it changes, when known. */
+export interface PrepParentVariables {
+  parentActivityId?: string;
+}
+export type CompleteActivityVariables = ActivityPostVariables<CompleteActivityInput> &
+  PrepParentVariables;
 export type ConvertRecurrenceVariables = ActivityPostVariables<{
   selectedDate: ConvertRecurrenceInput[keyof ConvertRecurrenceInput];
 }>;
-export type UncompleteActivityVariables = ActivityPostVariables<UncompleteActivityInput>;
+export type UncompleteActivityVariables = ActivityPostVariables<UncompleteActivityInput> &
+  PrepParentVariables;
 export type SkipActivityVariables = ActivityPostVariables<SkipActivityInput>;
 export type SnoozeActivityVariables = ActivityPostVariables<SnoozeActivityInput>;
 export type UnsnoozeActivityVariables = ActivityPostVariables<UnsnoozeActivityInput>;
@@ -148,6 +154,13 @@ export function refreshActivityLists(client: QueryClient): void {
  * deep link from treating the deleted detail as fresh without destroying or cancelling the
  * query while its screen is navigating away.
  */
+/** Mutation-cache events carry `unknown` variables; this is the one narrowing they get. */
+function stringField(value: unknown, key: string): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const field = Reflect.get(value, key);
+  return typeof field === 'string' ? field : undefined;
+}
+
 export function refreshActivityDetails(
   client: QueryClient,
   mutationKey: unknown,
@@ -185,9 +198,8 @@ export function refreshActivityDetails(
   if (scope !== 'activity' || name === 'duplicate') {
     return false;
   }
-  if (typeof variables !== 'object' || variables === null) return false;
-  const activityId = (variables as { activityId?: unknown }).activityId;
-  if (typeof activityId !== 'string') return false;
+  const activityId = stringField(variables, 'activityId');
+  if (activityId === undefined) return false;
 
   void client.invalidateQueries({
     queryKey: activityKey(activityId),
@@ -200,12 +212,10 @@ export function refreshActivityDetails(
    * detail. The parent read is strongly consistent, so it may refetch at once.
    */
   if (name === 'complete' || name === 'uncomplete') {
-    const named = (variables as { parentActivityId?: unknown }).parentActivityId;
     const parentActivityId =
-      typeof named === 'string'
-        ? named
-        : client.getQueryData<ActivityDetail>(activityKey(activityId))?.activity
-            .parentActivityId;
+      stringField(variables, 'parentActivityId') ??
+      client.getQueryData<ActivityDetail>(activityKey(activityId))?.activity
+        .parentActivityId;
     if (parentActivityId !== undefined) {
       void client.invalidateQueries({ queryKey: activityKey(parentActivityId) });
     }

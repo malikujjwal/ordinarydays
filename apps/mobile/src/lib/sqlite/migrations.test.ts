@@ -805,4 +805,16 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toEqual({ next_cursor: 'cur_existing', generation: 0 });
   });
+
+  it('indexes Prep pointers by child for completions that arrive without the parent', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'index' AND name = 'activity_children_by_child';`,
+      ),
+    ).toEqual({ name: 'activity_children_by_child' });
+  });
 });

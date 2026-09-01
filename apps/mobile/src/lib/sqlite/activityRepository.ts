@@ -918,6 +918,20 @@ export class ActivityRepository {
       'DELETE FROM activity_children WHERE parent_activity_id = ?;',
       [activityId],
     );
+    // A deleted Prep task also leaves its parent's section; the parent is told so it re-reads.
+    const parents = await transaction.database.all(
+      'SELECT parent_activity_id FROM activity_children WHERE child_activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_children WHERE child_activity_id = ?;',
+      [activityId],
+    );
+    for (const parent of parents) {
+      const parentActivityId = text(parent, 'parent_activity_id');
+      if (parentActivityId !== undefined)
+        transaction.changed(this.scope(parentActivityId));
+    }
     await transaction.database.run(
       'DELETE FROM activity_source_lists WHERE activity_id = ?;',
       [activityId],
