@@ -9,6 +9,7 @@ import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import type { NeedsDateRowData } from '@/features/agenda/model/plansApply';
 import { type SqliteDatabase, type SqliteReader, textColumn } from './database';
+import type { RevisionedProjectionReader } from './projectionReader';
 import type { RepositoryListener, RepositorySubscriptions } from './subscriptions';
 import type { TransactionContext } from './transaction';
 
@@ -60,6 +61,7 @@ export class PlansRepository {
   constructor(
     private readonly database: SqliteDatabase,
     private readonly subscriptions: RepositorySubscriptions,
+    private readonly projections?: RevisionedProjectionReader,
   ) {}
 
   subscribe(listener: RepositoryListener): () => void {
@@ -77,8 +79,20 @@ export class PlansRepository {
     );
   }
 
-  read(timezone: string): Promise<NativePlansProjection | undefined> {
-    return this.database.readTransaction((reader) => this.readFrom(reader, timezone));
+  /**
+   * UI reads go through the account's serialized projection reader, like every other
+   * projection. A bare `readTransaction` on the writer connection is not serialized, so two
+   * overlapping Plans reads (the hook issues two on mount) nest `BEGIN` on one connection and
+   * surface on the device as "cannot rollback - no transaction is active".
+   */
+  async read(timezone: string): Promise<NativePlansProjection | undefined> {
+    if (this.projections === undefined) {
+      return this.database.readTransaction((reader) => this.readFrom(reader, timezone));
+    }
+    const snapshot = await this.projections.snapshot((reader) =>
+      this.readFrom(reader, timezone),
+    );
+    return snapshot.data;
   }
 
   async install(

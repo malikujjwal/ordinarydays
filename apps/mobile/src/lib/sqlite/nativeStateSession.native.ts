@@ -94,7 +94,11 @@ async function startSession(
     account.subscriptions,
     account.projections,
   );
-  const plans = new PlansRepository(account.database, account.subscriptions);
+  const plans = new PlansRepository(
+    account.database,
+    account.subscriptions,
+    account.projections,
+  );
   const outbox = new OutboxRepository(account.database);
   const importer = new LegacyImporter(
     account.transactions,

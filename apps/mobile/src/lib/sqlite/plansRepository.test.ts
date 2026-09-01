@@ -10,6 +10,7 @@ import { ActivityRepository } from './activityRepository';
 import type { SqliteDatabase } from './database';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { PlansRepository } from './plansRepository';
+import type { RevisionedProjectionReader } from './projectionReader';
 import { RepositorySubscriptions } from './subscriptions';
 import { SerializedTransactionRunner } from './transaction';
 
@@ -138,5 +139,44 @@ describe('native Plans projection', () => {
     const restored = await plans.read(TIMEZONE);
     expect(restored?.needsDate.map((row) => row.activityId)).toEqual([A, B]);
     expect(restored?.needsDate[0]?.lastActivityAt).toBe('2026-08-03T09:00:00.000Z');
+  });
+
+  it('serves overlapping UI reads through the serialized projection reader', async () => {
+    if (database === undefined) throw new Error('missing plans database');
+    const current = database;
+    let served = 0;
+    /* The account reader's writer-fallback path: reads queue on the serialized scheduler. */
+    const projections: RevisionedProjectionReader = {
+      snapshot: <T>(task: Parameters<RevisionedProjectionReader['snapshot']>[0]) =>
+        transactions.read(async (reader) => {
+          served += 1;
+          return {
+            data: (await task(reader)) as T,
+            commitRevision: 1,
+            source: 'writer-fallback' as const,
+            metrics: { callCount: 1, durationMs: 0 },
+          };
+        }),
+    };
+    const projected = new PlansRepository(current, subscriptions, projections);
+    await transactions.run((transaction) =>
+      projected.install(transaction, TIMEZONE, initial()),
+    );
+
+    // The native hook issues two reads on mount. A bare writer-connection transaction nests
+    // BEGIN under the other read (the device reports it as a failed ROLLBACK)...
+    await expect(
+      Promise.all([plans.read(TIMEZONE), plans.read(TIMEZONE)]),
+    ).rejects.toThrow(/within a transaction/);
+
+    // ...while the projection reader serializes them.
+    const [first, second] = await Promise.all([
+      projected.read(TIMEZONE),
+      projected.read(TIMEZONE),
+    ]);
+
+    expect(served).toBe(2);
+    expect(first?.needsDate.map((row) => row.activityId)).toEqual([B, A]);
+    expect(second).toEqual(first);
   });
 });
