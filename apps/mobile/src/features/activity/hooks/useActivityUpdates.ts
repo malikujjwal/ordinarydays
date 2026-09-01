@@ -96,6 +96,9 @@ export function useActivityUpdates(
   /** Guards async callbacks: a response that started under a previous activity is dropped. */
   const liveActivity = useRef(activityId);
   liveActivity.current = activityId;
+  /** The head a continuation was requested against; a page for an older head is dropped. */
+  const liveHead = useRef(head);
+  liveHead.current = head;
 
   const refreshDetail = useCallback(
     () => queryClient.invalidateQueries({ queryKey: activityKey(activityId) }),
@@ -165,10 +168,14 @@ export function useActivityUpdates(
   const loadPage = useCallback(
     async (requestedCursor: string): Promise<boolean> => {
       const requested = activityId;
+      const requestedHead = liveHead.current;
       setLoadingMore(true);
       try {
         const page = await getActivityUpdates(apiClient, activityId, requestedCursor);
         if (liveActivity.current !== requested) return false;
+        // A strong refetch installed a new head (and cursor) while this page was in flight:
+        // the page belongs to the old chain and would resurrect deletes or skip entries.
+        if (liveHead.current !== requestedHead) return false;
         setOlder((current) => dedupe([...current, ...page.updates]));
         setCursor(page.cursor);
         setFailedCursor(undefined);

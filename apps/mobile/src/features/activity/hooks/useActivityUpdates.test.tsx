@@ -256,6 +256,25 @@ describe('useActivityUpdates (web)', () => {
     expect(result.current.errorAction).toBeUndefined();
   });
 
+  it('drops a continuation page that resolves after a newer head was installed', async () => {
+    const page = deferred<{ updates: ActivityUpdate[]; cursor: string | undefined }>();
+    clients.get.mockReturnValueOnce(page.promise);
+    const { result, rerender } = render(queryClient(), {
+      updates: [update(3)],
+      cursor: 'cur_1',
+    });
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.isLoadingMore).toBe(true));
+
+    // A strong detail refetch lands first: update 3 was deleted remotely, the chain restarts.
+    rerender({ updates: [update(4)], cursor: 'cur_2' });
+    page.resolve({ updates: [update(2), update(3)], cursor: 'cur_stale' });
+    await waitFor(() => expect(result.current.isLoadingMore).toBe(false));
+
+    expect(bodies(result.current.updates)).toEqual(['Note 4']);
+    expect(result.current.cursor).toBe('cur_2');
+  });
+
   it('treats an absent embedded page as one stable empty head', () => {
     const { result, rerender } = render(queryClient(), {
       updates: undefined,
