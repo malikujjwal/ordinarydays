@@ -1,8 +1,8 @@
 import { MAX_UPDATE_BODY_LEN } from '@od/shared/constants';
 import type { ActivityUpdate } from '@od/shared/types';
-import { Button, Field, Text, useTheme } from '@od/ui';
-import { useState } from 'react';
-import { View } from 'react-native';
+import { Button, Field, Text, type Theme, useTheme } from '@od/ui';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { ActionRow } from '@/features/activity/components/ActionRow';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
 import { UpdateRow } from '@/features/activity/components/UpdateRow';
@@ -35,6 +35,8 @@ export interface UpdatesSectionProps {
   hasOlder?: boolean;
   onLoadOlder?: () => void;
   isLoadingOlder?: boolean;
+  /** Increments when the screen-owned scroll viewport reaches its pagination threshold. */
+  paginationSignal?: number;
   /** §5.3 failure copy for the last post/delete/page that did not land. */
   errorMessage?: string;
 }
@@ -49,22 +51,42 @@ export function UpdatesSection({
   hasOlder = false,
   onLoadOlder,
   isLoadingOlder = false,
+  paginationSignal = 0,
   errorMessage,
 }: UpdatesSectionProps) {
   const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [expanded, setExpanded] = useState(false);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState('');
+  const handledPaginationSignal = useRef(paginationSignal);
   const { shown, showAllCount } = peekRows(updates, expanded);
 
-  async function submit() {
+  const submit = useCallback(async () => {
     if (onPost === undefined || draft.trim() === '' || isPosting) return;
     const posted = await onPost(draft);
     if (posted) {
       setDraft('');
       setComposing(false);
     }
-  }
+  }, [draft, isPosting, onPost]);
+  const cancel = useCallback(() => {
+    setDraft('');
+    setComposing(false);
+  }, []);
+  const startComposing = useCallback(() => setComposing(true), []);
+  const showAll = useCallback(() => setExpanded(true), []);
+  const handleSubmit = useCallback(() => void submit(), [submit]);
+  useEffect(() => {
+    if (!expanded) {
+      handledPaginationSignal.current = paginationSignal;
+      return;
+    }
+    if (handledPaginationSignal.current === paginationSignal) return;
+    handledPaginationSignal.current = paginationSignal;
+    if (!hasOlder || isLoadingOlder || onLoadOlder === undefined) return;
+    onLoadOlder();
+  }, [expanded, hasOlder, isLoadingOlder, onLoadOlder, paginationSignal]);
 
   return (
     <SectionFrame
@@ -97,9 +119,7 @@ export function UpdatesSection({
           key={update.updateId}
           update={update}
           relativeTime={relativeTime(update.createdAt)}
-          {...(onDelete === undefined || update.kind !== 'user'
-            ? {}
-            : { onDelete: () => onDelete(update) })}
+          {...(onDelete === undefined || update.kind !== 'user' ? {} : { onDelete })}
         />
       ))}
       {showAllCount === undefined ? null : (
@@ -107,22 +127,12 @@ export function UpdatesSection({
           label={`Show all ${showAllCount}`}
           accessibilityLabel={`Show all ${showAllCount}`}
           variant="subhead"
-          onPress={() => setExpanded(true)}
+          onPress={showAll}
           testID="updates-show-all"
         />
       )}
-      {expanded && hasOlder && onLoadOlder !== undefined ? (
-        <ActionRow
-          label={isLoadingOlder ? 'Loading…' : 'Show earlier updates'}
-          accessibilityLabel="Show earlier updates"
-          variant="subhead"
-          onPress={onLoadOlder}
-          disabled={isLoadingOlder}
-          testID="updates-load-older"
-        />
-      ) : null}
       {onPost === undefined ? null : composing ? (
-        <View style={{ gap: theme.space[3] }} testID="update-composer">
+        <View style={styles.composer} testID="update-composer">
           <Field
             label="Update"
             accessibilityLabel="Update"
@@ -132,20 +142,17 @@ export function UpdatesSection({
             maxLength={MAX_UPDATE_BODY_LEN}
             testID="update-composer-body"
           />
-          <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
+          <View style={styles.actions}>
             <Button
               label="Cancel"
               variant="ghost"
-              onPress={() => {
-                setDraft('');
-                setComposing(false);
-              }}
+              onPress={cancel}
               testID="update-composer-cancel"
             />
-            <View style={{ flex: 1 }}>
+            <View style={styles.grow}>
               <Button
                 label="Post update"
-                onPress={() => void submit()}
+                onPress={handleSubmit}
                 disabled={draft.trim() === ''}
                 loading={isPosting}
                 fullWidth
@@ -158,10 +165,17 @@ export function UpdatesSection({
         <ActionRow
           label="+ Write an update"
           accessibilityLabel="Write an update"
-          onPress={() => setComposing(true)}
+          onPress={startComposing}
           testID="updates-add"
         />
       )}
     </SectionFrame>
   );
 }
+
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    composer: { gap: theme.space[3] },
+    actions: { flexDirection: 'row', gap: theme.space[3] },
+    grow: { flex: 1 },
+  });

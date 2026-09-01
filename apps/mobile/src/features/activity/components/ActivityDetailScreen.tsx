@@ -28,8 +28,8 @@ import {
   useTheme,
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type NativeScrollEvent, type NativeSyntheticEvent, View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { PendingNotice } from '@/components/PendingNotice';
@@ -204,6 +204,16 @@ export function ActivityDetailScreen({
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [updatesPaginationSignal, setUpdatesPaginationSignal] = useState(0);
+  const handleDetailScroll = useCallback(
+    ({ nativeEvent }: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+      if (contentOffset.y + layoutMeasurement.height >= contentSize.height - 160) {
+        setUpdatesPaginationSignal((current) => current + 1);
+      }
+    },
+    [],
+  );
   const targetIdentity =
     target.kind === 'activity'
       ? `activity:${target.activityId}`
@@ -560,6 +570,7 @@ export function ActivityDetailScreen({
           today={today}
           onOpenChild={onOpenChild ?? onOpenActivity}
           onToggleChild={actions.setChildCompletion}
+          updatesPaginationSignal={updatesPaginationSignal}
           {...(onOpenList === undefined ? {} : { onOpenList })}
           {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
           {...(onAddList === undefined ? {} : { onAddList })}
@@ -625,7 +636,12 @@ export function ActivityDetailScreen({
        * surface are rounded; rounding a page is the corporate-dashboard look the system exists
        * to avoid.
        */}
-      <ScreenShell measure="reading">
+      <ScreenShell
+        measure="reading"
+        onScroll={handleDetailScroll}
+        scrollEventThrottle={16}
+        testID="detail-shell"
+      >
         <View testID="detail-surface">{detailContent}</View>
       </ScreenShell>
 
@@ -921,6 +937,8 @@ interface LoadedProps {
   onOpenChild: (activityId: string) => void;
   /** Complete or uncomplete one Prep task through the platform action owner. */
   onToggleChild: (child: ActivityChild, completed: boolean) => Promise<boolean>;
+  /** Screen-owned near-end scroll events that drive Updates cursor pagination. */
+  updatesPaginationSignal: number;
   /** Opens one of this Plan's Lists (P3-37, P3-39). Absent leaves the rows plain. */
   onOpenList?: (listId: string) => void;
   /** `+ Add prep task` (P3-38); absent leaves the chip and the affordance out. */
@@ -999,6 +1017,7 @@ function Loaded({
   today,
   onOpenChild,
   onToggleChild,
+  updatesPaginationSignal,
   onOpenList,
   onAddPrepTask,
   onAddList,
@@ -1537,13 +1556,12 @@ function Loaded({
             updateStamps.get(createdAt) ??
             relativeUpdateTime(createdAt, updatesToday, timezone)
           }
-          {...(pending
-            ? {}
-            : { onPost: feed.post, onDelete: (u) => void feed.remove(u) })}
+          {...(pending ? {} : { onPost: feed.post, onDelete: feed.remove })}
           isPosting={feed.isPosting}
           hasOlder={feed.cursor !== undefined}
           onLoadOlder={feed.loadMore}
           isLoadingOlder={feed.isLoadingMore}
+          paginationSignal={updatesPaginationSignal}
           {...(feed.errorMessage === undefined
             ? {}
             : { errorMessage: feed.errorMessage })}

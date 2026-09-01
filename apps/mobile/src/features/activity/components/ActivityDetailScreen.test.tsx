@@ -3235,7 +3235,7 @@ describe('the Updates section (P3-40)', () => {
     expect(usePlanActivityFloor.getState().floors[ID]).toBe(stored.createdAt);
   });
 
-  it('pages through the cursor only when revealed, never on open', async () => {
+  it('pages through the cursor on near-end scroll only after the section is revealed', async () => {
     const first = [
       userUpdate(1, '2026-08-11T10:00:00.000Z'),
       systemUpdate(1, '2026-08-10T10:00:00.000Z'),
@@ -3253,7 +3253,13 @@ describe('the Updates section (P3-40)', () => {
     expect(sent.filter((call) => call.url.includes('/updates'))).toHaveLength(0);
 
     fireEvent.click(screen.getByTestId('updates-show-all'));
-    fireEvent.click(screen.getByTestId('updates-load-older'));
+    fireEvent.scroll(screen.getByTestId('detail-shell-body'), {
+      nativeEvent: {
+        contentOffset: { y: 840 },
+        contentSize: { height: 1_200, width: 400 },
+        layoutMeasurement: { height: 400, width: 400 },
+      },
+    });
     await screen.findByTestId(`update-${older.updateId}`);
     const paged = sent.find(
       (call) => call.method === 'GET' && call.url.includes('cursor=cur_1'),

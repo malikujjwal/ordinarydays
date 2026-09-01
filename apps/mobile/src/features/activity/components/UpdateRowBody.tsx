@@ -1,7 +1,7 @@
 import type { ActivityUpdate } from '@od/shared/types';
-import { Text, useTheme } from '@od/ui';
-import type { ComponentProps, ReactNode } from 'react';
-import { View } from 'react-native';
+import { Text, type Theme, useTheme } from '@od/ui';
+import { type ComponentProps, memo, type ReactNode, useMemo } from 'react';
+import { StyleSheet, View } from 'react-native';
 
 /**
  * The one visual body every Updates entry shares (P3-40): the native swipe row, the web
@@ -17,7 +17,7 @@ export interface UpdateRowProps {
   update: ActivityUpdate;
   relativeTime: string;
   /** Absent on a system entry by construction — the caller never passes it for one. */
-  onDelete?: () => void;
+  onDelete?: (update: ActivityUpdate) => void;
 }
 
 export interface UpdateRowBodyProps {
@@ -33,7 +33,19 @@ export interface UpdateRowBodyProps {
   containerProps?: Partial<ComponentProps<typeof View>>;
 }
 
-export function UpdateRowBody({
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    row: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      justifyContent: 'space-between',
+      gap: theme.space[3],
+      paddingVertical: theme.space[1],
+    },
+    body: { flex: 1, minWidth: 0 },
+  });
+
+export const UpdateRowBody = memo(function UpdateRowBody({
   body,
   trailing,
   muted,
@@ -42,19 +54,10 @@ export function UpdateRowBody({
   containerProps,
 }: UpdateRowBodyProps) {
   const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   return (
-    <View
-      {...containerProps}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'baseline',
-        justifyContent: 'space-between',
-        gap: theme.space[3],
-        paddingVertical: theme.space[1],
-      }}
-      testID={testID}
-    >
-      <View style={{ flex: 1, minWidth: 0 }}>
+    <View {...containerProps} style={styles.row} testID={testID}>
+      <View style={styles.body}>
         <Text
           variant="body"
           color={muted ? 'textSecondary' : 'textPrimary'}
@@ -69,4 +72,4 @@ export function UpdateRowBody({
       </Text>
     </View>
   );
-}
+});

@@ -1,6 +1,6 @@
-import { Text, Touchable, useTheme } from '@od/ui';
-import { useState } from 'react';
-import { View } from 'react-native';
+import { Text, type Theme, Touchable, useTheme } from '@od/ui';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import {
   UpdateRowBody,
   type UpdateRowProps,
@@ -17,18 +17,40 @@ import {
  */
 export type { UpdateRowProps };
 
-export function UpdateRow({ update, relativeTime, onDelete }: UpdateRowProps) {
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    deleteControl: { paddingHorizontal: theme.space[2] },
+  });
+
+export const UpdateRow = memo(function UpdateRow({
+  update,
+  relativeTime,
+  onDelete,
+}: UpdateRowProps) {
   const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const deletable = update.kind === 'user' && onDelete !== undefined;
   const controlVisible = deletable && (hovered || focused);
+  const showHover = useCallback(() => setHovered(true), []);
+  const hideHover = useCallback(() => setHovered(false), []);
+  const showFocus = useCallback(() => setFocused(true), []);
+  const hideFocus = useCallback(() => setFocused(false), []);
+  const handleDelete = useCallback(() => onDelete?.(update), [onDelete, update]);
+  const controlStyle = useMemo(
+    () => [
+      styles.deleteControl,
+      {
+        opacity: controlVisible ? 1 : 0,
+        pointerEvents: controlVisible ? ('auto' as const) : ('none' as const),
+      },
+    ],
+    [controlVisible, styles.deleteControl],
+  );
 
   return (
-    <View
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-    >
+    <View onPointerEnter={showHover} onPointerLeave={hideHover}>
       <UpdateRowBody
         body={update.body}
         trailing={relativeTime}
@@ -40,20 +62,11 @@ export function UpdateRow({ update, relativeTime, onDelete }: UpdateRowProps) {
                 <Touchable
                   accessibilityRole="button"
                   accessibilityLabel="Delete update"
-                  onFocus={() => setFocused(true)}
-                  onBlur={() => setFocused(false)}
-                  onPress={onDelete}
+                  onFocus={showFocus}
+                  onBlur={hideFocus}
+                  onPress={handleDelete}
                   testID={`update-delete-${update.updateId}`}
-                  style={{
-                    paddingHorizontal: theme.space[2],
-                    opacity: controlVisible ? 1 : 0,
-                    /**
-                     * Invisible means un-tappable (CLAUDE.md rule 6: a row tap never
-                     * mutates). Keyboard access survives — focusing the control is what
-                     * reveals it, and a revealed control accepts the pointer again.
-                     */
-                    pointerEvents: controlVisible ? 'auto' : 'none',
-                  }}
+                  style={controlStyle}
                 >
                   <Text variant="footnoteStrong" color="danger">
                     Delete
@@ -65,4 +78,4 @@ export function UpdateRow({ update, relativeTime, onDelete }: UpdateRowProps) {
       />
     </View>
   );
-}
+});
