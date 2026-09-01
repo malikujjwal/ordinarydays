@@ -1483,15 +1483,18 @@ cannot replace another stage with an empty array.
    Recurrence math supplies the corresponding next date for each bounded `#R` row, so
    calculating `nextFrom` never scans an empty calendar gap.
 
-   **Round-trip budget exception (audited 2026-09-01).** Initial mode is the written
+   **Round-trip budget exception (measured 2026-09-01).** Initial mode is the written
    exception to Phase 9's generic three-round-trip endpoint target: it deliberately replaces
    three screen requests with one aggregate response and the four independently authoritative
    streams above cannot be collapsed without either dropping a stage or making one bucket
    impersonate another. Every stream is bounded and starts concurrently; continuation modes
    remain stage-local. The service query-plan test fixes the Plans-owned call set at exactly
-   four bucket calls (`#P`, two purpose-distinct `#S` reads, and `#R`), excludes `#N`, and
-   separately asserts one shared-agenda assembly. Adding another stream therefore requires a
-   new measurement and an amended justification rather than silently spending another call.
+   four bucket calls (`#P`, two purpose-distinct `#S` reads, and `#R`) and excludes `#N`.
+   The shared-agenda assembly performs its own `#S` and `#R` queries, so a second test over
+   actual `DynamoDBDocumentClient` commands fixes the deployed initial-mode budget at **six
+   Query commands total**: `#P` once, `#S` three times, and `#R` twice. Adding another query
+   therefore requires a new measurement and an amended justification rather than silently
+   spending another call.
 2. `upcoming` **expands recurring Activity series** through the same `expandAgenda` path the
    agenda uses (P2-08), so a weekly dinner contributes one row per date. Do not reimplement
    expansion here: pass all bounded `#R` rows and the exact requested window to the shared

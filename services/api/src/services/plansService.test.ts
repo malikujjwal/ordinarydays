@@ -1,5 +1,7 @@
+import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { Activity } from '@od/shared/types';
-import { describe, expect, it, vi } from 'vitest';
+import { mockClient } from 'aws-sdk-client-mock';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoredItem } from '../repositories/migrate.js';
 import type { PlansDependencies } from './plansService.js';
 import { getPlans } from './plansService.js';
@@ -16,6 +18,12 @@ import { getPlans } from './plansService.js';
 const USER = 'usr_local_dev';
 const TZ = 'America/New_York';
 const NOW = '2026-09-01T15:00:00.000Z';
+const ddbMock = mockClient(DynamoDBDocumentClient);
+
+beforeEach(() => {
+  ddbMock.reset();
+  ddbMock.on(QueryCommand).resolves({ Items: [] });
+});
 
 const plan = (overrides: Partial<Activity> = {}): Activity =>
   ({
@@ -78,6 +86,24 @@ function deps(overrides: Partial<PlansDependencies> = {}): {
 const bucketsIn = (calls: readonly Recorded[]) => [
   ...new Set(calls.map((c) => c.bucket)),
 ];
+
+describe('actual DynamoDB round-trip budget', () => {
+  it('pins initial mode to six repository Query commands', async () => {
+    await getPlans(USER, { mode: 'initial', tz: TZ }, NOW);
+
+    const buckets = ddbMock
+      .commandCalls(QueryCommand)
+      .map(
+        (call) =>
+          call.args[0].input.ExpressionAttributeValues?.[':pk'] as string | undefined,
+      );
+    expect(buckets).toHaveLength(6);
+    expect(buckets.filter((bucket) => bucket === `U#${USER}#P`)).toHaveLength(1);
+    expect(buckets.filter((bucket) => bucket === `U#${USER}#S`)).toHaveLength(3);
+    expect(buckets.filter((bucket) => bucket === `U#${USER}#R`)).toHaveLength(2);
+    expect(buckets).not.toContain(`U#${USER}#N`);
+  });
+});
 
 describe('which streams each mode starts', () => {
   it('initial reads #P, both #S slices and #R — and never #N', async () => {
