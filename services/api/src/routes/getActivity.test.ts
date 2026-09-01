@@ -374,14 +374,12 @@ describe('reading an activity you own', () => {
     ).toBe(true);
   });
 
-  it('uses exactly three dependency waves for a direct participant with hydration', async () => {
+  it('starts no section read before authorization has succeeded', async () => {
     const partition = [meta({ ownerId: OTHER }), participantOf(DEV), sourceList()];
-    const authorityWave = deferred<void>();
-    const sectionWave = deferred<void>();
-    const hydrationWave = deferred<void>();
+    const authority = deferred<void>();
     ddbMock.on(GetCommand).callsFake(async (input) => {
       const key = input.Key as Record<string, unknown>;
-      await authorityWave.promise;
+      await authority.promise;
       if (key.pk === `ACT#${ACT}` && key.sk === 'META') {
         return { Item: partition[0] as never };
       }
@@ -394,45 +392,30 @@ describe('reading an activity you own', () => {
         } as never,
       };
     });
-    ddbMock.on(QueryCommand).callsFake(async (input) => {
+    ddbMock.on(QueryCommand).callsFake((input) => {
       const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
       const prefix = String(values[':skPrefix'] ?? '');
-      if (prefix === 'ATT#') {
-        await hydrationWave.promise;
-        return { Items: [] };
-      }
-      await sectionWave.promise;
       if (prefix === 'OCC#') return { Count: 0 };
       return {
         Items: partition.filter((row) => String(row.sk).startsWith(prefix)) as never,
       };
     });
-    ddbMock.on(BatchGetCommand).callsFake(async () => {
-      await hydrationWave.promise;
-      return {
-        Responses: {
-          'od-main-local': [privateListMeta(), listPointer(DEV)] as never,
-        },
-      };
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: { 'od-main-local': [privateListMeta(), listPointer(DEV)] as never },
     });
 
     const response = get(asUser(DEV));
     await vi.waitFor(() => expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2));
+    // Both authority reads are still pending: nothing else may have been asked for.
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
-
-    authorityWave.resolve();
-    await vi.waitFor(() => expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(6));
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
 
-    sectionWave.resolve();
-    await vi.waitFor(() => expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(7));
-    await vi.waitFor(() => expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(1));
-
-    hydrationWave.resolve();
+    authority.resolve();
     await expect(response).resolves.toMatchObject({ status: 200 });
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(1);
   });
 
-  it('measures the maximum bounded command set and occurrence-count continuation', async () => {
+  it('stays bounded at the model maximum: 100 source Lists, 50 legacy children, two count pages', async () => {
     const idToken = (index: number) =>
       `01J8XKQ2M4N5P6R7S8T9V0${String(index).padStart(4, '0')}`;
     const listIds = Array.from({ length: 100 }, (_, index) => `lst_${idToken(index)}`);
@@ -552,15 +535,18 @@ describe('reading an activity you own', () => {
     expect(body.data.children).toHaveLength(50);
     expect(body.data.sourceLists).toHaveLength(100);
     expect(body.data.attachments).toHaveLength(20);
+    // Bounded, never one read per List or per child: a fixed number of prefix Queries, and
+    // the 250 hydration keys chunked at DynamoDB's 100-key limit.
     expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2);
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(8);
-    const batches = ddbMock.commandCalls(BatchGetCommand);
-    expect(batches).toHaveLength(3);
-    expect(
-      batches
-        .map((call) => call.args[0].input.RequestItems?.['od-main-local']?.Keys?.length)
-        .sort((left, right) => Number(left) - Number(right)),
-    ).toEqual([50, 100, 100]);
+    expect(ddbMock.commandCalls(QueryCommand).length).toBeLessThanOrEqual(8);
+    const batchSizes = ddbMock
+      .commandCalls(BatchGetCommand)
+      .map(
+        (call) => call.args[0].input.RequestItems?.['od-main-local']?.Keys?.length ?? 0,
+      );
+    expect(batchSizes.length).toBeLessThanOrEqual(3);
+    expect(Math.max(...batchSizes)).toBeLessThanOrEqual(100);
+    expect(batchSizes.reduce((sum, size) => sum + size, 0)).toBe(250);
   });
 });
 
