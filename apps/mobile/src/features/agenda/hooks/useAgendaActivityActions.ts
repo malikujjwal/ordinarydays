@@ -136,6 +136,10 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         activityId: target.activityId,
         input: { ...scopeToWire(scopeForRow(item)) },
         idempotencyKey: randomUUID(),
+        // A Prep task's row names its parent, whose detail (the Prep section) this changes.
+        ...(item.parentActivityId === undefined
+          ? {}
+          : { parentActivityId: item.parentActivityId }),
       };
       const compensation = { ...original, idempotencyKey: randomUUID() };
 

@@ -326,6 +326,21 @@ describe('the query client defaults', () => {
     expect(client.getQueryState(['activity', PARENT_ID])?.isInvalidated).toBe(true);
   });
 
+  it('refreshes the parent named by Today when the child detail was never cached', () => {
+    const client = createOfflineQueryClient();
+    const PARENT_ID = 'act_01J0000000000000000000000P';
+    client.setQueryData(['activity', PARENT_ID], { activity });
+
+    expect(
+      refreshActivityDetails(client, activityMutationKeys.complete, {
+        activityId: ACTIVITY_ID,
+        parentActivityId: PARENT_ID,
+      }),
+    ).toBe(true);
+
+    expect(client.getQueryState(['activity', PARENT_ID])?.isInvalidated).toBe(true);
+  });
+
   it.each([activityMutationKeys.create, activityMutationKeys.duplicate])(
     'does not invent a detail target for %s/%s',
     (scope, name) => {

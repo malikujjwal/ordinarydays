@@ -274,30 +274,43 @@ export class ActivityRepository {
     return status === 'saved' || status === 'scheduled' ? status : undefined;
   }
 
-  /** The stored parent of a Prep task, so a completion from any screen can reach its section. */
-  async readParentActivityId(
-    database: SqliteExecutor,
-    activityId: string,
-  ): Promise<string | undefined> {
-    const row = await database.first(
-      'SELECT parent_activity_id FROM activities WHERE activity_id = ?;',
-      [activityId],
+  /**
+   * Mirrors a child's status onto every installed parent projection that lists it, keyed by
+   * the child alone. This is how a completion that reached the child by any route other
+   * than its parent's section (its detail screen, Today's checkbox, an acknowledgement, a
+   * rejection rollback) keeps the parent's Prep section truthful; absence is a no-op because
+   * this device may never have installed the parent's detail.
+   */
+  async setChildStatusEverywhere(
+    transaction: TransactionContext,
+    childActivityId: string,
+    status: ActivityChild['status'],
+  ): Promise<void> {
+    const parents = await transaction.database.all(
+      'SELECT parent_activity_id FROM activity_children WHERE child_activity_id = ?;',
+      [childActivityId],
     );
-    return row === undefined ? undefined : text(row, 'parent_activity_id');
+    if (parents.length === 0) return;
+    await transaction.database.run(
+      `UPDATE activity_children SET status = ?,
+         restored_status = CASE
+           WHEN ? IN ('saved', 'scheduled') THEN ? ELSE restored_status END
+       WHERE child_activity_id = ?;`,
+      [status, status, status, childActivityId],
+    );
+    for (const parent of parents) {
+      const parentActivityId = text(parent, 'parent_activity_id');
+      if (parentActivityId !== undefined)
+        transaction.changed(this.scope(parentActivityId));
+    }
   }
 
-  /**
-   * Mirrors a child's status onto its parent's installed Prep projection. `required` is for
-   * the parent's own section acting on a row it just showed; a completion that reached the
-   * child by another route (its detail screen, Today's checkbox, an acknowledgement) must
-   * not fail because this device never installed the parent's detail.
-   */
+  /** The parent's own Prep section acting on a row it just showed: the row must exist. */
   async setChildStatusLocal(
     transaction: TransactionContext,
     parentActivityId: string,
     childActivityId: string,
     status: ActivityChild['status'],
-    options: { readonly required?: boolean } = {},
   ): Promise<void> {
     const changed = await transaction.database.run(
       `UPDATE activity_children SET status = ?,
@@ -307,25 +320,20 @@ export class ActivityRepository {
       [status, status, status, parentActivityId, childActivityId],
     );
     if (changed.changes !== 1) {
-      if (options.required !== false) {
-        throw new Error('The parent no longer contains this Prep task.');
-      }
-      return;
+      throw new Error('The parent no longer contains this Prep task.');
     }
     transaction.changed(this.scope(parentActivityId));
   }
 
+  /** The server's word on a child, applied to every parent projection that lists it. */
   async acceptCanonicalChildStatus(
     transaction: TransactionContext,
-    parentActivityId: string,
     activity: Activity,
   ): Promise<void> {
-    await this.setChildStatusLocal(
+    await this.setChildStatusEverywhere(
       transaction,
-      parentActivityId,
       activity.activityId,
       activity.status,
-      { required: false },
     );
   }
 
@@ -757,9 +765,12 @@ export class ActivityRepository {
     transaction: TransactionContext,
     detail: ActivityDetail,
   ): Promise<boolean> {
-    return this.installCanonicalDetail(transaction, detail, {
+    const restored = await this.installCanonicalDetail(transaction, detail, {
       preserveLocalReminders: false,
     });
+    // The optimistic status also reached the parent's Prep projection; restore that too.
+    if (restored) await this.acceptCanonicalChildStatus(transaction, detail.activity);
+    return restored;
   }
 
   private async installCanonicalDetail(

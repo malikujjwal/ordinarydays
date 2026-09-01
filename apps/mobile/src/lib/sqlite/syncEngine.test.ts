@@ -431,6 +431,166 @@ describe('serialized native convergence guard', () => {
     });
   });
 
+  describe('a Prep task and its parent projection', () => {
+    const timestamp = '2026-08-19T08:00:00.000Z';
+    const childActivity: Activity = {
+      activityId: OTHER,
+      ownerId: OWNER,
+      objectKind: 'task',
+      type: 'task',
+      status: 'scheduled',
+      title: 'Pack a bag',
+      participantCount: 1,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      details: { kind: 'task' },
+      parentActivityId: ACTIVITY,
+      schedule: { date: '2026-08-20', timezone: 'UTC' },
+      icsSequence: 0,
+      createdAt: timestamp,
+      lastActivityAt: timestamp,
+      updatedAt: timestamp,
+      schemaVersion: 1,
+    };
+    const parentChildStatus = async () =>
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children?.[0]
+        ?.status;
+
+    async function installParentAndChild(): Promise<ActivityDetail> {
+      const seed = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+      if (seed === undefined) throw new Error('missing parent fixture');
+      await transactions.run(async (transaction) => {
+        await activities.putCanonical(transaction, {
+          ...seed,
+          children: [
+            {
+              activityId: OTHER,
+              title: 'Pack a bag',
+              status: 'scheduled',
+              restoredStatus: 'scheduled',
+              isRecurring: false,
+            },
+          ],
+        });
+        await activities.putCanonical(transaction, {
+          activity: childActivity,
+          reminders: [],
+        });
+      });
+      return seed;
+    }
+
+    it('does not let an older completion acknowledgement regress the parent past a queued Undo', async () => {
+      await installParentAndChild();
+      await transactions.run((transaction) =>
+        service.complete(
+          transaction,
+          {
+            activityId: OTHER,
+            idempotencyKey: 'child-complete',
+            input: { outcome: 'done' },
+          },
+          true,
+          'scheduled',
+          clock,
+        ),
+      );
+      await transactions.run((transaction) =>
+        service.complete(
+          transaction,
+          { activityId: OTHER, idempotencyKey: 'child-undo', input: {} },
+          false,
+          'scheduled',
+          clock,
+        ),
+      );
+      expect(await parentChildStatus()).toBe('scheduled');
+
+      const undoRelease = deferred<void>();
+      client.setMutationDefaults(['activity', 'complete'], {
+        mutationFn: async () => ({
+          activity: {
+            ...childActivity,
+            status: 'completed',
+            completedAt: timestamp,
+            outcome: 'done',
+            updatedAt: '2026-08-19T09:00:00.000Z',
+          },
+        }),
+      });
+      client.setMutationDefaults(['activity', 'uncomplete'], {
+        mutationFn: async () => {
+          await undoRelease.promise;
+          return {
+            activity: { ...childActivity, updatedAt: '2026-08-19T10:00:00.000Z' },
+          };
+        },
+      });
+      const sync = syncEngine();
+      const running = sync.syncNow();
+      await vi.waitFor(async () =>
+        expect((await outbox.all()).map((intent) => intent.intentId)).toEqual([
+          'child-undo',
+        ]),
+      );
+
+      // Complete is acknowledged while Undo is still queued: the parent keeps Undo's word.
+      expect(await parentChildStatus()).toBe('scheduled');
+
+      undoRelease.resolve();
+      await running;
+      sync.stop();
+      expect(await parentChildStatus()).toBe('scheduled');
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    it('restores the parent Prep pointer when a child completion is permanently rejected', async () => {
+      const seed = await installParentAndChild();
+      await transactions.run((transaction) =>
+        service.complete(
+          transaction,
+          {
+            activityId: OTHER,
+            parentActivityId: ACTIVITY,
+            idempotencyKey: 'rejected-child-complete',
+            input: { outcome: 'done' },
+          },
+          true,
+          'scheduled',
+          clock,
+        ),
+      );
+      expect(await parentChildStatus()).toBe('completed');
+
+      const sync = syncEngine({
+        push: {
+          ...pushTransport(),
+          complete: async () => {
+            throw new ApiError(
+              'validation_failed',
+              'Not yours to complete',
+              422,
+              'req_c',
+              [],
+            );
+          },
+        },
+        pull: {
+          ...pullAdapter(),
+          activity: async (target) =>
+            target.activityId === OTHER
+              ? { activity: childActivity, reminders: [] }
+              : { ...seed, children: [] },
+        },
+      });
+      await expect(sync.syncNow()).rejects.toThrow('Not yours to complete');
+      sync.stop();
+
+      expect(await parentChildStatus()).toBe('scheduled');
+    });
+  });
+
   it('reads occurrence date and capabilities from committed Agenda rows', async () => {
     const activity = await seedRecurring();
     const target = {

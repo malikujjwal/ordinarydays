@@ -1292,18 +1292,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           );
           await this.agenda.acceptCanonicalActivitySummary(transaction, installable);
         }
-        const parentActivityId =
-          field(intent.variables, 'parentActivityId') ?? installable?.parentActivityId;
+        // The parent's Prep projection follows the child on the same terms as the child
+        // itself: a later queued intent for this child owns its status until it settles.
         if (
+          canInstallThroughLaterIntents &&
           installable !== undefined &&
-          typeof parentActivityId === 'string' &&
           (intent.mutationKey[1] === 'complete' || intent.mutationKey[1] === 'uncomplete')
         ) {
-          await this.activities.acceptCanonicalChildStatus(
-            transaction,
-            parentActivityId,
-            installable,
-          );
+          await this.activities.acceptCanonicalChildStatus(transaction, installable);
         }
         if (recurrenceMutation && activity !== undefined && laterOnlyTouchesReminders) {
           await this.activities.installAcknowledgedActivity(

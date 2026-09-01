@@ -1001,6 +1001,56 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toEqual([{ ...parent.children?.[0], status: 'scheduled' }]);
   });
 
+  it('updates the parent section from Today even when the child row was never installed', async () => {
+    const timestamp = '2026-08-19T08:00:00.000Z';
+    const parent: ActivityDetail = {
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title: 'Shared trip',
+        participantCount: 1,
+        childCount: 1,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        details: { kind: 'custom' },
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+      children: [
+        {
+          activityId: OTHER,
+          title: 'Pack a bag',
+          status: 'scheduled',
+          restoredStatus: 'scheduled',
+          isRecurring: false,
+        },
+      ],
+    };
+    await transactions.run((transaction) => activities.putCanonical(transaction, parent));
+
+    // Today's checkbox names no parent and this device never opened the child's detail.
+    const accepted = await coordinator.complete(
+      OTHER,
+      'child-complete-from-today',
+      { outcome: 'done' },
+      true,
+      'scheduled',
+      clock,
+    );
+
+    expect(accepted).toMatchObject({ kind: 'accepted' });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
+    ).toEqual([{ ...parent.children?.[0], status: 'completed' }]);
+  });
+
   it('restores dated and undated completed Prep tasks exactly after an offline restart', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     const timestamp = '2026-08-19T08:00:00.000Z';
