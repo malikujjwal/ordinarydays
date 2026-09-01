@@ -24,6 +24,7 @@ export type OutboxAttention =
         | 'replay_age_expired'
         | 'ambiguous_collision'
         | 'predecessor_rejected'
+        | 'retry_exhausted'
         | 'legacy_unknown';
     };
 

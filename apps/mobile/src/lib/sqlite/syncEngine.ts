@@ -91,8 +91,8 @@ export interface NativeSyncEngine {
 const MAX_INTENTS_PER_PASS = 20;
 const RETRY_BACKOFF_MS = [2_000, 10_000, 30_000, 60_000] as const;
 
-/** Claims before a deterministic local failure parks for recovery instead of looping. */
-const MAX_LOCAL_FAILURE_ATTEMPTS = 3;
+/** Consecutive local failures before an intent parks for recovery instead of looping. */
+const MAX_LOCAL_FAILURE_STREAK = 3;
 
 function isPermanent(error: unknown): boolean {
   const status = field(error, 'status');
@@ -106,18 +106,18 @@ function isPermanent(error: unknown): boolean {
 }
 
 /**
- * Whether a transient-looking failure has stopped being worth automatic retries.
+ * A failure that is neither transport loss nor a server answer.
  *
- * Only local, deterministic errors exhaust. Transport loss (`NetworkError`) is queue state
- * that must survive any amount of offline time, and a server-owned transient (`ApiError`
- * 5xx/408/429) stays with the backoff — the server may recover. Everything else — a
- * settlement invariant, a response-contract mismatch, a thrown string — repeats identically
- * on every claim, and the 2026-08-31 poison-pill incident is what an unbounded loop of
- * those does to an ordering domain: it blocks it forever while presenting as "Syncing…".
+ * Transport loss (`NetworkError`) is queue state that must survive any amount of offline
+ * time, and a server response — permanent or transient — is the server's to own. What is
+ * left is local: a settlement invariant, a response-contract mismatch, a thrown string.
+ * Those tend to repeat identically on every claim, and the 2026-08-31 poison-pill incident
+ * is what an unbounded loop of them does to an ordering domain: it blocks it forever while
+ * presenting as "Syncing…". Only an unbroken streak of these counts toward parking —
+ * `attempts` alone cannot distinguish two offline claims from two identical local faults.
  */
-function retryExhausted(error: unknown, attempts: number): boolean {
-  if (error instanceof NetworkError || error instanceof ApiError) return false;
-  return attempts >= MAX_LOCAL_FAILURE_ATTEMPTS;
+function isLocalFailure(error: unknown): boolean {
+  return !(error instanceof NetworkError) && !(error instanceof ApiError);
 }
 
 function message(error: unknown): string {
@@ -303,6 +303,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private readonly activeCoverageKeys = new Set<string>();
   private readonly requestedCoverages = new Map<string, AgendaQuery>();
   private cycleError: Error | undefined;
+  /**
+   * Consecutive local-failure counts per intent, session-scoped on purpose: a restart
+   * grants a fresh budget, which biases toward retrying — the safe direction — while any
+   * single session still bounds a deterministic failure at {@link MAX_LOCAL_FAILURE_STREAK}
+   * claims. Durable counting would need a schema column for what a Map does here.
+   */
+  private readonly localFailureStreaks = new Map<string, number>();
   private anytimeRunning: Promise<readonly ActivityListItem[]> | undefined;
   private listsRunning: Promise<readonly List[]> | undefined;
   private readonly itemsRunning = new Map<string, Promise<void>>();
@@ -981,6 +988,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           }
         }
         await this.settleListIntent(intent, response, canonicalRows, canonicalItem);
+        this.localFailureStreaks.delete(intent.intentId);
         this.retryIndex = 0;
         return 'continue';
       }
@@ -1168,6 +1176,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           durationMs: Date.now() - startedAt,
         });
       }
+      this.localFailureStreaks.delete(intent.intentId);
       this.retryIndex = 0;
       return 'continue';
     } catch (error) {
@@ -1178,13 +1187,16 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
        * `ReferenceError: Property 'error' doesn't exist`.
        */
       const failure = error instanceof Error ? error : new Error(String(error));
-      /*
-       * A deterministic local failure that survived its retry budget settles through the
-       * same machinery as a server rejection: authoritative rollback, `needs_attention`,
-       * the recovery banner. Retrying it again would repeat the identical failure and
-       * block this ordering domain forever behind an intent that can never settle itself.
-       */
-      const permanent = isPermanent(failure) || retryExhausted(failure, intent.attempts);
+      const permanent = isPermanent(failure);
+      const localStreak =
+        !permanent && isLocalFailure(failure)
+          ? (this.localFailureStreaks.get(intent.intentId) ?? 0) + 1
+          : 0;
+      if (localStreak > 0) {
+        this.localFailureStreaks.set(intent.intentId, localStreak);
+      } else {
+        this.localFailureStreaks.delete(intent.intentId);
+      }
       if (__DEV__) {
         console.warn('native_outbox_intent_failed', {
           intentId: intent.intentId,
@@ -1193,6 +1205,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           phase,
           permanent,
           attempts: intent.attempts,
+          localStreak,
           durationMs: Date.now() - startedAt,
           message: failure.message,
         });
@@ -1200,6 +1213,28 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       const collision = await this.recoverCreateCollision(intent, failure);
       if (collision === 'recovered' || collision === 'parked') return 'continue';
       if (collision === 'retry') return 'blocked';
+      /*
+       * An unbroken streak of local failures parks, and only parks. It is not a server
+       * verdict — the request may even have succeeded remotely before settlement threw —
+       * so nothing here rolls local state back or labels the intent `rejected`; the
+       * optimistic projection stays, the recovery banner offers Retry and Discard, and
+       * `claimNext` keeps the rest of this ordering domain waiting behind it exactly as
+       * it would behind any other `needs_attention` predecessor.
+       */
+      if (localStreak >= MAX_LOCAL_FAILURE_STREAK) {
+        this.localFailureStreaks.delete(intent.intentId);
+        this.cycleError ??= failure;
+        await this.transactions.run(async (transaction) => {
+          await this.outbox.needsAttention(
+            transaction.database,
+            intent.intentId,
+            { kind: 'parked', reason: 'retry_exhausted' },
+            failure.message,
+          );
+          transaction.changed('outbox');
+        });
+        return 'continue';
+      }
       const supersededByDelete =
         permanent &&
         intent.mutationKey[0] === 'list' &&
@@ -2382,19 +2417,44 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
    * expected transport loss — the intent requeues, the backoff owns the retry — and the
    * abandoned operation keeps its handlers so a late settlement is swallowed, never an
    * unhandled rejection.
+   *
+   * **The deadline releases the lane; it does not cancel the operation.** An abandoned
+   * operation that later un-hangs may still run its tail — including a SQLite install —
+   * after newer lane work has started. What bounds that: every write goes through the
+   * serialized transaction runner, so nothing interleaves inside a transaction, and the
+   * repositories' freshness guards decide whether a late canonical install may land, the
+   * same way they judge any delayed response. The lane's strict ordering is deliberately
+   * traded for liveness at this one edge; threading real cancellation through the
+   * transports is the recorded follow-up. Late settlements are logged so a recovered
+   * operation is visible rather than silent.
    */
   private boundedNetwork<T>(operation: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
+      let abandonedAt: number | undefined;
       const deadline = setTimeout(() => {
+        abandonedAt = Date.now();
         reject(new NetworkError('The network lane timed out.', undefined));
       }, this.networkLaneDeadlineMs);
       operation().then(
         (value) => {
           clearTimeout(deadline);
+          if (abandonedAt !== undefined && __DEV__) {
+            console.warn('native_network_lane_late_settlement', {
+              outcome: 'resolved',
+              latenessMs: Date.now() - abandonedAt,
+            });
+          }
           resolve(value);
         },
         (error: unknown) => {
           clearTimeout(deadline);
+          if (abandonedAt !== undefined && __DEV__) {
+            console.warn('native_network_lane_late_settlement', {
+              outcome: 'rejected',
+              latenessMs: Date.now() - abandonedAt,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
           reject(error);
         },
       );

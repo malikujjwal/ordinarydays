@@ -21,6 +21,7 @@ export type ParkedIntentReason =
   | 'replay_age_expired'
   | 'ambiguous_collision'
   | 'predecessor_rejected'
+  | 'retry_exhausted'
   | 'legacy_unknown';
 
 export interface ParkedIntentAttention {

@@ -1821,10 +1821,12 @@ describe('serialized native convergence guard', () => {
 
   /**
    * The 2026-08-31 poison pill, locked down as a class: a failure that is neither transport
-   * loss nor a server answer repeats identically on every claim, so after a bounded number
-   * of attempts it routes through the permanent-rejection machinery — authoritative
-   * rollback, `needs_attention`, the recovery banner — instead of blocking its ordering
-   * domain forever. Transport loss never exhausts; offline is queue state.
+   * loss nor a server answer repeats identically on every claim, so after an unbroken
+   * streak of them the intent **parks** — `retry_exhausted`, the recovery banner's Retry
+   * and Discard — instead of blocking its ordering domain forever. It parks rather than
+   * routing through permanent rejection because a local failure is not a server verdict:
+   * the request may even have succeeded remotely before settlement threw, so the
+   * optimistic projection stays exactly where it was.
    */
   it('parks a deterministically failing intent for recovery instead of retrying forever', async () => {
     const base = pushTransport();
@@ -1856,7 +1858,59 @@ describe('serialized native convergence guard', () => {
       intentId: 'poisoned-edit',
       status: 'needs_attention',
       attempts: 3,
-      attention: { kind: 'rejected' },
+      attention: { kind: 'parked', reason: 'retry_exhausted' },
+    });
+    // Parked, not rolled back: the local optimistic edit is still what the user sees.
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
+    ).toBe('Poisoned');
+  });
+
+  /**
+   * The streak is consecutive local failures, never raw claims: `attempts` counts every
+   * claim including offline ones, so two offline cycles followed by a first-ever local
+   * fault must not read as three deterministic failures. Offline time spends none of the
+   * parking budget; only the local fault's own unbroken run does.
+   */
+  it('does not let offline claims spend the local-failure budget', async () => {
+    const base = pushTransport();
+    let mode: 'offline' | 'poison' = 'offline';
+    const push: ActivityPushTransport = {
+      ...base,
+      patch: async () => {
+        if (mode === 'offline') {
+          throw new NetworkError('The request could not be sent.', undefined);
+        }
+        throw new Error('Local settlement invariant.');
+      },
+    };
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'mixed-history-edit',
+        input: { title: 'Mixed history' },
+        ifMatch: 'v1',
+      }),
+    );
+    const sync = syncEngine({ push });
+
+    await expect(sync.syncNow()).rejects.toThrow('could not be sent');
+    await expect(sync.syncNow()).rejects.toThrow('could not be sent');
+    mode = 'poison';
+    await expect(sync.syncNow()).rejects.toThrow('settlement invariant');
+
+    // Three claims down, but only one local failure: still ordinary queue state.
+    expect((await outbox.all())[0]).toMatchObject({ status: 'queued', attempts: 3 });
+
+    await expect(sync.syncNow()).rejects.toThrow('settlement invariant');
+    await expect(sync.syncNow()).rejects.toThrow('settlement invariant');
+    sync.stop();
+
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'mixed-history-edit',
+      status: 'needs_attention',
+      attempts: 5,
+      attention: { kind: 'parked', reason: 'retry_exhausted' },
     });
   });
 
