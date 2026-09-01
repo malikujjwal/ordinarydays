@@ -1,3 +1,4 @@
+import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { ListDetailScreen } from '@/features/lists/components/ListDetailScreen';
 import { useComposeDraft } from '@/stores/composeDraft';
@@ -29,6 +30,9 @@ export default function ListDetailRoute() {
   return (
     <ListDetailScreen
       listId={listId}
+      // The route is the edge where the real clock may be read (`coding-standards.md` §4.3);
+      // the Plan state line's relative words are derived from this one value (P3-35).
+      today={format(new Date(), 'yyyy-MM-dd')}
       onBack={() => router.back()}
       onOpenActivity={(activityId) => router.push(`/activity/${activityId}` as Href)}
       onPlanItem={({ listId: sourceListId, featureConfig, item }) => {

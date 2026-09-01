@@ -3,9 +3,11 @@ import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 import { View } from 'react-native';
+import type { ListItemRow as ListItemRowData } from '@/lib/sqlite/listItemsRepository';
 import { countLine } from '../model/listCard';
 import { ITEM_SCROLL_FETCH_RATIO, mayShowEmptyState } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
+import { planStateLine, spokenPlanStateLine } from '../model/planStateLine';
 import { orderedItems, reorderRange } from '../model/reorder';
 import { ListAddRow } from './ListAddRow';
 import { ListEmptyState } from './ListEmptyState';
@@ -17,8 +19,16 @@ import { isGroupedStageList, StateSections } from './StateSections';
 
 export interface ListDetailSurfaceProps {
   list: List | undefined;
-  items: readonly ListItemView[];
+  items: readonly ListItemRowData[];
   itemCount: number;
+  /**
+   * The user's today, injected by the route (`coding-standards.md` §4.3), for the state
+   * line's relative words. Absent — as in the deterministic gallery — no line renders, which
+   * is also correct: a line whose `Saturday` cannot be trusted is worse than none.
+   */
+  today?: string;
+  /** Opens the caller's linked Plan from its state line (P3-35). */
+  onOpenPlan?: (activityId: string) => void;
   complete: boolean;
   status: 'pending' | 'success' | 'error';
   requestId?: string;
@@ -42,6 +52,8 @@ export function ListDetailSurface({
   list,
   items,
   itemCount,
+  today,
+  onOpenPlan,
   complete,
   status,
   requestId,
@@ -56,6 +68,24 @@ export function ListDetailSurface({
   onToggleChecked,
   onDrop,
 }: ListDetailSurfaceProps) {
+  /** The row's state-line props, derived once so both layouts say the same thing. */
+  const stateLineProps = useCallback(
+    (item: ListItemRowData) => {
+      if (today === undefined) return {};
+      const line = planStateLine(item.viewerPlan, today);
+      const spoken = spokenPlanStateLine(item.viewerPlan, today);
+      const activityId = item.viewerLink?.activityId;
+      return {
+        ...(item.viewerPlan === undefined ? {} : { viewerPlan: item.viewerPlan }),
+        ...(line === undefined ? {} : { planStateLine: line }),
+        ...(spoken === undefined ? {} : { planStateLineSpoken: spoken }),
+        ...(onOpenPlan === undefined || activityId === undefined
+          ? {}
+          : { onOpenPlan: () => onOpenPlan(activityId) }),
+      };
+    },
+    [today, onOpenPlan],
+  );
   const theme = useTheme();
   const showEmpty = mayShowEmptyState(
     { itemCount, loadedCount: items.length, complete },
@@ -139,6 +169,7 @@ export function ListDetailSurface({
               items={items}
               onOpen={onOpenItem}
               onDrop={onDrop}
+              rowExtras={stateLineProps}
             />
           </View>
         ) : (
@@ -161,6 +192,7 @@ export function ListDetailSurface({
                   {...(item.features?.place === undefined
                     ? {}
                     : { onOpenLocation: () => void openInMaps(item.features?.place) })}
+                  {...stateLineProps(item)}
                   testID={`list-item-${item.itemId}`}
                 />
               )}

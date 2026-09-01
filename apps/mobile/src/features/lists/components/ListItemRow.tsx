@@ -20,6 +20,8 @@ export interface ListItemRowProps {
   item: ListItemView;
   viewerPlan?: ListItemPlanState;
   planStateLine?: string;
+  /** The unabbreviated spoken variant (`7:00 PM`), per `interaction-contract.md` §6.2. */
+  planStateLineSpoken?: string;
   onOpen?: () => void;
   onToggleChecked?: (next: boolean) => boolean | undefined | Promise<boolean | undefined>;
   onOpenLocation?: () => void;
@@ -32,6 +34,7 @@ export function ListItemRow({
   item,
   viewerPlan,
   planStateLine,
+  planStateLineSpoken,
   onOpen,
   onToggleChecked,
   onOpenLocation,
@@ -205,7 +208,7 @@ export function ListItemRow({
         {stateLine === undefined ? null : (
           <Touchable
             accessibilityRole="link"
-            accessibilityLabel={`${stateLine}, open plan`}
+            accessibilityLabel={`${planStateLineSpoken ?? stateLine}, open plan`}
             disabled={onOpenPlan === undefined}
             {...(onOpenPlan === undefined ? {} : { onPress: onOpenPlan })}
             {...id('plan-state')}

@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
-import { API, e2eHeaders } from '../support/api';
+import { API, e2eHeaders, wallDate, ZONE } from '../support/api';
 
 /**
  * The `Plan this item` kind-and-audience sheet, end to end (P3-34,
@@ -149,4 +149,63 @@ test('General on a Watch Later list stores custom — configuration never choose
     audience: { mode: 'just_me' },
   });
   expect(bodies[0]).not.toHaveProperty('details.season');
+});
+
+/**
+ * The caller-scoped Plan state line's two tap targets (P3-35, §6.2): the state line opens the
+ * linked Activity, the title opens the item sheet, and neither reaches the other's screen.
+ */
+test('the state line opens the Plan and the title opens the item sheet', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const listId = await createList(request, `Watchlist ${stamp}`, 'watch-later');
+  const itemId = await createWatchingItem(request, listId, `Severance ${stamp}`);
+
+  // Two days out is inside the 7-day window, so the line carries the weekday name.
+  const scheduledFor = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+  const date = wallDate(scheduledFor);
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: ZONE,
+    weekday: 'long',
+  }).format(scheduledFor);
+
+  const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const activityId = `act_0${[...randomBytes(25)].map((b) => alphabet[b % 32]).join('')}`;
+  const scheduled = await request.post(
+    `${API}/v1/lists/${listId}/items/${itemId}/schedule`,
+    {
+      headers: e2eHeaders(randomUUID()),
+      data: {
+        activityId,
+        creationTarget: { objectKind: 'plan', type: 'watch' },
+        audience: { mode: 'just_me' },
+        schedule: { date, time: '20:00', timezone: ZONE },
+      },
+    },
+  );
+  expect(scheduled.ok(), await scheduled.text()).toBe(true);
+
+  await page.goto(`/lists/${listId}`);
+  await expect(testId(page, 'list-detail')).toBeVisible();
+
+  const line = testId(page, `list-item-${itemId}-plan-state`);
+  await expect(line).toHaveText(`Next session ${weekday} · 8 PM`);
+  await expect(
+    page.getByRole('link', { name: `Next session ${weekday} 8:00 PM, open plan` }),
+  ).toBeVisible();
+
+  // The state line opens the **Activity**, not the item detail (§6.2).
+  await line.click();
+  await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue(
+    `Severance ${stamp}`,
+  );
+  await expect(testId(page, 'item-sheet')).toHaveCount(0);
+
+  // The title opens the item sheet, not the Plan.
+  await page.goBack();
+  await expect(testId(page, 'list-detail')).toBeVisible();
+  await testId(page, `list-item-${itemId}-body`).click();
+  await expect(testId(page, 'item-sheet')).toBeVisible();
 });

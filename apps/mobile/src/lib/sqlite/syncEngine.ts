@@ -4,6 +4,7 @@ import {
   type AgendaQuery,
   activityCompletionResult,
   activity as activitySchema,
+  listItemActivityLink,
   listItemView,
   listView,
   scheduleActivityResult,
@@ -1052,6 +1053,34 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           );
           await this.agenda.acceptCanonicalActivitySummary(transaction, pushedPlan);
           await this.anytime?.acceptCanonicalActivity(transaction, pushedPlan);
+          /*
+           * The transaction that created the Plan also wrote the caller's `LNK#`, and the
+           * response carries it back. Installing the pair here is what lets the row's state
+           * line render before the next detail pull (P3-35); the trimmed `viewerPlan` is the
+           * projection contract's exact three fields, derived from the Plan just installed.
+           */
+          const link = listItemActivityLink.safeParse(field(response, 'viewerLink'));
+          if (
+            link.success &&
+            pushedPlan.objectKind === 'plan' &&
+            this.listItems !== undefined
+          ) {
+            await this.listItems.setViewerPair(
+              transaction,
+              link.data.listId,
+              link.data.itemId,
+              {
+                viewerLink: link.data,
+                viewerPlan: {
+                  type: pushedPlan.type,
+                  status: pushedPlan.status,
+                  ...(pushedPlan.schedule === undefined
+                    ? {}
+                    : { schedule: pushedPlan.schedule }),
+                },
+              },
+            );
+          }
           await this.outbox.acknowledge(transaction.database, intent.intentId);
           transaction.changed('outbox');
         });

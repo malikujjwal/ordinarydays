@@ -8,8 +8,9 @@ import {
   useTheme,
 } from '@od/ui';
 import { View } from 'react-native';
+import type { ListItemRow as ListItemRowData } from '@/lib/sqlite/listItemsRepository';
 import { orderedItems, type ReorderRange } from '../model/reorder';
-import { ListItemRow } from './ListItemRow';
+import { ListItemRow, type ListItemRowProps } from './ListItemRow';
 import { ReorderableList } from './ReorderableList';
 
 const ORDER: readonly ListItemState[] = ['open', 'active', 'done'];
@@ -31,9 +32,15 @@ export function isGroupedStageList(list: List): list is GroupedStageList {
 
 export interface StateSectionsProps {
   list: GroupedStageList;
-  items: readonly ListItemView[];
+  items: readonly ListItemRowData[];
   onOpen: (item: ListItemView) => void;
   onDrop: (itemId: string, toIndex: number) => void;
+  /**
+   * Per-row additions the surface derives — today the Plan state line trio and its tap
+   * target (P3-35). A function rather than pre-zipped rows so this component keeps rendering
+   * plain items and cannot re-derive or reinterpret the line.
+   */
+  rowExtras?: (item: ListItemRowData) => Partial<ListItemRowProps>;
 }
 
 export function stateGroupDropIndex(
@@ -65,7 +72,13 @@ export function stateGroupReorderRange(
   return { first: 0, last: Math.max(0, sectionLength - 1) };
 }
 
-export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProps) {
+export function StateSections({
+  list,
+  items,
+  onOpen,
+  onDrop,
+  rowExtras,
+}: StateSectionsProps) {
   const theme = useTheme();
   return (
     <View style={{ gap: theme.space[4] }} testID="list-state-sections">
@@ -96,7 +109,13 @@ export function StateSections({ list, items, onOpen, onDrop }: StateSectionsProp
                 if (flat !== undefined) onDrop(itemId, flat);
               }}
               renderItem={(item) => (
-                <ListItemRow list={list} item={item} onOpen={() => onOpen(item)} />
+                <ListItemRow
+                  list={list}
+                  item={item}
+                  onOpen={() => onOpen(item)}
+                  {...rowExtras?.(item)}
+                  testID={`list-item-${item.itemId}`}
+                />
               )}
             />
           </View>

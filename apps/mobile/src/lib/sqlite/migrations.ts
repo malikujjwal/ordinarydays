@@ -1136,6 +1136,21 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           CHECK (local_failure_count >= 0);
       `),
   },
+  {
+    version: 17,
+    name: 'list-item-viewer-plan',
+    /**
+     * The caller-scoped `viewerLink` / `viewerPlan` pair beside each committed item (P3-35),
+     * so the Plan state line renders offline. Nullable and additive: existing rows simply
+     * have no pair until the next detail page installs the caller's current truth, which is
+     * also the correct answer — the pair is a projection, never something to invent locally.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE list_items ADD COLUMN viewer_link_json TEXT;
+        ALTER TABLE list_items ADD COLUMN viewer_plan_json TEXT;
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

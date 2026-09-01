@@ -117,6 +117,13 @@ export async function scheduleListItem(
   const schedule = input.schedule === undefined ? undefined : toSchedule(input.schedule);
   const storedRecurrence = recurrenceForCreate(input.recurrence, schedule);
 
+  /**
+   * The item's title, copied **once**, when the request omitted one. After this the two
+   * titles are independent in both directions — a member who may rename a shared item must
+   * never rename another member's private Plan (P3-14).
+   */
+  const title = input.title ?? item.title;
+
   const activity: Activity = {
     /**
      * The client's id, always — this route requires one (ADR-055). Identity only: ownership
@@ -128,12 +135,7 @@ export async function scheduleListItem(
     objectKind: 'plan',
     /** The kind the user tapped, and nothing else decides it. */
     type: input.creationTarget.type,
-    /**
-     * The item's title, copied **once**, when the request omitted one. After this the two
-     * titles are independent in both directions — a member who may rename a shared item must
-     * never rename another member's private Plan (P3-14).
-     */
-    title: input.title ?? item.title,
+    title,
     ...(input.notes === undefined ? {} : { notes: input.notes }),
     ...(schedule === undefined ? {} : { schedule }),
     ...(storedRecurrence === undefined ? {} : { recurrence: storedRecurrence }),
@@ -142,7 +144,18 @@ export async function scheduleListItem(
     /** Provenance back to where this Plan came from. The item carries no pointer the other way. */
     listId,
     listItemId: itemId,
-    details: input.details ?? { kind: input.creationTarget.type },
+    /**
+     * A defaulted `details` must still satisfy the stored contract, and `watch` is the one
+     * kind with a required field: `mediaTitle` mirrors the title, exactly as the compose form
+     * does (`activities.md` §4.3). Found in P3-35's review: `{ kind: 'watch' }` alone was
+     * accepted at the boundary and then failed every later read of the caller's `viewerPlan`
+     * join — a write the server could not read back.
+     */
+    details:
+      input.details ??
+      (input.creationTarget.type === 'watch'
+        ? { kind: 'watch', mediaTitle: title }
+        : { kind: input.creationTarget.type }),
     participantCount: 0,
     childCount: 0,
     expenseTotalCents: 0,

@@ -231,3 +231,80 @@ describe('the canonical list item shell', () => {
     expect(screen.queryByTestId('row-metadata')).toBeNull();
   });
 });
+
+/**
+ * The caller-scoped Plan state line (P3-35, `interaction-contract.md` §6.2): two separate
+ * accessibility elements with the contract's labels, and two separate destinations.
+ */
+describe('the Plan state line', () => {
+  const scheduled = {
+    type: 'event',
+    status: 'scheduled',
+    schedule: { date: '2026-08-15', time: '19:00', timezone: 'America/New_York' },
+  } as const;
+
+  function mountWithPlan(
+    viewerPlan: Parameters<typeof ListItemRow>[0]['viewerPlan'],
+    planStateLine?: string,
+    planStateLineSpoken?: string,
+  ) {
+    const onOpen = vi.fn();
+    const onOpenPlan = vi.fn();
+    render(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list({ itemStateMode: { mode: 'none' } })}
+          item={item({ title: 'Zahav' })}
+          {...(viewerPlan === undefined ? {} : { viewerPlan })}
+          {...(planStateLine === undefined ? {} : { planStateLine })}
+          {...(planStateLineSpoken === undefined ? {} : { planStateLineSpoken })}
+          onOpen={onOpen}
+          onOpenPlan={onOpenPlan}
+          testID="row"
+        />
+      </ThemeProvider>,
+    );
+    return { onOpen, onOpenPlan };
+  }
+
+  it('renders the title and the state line as two separate targets with two destinations', () => {
+    const handlers = mountWithPlan(
+      scheduled,
+      'Planned Saturday · 7 PM',
+      'Planned Saturday 7:00 PM',
+    );
+
+    const body = screen.getByRole('button', { name: 'Zahav' });
+    const line = screen.getByRole('link', {
+      name: 'Planned Saturday 7:00 PM, open plan',
+    });
+
+    fireEvent.click(body);
+    expect(handlers.onOpen).toHaveBeenCalledOnce();
+    expect(handlers.onOpenPlan).not.toHaveBeenCalled();
+
+    fireEvent.click(line);
+    expect(handlers.onOpenPlan).toHaveBeenCalledOnce();
+    expect(handlers.onOpen).toHaveBeenCalledOnce();
+  });
+
+  it('renders Cancelled with the same tap target and no date suffix', () => {
+    const handlers = mountWithPlan(
+      { type: 'event', status: 'cancelled' },
+      'Cancelled',
+      'Cancelled',
+    );
+    fireEvent.click(screen.getByRole('link', { name: 'Cancelled, open plan' }));
+    expect(handlers.onOpenPlan).toHaveBeenCalledOnce();
+  });
+
+  it('renders no line for a saved plan even when a caller passes one', () => {
+    mountWithPlan({ type: 'event', status: 'saved' }, 'Planned Saturday');
+    expect(screen.queryByTestId('row-plan-state')).toBeNull();
+  });
+
+  it('renders no line for a stale skipped projection, defensively', () => {
+    mountWithPlan({ ...scheduled, status: 'skipped' }, 'Planned Saturday');
+    expect(screen.queryByTestId('row-plan-state')).toBeNull();
+  });
+});
