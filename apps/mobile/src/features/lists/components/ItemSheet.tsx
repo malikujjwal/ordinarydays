@@ -703,9 +703,14 @@ export function ItemSheet({
               close();
               const draftTitle = title.trim();
               const draftNote = note.trim();
+              // Both fields fall back to the stored row when the sheet's draft is blank —
+              // an empty field means "nothing typed here", never "erase the stored value
+              // from the copy" (the flushed save owns the actual write).
+              const storedNote = item.note?.trim() ?? '';
+              const noteForBridge = draftNote !== '' ? draftNote : storedNote;
               onPlanItem({
                 title: draftTitle === '' ? item.title : draftTitle,
-                ...(draftNote === '' ? {} : { note: draftNote }),
+                ...(noteForBridge === '' ? {} : { note: noteForBridge }),
               });
             }}
             testID="item-sheet-plan"

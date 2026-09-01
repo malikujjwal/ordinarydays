@@ -50,6 +50,7 @@ export function ListsSection({ sourceLists, onOpenList, onAddList }: ListsSectio
         <ActionRow
           label={`Show all ${showAllCount}`}
           accessibilityLabel={`Show all ${showAllCount}`}
+          variant="subhead"
           onPress={() => setExpanded(true)}
           testID="lists-show-all"
         />

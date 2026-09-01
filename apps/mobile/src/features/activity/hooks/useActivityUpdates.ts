@@ -91,13 +91,17 @@ export function useActivityUpdates(
   /**
    * A **different activity** under the same mounted screen (a `router.replace` between plans
    * reuses the component) resets every piece of feed state — one plan's local posts, deletes
-   * and paged-in history must never bleed into another's feed. The same ref guards every
-   * async callback below: a response that started under a previous activity is dropped, not
-   * merged, so an in-flight page or post from plan A cannot land in plan B.
+   * and paged-in history must never bleed into another's feed. A refetched detail (same
+   * activity, new embedded cursor) resets only the paging.
+   *
+   * The seed marker is **state**, not a ref: React's adjust-on-prop-change pattern re-runs
+   * with the queued updates on the next attempt if a render is discarded, whereas a ref
+   * mutated during an interrupted render would advance while the resets were thrown away —
+   * exactly the bleed this block exists to prevent.
    */
-  const liveActivity = useRef(activityId);
-  if (liveActivity.current !== activityId) {
-    liveActivity.current = activityId;
+  const [seeded, setSeeded] = useState({ activityId, cursor: embedded.cursor });
+  if (seeded.activityId !== activityId) {
+    setSeeded({ activityId, cursor: embedded.cursor });
     setPosted([]);
     setDeleted(new Set());
     setPending([]);
@@ -105,14 +109,18 @@ export function useActivityUpdates(
     setOlder([]);
     setCursor(embedded.cursor);
     setLoadingMore(false);
-  }
-  /** A refetched detail carries a fresh first page; older pages hang off its cursor. */
-  const seededCursor = useRef(embedded.cursor);
-  if (seededCursor.current !== embedded.cursor) {
-    seededCursor.current = embedded.cursor;
+  } else if (seeded.cursor !== embedded.cursor) {
+    setSeeded({ activityId, cursor: embedded.cursor });
     setCursor(embedded.cursor);
     setOlder([]);
   }
+  /**
+   * Guards every async callback below: a response that started under a previous activity is
+   * dropped, not merged. Assigned unconditionally, so it is safe under discarded renders —
+   * it only ever holds the identity of the activity currently rendering.
+   */
+  const liveActivity = useRef(activityId);
+  liveActivity.current = activityId;
 
   const updates = useMemo(
     () =>

@@ -80,6 +80,7 @@ export function PrepSection({
         <ActionRow
           label={`Show all ${showAllCount}`}
           accessibilityLabel={`Show all ${showAllCount}`}
+          variant="subhead"
           onPress={() => setExpanded(true)}
           testID="prep-show-all"
         />

@@ -14,7 +14,11 @@ import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
 import { usePlanActivityFloor } from '@/stores/planActivityFloor';
-import { applyPlansCreate, createdActivityFrom } from '../model/plansApply';
+import {
+  applyPlansCreate,
+  applyPlansRemove,
+  createdActivityFrom,
+} from '../model/plansApply';
 
 /**
  * The three-stage Plans read (P3-36): one `GET /v1/plans?mode=initial` renders the screen,
@@ -73,6 +77,17 @@ export interface PlansView {
   readonly loadMoreUpcoming: () => void;
   readonly loadMorePast: () => void;
   readonly refetch: () => void;
+  /**
+   * Synchronous completion projection for the tap handler — the cross-platform channel
+   * (native has no MutationCache for the subscription to ride). Call it only after the
+   * action layer's guards accept the write; the web lifecycle events reconcile and revert.
+   */
+  readonly projectCompletion: (
+    item: Pick<AgendaItem, 'activityId' | 'occurrenceDate'>,
+    checked: boolean,
+  ) => void;
+  /** True while the upcoming arm's last window request failed; gates the auto-advance. */
+  readonly upcomingStalled: boolean;
   readonly message?: string;
   readonly requestId?: string;
 }
@@ -94,6 +109,21 @@ const CREATE_KEYS: readonly (readonly string[])[] = [
 const keyMatches = (key: readonly unknown[], candidate: readonly string[]) =>
   key.length === candidate.length && candidate.every((part, i) => key[i] === part);
 
+/**
+ * The write kinds this store projects, and the boundary of the list. It deliberately covers
+ * fewer keys than `lib/agendaCache.ts`'s `projectActivityWrite`: skip/snooze/patch touch
+ * fields the next natural refetch reconciles harmlessly, while creates, schedules, deletes
+ * and completions change **which row is where** — the states a user stares at while the GSI
+ * is still behind. A new write kind that moves rows must be added in both places.
+ */
+interface CompletionSnapshot {
+  readonly activityId: string;
+  readonly occurrenceDate: string | undefined;
+  readonly prior: AgendaItem['status'];
+}
+
+const NEGATIVE_OUTCOMES = new Set(['didnt_happen', 'didnt_go']);
+
 interface PlansState {
   readonly status: 'pending' | 'success' | 'error';
   readonly needsDate: readonly NeedsDateRowData[];
@@ -102,6 +132,12 @@ interface PlansState {
   readonly pastCursor: string | undefined;
   /** Cleared by any later successful load, so a banner never outlives its cause. */
   readonly failure: { message: string; requestId?: string } | undefined;
+  /**
+   * Whether the **upcoming** arm specifically has failed. Kept apart from `failure` because
+   * a Past-page failure must not suppress Upcoming's auto-advance or its advancing state —
+   * one shared flag turned a Past 500 into a false `No upcoming plans`.
+   */
+  readonly upcomingStalled: boolean;
 }
 
 const EMPTY: PlansState = {
@@ -111,10 +147,19 @@ const EMPTY: PlansState = {
   upcomingWindow: undefined,
   pastCursor: undefined,
   failure: undefined,
+  upcomingStalled: false,
 };
 
-export function usePlans(timezone: string, today: WallDate): PlansView {
+export function usePlans(
+  timezone: string,
+  today: WallDate,
+  /** `HH:mm` in the viewer's zone, for the projected rows' `isPast` (§4.3-injected). */
+  currentMinute: string,
+): PlansView {
   const [state, setState] = useState<PlansState>(EMPTY);
+  /** Mirror for callbacks that must read current rows synchronously (snapshot capture). */
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [refreshing, setRefreshing] = useState(false);
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
   const [loadingPast, setLoadingPast] = useState(false);
@@ -147,6 +192,7 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
         },
         pastCursor: data.pastPage.nextCursor,
         failure: undefined,
+        upcomingStalled: false,
       });
     } catch (error) {
       if (!mounted.current || generation.current !== attempt) return;
@@ -178,41 +224,99 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
    * projection does, rather than on any component that is about to unmount.
    */
   const queryClient = useQueryClient();
-  /** The caller's injected clock (§4.3), read through a ref so midnight is not a resubscribe. */
-  const todayRef = useRef(today);
-  todayRef.current = today;
+  /** The caller's injected clock (§4.3), read through refs so a tick is not a resubscribe. */
+  const clockRef = useRef({ today, currentMinute });
+  clockRef.current = { today, currentMinute };
   /**
-   * Patches one row's completion status in place. `changed` short-circuits so an event for a
-   * row this tab does not hold (or a date it has not loaded) leaves every identity stable.
+   * Snapshots taken when a completion-family mutation projects, keyed by the mutation's own
+   * id, so `error` restores the **exact** prior statuses — a skipped occurrence goes back to
+   * skipped, never to a fabricated `scheduled`.
    */
-  const patchCompletion = useCallback(
-    (activityId: string, occurrenceDate: string | undefined, checked: boolean) => {
-      setState((current) => {
-        const byDate = new Map(current.store.byDate);
-        let changed = false;
-        for (const [date, rows] of byDate) {
-          const next = rows.map((row) => {
-            if (row.activityId !== activityId || row.occurrenceDate !== occurrenceDate) {
-              return row;
-            }
-            changed = true;
-            const status: AgendaItem['status'] =
-              row.occurrenceDate === undefined
-                ? checked
-                  ? 'completed'
-                  : 'scheduled'
-                : checked
-                  ? 'completed_occurrence'
-                  : 'scheduled';
-            return { ...row, status };
-          });
-          if (next.some((row, index) => row !== rows[index])) byDate.set(date, next);
+  const completionSnapshots = useRef(new Map<number, CompletionSnapshot[]>());
+
+  /**
+   * Sets one row's status, returning the prior statuses it changed. Locate-first: the
+   * common case is a tick for a row this store does not hold (Today's checkbox with Plans
+   * mounted behind it), and that case allocates nothing.
+   */
+  const patchStatus = useCallback(
+    (
+      activityId: string,
+      occurrenceDate: string | undefined,
+      status: AgendaItem['status'],
+    ): CompletionSnapshot[] => {
+      /**
+       * Snapshots come from the mirror, synchronously — a `setState` updater runs at
+       * render time, after this function has already returned. The mirror can lag one
+       * queued update, which is exactly right for the web double-projection: the direct
+       * tap projection queues first, and the `pending` event's snapshot still captures the
+       * row's true pre-tap status.
+       */
+      const taken: CompletionSnapshot[] = [];
+      for (const rows of stateRef.current.store.byDate.values()) {
+        for (const row of rows) {
+          if (
+            row.activityId === activityId &&
+            row.occurrenceDate === occurrenceDate &&
+            row.status !== status
+          ) {
+            taken.push({ activityId, occurrenceDate, prior: row.status });
+          }
         }
-        if (!changed) return current;
+      }
+      setState((current) => {
+        const hits: WallDate[] = [];
+        for (const [date, rows] of current.store.byDate) {
+          if (
+            rows.some(
+              (row) =>
+                row.activityId === activityId &&
+                row.occurrenceDate === occurrenceDate &&
+                row.status !== status,
+            )
+          ) {
+            hits.push(date);
+          }
+        }
+        if (hits.length === 0) return current;
+        const byDate = new Map(current.store.byDate);
+        for (const date of hits) {
+          const rows = byDate.get(date) ?? [];
+          byDate.set(
+            date,
+            rows.map((row) =>
+              row.activityId === activityId && row.occurrenceDate === occurrenceDate
+                ? { ...row, status }
+                : row,
+            ),
+          );
+        }
         return { ...current, store: { ...current.store, byDate } };
       });
+      return taken;
     },
     [],
+  );
+
+  /**
+   * The synchronous, cross-platform completion projection. `PlansScreen` calls it from the
+   * tap handler after the action layer's guards accept the write — native has no
+   * `MutationCache`, so the subscription below cannot be the only channel; on web the
+   * subsequent `pending` event patches the same value and no-ops.
+   */
+  const projectCompletion = useCallback(
+    (item: Pick<AgendaItem, 'activityId' | 'occurrenceDate'>, checked: boolean) => {
+      const status: AgendaItem['status'] =
+        item.occurrenceDate === undefined
+          ? checked
+            ? 'completed'
+            : 'scheduled'
+          : checked
+            ? 'completed_occurrence'
+            : 'scheduled';
+      patchStatus(item.activityId, item.occurrenceDate, status);
+    },
+    [patchStatus],
   );
 
   useEffect(() => {
@@ -221,7 +325,10 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
       const key = event.mutation.options.mutationKey;
       if (!Array.isArray(key)) return;
 
-      // Creates: project the 201's authoritative Activity into the stages.
+      // Creates: project the 201's authoritative Activity into the stages. A date beyond
+      // the loaded window also extends the render window to reach it — otherwise the row
+      // is invisible, the tab still claims emptiness, and an auto-advance can replace the
+      // projection with a pre-write GSI answer.
       if (
         event.action.type === 'success' &&
         CREATE_KEYS.some((candidate) => keyMatches(key, candidate))
@@ -230,24 +337,77 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
         if (activity === undefined) return;
         setState((current) => {
           if (current.status !== 'success') return current;
-          const projected = applyPlansCreate(current, activity, todayRef.current);
-          return projected === undefined ? current : { ...current, ...projected };
+          const projected = applyPlansCreate(current, activity, clockRef.current);
+          if (projected === undefined) return current;
+          const date = activity.schedule?.date;
+          const window = current.upcomingWindow;
+          const upcomingWindow =
+            date !== undefined && window !== undefined && date > window.through
+              ? { ...window, through: date as WallDate }
+              : window;
+          return { ...current, ...projected, upcomingWindow };
         });
         return;
       }
 
+      // Reschedules and deletes move rows between dates and stages: remove every trace,
+      // then (for a schedule) re-insert from the authoritative response. Occurrence-scoped
+      // reschedules of a series are left to reconciliation — the response cannot say which
+      // expanded occurrences a window holds.
+      if (event.action.type === 'success') {
+        const isSchedule = keyMatches(key, activityMutationKeys.schedule);
+        const isDelete = keyMatches(key, activityMutationKeys.delete);
+        if (isSchedule || isDelete) {
+          const variables = event.mutation.state.variables as
+            | { activityId?: unknown }
+            | undefined;
+          const activityId = variables?.activityId;
+          if (typeof activityId !== 'string') return;
+          const activity = isSchedule
+            ? createdActivityFrom(event.action.data)
+            : undefined;
+          setState((current) => {
+            if (current.status !== 'success') return current;
+            if (
+              isSchedule &&
+              (activity === undefined || activity.recurrence !== undefined)
+            ) {
+              return current;
+            }
+            const removed = applyPlansRemove(current, activityId) ?? current;
+            if (activity === undefined) {
+              return removed === current ? current : { ...current, ...removed };
+            }
+            const inserted = applyPlansCreate(removed, activity, clockRef.current);
+            const next = inserted ?? removed;
+            if (next === current) return current;
+            const date = activity.schedule?.date;
+            const window = current.upcomingWindow;
+            const upcomingWindow =
+              date !== undefined && window !== undefined && date > window.through
+                ? { ...window, through: date as WallDate }
+                : window;
+            return { ...current, ...next, upcomingWindow };
+          });
+          return;
+        }
+      }
+
       /**
-       * Completions: the same seam projects the toggle and, crucially, **reverts** it. The
-       * agenda action's own rollback rewrites only TanStack caches, so this store listens to
-       * the mutation lifecycle instead: `pending` projects (guarded rows never reach a
-       * mutation, so a refused tick projects nothing), `error` restores, and a successful
-       * `uncomplete` — the toast's Undo — is itself the un-projection.
+       * Completions: the same seam projects the lifecycle. `pending` projects the target
+       * status (a negative passed-plan outcome rides the complete key and projects
+       * **skipped**, not completed), `error` restores the exact snapshots, and a successful
+       * `uncomplete` — the toast's Undo — is itself the un-projection. Guarded rows never
+       * reach a mutation, so a refused tick projects nothing through this channel.
        */
       const isComplete = keyMatches(key, activityMutationKeys.complete);
       const isUncomplete = keyMatches(key, activityMutationKeys.uncomplete);
       if (!isComplete && !isUncomplete) return;
       const variables = event.mutation.state.variables as
-        | { activityId?: unknown; input?: { occurrenceDate?: unknown } }
+        | {
+            activityId?: unknown;
+            input?: { occurrenceDate?: unknown; outcome?: unknown };
+          }
         | undefined;
       const activityId = variables?.activityId;
       if (typeof activityId !== 'string') return;
@@ -256,12 +416,34 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
           ? variables.input.occurrenceDate
           : undefined;
       if (event.action.type === 'pending') {
-        patchCompletion(activityId, occurrenceDate, isComplete);
+        const negative =
+          isComplete &&
+          typeof variables?.input?.outcome === 'string' &&
+          NEGATIVE_OUTCOMES.has(variables.input.outcome);
+        const status: AgendaItem['status'] = isUncomplete
+          ? 'scheduled'
+          : occurrenceDate === undefined
+            ? negative
+              ? 'skipped'
+              : 'completed'
+            : negative
+              ? 'skipped_occurrence'
+              : 'completed_occurrence';
+        const taken = patchStatus(activityId, occurrenceDate, status);
+        if (taken.length > 0) {
+          completionSnapshots.current.set(event.mutation.mutationId, taken);
+        }
       } else if (event.action.type === 'error') {
-        patchCompletion(activityId, occurrenceDate, !isComplete);
+        const taken = completionSnapshots.current.get(event.mutation.mutationId);
+        completionSnapshots.current.delete(event.mutation.mutationId);
+        for (const snapshot of taken ?? []) {
+          patchStatus(snapshot.activityId, snapshot.occurrenceDate, snapshot.prior);
+        }
+      } else if (event.action.type === 'success') {
+        completionSnapshots.current.delete(event.mutation.mutationId);
       }
     });
-  }, [queryClient, patchCompletion]);
+  }, [queryClient, patchStatus]);
 
   const loadMoreUpcoming = useCallback(() => {
     const window = state.upcomingWindow;
@@ -286,11 +468,16 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
             nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
           },
           failure: undefined,
+          upcomingStalled: false,
         }));
       })
       .catch((error: unknown) => {
         if (!mounted.current) return;
-        setState((current) => ({ ...current, failure: describe(error) }));
+        setState((current) => ({
+          ...current,
+          failure: describe(error),
+          upcomingStalled: true,
+        }));
       })
       .finally(() => {
         if (mounted.current) setLoadingUpcoming(false);
@@ -363,6 +550,8 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
     loadMoreUpcoming,
     loadMorePast,
     refetch,
+    projectCompletion,
+    upcomingStalled: state.upcomingStalled,
     ...(state.failure === undefined
       ? {}
       : {

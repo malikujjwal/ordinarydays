@@ -167,42 +167,51 @@ function assertBelongsToList(items: readonly ListItemRow[], listId: string): voi
  * pair, absence included, so its conflict arm installs that truth in the same statement — one
  * write per item instead of an upsert-then-update pair on the sync hot path.
  */
+/** Two complete, greppable statements — never assembled by concatenating SQL fragments. */
+const ITEM_UPSERT_SQL = `INSERT INTO list_items (
+  item_id, list_id, rank, title, note, state, features_json,
+  source_activity_id, source_label, viewer_link_json, viewer_plan_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_id) DO UPDATE SET
+  list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
+  note=excluded.note, state=excluded.state,
+  features_json=excluded.features_json,
+  source_activity_id=excluded.source_activity_id,
+  source_label=excluded.source_label;`;
+
+const ITEM_UPSERT_WITH_PAIR_SQL = `INSERT INTO list_items (
+  item_id, list_id, rank, title, note, state, features_json,
+  source_activity_id, source_label, viewer_link_json, viewer_plan_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_id) DO UPDATE SET
+  list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
+  note=excluded.note, state=excluded.state,
+  features_json=excluded.features_json,
+  source_activity_id=excluded.source_activity_id,
+  source_label=excluded.source_label,
+  viewer_link_json=excluded.viewer_link_json,
+  viewer_plan_json=excluded.viewer_plan_json;`;
+
 async function writeItemRow(
   database: SqliteExecutor,
   item: ListItemRow,
   pairAuthority = false,
 ): Promise<void> {
-  await database.run(
-    `INSERT INTO list_items (
-      item_id, list_id, rank, title, note, state, features_json,
-      source_activity_id, source_label, viewer_link_json, viewer_plan_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(item_id) DO UPDATE SET
-      list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
-      note=excluded.note, state=excluded.state,
-      features_json=excluded.features_json,
-      source_activity_id=excluded.source_activity_id,
-      source_label=excluded.source_label${
-        pairAuthority
-          ? ', viewer_link_json=excluded.viewer_link_json, viewer_plan_json=excluded.viewer_plan_json'
-          : ''
-      };`,
-    [
-      item.itemId,
-      item.listId,
-      item.rank,
-      item.title,
-      item.note ?? null,
-      item.state,
-      item.features === undefined ? null : JSON.stringify(item.features),
-      item.sourceActivityId ?? null,
-      item.sourceLabel ?? null,
-      // Pointer and state travel together or not at all (§3): a half-pair stores as absence.
-      ...(item.viewerLink === undefined || item.viewerPlan === undefined
-        ? [null, null]
-        : [JSON.stringify(item.viewerLink), JSON.stringify(item.viewerPlan)]),
-    ],
-  );
+  await database.run(pairAuthority ? ITEM_UPSERT_WITH_PAIR_SQL : ITEM_UPSERT_SQL, [
+    item.itemId,
+    item.listId,
+    item.rank,
+    item.title,
+    item.note ?? null,
+    item.state,
+    item.features === undefined ? null : JSON.stringify(item.features),
+    item.sourceActivityId ?? null,
+    item.sourceLabel ?? null,
+    // Pointer and state travel together or not at all (§3): a half-pair stores as absence.
+    ...(item.viewerLink === undefined || item.viewerPlan === undefined
+      ? [null, null]
+      : [JSON.stringify(item.viewerLink), JSON.stringify(item.viewerPlan)]),
+  ]);
 }
 
 /**

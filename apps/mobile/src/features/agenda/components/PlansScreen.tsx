@@ -25,6 +25,7 @@ import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import { type NeedsDateRowData, usePlans } from '../hooks/usePlans';
 import { pastSectionsFromStore, upcomingSectionsFromStore } from '../model/plansStages';
 import type { UpcomingListItem, UpcomingMonthSection } from '../model/plansWindow';
+import { isFutureRecurringOccurrence, wouldCompleteWholeSeries } from '../model/rowScope';
 import { AgendaRow } from './AgendaRow';
 import { NeedsDateCard } from './NeedsDateCard';
 
@@ -80,7 +81,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
   const timezone = resolveViewerTimezone(queryClient);
   const today = toWallDate(tick.instant, timezone);
   const currentMinute = toWallTime(tick.instant, timezone);
-  const plans = usePlans(timezone, today);
+  const plans = usePlans(timezone, today, currentMinute);
   const actions = useAgendaActivityActions({ today, currentMinute, timezone });
   /**
    * Upcoming is where the tab lands: it answers "what is next", the question the tab is
@@ -113,11 +114,13 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
     () => (stage === 'past' ? pastSectionsFromStore(plans.store, today) : undefined),
     [stage, plans.store, today],
   );
-  /** Whether any past content exists, cheap enough to know without projecting the stage. */
-  const hasPastRows = useMemo(
-    () => [...plans.store.byDate].some(([date, rows]) => date < today && rows.length > 0),
-    [plans.store, today],
-  );
+  /** Whether the store holds any row at all — a loop with an early exit, no allocation. */
+  const hasAnyRows = useMemo(() => {
+    for (const rows of plans.store.byDate.values()) {
+      if (rows.length > 0) return true;
+    }
+    return false;
+  }, [plans.store]);
   /** A stable section identity — the screen re-renders every ticker minute. */
   const needsDateSections = useMemo(
     () => [{ data: [...plans.needsDate] }],
@@ -137,11 +140,13 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
 
   const upcomingEmpty =
     upcomingSections.length === 0 && plans.upcomingWindow?.nextFrom == null;
+  // `hasAnyRows`, not a stage-scoped check: a row projected anywhere — a create landing on
+  // a date no stage happens to render right now — still means the account is not empty.
   const allEmpty =
     plans.status === 'success' &&
     plans.needsDate.length === 0 &&
     upcomingEmpty &&
-    !hasPastRows &&
+    !hasAnyRows &&
     plans.pastCursor === undefined;
 
   /**
@@ -156,21 +161,28 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
     upcomingSections.length === 0 &&
     plans.upcomingWindow?.nextFrom != null &&
     !plans.isLoadingMoreUpcoming &&
-    // A failed window request must not re-arm the advance, or a 500ing API turns this
-    // effect into an unbounded retry loop; the failure banner's refresh is the retry.
-    plans.message === undefined;
+    // A failed **window** request must not re-arm the advance, or a 500ing API turns this
+    // effect into an unbounded retry loop; the failure banner's refresh is the retry. The
+    // flag is upcoming-specific so a Past-page failure cannot suppress the advance.
+    !plans.upcomingStalled;
   const { loadMoreUpcoming } = plans;
   useEffect(() => {
     if (shouldAdvance) loadMoreUpcoming();
   }, [shouldAdvance, loadMoreUpcoming]);
 
   /**
-   * The Plans store's own projection now rides the mutation cache (`usePlans` subscribes to
-   * complete/uncomplete lifecycles), so this passes straight through — which is also what
-   * makes rollback and Undo reach the row, and what keeps a guard-refused tick from
-   * projecting anything.
+   * The tap projects **synchronously and on both platforms** — native has no MutationCache
+   * for `usePlans`' subscription to observe, so the direct call is the channel that works
+   * everywhere; on web the `pending` event then patches the same value (a no-op) and the
+   * lifecycle handles rollback and Undo. The two guards are the action layer's own,
+   * consulted here so a refused tick projects nothing.
    */
-  const toggleComplete = actions.toggleComplete;
+  const toggleComplete = (item: AgendaItem, checked: boolean) => {
+    if (wouldCompleteWholeSeries(item)) return;
+    if (checked && isFutureRecurringOccurrence(item, today)) return;
+    plans.projectCompletion(item, checked);
+    actions.toggleComplete(item, checked);
+  };
 
   const refresh = (
     <RefreshControl refreshing={plans.isRefreshing} onRefresh={plans.refetch} />
@@ -268,15 +280,14 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
       if (upcomingSections.length === 0) {
         /**
          * A zero-row window with a non-null `nextFrom` is the server saying "the next row
-         * is out there" (§P3-20): while the auto-advance chases it, the screen shows a
-         * loading state — never a false `No upcoming plans`. On failure the advance stops
-         * (see `shouldAdvance`) and the stale-error banner carries the retry.
+         * is out there" (§P3-20): while the advance can still chase it, the screen shows a
+         * refreshable loading state — never a false `No upcoming plans`. Only an upcoming
+         * failure drops through to the empty state, with the banner carrying the retry.
          */
-        if (plans.upcomingWindow?.nextFrom != null && plans.message === undefined) {
-          return (
-            <View testID="plans-upcoming-advancing">
-              <Skeleton shape="card" count={2} />
-            </View>
+        if (plans.upcomingWindow?.nextFrom != null && !plans.upcomingStalled) {
+          return refreshableEmpty(
+            'plans-upcoming-advancing',
+            <Skeleton shape="card" count={2} />,
           );
         }
         return refreshableEmpty(
@@ -366,13 +377,14 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
           />
         </View>
       ) : allEmpty ? (
-        <View testID="plans-all-empty">
+        refreshableEmpty(
+          'plans-all-empty',
           <EmptyState
             heading="No plans"
             body="Add something you want to do, on its own or with someone."
             action={{ label: 'Add', onPress: onAdd }}
-          />
-        </View>
+          />,
+        )
       ) : (
         <View style={{ flex: 1, gap: theme.space[4] }}>
           <SegmentedControl

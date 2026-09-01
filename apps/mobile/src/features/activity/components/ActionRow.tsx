@@ -11,6 +11,12 @@ export interface ActionRowProps {
   onPress: () => void;
   testID?: string;
   disabled?: boolean;
+  /**
+   * `body` is a create affordance (`+ Add prep task`); `subhead` is a disclosure
+   * (`Show all n`, `Show earlier updates`) — the deliberate weight distinction between
+   * making something and revealing what exists.
+   */
+  variant?: 'body' | 'subhead';
 }
 
 export function ActionRow({
@@ -19,6 +25,7 @@ export function ActionRow({
   onPress,
   testID,
   disabled = false,
+  variant = 'body',
 }: ActionRowProps) {
   const theme = useTheme();
   return (
@@ -30,7 +37,7 @@ export function ActionRow({
       style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
       {...(testID === undefined ? {} : { testID })}
     >
-      <Text variant="body" color="textAction">
+      <Text variant={variant} color="textAction">
         {label}
       </Text>
     </Touchable>
