@@ -91,6 +91,9 @@ export interface NativeSyncEngine {
 const MAX_INTENTS_PER_PASS = 20;
 const RETRY_BACKOFF_MS = [2_000, 10_000, 30_000, 60_000] as const;
 
+/** Claims before a deterministic local failure parks for recovery instead of looping. */
+const MAX_LOCAL_FAILURE_ATTEMPTS = 3;
+
 function isPermanent(error: unknown): boolean {
   const status = field(error, 'status');
   return (
@@ -100,6 +103,21 @@ function isPermanent(error: unknown): boolean {
     status !== 408 &&
     status !== 429
   );
+}
+
+/**
+ * Whether a transient-looking failure has stopped being worth automatic retries.
+ *
+ * Only local, deterministic errors exhaust. Transport loss (`NetworkError`) is queue state
+ * that must survive any amount of offline time, and a server-owned transient (`ApiError`
+ * 5xx/408/429) stays with the backoff — the server may recover. Everything else — a
+ * settlement invariant, a response-contract mismatch, a thrown string — repeats identically
+ * on every claim, and the 2026-08-31 poison-pill incident is what an unbounded loop of
+ * those does to an ordering domain: it blocks it forever while presenting as "Syncing…".
+ */
+function retryExhausted(error: unknown, attempts: number): boolean {
+  if (error instanceof NetworkError || error instanceof ApiError) return false;
+  return attempts >= MAX_LOCAL_FAILURE_ATTEMPTS;
 }
 
 function message(error: unknown): string {
@@ -1160,7 +1178,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
        * `ReferenceError: Property 'error' doesn't exist`.
        */
       const failure = error instanceof Error ? error : new Error(String(error));
-      const permanent = isPermanent(failure);
+      /*
+       * A deterministic local failure that survived its retry budget settles through the
+       * same machinery as a server rejection: authoritative rollback, `needs_attention`,
+       * the recovery banner. Retrying it again would repeat the identical failure and
+       * block this ordering domain forever behind an intent that can never settle itself.
+       */
+      const permanent = isPermanent(failure) || retryExhausted(failure, intent.attempts);
       if (__DEV__) {
         console.warn('native_outbox_intent_failed', {
           intentId: intent.intentId,
@@ -1168,6 +1192,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           activityId: intent.entityId,
           phase,
           permanent,
+          attempts: intent.attempts,
           durationMs: Date.now() - startedAt,
           message: failure.message,
         });
@@ -2334,12 +2359,45 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     }, delay);
   }
 
+  /**
+   * Defence in depth for the serialized lane (the 2026-08-31 freeze post-mortem): the HTTP
+   * client bounds its own requests, but this lane must not trust any injected operation to
+   * settle. Public so a test can prove the lane frees without waiting a minute.
+   */
+  networkLaneDeadlineMs = 60_000;
+
   private serialNetwork<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.networkTail.then(operation, operation);
+    const guarded = () => this.boundedNetwork(operation);
+    const pending = this.networkTail.then(guarded, guarded);
     this.networkTail = pending.then(
       () => undefined,
       () => undefined,
     );
     return pending;
+  }
+
+  /**
+   * One hung promise here used to freeze the whole engine: the drain awaited it, every
+   * wake only set flags behind it, and the tail never advanced. The deadline rejects as
+   * expected transport loss — the intent requeues, the backoff owns the retry — and the
+   * abandoned operation keeps its handlers so a late settlement is swallowed, never an
+   * unhandled rejection.
+   */
+  private boundedNetwork<T>(operation: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const deadline = setTimeout(() => {
+        reject(new NetworkError('The network lane timed out.', undefined));
+      }, this.networkLaneDeadlineMs);
+      operation().then(
+        (value) => {
+          clearTimeout(deadline);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(deadline);
+          reject(error);
+        },
+      );
+    });
   }
 }

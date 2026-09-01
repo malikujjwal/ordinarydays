@@ -1778,6 +1778,88 @@ describe('serialized native convergence guard', () => {
     expect(queued?.lastError).toBeUndefined();
   });
 
+  /**
+   * The 2026-08-31 freeze, locked down at the engine seam: the HTTP client bounds its own
+   * requests, but the serialized lane must not trust any injected operation to settle. A
+   * hung transport call rejects at the lane deadline as expected transport loss, the tail
+   * advances, and the next drain converges — the engine never freezes behind one promise.
+   */
+  it('frees the serialized lane when a transport call never settles', async () => {
+    const base = pushTransport();
+    let hang = true;
+    const push: ActivityPushTransport = {
+      ...base,
+      patch: async () => {
+        if (hang) return new Promise<never>(() => undefined);
+        return undefined;
+      },
+    };
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'hung-edit',
+        input: { title: 'Held hostage' },
+        ifMatch: 'v1',
+      }),
+    );
+    const sync = syncEngine({ push });
+    sync.networkLaneDeadlineMs = 100;
+
+    await expect(sync.syncNow()).rejects.toThrow('The network lane timed out.');
+
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'hung-edit',
+      status: 'queued',
+      attempts: 1,
+    });
+
+    hang = false;
+    await sync.syncNow();
+    sync.stop();
+    expect(await outbox.all()).toEqual([]);
+  });
+
+  /**
+   * The 2026-08-31 poison pill, locked down as a class: a failure that is neither transport
+   * loss nor a server answer repeats identically on every claim, so after a bounded number
+   * of attempts it routes through the permanent-rejection machinery — authoritative
+   * rollback, `needs_attention`, the recovery banner — instead of blocking its ordering
+   * domain forever. Transport loss never exhausts; offline is queue state.
+   */
+  it('parks a deterministically failing intent for recovery instead of retrying forever', async () => {
+    const base = pushTransport();
+    const push: ActivityPushTransport = {
+      ...base,
+      patch: async () => {
+        throw new Error('Intent id was reused for a different durable action.');
+      },
+    };
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'poisoned-edit',
+        input: { title: 'Poisoned' },
+        ifMatch: 'v1',
+      }),
+    );
+    const sync = syncEngine({ push });
+
+    await expect(sync.syncNow()).rejects.toThrow('reused for a different');
+    expect((await outbox.all())[0]).toMatchObject({ status: 'queued', attempts: 1 });
+    await expect(sync.syncNow()).rejects.toThrow('reused for a different');
+    expect((await outbox.all())[0]).toMatchObject({ status: 'queued', attempts: 2 });
+
+    await expect(sync.syncNow()).rejects.toThrow('reused for a different');
+    sync.stop();
+
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'poisoned-edit',
+      status: 'needs_attention',
+      attempts: 3,
+      attention: { kind: 'rejected' },
+    });
+  });
+
   it('lets an unrelated ordering key converge behind a transiently blocked key', async () => {
     const calls: string[] = [];
     const base = pushTransport();
