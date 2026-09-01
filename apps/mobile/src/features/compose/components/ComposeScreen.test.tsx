@@ -642,6 +642,78 @@ describe('a failed save', () => {
 });
 
 /**
+ * `+ Add prep task` (P3-38): the parent Plan's labelled action fixes both the object and the
+ * relationship, and the same words through the global chooser fix neither.
+ */
+describe('the prep-task contextual entry', () => {
+  const PARENT = 'act_01J0000000000000000000000P';
+
+  it('opens the Task form directly with Save task and sends the fixed parent', async () => {
+    const onClose = vi.fn();
+    useComposeDraft.getState().openPrepTask(PARENT);
+    mount(onClose);
+
+    // No chooser step: the plan's action was the explicit Task choice.
+    expect(
+      screen.queryByRole('heading', { name: 'What would you like to add?' }),
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Book hotel' },
+    });
+    tap('Save task');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const request = sent.find((call) => call.url.includes('/v1/activities'));
+    expect(request?.body).toMatchObject({
+      objectKind: 'task',
+      type: 'task',
+      title: 'Book hotel',
+      parentActivityId: PARENT,
+    });
+  });
+
+  it('drops the parent when Change backs out to the global chooser', async () => {
+    const onClose = vi.fn();
+    useComposeDraft.getState().openPrepTask(PARENT);
+    mount(onClose);
+
+    // Backing out abandons the labelled context; what follows is an ordinary global add,
+    // and no path through the chooser may carry the prep relationship silently.
+    tap('Change');
+    expect(
+      screen.getByRole('heading', { name: 'What would you like to add?' }),
+    ).toBeDefined();
+    tapChoice('Task');
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Book hotel' },
+    });
+    tap('Save task');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const request = sent.find((call) => call.url.includes('/v1/activities'));
+    expect(request?.body).toMatchObject({ objectKind: 'task', type: 'task' });
+    expect(request?.body).not.toHaveProperty('parentActivityId');
+  });
+
+  it('leaves the same words a standalone custom Plan through the global chooser', async () => {
+    const onClose = vi.fn();
+    mount(onClose);
+
+    tapChoice('Plan');
+    tapChoice('General');
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Book hotel' },
+    });
+    tap('Save plan');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const request = sent.find((call) => call.url.includes('/v1/activities'));
+    expect(request?.body).toMatchObject({ objectKind: 'plan', type: 'custom' });
+    expect(request?.body).not.toHaveProperty('parentActivityId');
+  });
+});
+
+/**
  * The `Plan this item` bridge flow (P3-34, `plans-and-lists.md` §6).
  *
  * The Vitest half of the flow the task specifies for Playwright: kind step with nothing

@@ -2847,3 +2847,66 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.queryByTestId('section-people')).toBeNull();
   });
 });
+
+/**
+ * `+ Add prep task` (P3-38): a wired handler surfaces the empty section through the chip row
+ * and the populated section through its own trailing affordance — and an unwired detail
+ * (P3-37's shipped state) renders neither.
+ */
+describe('the prep-task entry points (P3-38)', () => {
+  const child = (index: number) => ({
+    activityId: `act_01J0000000000000000000P3${37 + index}`,
+    title: `Prep ${index}`,
+    status: 'scheduled' as const,
+    isRecurring: false,
+  });
+
+  function mountWithPrepEntry(extras: Partial<ActivityDetail>) {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan(), [], undefined, undefined, undefined, extras),
+    });
+    const onAddPrepTask = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    registerActivityMutationDefaults(queryClient);
+    render(
+      <SafeAreaProvider>
+        <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+          <ThemeProvider scheme="light">
+            <QueryClientProvider client={queryClient}>
+              <ActivityDetailScreen
+                target={{ kind: 'activity', activityId: ID }}
+                today={TODAY}
+                onBack={() => {}}
+                onOpenActivity={() => {}}
+                onOpenList={() => {}}
+                onOpenChild={() => {}}
+                onAddPrepTask={onAddPrepTask}
+              />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
+      </SafeAreaProvider>,
+    );
+    return { onAddPrepTask };
+  }
+
+  it('offers a Prep task chip on an empty plan and fires the handler', async () => {
+    const { onAddPrepTask } = mountWithPrepEntry({});
+    await screen.findByTestId('detail-content');
+    expect(screen.queryByTestId('section-prep')).toBeNull();
+    fireEvent.click(screen.getByTestId('add-to-plan-prep-task'));
+    expect(onAddPrepTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves the entry into the populated section and off the chip row', async () => {
+    const { onAddPrepTask } = mountWithPrepEntry({ children: [child(1)] });
+    await screen.findByTestId('section-prep');
+    expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
+    expect(screen.getByText('+ Add prep task')).toBeDefined();
+    fireEvent.click(screen.getByTestId('prep-add'));
+    expect(onAddPrepTask).toHaveBeenCalledTimes(1);
+  });
+});

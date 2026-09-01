@@ -107,6 +107,9 @@ export function ComposeScreen({
         reminderOffset: draft.reminderOffset,
         ...(draft.recurrence === undefined ? {} : { recurrence: draft.recurrence }),
         details: draft.details,
+        ...(draft.parentActivityId === undefined
+          ? {}
+          : { parentActivityId: draft.parentActivityId }),
       },
       timezone,
     );

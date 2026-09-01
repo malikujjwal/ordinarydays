@@ -141,7 +141,24 @@ export function refreshActivityDetails(
 ): boolean {
   if (!Array.isArray(mutationKey)) return false;
   const [scope, name] = mutationKey as readonly unknown[];
-  if (scope !== 'activity' || name === 'create' || name === 'duplicate') {
+  /**
+   * A create refreshes nothing about itself — the id is new — but a **prep-task** create
+   * (P3-38) changes its parent's detail: the PREP section is projected from the `SUB#`
+   * pointer the same transaction wrote, and the plan screen is still mounted behind the
+   * compose modal. The detail read is a strongly consistent partition read, so an immediate
+   * refetch cannot lose the race the agenda's `refetchType: 'none'` exists for.
+   */
+  if (scope === 'activity' && name === 'create') {
+    const parentActivityId = (
+      variables as { input?: { parentActivityId?: unknown } } | undefined
+    )?.input?.parentActivityId;
+    if (typeof parentActivityId === 'string') {
+      void client.invalidateQueries({ queryKey: activityKey(parentActivityId) });
+      return true;
+    }
+    return false;
+  }
+  if (scope !== 'activity' || name === 'duplicate') {
     return false;
   }
   if (typeof variables !== 'object' || variables === null) return false;
