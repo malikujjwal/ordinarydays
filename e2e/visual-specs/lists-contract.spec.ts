@@ -266,7 +266,7 @@ test.describe('P3-33 production List contracts', () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await installKeyboardViewport(page, 336);
       await openFrame(page, 'context-add-long', scheme);
-      await expect(page.getByLabel('Title')).toBeFocused();
+      await expect(page.getByLabel('Add item to Weekend packing')).toBeFocused();
       await expectAboveKeyboard(page, 'list-contextual-add', 336);
       await expect(page).toHaveScreenshot(`context-add-long-compact-${scheme}.png`);
     });
@@ -278,7 +278,7 @@ test.describe('P3-33 production List contracts', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await installKeyboardViewport(page, 336);
     await openFrame(page, 'context-add-long');
-    const title = page.getByLabel('Title');
+    const title = page.getByLabel('Add item to Weekend packing');
 
     for (const value of ['Rapid item 1', 'Rapid item 2', 'Rapid item 3']) {
       await title.fill(value);
@@ -329,6 +329,20 @@ test.describe('P3-33 production List contracts', () => {
     await expect(page.getByRole('button', { name: 'Delete item' })).toBeInViewport({
       ratio: 1,
     });
+    const header = await page
+      .getByRole('heading', { name: 'Item details' })
+      .boundingBox();
+    const addIngredient = await page
+      .getByRole('button', { name: 'Add ingredient' })
+      .boundingBox();
+    expect(header).not.toBeNull();
+    expect(addIngredient).not.toBeNull();
+    if (header !== null && addIngredient !== null) {
+      const separated =
+        addIngredient.y + addIngredient.height <= header.y ||
+        addIngredient.y >= header.y + header.height;
+      expect(separated).toBe(true);
+    }
     await expect(page).toHaveScreenshot('item-details-large-text-light.png');
   });
 
@@ -527,15 +541,12 @@ test.describe('P3-33 production List contracts', () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'context-add', scheme);
       await expect(page.getByTestId('list-contextual-add')).toBeVisible();
-      await expect(
-        page.getByRole('heading', { name: 'Add item to Weekend packing' }),
-      ).toBeVisible();
-      await expect(page.getByLabel('Title')).toBeFocused();
-      await expect(page.getByLabel('Note')).toBeVisible();
-      await expect(page.getByText('Optional')).toBeVisible();
-      await expect(
-        page.getByRole('button', { name: 'Add to Weekend packing' }),
-      ).toBeVisible();
+      await expect(page.getByLabel('Add item to Weekend packing')).toBeFocused();
+      await expect(page.getByLabel('Note')).toHaveCount(0);
+      await expect(page.getByText('Optional')).toHaveCount(0);
+      await expect(page.getByText('Return adds another')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Done adding' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
       await expect(page.getByTestId('list-title')).toBeVisible();
       await expect(page).toHaveScreenshot(`context-add-compact-${scheme}.png`);

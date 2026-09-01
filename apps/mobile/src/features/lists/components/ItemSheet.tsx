@@ -151,6 +151,7 @@ const createStyles = (theme: Theme) =>
     subItemHeading: {
       minHeight: theme.layout.hitTarget,
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       gap: theme.space[2],
       borderBottomWidth: 1,
@@ -450,7 +451,7 @@ export function ItemSheet({
     subItems: (config) => (
       <View key="subItems" testID="sub-items-editor">
         <View style={styles.subItemHeading}>
-          <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexBasis: '33%', flexGrow: 1, minWidth: 0 }}>
             <Text variant="sectionLabel" color="textSecondary">
               {config.sectionLabel}
             </Text>
