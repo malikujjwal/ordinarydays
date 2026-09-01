@@ -2910,3 +2910,76 @@ describe('the prep-task entry points (P3-38)', () => {
     expect(onAddPrepTask).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * The `Add list` entry points (P3-39): the chip on an empty plan, the section's own
+ * affordance once a List exists, both handing the caller the plan's title for the sheet's
+ * context line — and the entry is the same from every Plan type, because the type is not
+ * an input to it.
+ */
+describe('the Add-list entry points (P3-39)', () => {
+  const sourceList = {
+    listId: 'lst_01J0000000000000000000P339',
+    title: 'Packing',
+    icon: 'list',
+    itemCount: 8,
+    doneCount: 3,
+  };
+
+  function mountWithListEntry(extras: Partial<ActivityDetail>, activity = plan()) {
+    stubFetch({
+      status: 200,
+      body: detailBody(activity, [], undefined, undefined, undefined, extras),
+    });
+    const onAddList = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    registerActivityMutationDefaults(queryClient);
+    render(
+      <SafeAreaProvider>
+        <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+          <ThemeProvider scheme="light">
+            <QueryClientProvider client={queryClient}>
+              <ActivityDetailScreen
+                target={{ kind: 'activity', activityId: ID }}
+                today={TODAY}
+                onBack={() => {}}
+                onOpenActivity={() => {}}
+                onOpenList={() => {}}
+                onOpenChild={() => {}}
+                onAddList={onAddList}
+              />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
+      </SafeAreaProvider>,
+    );
+    return { onAddList };
+  }
+
+  it.each([
+    ['custom', { kind: 'custom' }],
+    ['meal', { kind: 'meal' }],
+    ['watch', { kind: 'watch', mediaTitle: 'Zahav' }],
+    ['event', { kind: 'event' }],
+  ] as const)(
+    'offers the identical List chip on an empty %s plan, with the title',
+    async (type, details) => {
+      const { onAddList } = mountWithListEntry({}, plan({ type, details }));
+      await screen.findByTestId('detail-content');
+      expect(screen.queryByTestId('section-lists')).toBeNull();
+      fireEvent.click(screen.getByTestId('add-to-plan-list'));
+      expect(onAddList).toHaveBeenCalledWith('Zahav');
+    },
+  );
+
+  it('moves the entry into the populated section and off the chip row', async () => {
+    const { onAddList } = mountWithListEntry({ sourceLists: [sourceList] });
+    await screen.findByTestId('section-lists');
+    expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
+    expect(screen.getByText('+ Add list')).toBeDefined();
+    fireEvent.click(screen.getByTestId('lists-add'));
+    expect(onAddList).toHaveBeenCalledWith('Zahav');
+  });
+});

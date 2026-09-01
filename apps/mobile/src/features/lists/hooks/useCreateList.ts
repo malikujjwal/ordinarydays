@@ -25,9 +25,15 @@ export interface CreateListResult {
    * Writes the list, and answers with its id so the caller can continue into it.
    *
    * Takes the **tapped** style's key and the visible title. Not a draft, not free text: there
-   * is no argument through which a title could influence the style.
+   * is no argument through which a title could influence the style. `sourceActivityId` is
+   * P3-39's Plan relationship — it comes from the plan whose labelled `Add list` opened the
+   * sheet, never from anything typed, and the server forces the copied slot to `null` for it.
    */
-  create: (templateKey: string, title: string) => Promise<string | undefined>;
+  create: (
+    templateKey: string,
+    title: string,
+    options?: { sourceActivityId?: string },
+  ) => Promise<string | undefined>;
   isCreating: boolean;
   /** `interaction-contract.md` §5.3 copy. The step stays open behind it. */
   errorMessage: string | undefined;
@@ -57,19 +63,41 @@ export function useCreateList(): CreateListResult {
   const [error, setError] = useState<unknown>();
 
   const mutation = useMutation({
-    mutationFn: ({ templateKey, title }: { templateKey: string; title: string }) =>
+    mutationFn: ({
+      templateKey,
+      title,
+      sourceActivityId,
+    }: {
+      templateKey: string;
+      title: string;
+      sourceActivityId?: string;
+    }) =>
       // `expo-crypto`, not `crypto.randomUUID`: the latter is absent from some Hermes builds,
       // and an idempotency key is the wrong place to find that out.
-      createList(apiClient, { title, templateKey }, randomUUID()),
+      createList(
+        apiClient,
+        {
+          title,
+          templateKey,
+          ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
+        },
+        randomUUID(),
+      ),
   });
 
   const failure = error === undefined ? undefined : describeCreateFailure(error);
 
   return {
-    create: async (templateKey, title) => {
+    create: async (templateKey, title, options) => {
       try {
         setError(undefined);
-        const list = await mutation.mutateAsync({ templateKey, title });
+        const list = await mutation.mutateAsync({
+          templateKey,
+          title,
+          ...(options?.sourceActivityId === undefined
+            ? {}
+            : { sourceActivityId: options.sourceActivityId }),
+        });
         // The index is a separate query and the sheet closes onto it; without this the new
         // list is missing from the screen the user is returned to.
         await queryClient.invalidateQueries({ queryKey: LISTS_KEY });

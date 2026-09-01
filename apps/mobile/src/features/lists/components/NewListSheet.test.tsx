@@ -243,6 +243,86 @@ describe('the title step', () => {
 });
 
 /**
+ * The sheet opened from a Plan's `Add list` (§P3-39): same catalogue, one context line, a
+ * `· <Plan title>` prefill, and `sourceActivityId` on the one confirmed write. The Plan is
+ * context, never input — nothing about it ranks, hides or selects a style.
+ */
+describe('a Plan as the source', () => {
+  const PLAN = {
+    activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+    planTitle: 'New York Trip',
+  };
+
+  function mountSourced() {
+    const onClose = vi.fn();
+    const onCreated = vi.fn();
+    render(
+      <ThemeProvider scheme="light">
+        <NewListSheet open onClose={onClose} onCreated={onCreated} source={PLAN} />
+      </ThemeProvider>,
+    );
+    return { onClose, onCreated };
+  }
+
+  it('names the Plan in a context line and changes nothing about the catalogue', () => {
+    mountSourced();
+
+    expect(screen.getByTestId('new-list-source-context').textContent).toBe(
+      'For New York Trip',
+    );
+    // The identical seven, in the identical order, nothing selected — the general `New list`
+    // catalogue exactly (§P3-39's identical-entry-point test).
+    const choices = listTemplateChoices();
+    const rendered = choices.filter((choice) => {
+      const label = choice.templateKey === 'blank' ? 'Blank list' : choice.chooserLabel;
+      return screen.queryByRole('button', { name: `${label}. ${choice.summary}` });
+    });
+    expect(rendered.map((choice) => choice.templateKey)).toEqual(
+      choices.map((choice) => choice.templateKey),
+    );
+    for (const choice of choices) {
+      const row = choiceControl(choice.templateKey);
+      expect(row.getAttribute('aria-selected'), choice.templateKey).toBeNull();
+      expect(row.getAttribute('aria-pressed'), choice.templateKey).toBeNull();
+    }
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('prefills `<Default title> · <Plan title>`, editable, and writes the source', async () => {
+    const { create } = setHook();
+    const { onCreated, onClose } = mountSourced();
+
+    choose('checklist');
+    expect(titleField().getAttribute('value')).toBe('Checklist · New York Trip');
+
+    fireEvent.change(titleField(), { target: { value: 'Packing · New York Trip' } });
+    fireEvent.click(createButton());
+    await vi.waitFor(() => expect(create).toHaveBeenCalled());
+
+    expect(create).toHaveBeenCalledWith('checklist', 'Packing · New York Trip', {
+      sourceActivityId: PLAN.activityId,
+    });
+    expect(onCreated).toHaveBeenCalledWith({
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      title: 'Packing · New York Trip',
+    });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the source through Back, which still retains no style or title', () => {
+    mountSourced();
+
+    choose('groceries');
+    fireEvent.change(titleField(), { target: { value: 'Costco run' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+    expect(screen.getByTestId('new-list-source-context')).toBeDefined();
+    choose('groceries');
+    expect(titleField().getAttribute('value')).toBe('Groceries · New York Trip');
+  });
+});
+
+/**
  * The absence acceptance criterion 6 is about. There is no matcher, debounce, term catalogue
  * or model call, so **nothing at all** leaves the device while the user types — including a
  * fetch of `GET /v1/list-templates`, which this sheet never needs because the catalogue ships

@@ -1,7 +1,11 @@
 import type { ActivityDetailTarget } from '@od/shared/types';
+import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
+import { NewListSheet } from '@/features/lists/components/NewListSheet';
+import { activityKey } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -22,6 +26,13 @@ export default function ActivityDetailRoute() {
   }>();
   const router = useRouter();
   const openPrepTask = useComposeDraft((s) => s.openPrepTask);
+  const queryClient = useQueryClient();
+  // `Add list` (P3-39): the sheet is composed here because features may not import each
+  // other — the route is the point where the activity feature meets the lists feature.
+  const [listSource, setListSource] = useState<{
+    activityId: string;
+    planTitle: string;
+  }>();
   const activityId = id ?? '';
   const target: ActivityDetailTarget =
     occurrenceDate === undefined
@@ -29,33 +40,46 @@ export default function ActivityDetailRoute() {
       : { kind: 'occurrence', activityId, date: occurrenceDate };
 
   return (
-    <ActivityDetailScreen
-      target={target}
-      today={format(new Date(), 'yyyy-MM-dd')}
-      onBack={() => router.back()}
-      {...(resolvePassed === '1'
-        ? {
-            resolutionOccurrenceDate: occurrenceDate ?? null,
-            onResolutionProjectionChange: (resolved: boolean) =>
-              router.setParams({ resolvePassed: resolved ? '0' : '1' }),
-          }
-        : {})}
-      /**
-       * `replace`, not `push`: the copy takes the original's place in the stack, so Back from
-       * it returns where the user came from rather than to the row they just duplicated. Two
-       * detail screens for two versions of one thing is a stack nobody asked for.
-       */
-      onOpenActivity={(next) => router.replace(`/activity/${next}` as Href)}
-      // The LISTS and PREP rows (P3-37): a plan's own List or child is somewhere the user
-      // goes and comes **back** from, so `push`, unlike the duplicate's replace above.
-      onOpenList={(listId) => router.push(`/lists/${listId}` as Href)}
-      onOpenChild={(childId) => router.push(`/activity/${childId}` as Href)}
-      // `+ Add prep task` (P3-38): the parent fixes the relationship; the modal opens on the
-      // Task form directly, never the global chooser.
-      onAddPrepTask={() => {
-        openPrepTask(activityId);
-        router.push('/compose');
-      }}
-    />
+    <>
+      <ActivityDetailScreen
+        target={target}
+        today={format(new Date(), 'yyyy-MM-dd')}
+        onBack={() => router.back()}
+        {...(resolvePassed === '1'
+          ? {
+              resolutionOccurrenceDate: occurrenceDate ?? null,
+              onResolutionProjectionChange: (resolved: boolean) =>
+                router.setParams({ resolvePassed: resolved ? '0' : '1' }),
+            }
+          : {})}
+        /**
+         * `replace`, not `push`: the copy takes the original's place in the stack, so Back from
+         * it returns where the user came from rather than to the row they just duplicated. Two
+         * detail screens for two versions of one thing is a stack nobody asked for.
+         */
+        onOpenActivity={(next) => router.replace(`/activity/${next}` as Href)}
+        // The LISTS and PREP rows (P3-37): a plan's own List or child is somewhere the user
+        // goes and comes **back** from, so `push`, unlike the duplicate's replace above.
+        onOpenList={(listId) => router.push(`/lists/${listId}` as Href)}
+        onOpenChild={(childId) => router.push(`/activity/${childId}` as Href)}
+        // `+ Add prep task` (P3-38): the parent fixes the relationship; the modal opens on the
+        // Task form directly, never the global chooser.
+        onAddPrepTask={() => {
+          openPrepTask(activityId);
+          router.push('/compose');
+        }}
+        onAddList={(planTitle) => setListSource({ activityId, planTitle })}
+      />
+      <NewListSheet
+        open={listSource !== undefined}
+        {...(listSource === undefined ? {} : { source: listSource })}
+        onClose={() => setListSource(undefined)}
+        // The LISTS section is projected from the `SOURCE_LIST#` row the create wrote; the
+        // detail read is strongly consistent, so refetching immediately shows the new list.
+        onCreated={() => {
+          void queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
+        }}
+      />
+    </>
   );
 }

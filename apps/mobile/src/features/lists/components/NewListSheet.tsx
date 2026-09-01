@@ -62,9 +62,17 @@ export interface NewListSheetProps {
    * callback; it never opens or returns to a global List-item draft.
    */
   onCreated?: (created: { listId: string; title: string }) => void;
+  /**
+   * The Plan whose `Add list` opened the sheet (P3-39). It adds a context line naming the
+   * Plan, prefixes the step-two title with `<Default title> · <Plan title>` (still editable),
+   * and stamps `sourceActivityId` on the one confirmed write. It changes **nothing** about
+   * the catalogue itself: same seven types, same order, nothing selected — a Plan's type,
+   * title, duration and participants do not rank, hide or pre-select a style.
+   */
+  source?: { activityId: string; planTitle: string };
 }
 
-export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
+export function NewListSheet({ open, onClose, onCreated, source }: NewListSheetProps) {
   const theme = useTheme();
   const create = useCreateList();
   /**
@@ -89,10 +97,21 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
     onClose();
   }
 
+  /** The step-two prefill: `<Default title> · <Plan title>` for a sourced create (§P3-39). */
+  function prefillFor(choice: ListTemplateChoice): string {
+    if (source === undefined) return choice.defaultTitle;
+    return `${choice.defaultTitle} · ${source.planTitle}`.slice(0, MAX_TITLE_LEN);
+  }
+
   async function confirm() {
     if (style === undefined) return;
     const createdTitle = title.trim();
-    const listId = await create.create(style.templateKey, createdTitle);
+    const listId =
+      source === undefined
+        ? await create.create(style.templateKey, createdTitle)
+        : await create.create(style.templateKey, createdTitle, {
+            sourceActivityId: source.activityId,
+          });
     if (listId === undefined) return; // The banner is showing; the step stays put.
     back();
     onCreated?.({ listId, title: createdTitle });
@@ -147,6 +166,13 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
 
       {style === undefined ? (
         <View testID="list-style-chooser" style={{ gap: theme.space[4] }}>
+          {source === undefined ? null : (
+            /* The §P3-39 context line: it names the Plan and nothing more — no type is
+             * highlighted, hidden or reordered because of what the Plan is. */
+            <Text variant="subhead" color="textPrimary" testID="new-list-source-context">
+              For {source.planTitle}
+            </Text>
+          )}
           <Text variant="subhead" color="textSecondary">
             Choose Blank when you want a list without a category or item details.
           </Text>
@@ -157,7 +183,7 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
                 leading
                 onPress={() => {
                   setStyle(blank);
-                  setTitle(blank.defaultTitle);
+                  setTitle(prefillFor(blank));
                 }}
               />
             </View>
@@ -172,7 +198,7 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
                   choice={choice}
                   onPress={() => {
                     setStyle(choice);
-                    setTitle(choice.defaultTitle);
+                    setTitle(prefillFor(choice));
                   }}
                 />
               </View>
@@ -187,7 +213,7 @@ export function NewListSheet({ open, onClose, onCreated }: NewListSheetProps) {
           </Text>
           <Field
             label="List name"
-            accessibilityLabel={`List name, pre-filled with ${style.defaultTitle}`}
+            accessibilityLabel={`List name, pre-filled with ${prefillFor(style)}`}
             value={title}
             onChangeText={setTitle}
             autoFocus
