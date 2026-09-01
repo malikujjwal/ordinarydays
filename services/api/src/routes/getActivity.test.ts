@@ -1,4 +1,9 @@
-import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  BatchGetCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +30,7 @@ let createApp: typeof CreateApp;
 const DEV = 'usr_local_dev';
 const OTHER = 'usr_someone_else';
 const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1L1';
 
 const REMINDER_OF = {
   [DEV]: 'rem_01J8XKQ2M4N5P6R7S8T9V0W1AA',
@@ -114,6 +120,35 @@ const participantOf = (userId: string) => ({
   rsvp: 'going',
   role: 'participant',
   isGuest: false,
+});
+
+const sourceList = () => ({
+  pk: `ACT#${ACT}`,
+  sk: `SOURCE_LIST#${LIST}`,
+  entity: 'SourceList',
+  listId: LIST,
+  schemaVersion: 1,
+});
+
+const privateListMeta = () => ({
+  pk: `LIST#${LIST}`,
+  sk: 'META',
+  entity: 'List',
+  listId: LIST,
+  title: 'Owner private packing',
+  icon: 'check-square',
+  itemCount: 7,
+  doneCount: 2,
+  schemaVersion: 2,
+});
+
+const listPointer = (userId: string) => ({
+  pk: `USER#${userId}`,
+  sk: `LIST#${LIST}`,
+  entity: 'ListIndex',
+  userId,
+  listId: LIST,
+  schemaVersion: 2,
 });
 
 beforeEach(async () => {
@@ -427,6 +462,48 @@ describe('reminders are the caller’s own', () => {
       skip: false,
       snooze: false,
     });
+  });
+
+  it('does not reveal a sourced List to a Plan participant without List access', async () => {
+    seed([
+      meta({ visibility: 'shared', participantCount: 1 }),
+      participantOf(OTHER),
+      sourceList(),
+    ]);
+    // The List exists, but the batch deliberately contains no USER#<caller>/LIST#<list>
+    // pointer. Plan participation and List membership are independent grants.
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: { 'od-main-local': [privateListMeta()] as never },
+    });
+
+    const res = await get(asUser(OTHER));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.sourceLists).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain('Owner private packing');
+  });
+
+  it('returns a sourced List when the caller has independent List access', async () => {
+    seed([meta(), sourceList()]);
+    // BatchGet ordering is not stable, so exercise META-before-pointer as well.
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: { 'od-main-local': [privateListMeta(), listPointer(DEV)] as never },
+    });
+
+    const res = await get(asUser(DEV));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.sourceLists).toEqual([
+      {
+        listId: LIST,
+        title: 'Owner private packing',
+        icon: 'check-square',
+        itemCount: 7,
+        doneCount: 2,
+      },
+    ]);
   });
 });
 

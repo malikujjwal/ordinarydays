@@ -1922,7 +1922,7 @@ export async function getActivityDetail(
    */
   const [feed, summaries, attachments] = await Promise.all([
     listActivityUpdates(target.activityId),
-    batchGetSourceListSummaries(sourceListIds),
+    batchGetSourceListSummaries(userId, sourceListIds),
     drainPendingUploads(userId, Date.parse(now)).then(() =>
       listAttachments(target.activityId),
     ),

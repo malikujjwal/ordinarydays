@@ -693,30 +693,40 @@ export interface UserListEntry {
 /**
  * The trimmed rows plan detail's LISTS section renders (P3-37, access pattern 4).
  *
- * One bounded `BatchGetItem` over `LIST#<id>` / `META` keys — never one read per List and
- * never a Query over anything — keyed back by `listId` so the caller can restore the
- * partition's own `SOURCE_LIST#` order. A missing META is simply absent from the map: the
- * List was deleted after the projection was read, and a summary of a ghost is worse than a
- * shorter section (P3-50 clears the projection in its own pass).
+ * One bounded `BatchGetItem` over the caller's `USER#<id>` / `LIST#<id>` pointers and the
+ * corresponding `LIST#<id>` / `META` keys — never one read per List and never a Query over
+ * anything. Plan participation and List membership are independent grants, so a META row is
+ * emitted only when its caller-owned pointer is present in the same strong read. Results are
+ * keyed back by `listId` so the caller can restore the partition's own `SOURCE_LIST#` order.
+ * A missing pointer or META is simply absent from the map.
  *
  * Deliberately tolerant of the stored shape: a summary is navigation, and a legacy aggregate
  * that would fail the full parse should still name itself on the plan that made it.
  */
 export async function batchGetSourceListSummaries(
+  userId: string,
   listIds: readonly string[],
 ): Promise<Map<string, SourceListSummary>> {
   const unique = [...new Set(listIds)];
   if (unique.length === 0) return new Map();
   const rows = await batchGetItems<StoredItem>(
-    unique.map((listId) => listMeta(listId)),
+    unique.flatMap((listId) => [listPointer(userId, listId), listMeta(listId)]),
     { consistentRead: true },
   );
+  const requested = new Set(unique);
+  const authorized = new Set<string>();
+  for (const row of rows) {
+    if (row.entity !== ENTITY.index || typeof row.listId !== 'string') continue;
+    if (!requested.has(row.listId)) continue;
+    const expected = listPointer(userId, row.listId);
+    if (row.pk === expected.pk && row.sk === expected.sk) authorized.add(row.listId);
+  }
   const summaries = new Map<string, SourceListSummary>();
   for (const row of rows) {
     if (row.entity !== ENTITY.list) continue;
     const listId = typeof row.listId === 'string' ? row.listId : undefined;
     const title = typeof row.title === 'string' ? row.title : undefined;
-    if (listId === undefined || title === undefined) continue;
+    if (listId === undefined || title === undefined || !authorized.has(listId)) continue;
     summaries.set(listId, {
       listId,
       title,
