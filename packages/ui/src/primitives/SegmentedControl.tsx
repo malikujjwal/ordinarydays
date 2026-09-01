@@ -7,7 +7,9 @@ import { Touchable } from './Touchable';
  * The stage switcher (`design-system.md` §6, §7.3) — `Needs a date · Upcoming · Past`.
  *
  * A `surfaceSunken` pill track with the active segment raised onto `surfaceRaised` + `e1`.
- * Counts render as a `footnote` beside the label where a stage carries a badge-worthy number.
+ * `count` renders as a `footnote` beside the label; the **Plans** switcher never passes one
+ * (§7.3, corrected 2026-08-25: §1.3.2 forbids every stage badge and count, so there is no
+ * badge-worthy number to render there — the plans chrome test enforces it).
  *
  * `role="tablist"` with `selected` state per segment, so a screen reader announces position
  * rather than reading three unrelated buttons.

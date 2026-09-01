@@ -1100,6 +1100,17 @@ may move below the title before any label truncates; the grip retains its 44 pt 
  └───────────────────────────────────────────────────────┘
 ```
 
+> **Amended 2026-08-25 (founder, screen board), built by P3-36 — the frame is the day on the
+> dated stages.** The event card above stands for **Needs a date** (and the public invite
+> header), where each card is one plan. Upcoming and Past were settled as **one card per
+> day**: the day heading, then a single `radius.lg` card whose `AgendaRow`s are separated by
+> hairlines, so the card edge means the unit the heading already names and eight rows draw
+> four frames rather than eight. The per-plan card cannot carry the dated stages as drawn —
+> Upcoming is *every dated Activity*, and a 44 pt squircle has nowhere to put a task's
+> checkbox — which is why P2-32 reached for `AgendaRow`; this records what replaced the
+> per-row `Card` wrapper it shipped. Gap lines stay outside the cards, and Past is the same
+> component with the row's own past de-emphasis and outcome verb.
+
 - The stage switcher is the `SegmentedControl` (`Needs a date · Upcoming · Past`); below it,
   the `All · Personal · Shared` filter Chips.
 
