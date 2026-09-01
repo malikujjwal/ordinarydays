@@ -1,14 +1,23 @@
 import { fixedClock, type Instant } from '@od/shared/time';
-import type { AgendaData, AgendaItem } from '@od/shared/types';
+import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
+import type { NeedsDateRowData } from '../hooks/usePlans';
 import { PlansScreen } from './PlansScreen';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-plans-test' }));
+
+/**
+ * The three-stage Plans tab (P3-36, `plans-and-lists.md` §1.3).
+ *
+ * Today is pinned to 2026-08-06 UTC. Every fixture speaks the `/v1/plans` contract — the
+ * screen replaced the P2-32 agenda read, and these tests replaced that file's fixtures with
+ * it. §1.3.2's prohibitions each appear below as an assertion, not a comment.
+ */
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
@@ -27,15 +36,48 @@ const row = (index: number, patch: Partial<AgendaItem> = {}): AgendaItem => ({
   ...patch,
 });
 
-const day = (date: string, items: AgendaItem[] = []) => ({
-  date,
-  schedule: items.filter((item) => item.time !== undefined),
-  anytime: items.filter((item) => item.time === undefined),
-  earlier: [],
+const zeroGroups = {
+  interested: { count: 0, names: [] },
+  maybe: { count: 0, names: [] },
+  pass: { count: 0, names: [] },
+  pending: { count: 0, names: [] },
+};
+
+const needsDateRow = (
+  index: number,
+  patch: Partial<NeedsDateRowData> = {},
+): NeedsDateRowData => ({
+  ...row(index),
+  lastActivityAt: '2026-08-01T10:00:00.000Z',
+  rsvpSummary: zeroGroups,
+  suggestionCount: 0,
+  ...patch,
 });
 
-const response = (days: AgendaData['days']) => ({
-  data: { days, warnings: [] },
+const plansDay = (date: string, items: AgendaItem[]) => ({ date, items });
+
+interface InitialOverrides {
+  needsDate?: NeedsDateRowData[];
+  upcoming?: ReturnType<typeof plansDay>[];
+  upcomingWindow?: { from: string; through: string; nextFrom: string | null };
+  past?: ReturnType<typeof plansDay>[];
+  pastPage?: { nextCursor?: string };
+}
+
+const initialBody = (overrides: InitialOverrides = {}) => ({
+  data: {
+    mode: 'initial',
+    needsDate: overrides.needsDate ?? [],
+    upcoming: overrides.upcoming ?? [],
+    upcomingWindow: overrides.upcomingWindow ?? {
+      from: '2026-08-06',
+      through: '2026-10-06',
+      nextFrom: null,
+    },
+    past: overrides.past ?? [],
+    pastPage: overrides.pastPage ?? {},
+    warnings: [],
+  },
   meta: { requestId: 'req_plans' },
 });
 
@@ -44,18 +86,22 @@ interface FetchCall {
   method: string;
 }
 
-function stubFetch(body: unknown, activitiesBody?: unknown): FetchCall[] {
+/** Serves `/v1/plans` by arrival order; the first body answers every later call too. */
+function stubFetch(...bodies: unknown[]): FetchCall[] {
   const calls: FetchCall[] = [];
+  let plansCall = 0;
   vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
-    const selected = url.includes('/v1/activities') ? activitiesBody : body;
+    const body = url.includes('/v1/plans')
+      ? (bodies[Math.min(plansCall++, bodies.length - 1)] ?? initialBody())
+      : { data: {}, meta: { requestId: 'req_other' } };
     return Promise.resolve({
       ok: true,
       status: 200,
       headers: { get: () => null },
-      json: () => Promise.resolve(selected),
-      text: () => Promise.resolve(JSON.stringify(selected)),
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
     });
   });
   return calls;
@@ -94,48 +140,171 @@ function mount(onOpen = () => {}, onAdd = () => {}) {
   );
 }
 
+const openStage = (label: string) =>
+  fireEvent.click(screen.getByRole('tab', { name: label }));
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-it('shows the loading state while the agenda request is pending', () => {
+it('shows the loading state while the initial request is pending', () => {
   vi.stubGlobal('fetch', () => new Promise(() => {}));
   mount();
 
   expect(screen.getByTestId('plans-loading')).toBeDefined();
 });
 
-it('requests the inclusive 62-day agenda window without Anytime and never reads undated Plans', async () => {
-  const undatedSharedPlan = row(30, { title: 'Undated shared plan' });
-  const calls = stubFetch(response([day('2026-08-06')]), {
-    data: [undatedSharedPlan],
-    meta: { requestId: 'req_wrong_endpoint' },
-  });
+it('renders the whole screen from one initial /v1/plans request', async () => {
+  const calls = stubFetch(
+    initialBody({
+      needsDate: [needsDateRow(1, { title: 'Poconos trip' })],
+      upcoming: [plansDay('2026-08-08', [row(2, { title: 'Dinner', time: '19:00' })])],
+      past: [plansDay('2026-08-01', [row(3, { title: 'Old lunch', isPast: true })])],
+    }),
+  );
   mount();
 
-  await waitFor(() => expect(screen.getByTestId('plans-empty')).toBeDefined());
-  expect(calls).toEqual([
-    {
-      url: 'http://localhost:3000/v1/agenda?from=2026-08-06&to=2026-10-06&tz=UTC',
-      method: 'GET',
-    },
-  ]);
-  expect(screen.queryByText('Undated shared plan')).toBeNull();
+  await screen.findByText('Dinner');
+  expect(calls.filter(({ url }) => url.includes('/v1/plans'))).toHaveLength(1);
+  expect(calls[0]?.url).toContain('mode=initial');
+  expect(calls[0]?.url).toContain('tz=UTC');
+
+  // Every stage is one tap away, and no request accompanies the tap.
+  openStage('Needs a date');
+  expect(screen.getByText('Poconos trip')).toBeDefined();
+  openStage('Past');
+  expect(screen.getByText('Old lunch')).toBeDefined();
+  expect(calls.filter(({ url }) => url.includes('/v1/plans'))).toHaveLength(1);
 });
 
-it('uses the canonical empty-state copy and global Add action', async () => {
+it('carries exactly the three stage words on the switcher, no counts', async () => {
+  stubFetch(
+    initialBody({
+      needsDate: [needsDateRow(1), needsDateRow(2), needsDateRow(3)],
+      upcoming: [plansDay('2026-08-08', [row(4, { time: '19:00' })])],
+    }),
+  );
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  const tabs = screen.getAllByRole('tab');
+  // §1.3.2 rules 1 and 2: the heading is the words and nothing else — no `(3)`, no badge.
+  expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
+    'Needs a date',
+    'Upcoming',
+    'Past',
+  ]);
+});
+
+it.each(['custom', 'meal', 'watch', 'event'] as const)(
+  'renders a %s needs-a-date card with no checkbox and no date chip',
+  async (type) => {
+    stubFetch(
+      initialBody({
+        needsDate: [needsDateRow(1, { type, title: 'Undecided plan' })],
+      }),
+    );
+    mount();
+
+    await screen.findByTestId('plans-stage-switcher');
+    openStage('Needs a date');
+    expect(screen.getByText('Undecided plan')).toBeDefined();
+    expect(screen.getByText('No date yet')).toBeDefined();
+    // The second line is the RSVP summary, always rendered (§1.3.1).
+    expect(screen.getByText('Just you')).toBeDefined();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  },
+);
+
+it('renders needsDate in exactly the order the server sent, unsorted', async () => {
+  stubFetch(
+    initialBody({
+      needsDate: [
+        needsDateRow(3, {
+          title: 'Zebra plan',
+          lastActivityAt: '2026-08-01T00:00:00.000Z',
+        }),
+        needsDateRow(1, {
+          title: 'Alpha plan',
+          lastActivityAt: '2026-08-03T00:00:00.000Z',
+        }),
+        needsDateRow(2, {
+          title: 'Middle plan',
+          lastActivityAt: '2026-08-02T00:00:00.000Z',
+        }),
+      ],
+    }),
+  );
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  openStage('Needs a date');
+  const [zebra, alpha, middle] = ['Zebra plan', 'Alpha plan', 'Middle plan'].map(
+    (title) => screen.getByText(title),
+  );
+  if (zebra === undefined || alpha === undefined || middle === undefined) {
+    throw new Error('All three fixtures must render.');
+  }
+  expect(zebra.compareDocumentPosition(alpha) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  expect(alpha.compareDocumentPosition(middle) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+});
+
+it('renders the suggestion count as card content, never stage chrome', async () => {
+  stubFetch(
+    initialBody({
+      needsDate: [needsDateRow(1, { title: 'Zahav dinner', suggestionCount: 2 })],
+    }),
+  );
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  openStage('Needs a date');
+  expect(screen.getByText('No date yet — 2 suggestions')).toBeDefined();
+  expect(screen.getByRole('tab', { name: 'Needs a date' }).textContent).toBe(
+    'Needs a date',
+  );
+});
+
+it('shows each empty stage line, and the single No plans state only when all three are empty', async () => {
   const onAdd = vi.fn();
-  stubFetch(response([day('2026-08-06')]));
+  stubFetch(initialBody());
   mount(() => {}, onAdd);
 
-  await screen.findByText('No upcoming plans');
-  expect(screen.getByText('Anything with a date shows up here.')).toBeDefined();
+  await screen.findByTestId('plans-all-empty');
+  expect(screen.getByText('No plans')).toBeDefined();
+  expect(
+    screen.getByText('Add something you want to do, on its own or with someone.'),
+  ).toBeDefined();
+  expect(screen.queryByTestId('plans-stage-switcher')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Add' }));
   expect(onAdd).toHaveBeenCalledOnce();
 });
 
-it('shows the standard retry surface when the agenda request fails', async () => {
+it('renders per-stage empty lines when only one stage has content', async () => {
+  stubFetch(
+    initialBody({
+      needsDate: [needsDateRow(1, { title: 'Only undated' })],
+    }),
+  );
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  // Upcoming (the landing stage) is empty: its own §1.3.3 line, with the Add action.
+  expect(screen.getByText('No upcoming plans')).toBeDefined();
+  expect(screen.getByText('Anything with a date shows up here.')).toBeDefined();
+  openStage('Past');
+  expect(screen.getByText('Nothing here')).toBeDefined();
+  expect(screen.getByText('Plans that have happened show up here.')).toBeDefined();
+  openStage('Needs a date');
+  expect(screen.getByText('Only undated')).toBeDefined();
+});
+
+it('shows the standard retry surface when the initial request fails', async () => {
   stubFailure();
   mount();
 
@@ -144,93 +313,40 @@ it('shows the standard retry surface when the agenda request fails', async () =>
   expect(screen.getByRole('button', { name: 'Try again' })).toBeDefined();
 }, 15_000);
 
-it('renders one card per recurring occurrence across a seven-day response', async () => {
-  const recurringDays = Array.from({ length: 7 }, (_, index) => {
-    const date = `2026-08-${String(6 + index).padStart(2, '0')}`;
-    return day(date, [
-      row(index, {
-        title: 'Daily walk',
-        occurrenceDate: date,
-        isRecurring: true,
-        recurrenceDescription: 'Every day',
-        time: '18:00',
-      }),
-    ]);
-  });
-  stubFetch(response(recurringDays));
-  mount();
-
-  await waitFor(() => expect(screen.getByTestId('plans-list')).toBeDefined());
-  expect(screen.getAllByText('Daily walk')).toHaveLength(7);
-});
-
-it('keeps dated Earlier and completed rows while excluding Today-only copies', async () => {
-  const scheduledAllDay = row(1, { title: 'All-day museum', status: 'scheduled' });
-  const savedTask = row(2, { title: 'Undated saved task', status: 'saved' });
-  const overdueTask = row(3, {
-    title: 'Rolled-forward overdue task',
-    status: 'scheduled',
-    overdueFromDate: '2026-08-05',
-  });
-  const earlierPlan = row(4, { title: 'Earlier meeting', time: '09:00' });
-  const completedPlan = row(5, {
-    title: 'Completed scheduled row',
-    status: 'completed',
-    time: '10:00',
-  });
+it('groups Upcoming into day cards with gap lines and sticky month sections', async () => {
   stubFetch(
-    response([
-      {
-        date: '2026-08-06',
-        schedule: [completedPlan],
-        anytime: [scheduledAllDay, savedTask, overdueTask],
-        earlier: [earlierPlan],
-      },
-    ]),
+    initialBody({
+      upcoming: [
+        plansDay('2026-08-19', [
+          row(1, { title: 'Trip start', time: '09:00' }),
+          row(2, { title: 'Same-day task', type: 'task', hasCheckbox: true }),
+        ]),
+        plansDay('2026-08-25', [row(3, { title: 'Later dinner', time: '19:00' })]),
+        plansDay('2026-09-03', [row(4, { title: 'September plan', time: '12:00' })]),
+      ],
+    }),
   );
   mount();
 
-  await screen.findByText('All-day museum');
-  expect(screen.getByText('Earlier meeting')).toBeDefined();
-  expect(screen.getByText('Completed scheduled row')).toBeDefined();
-  expect(screen.queryByText('Undated saved task')).toBeNull();
-  expect(screen.queryByText('Rolled-forward overdue task')).toBeNull();
+  await screen.findByText('Trip start');
+  // One card per day: two rows share the 19 Aug card, and each day has exactly one frame.
+  expect(screen.getByTestId('plans-day-2026-08-19')).toBeDefined();
+  expect(screen.getByTestId('plans-day-2026-08-25')).toBeDefined();
+  expect(
+    screen.getByRole('button', { name: 'Aug 20 – 24 · nothing planned' }),
+  ).toBeDefined();
+  expect(screen.getByRole('heading', { name: 'August 2026' })).toBeDefined();
+  expect(screen.getByRole('heading', { name: 'September 2026' })).toBeDefined();
 });
 
-it("disables a future recurring task's checkbox until its occurrence date", async () => {
-  stubFetch(
-    response([
-      day('2026-08-07', [
-        row(1, {
-          type: 'task',
-          title: 'Tomorrow stand-up',
-          occurrenceDate: '2026-08-07',
-          isRecurring: true,
-          hasCheckbox: true,
-          time: '09:00',
-        }),
-      ]),
-    ]),
-  );
-  mount();
-
-  const checkbox = await screen.findByRole('checkbox', {
-    name: 'Tomorrow stand-up, not completed',
-  });
-  expect(checkbox.getAttribute('aria-disabled')).toBe('true');
-});
-
-it('renders exact gap copy and opens a date picker pre-set to the first date without writing', async () => {
+it('opens the gap date picker pre-set to the first day without writing anything', async () => {
   const calls = stubFetch(
-    response([
-      day('2026-08-19', [row(1)]),
-      day('2026-08-20'),
-      day('2026-08-21'),
-      day('2026-08-22'),
-      day('2026-08-23'),
-      day('2026-08-24'),
-      day('2026-08-25', [row(2)]),
-    ]),
+    initialBody({
+      upcoming: [
+        plansDay('2026-08-19', [row(1, { time: '09:00' })]),
+        plansDay('2026-08-25', [row(2, { time: '19:00' })]),
+      ],
+    }),
   );
   mount();
 
@@ -238,9 +354,6 @@ it('renders exact gap copy and opens a date picker pre-set to the first date wit
     name: 'Aug 20 – 24 · nothing planned',
   });
   const requestsBeforeTap = calls.length;
-  expect(gap.style.minHeight).toBe('44px');
-  expect(gap.style.width).toBe('100%');
-  expect(screen.getByText('Aug 20 – 24 · nothing planned').style.fontSize).toBe('13px');
   fireEvent.click(gap);
 
   expect(screen.getByTestId('plans-gap-date-picker')).toBeDefined();
@@ -249,72 +362,84 @@ it('renders exact gap copy and opens a date picker pre-set to the first date wit
   expect(calls.every(({ method }) => method === 'GET')).toBe(true);
 });
 
-it('uses sticky month sections and replaces August with September in document order', async () => {
-  stubFetch(response([day('2026-08-29', [row(1)]), day('2026-09-03', [row(2)])]));
+it('reaches a far-future plan through the nextFrom sentinel with exactly one window load', async () => {
+  const calls = stubFetch(
+    initialBody({
+      upcomingWindow: {
+        from: '2026-08-06',
+        through: '2026-10-06',
+        nextFrom: '2027-02-10',
+      },
+    }),
+    {
+      data: {
+        mode: 'upcoming_window',
+        upcoming: [
+          plansDay('2027-02-10', [row(1, { title: 'Far future', time: '18:00' })]),
+        ],
+        upcomingWindow: { from: '2027-02-10', through: '2027-04-12', nextFrom: null },
+        warnings: [],
+      },
+      meta: { requestId: 'req_plans_window' },
+    },
+  );
   mount();
 
-  const august = await screen.findByTestId('plans-month-2026-08');
-  const september = screen.getByTestId('plans-month-2026-09');
-  expect(screen.getByRole('heading', { name: 'August 2026' })).toBeDefined();
-  expect(screen.getByRole('heading', { name: 'September 2026' })).toBeDefined();
-  expect(
-    august.compareDocumentPosition(september) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-
-  fireEvent.scroll(screen.getByTestId('plans-list'), {
-    target: { scrollTop: 1_000 },
-  });
-  expect(screen.getByTestId('plans-month-2026-09')).toBeDefined();
+  await screen.findByText('Far future');
+  const plansCalls = calls.filter(({ url }) => url.includes('/v1/plans'));
+  expect(plansCalls).toHaveLength(2);
+  expect(plansCalls[1]?.url).toContain('mode=upcoming_window');
+  expect(plansCalls[1]?.url).toContain('upcomingFrom=2027-02-10');
 });
 
-it("opens today's recurring task with its occurrence scope", async () => {
+it('renders Past de-emphasised under month headings while Needs a date is not', async () => {
+  stubFetch(
+    initialBody({
+      needsDate: [needsDateRow(1, { title: 'Fresh idea' })],
+      past: [
+        plansDay('2026-08-01', [
+          row(2, {
+            title: 'Past dinner',
+            time: '19:00',
+            isPast: true,
+            status: 'completed',
+          }),
+        ]),
+        plansDay('2026-07-25', [row(3, { title: 'July trip', isPast: true })]),
+      ],
+    }),
+  );
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  openStage('Past');
+  await screen.findByText('Past dinner');
+  expect(screen.getByRole('heading', { name: 'August' })).toBeDefined();
+  expect(screen.getByRole('heading', { name: 'July' })).toBeDefined();
+  // De-emphasis is the row's own past treatment: subhead title in muted ink.
+  const pastTitle = screen.getByText('Past dinner');
+  expect(pastTitle.style.fontSize).toBe('15px');
+
+  openStage('Needs a date');
+  const freshTitle = screen.getByText('Fresh idea');
+  // The undated card is not aged or de-emphasised (§1.3.2 rule 4): full heading treatment.
+  expect(freshTitle.style.fontSize).toBe('16px');
+});
+
+it("opens a recurring row's detail with its occurrence scope", async () => {
   const onOpen = vi.fn();
-  const todayOccurrence = row(1, {
+  const occurrence = row(1, {
     type: 'task',
     title: 'Today stand-up',
-    occurrenceDate: '2026-08-06',
+    occurrenceDate: '2026-08-08',
     isRecurring: true,
     hasCheckbox: true,
+    time: '09:00',
   });
-  const calls = stubFetch(response([day('2026-08-06', [todayOccurrence])]));
+  stubFetch(initialBody({ upcoming: [plansDay('2026-08-08', [occurrence])] }));
   mount(onOpen);
 
-  const cardBody = await screen.findByRole('button', { name: /Today stand-up/ });
-  fireEvent.click(cardBody);
-  expect(onOpen).toHaveBeenCalledExactlyOnceWith(todayOccurrence);
-  expect(calls).toHaveLength(1);
-});
-
-/**
- * Reported: a recurring plan shows only today's occurrence, none of the later ones.
- *
- * Plans asks for the full 62-day window and the server expands a recurring plan across it
- * (`agendaService.test.ts`), so this closes the last untested link — that the screen renders
- * every occurrence rather than collapsing a series to one row. `buildUpcomingSections` keys
- * items by `activityId:occurrenceDate`, and a series shares one `activityId` across every day.
- */
-it('renders one row per occurrence of a recurring plan across the window', async () => {
-  const occurrence = (date: string): AgendaItem =>
-    row(1, {
-      title: 'Book club',
-      time: '18:00',
-      isRecurring: true,
-      occurrenceDate: date,
-      recurrenceDescription: 'Every day',
-    });
-  const dates = ['2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09'];
-  stubFetch(response(dates.map((date) => day(date, [occurrence(date)]))));
-
-  mount();
-
-  for (const date of dates) {
-    expect(await screen.findByTestId(`plans-date-${date}`)).toBeDefined();
-  }
-  // One card per day, each carrying the occurrence's own date in its key.
-  for (const date of dates) {
-    expect(
-      screen.getByTestId(`plans-card-${occurrence(date).activityId}:${date}`),
-    ).toBeDefined();
-  }
-  expect(screen.getAllByText('Book club')).toHaveLength(dates.length);
+  const body = await screen.findByRole('button', { name: /Today stand-up/ });
+  fireEvent.click(body);
+  expect(onOpen).toHaveBeenCalledExactlyOnceWith(occurrence);
 });

@@ -53,20 +53,25 @@ function itemsForDay(day: AgendaDay): AgendaItem[] {
 }
 
 /**
- * Builds Plans → Upcoming from the server's complete date window.
- *
- * Empty dates become one line only when they are bounded by populated dates. Native Agenda
- * deliberately materializes Today's wider visible superset, so Plans filters that shared
- * projection here. Every genuinely dated row remains visible even after Agenda moves it to
- * Earlier or resolves it; only undated Saved items and rolled-forward overdue copies are
- * Today-only. Duplicate identities collapse after the three buckets are merged.
+ * The shared shape of one occupied date, wherever its rows came from — the agenda window
+ * (this file's original caller) or the `/v1/plans` date store (P3-36's `plansStages`).
  */
-export function buildUpcomingSections(agenda: AgendaData): UpcomingMonthSection[] {
-  const occupied = agenda.days
-    .map((day) => ({ date: day.date, items: itemsForDay(day) }))
-    .filter(({ items }) => items.length > 0)
-    .sort((left, right) => left.date.localeCompare(right.date));
+export interface OccupiedDay {
+  readonly date: string;
+  readonly items: AgendaItem[];
+}
 
+/**
+ * Ascending occupied days → month sections with interior gap lines.
+ *
+ * Extracted from {@link buildUpcomingSections} when P3-36 gave it a second producer: the
+ * grouping, the gap rule ("empty dates become one line only when bounded by populated
+ * dates") and the month headers are presentation the two data sources must not drift apart
+ * on.
+ */
+export function sectionsFromOccupiedDays(
+  occupied: readonly OccupiedDay[],
+): UpcomingMonthSection[] {
   const list: UpcomingListItem[] = [];
   for (const [index, day] of occupied.entries()) {
     const previous = occupied[index - 1];
@@ -95,4 +100,22 @@ export function buildUpcomingSections(agenda: AgendaData): UpcomingMonthSection[
     }
   }
   return sections;
+}
+
+/**
+ * Builds Plans → Upcoming from the server's complete date window.
+ *
+ * Empty dates become one line only when they are bounded by populated dates. Native Agenda
+ * deliberately materializes Today's wider visible superset, so Plans filters that shared
+ * projection here. Every genuinely dated row remains visible even after Agenda moves it to
+ * Earlier or resolves it; only undated Saved items and rolled-forward overdue copies are
+ * Today-only. Duplicate identities collapse after the three buckets are merged.
+ */
+export function buildUpcomingSections(agenda: AgendaData): UpcomingMonthSection[] {
+  const occupied = agenda.days
+    .map((day) => ({ date: day.date, items: itemsForDay(day) }))
+    .filter(({ items }) => items.length > 0)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  return sectionsFromOccupiedDays(occupied);
 }
