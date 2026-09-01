@@ -198,6 +198,25 @@ describe('what the bridge never infers', () => {
     expect(written()?.[1]?.details).toEqual({ kind: 'custom' });
   });
 
+  /**
+   * `watch` is the one kind whose stored details have a required field, and a defaulted
+   * `{ kind: 'watch' }` was a write the server could not read back — every later join of the
+   * caller's `viewerPlan` failed on the stored Activity (found in P3-35). The mirror is the
+   * compose form's own rule (`activities.md` §4.3): `mediaTitle` starts as the title.
+   */
+  it('mirrors the seeded title into mediaTitle for an omitted watch details', async () => {
+    await scheduleListItem(
+      USER,
+      LIST,
+      ITEM,
+      withInput({ creationTarget: { objectKind: 'plan', type: 'watch' } }),
+      NOW,
+    );
+
+    const activity = written()?.[1];
+    expect(activity?.details).toEqual({ kind: 'watch', mediaTitle: activity?.title });
+  });
+
   it('takes ownership from the caller, never from the request', async () => {
     await scheduleListItem('usr_someone_else', LIST, ITEM, input, NOW);
 

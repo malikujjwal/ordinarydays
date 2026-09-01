@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useIsOffline } from '@/hooks/usePendingIntents';
 import { apiClient } from '@/lib/apiClient';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
+import { flattenDetailItem } from '@/lib/sync/pullAdapter';
 import { mergeItemPages } from '../model/listDetail';
 
 /**
@@ -100,7 +101,8 @@ async function fetchFirstPage(listId: string): Promise<Projection> {
   const detail = await getList(apiClient, listId, { includeItems: true });
   return {
     list: detail.list as List,
-    items: (detail.items ?? []).map((entry) => entry.item as ListItemRow),
+    // Flattened with the caller's viewer pair, which is what the Plan state line reads (P3-35).
+    items: (detail.items ?? []).map(flattenDetailItem),
     nextCursor: detail.nextCursor,
     complete: detail.nextCursor === undefined,
   };
@@ -173,10 +175,7 @@ export function useListDetail(listId: string): ListDetailView {
             ? current
             : {
                 ...current,
-                items: mergeItemPages(
-                  current.items,
-                  page.data.map((entry) => entry.item as ListItemRow),
-                ),
+                items: mergeItemPages(current.items, page.data.map(flattenDetailItem)),
                 nextCursor: page.meta.nextCursor,
                 complete: page.meta.nextCursor === undefined,
               },

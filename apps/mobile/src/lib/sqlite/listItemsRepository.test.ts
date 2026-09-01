@@ -276,6 +276,94 @@ describe('the SQLite item slice', () => {
     ).rejects.toThrow('does not belong to this list');
   });
 
+  /**
+   * The caller's viewer pair (P3-35): page truth installs and clears it, item truth preserves
+   * it. The asymmetry is the whole design — a patch acknowledgement says nothing about the
+   * caller's link, and a page entry with no pair **is** a cleared pointer.
+   */
+  describe('the viewer plan pair', () => {
+    const pair = {
+      viewerLink: {
+        listId: LIST,
+        itemId: 'itm_01J000000000000000000000AA',
+        viewerUserId: 'usr_01J0000000000000000000000B',
+        activityId: 'act_01J0000000000000000000000A',
+        linkedAt: '2026-08-12T10:00:00.000Z',
+      },
+      viewerPlan: {
+        type: 'event',
+        status: 'scheduled',
+        schedule: { date: '2026-08-15', time: '19:00', timezone: 'America/New_York' },
+      },
+    } as const;
+
+    it('round-trips a page row carrying the pair', async () => {
+      const stored = item('itm_01J000000000000000000000AA', 'a', { ...pair });
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(transaction, LIST, [stored], page()),
+      );
+      expect((await items.read(LIST))[0]).toEqual(stored);
+    });
+
+    it('is preserved by an item acknowledgement and cleared by a bare page merge', async () => {
+      const stored = item('itm_01J000000000000000000000AA', 'a', { ...pair });
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(transaction, LIST, [stored], page('cursor-1')),
+      );
+
+      // A patch acknowledgement carries the item alone; the stored pair must survive it.
+      await transactions.run((transaction) =>
+        items.installAcknowledged(
+          transaction,
+          item('itm_01J000000000000000000000AA', 'a', { title: 'Renamed' }),
+        ),
+      );
+      expect((await items.read(LIST))[0]).toEqual({
+        ...item('itm_01J000000000000000000000AA', 'a', { title: 'Renamed' }),
+        ...pair,
+      });
+
+      // A page entry with no pair is the caller's current truth: the pointer was cleared.
+      await transactions.run((transaction) =>
+        items.mergePage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a', { title: 'Renamed' })],
+          page(),
+        ),
+      );
+      expect((await items.read(LIST))[0]).toEqual(
+        item('itm_01J000000000000000000000AA', 'a', { title: 'Renamed' }),
+      );
+    });
+
+    it('is installed and cleared by setViewerPair, the settlement path', async () => {
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a')],
+          page(),
+        ),
+      );
+
+      await transactions.run((transaction) =>
+        items.setViewerPair(transaction, LIST, 'itm_01J000000000000000000000AA', pair),
+      );
+      expect((await items.read(LIST))[0]?.viewerPlan).toEqual(pair.viewerPlan);
+
+      await transactions.run((transaction) =>
+        items.setViewerPair(
+          transaction,
+          LIST,
+          'itm_01J000000000000000000000AA',
+          undefined,
+        ),
+      );
+      expect((await items.read(LIST))[0]?.viewerPlan).toBeUndefined();
+    });
+  });
+
   it('drops a list slice whole when the list leaves', async () => {
     await transactions.run((transaction) =>
       items.replaceFirstPage(

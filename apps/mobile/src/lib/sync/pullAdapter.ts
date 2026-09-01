@@ -82,6 +82,26 @@ export interface ActivityPullAdapter {
   listItem?(listId: string, itemId: string, signal?: AbortSignal): Promise<ListItemRow>;
 }
 
+/**
+ * One list-detail entry as the row the projection stores (P3-35): the item, with the caller's
+ * `viewerLink` / `viewerPlan` pair flattened on when the union carries it. Pointer and state
+ * arrive together or not at all (`api-contract.md` §3), so a bare entry **is** the caller's
+ * current truth — no pair — and flattening preserves exactly that.
+ */
+export function flattenDetailItem(entry: {
+  readonly item: unknown;
+  readonly viewerLink?: unknown;
+  readonly viewerPlan?: unknown;
+}): ListItemRow {
+  const item = entry.item as ListItemRow;
+  if (entry.viewerLink === undefined || entry.viewerPlan === undefined) return item;
+  return {
+    ...item,
+    viewerLink: entry.viewerLink,
+    viewerPlan: entry.viewerPlan,
+  } as ListItemRow;
+}
+
 export const sharedActivityPullAdapter: ActivityPullAdapter = {
   agenda: (request, signal) => getAgenda(apiClient, request, signal),
   activity: (target, signal) => getActivity(apiClient, target, signal),
@@ -109,17 +129,14 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
     const detail = await getList(apiClient, listId, { includeItems: true }, signal);
     return {
       list: detail.list as List,
-      // The detail item is a union carrying the caller's link when there is one; P3-35 renders
-      // that line and owns storing it. This slice takes the item and nothing else.
-      items: (detail.items ?? []).map((entry) => entry.item as ListItemRow),
+      items: (detail.items ?? []).map(flattenDetailItem),
       ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),
     };
   },
   listItemsPage: async (listId, cursor, signal) => {
     const page = await getListItems(apiClient, listId, cursor, signal);
     return {
-      // P3-35 renders the caller's link; this slice takes the item, as page one does.
-      items: page.data.map((entry) => entry.item as ListItemRow),
+      items: page.data.map(flattenDetailItem),
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
     };
   },

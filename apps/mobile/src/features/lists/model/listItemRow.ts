@@ -51,8 +51,16 @@ export function subItemCount(list: RowList, item: ListItemView): string | undefi
   return LIST_ITEM_FEATURE_REGISTRY.subItems.summary(config, item.features?.subItems);
 }
 
+/**
+ * Display eligibility for the caller's Plan state line (P3-35, §6.2): a date to show, or a
+ * cancellation — which renders `Cancelled` with no date and is useful context on its own.
+ * Link presence alone is never enough, and a stale `skipped` projection renders nothing.
+ */
 export function mayShowPlanStateLine(viewerPlan: ListItemPlanState | undefined): boolean {
-  return viewerPlan?.schedule?.date !== undefined;
+  if (viewerPlan === undefined) return false;
+  if (viewerPlan.status === 'cancelled') return true;
+  if (viewerPlan.status === 'skipped' || viewerPlan.status === 'saved') return false;
+  return viewerPlan.schedule?.date !== undefined;
 }
 
 export function rowBodyLabel(list: RowList, item: ListItemView): string {

@@ -74,6 +74,11 @@ import { ListSettingsSheet } from './ListSettingsSheet';
  */
 export interface ListDetailScreenProps {
   listId: string;
+  /**
+   * The user's today, resolved at the route (`coding-standards.md` §4.3), so the Plan state
+   * line's `Saturday` means the same thing in every test and timezone (P3-35).
+   */
+  today?: string;
   onBack: () => void;
   /**
    * Opens an Activity, for §7.5's provenance row inside the item sheet.
@@ -104,6 +109,7 @@ interface PendingBulkPreview {
 
 export function ListDetailScreen({
   listId,
+  today,
   onBack,
   onOpenActivity,
   onPlanItem,
@@ -218,6 +224,8 @@ export function ListDetailScreen({
         list={presentedList}
         items={presentedItems}
         itemCount={presentedItemCount}
+        {...(today === undefined ? {} : { today })}
+        {...(onOpenActivity === undefined ? {} : { onOpenPlan: onOpenActivity })}
         complete={view.complete}
         status={view.status}
         {...(view.requestId === undefined ? {} : { requestId: view.requestId })}

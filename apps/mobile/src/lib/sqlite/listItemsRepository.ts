@@ -1,8 +1,16 @@
 import type { PatchListItemInput } from '@od/shared/client';
 import { compareListItems } from '@od/shared/rank';
-import { listItemView } from '@od/shared/schemas';
+import {
+  listItemActivityLink,
+  listItemPlanState,
+  listItemView,
+} from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
-import type { ListItemView } from '@od/shared/types';
+import type {
+  ListItemActivityLink,
+  ListItemPlanState,
+  ListItemView,
+} from '@od/shared/types';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {
@@ -37,17 +45,28 @@ import type { TransactionContext } from '@/lib/sqlite/transaction';
 /**
  * The item a client holds.
  *
- * `ListItemView` verbatim — the shared type that already means "the stored shape minus the two
- * storage-only fields". P3-27 restated its `Omit` here; a second declaration of one shape is a
- * second place for it to drift, so this is an alias and the name stays only because the
- * repository's callers read better with a row-shaped one.
+ * `ListItemView` plus the caller's viewer pair — the widened type P3-27's alias comment said
+ * a new column would need. P3-35 added exactly that: `viewer_link_json` / `viewer_plan_json`
+ * store the caller-scoped `viewerLink` / `viewerPlan` the list-detail response joins beside
+ * the item (`api-contract.md` §2.7), so the Plan state line renders offline.
  *
- * The alias is only correct while this table carries **nothing the view does not**, and it
- * does not: `list_items`' ten columns are exactly the view's ten fields, `fromRow` parses
- * through `listItemView`, and neither `itemRevision` nor `sourceProvenance` is stored. A
- * storage-only column added later needs its own type again rather than a widened alias.
+ * The pair is a **projection of somebody else's truth**, which is why it is optional and why
+ * its writes are separated below: item writes preserve it, and only the reads that carry
+ * authoritative page truth — a detail page install, or the bridge settlement that created the
+ * link — may set or clear it. `fromRow` still parses the item through `listItemView`; the
+ * pair parses through its own schemas, and a corrupt stored pair degrades to absence rather
+ * than failing the row, because a list must open even when a stale projection cannot.
  */
-export type ListItemRow = ListItemView;
+export type ListItemRow = ListItemView & {
+  readonly viewerLink?: ListItemActivityLink;
+  readonly viewerPlan?: ListItemPlanState;
+};
+
+/** The caller's link and the trimmed Plan it names; always stored and cleared together. */
+export interface ViewerPlanPair {
+  readonly viewerLink: ListItemActivityLink;
+  readonly viewerPlan: ListItemPlanState;
+}
 
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];
@@ -70,7 +89,7 @@ function fromRow(row: SqliteRow): ListItemRow {
   const sourceLabel = text(row, 'source_label');
   const features = json(row, 'features_json');
 
-  return listItemView.parse({
+  const item = listItemView.parse({
     itemId: text(row, 'item_id'),
     listId: text(row, 'list_id'),
     rank: text(row, 'rank'),
@@ -80,7 +99,21 @@ function fromRow(row: SqliteRow): ListItemRow {
     ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
     ...(sourceLabel === undefined ? {} : { sourceLabel }),
     ...(features === undefined ? {} : { features }),
-  }) as ListItemRow;
+  }) as ListItemView;
+
+  /*
+   * The pair degrades to absence rather than failing the row: a list has to open even when a
+   * stale viewer projection cannot be read, and the line's own eligibility rules already
+   * treat absence as "no line".
+   */
+  const link = listItemActivityLink.safeParse(json(row, 'viewer_link_json'));
+  const plan = listItemPlanState.safeParse(json(row, 'viewer_plan_json'));
+  if (!link.success || !plan.success) return item;
+  return {
+    ...item,
+    viewerLink: link.data as ListItemActivityLink,
+    viewerPlan: plan.data as ListItemPlanState,
+  };
 }
 
 /**
@@ -117,12 +150,21 @@ function assertBelongsToList(items: readonly ListItemRow[], listId: string): voi
   }
 }
 
+/**
+ * Writes the **item's own** columns and preserves the viewer pair on an existing row.
+ *
+ * Deliberate asymmetry (P3-35): an acknowledged create, a field patch or an Undo restore is
+ * item truth and says nothing about the caller's link — overwriting the pair from a bare item
+ * would clear a line the server still holds. On a fresh insert the row's own optional pair is
+ * written (a page install's rows carry it); on conflict the stored pair stands until
+ * {@link ListItemsRepository.setViewerPair} carries authoritative page or settlement truth.
+ */
 async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promise<void> {
   await database.run(
     `INSERT INTO list_items (
       item_id, list_id, rank, title, note, state, features_json,
-      source_activity_id, source_label
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      source_activity_id, source_label, viewer_link_json, viewer_plan_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(item_id) DO UPDATE SET
       list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
       note=excluded.note, state=excluded.state,
@@ -139,6 +181,30 @@ async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promis
       item.features === undefined ? null : JSON.stringify(item.features),
       item.sourceActivityId ?? null,
       item.sourceLabel ?? null,
+      item.viewerLink === undefined ? null : JSON.stringify(item.viewerLink),
+      item.viewerPlan === undefined ? null : JSON.stringify(item.viewerPlan),
+    ],
+  );
+}
+
+/**
+ * Installs authoritative viewer-pair truth for one row, absence included.
+ *
+ * Only two callers have that authority: a list-detail page (the server joined the caller's
+ * current pair, so a bare entry **is** a cleared pointer) and the bridge settlement that just
+ * created the link (P3-34). `undefined` clears; a row that no longer exists is a no-op.
+ */
+async function writeViewerPair(
+  database: SqliteExecutor,
+  itemId: string,
+  pair: ViewerPlanPair | undefined,
+): Promise<void> {
+  await database.run(
+    'UPDATE list_items SET viewer_link_json = ?, viewer_plan_json = ? WHERE item_id = ?;',
+    [
+      pair === undefined ? null : JSON.stringify(pair.viewerLink),
+      pair === undefined ? null : JSON.stringify(pair.viewerPlan),
+      itemId,
     ],
   );
 }
@@ -344,10 +410,37 @@ export class ListItemsRepository {
   ): Promise<void> {
     assertBelongsToList(items, listId);
     for (const item of items) {
-      if (!protectedItemIds.has(item.itemId))
+      if (!protectedItemIds.has(item.itemId)) {
         await writeItemRow(transaction.database, item);
+        /*
+         * A page's entries carry the caller's **current** pair, absence included, so a merge
+         * over an existing row must also install that truth — the upsert above deliberately
+         * preserves it (P3-35).
+         */
+        await writeViewerPair(
+          transaction.database,
+          item.itemId,
+          item.viewerLink === undefined || item.viewerPlan === undefined
+            ? undefined
+            : { viewerLink: item.viewerLink, viewerPlan: item.viewerPlan },
+        );
+      }
     }
     await this.writePageState(transaction.database, listId, page);
+    transaction.changed(this.scope(listId));
+  }
+
+  /**
+   * Installs the caller's viewer pair for one row (P3-34's settlement, or a targeted repair).
+   * `undefined` clears both halves; pointer and state travel together or not at all (§3).
+   */
+  async setViewerPair(
+    transaction: TransactionContext,
+    listId: string,
+    itemId: string,
+    pair: ViewerPlanPair | undefined,
+  ): Promise<void> {
+    await writeViewerPair(transaction.database, itemId, pair);
     transaction.changed(this.scope(listId));
   }
 
