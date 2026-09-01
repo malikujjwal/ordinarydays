@@ -1,7 +1,9 @@
-import type { ActivityUpdate } from '@od/shared/types';
 import { Text, Touchable, useTheme } from '@od/ui';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
-import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
+import {
+  UpdateRowBody,
+  type UpdateRowProps,
+} from '@/features/activity/components/UpdateRowBody';
 
 /**
  * One Updates entry on **native** (P3-40).
@@ -12,13 +14,9 @@ import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
  * renders the same row de-emphasised with no author name; in this phase user entries carry
  * no name either, since the only possible author is the caller.
  */
-export interface UpdateRowProps {
-  update: ActivityUpdate;
-  relativeTime: string;
-  /** Absent on a system entry by construction — the caller never passes it for one. */
-  onDelete?: () => void;
-}
+export type { UpdateRowProps };
 
+/** Matches `SwipeableRow`'s panel width, the app's one swipe-action measure. */
 const ACTION_WIDTH = 88;
 
 function Body({ update, relativeTime, onDelete }: UpdateRowProps) {

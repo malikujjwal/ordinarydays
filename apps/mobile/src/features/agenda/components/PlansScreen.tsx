@@ -13,8 +13,8 @@ import {
   useTheme,
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
-import { RefreshControl, SectionList, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { RefreshControl, ScrollView, SectionList, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
 import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
@@ -123,6 +123,17 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
     () => [{ data: [...plans.needsDate] }],
     [plans.needsDate],
   );
+  /** Stable so the memoised card is not defeated by a new renderItem identity (§8.3). */
+  const renderNeedsDateItem = useCallback(
+    ({ item }: { item: NeedsDateRowData }) => (
+      <NeedsDateCard
+        item={item}
+        onOpen={onOpen}
+        testID={`plans-needs-date-${item.activityId}`}
+      />
+    ),
+    [onOpen],
+  );
 
   const upcomingEmpty =
     upcomingSections.length === 0 && plans.upcomingWindow?.nextFrom == null;
@@ -163,6 +174,20 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
 
   const refresh = (
     <RefreshControl refreshing={plans.isRefreshing} onRefresh={plans.refetch} />
+  );
+  /**
+   * Pull-to-refresh must reach every stage, empty ones included — "pull-to-refresh
+   * refetches all three stages in the one request" (§P3-36) is unreachable from a bare
+   * `View`, so an empty stage renders inside its own refreshable scroll.
+   */
+  const refreshableEmpty = (testID: string, child: React.ReactNode) => (
+    <ScrollView
+      refreshControl={refresh}
+      contentContainerStyle={{ flexGrow: 1 }}
+      testID={testID}
+    >
+      {child}
+    </ScrollView>
   );
   const listPadding = {
     gap: theme.space[5],
@@ -219,13 +244,12 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
   const stageBody = () => {
     if (stage === 'needsDate') {
       if (plans.needsDate.length === 0) {
-        return (
-          <View testID="plans-needs-date-empty">
-            <EmptyState
-              heading="Nothing without a date"
-              body="Plans you've started but not scheduled show up here."
-            />
-          </View>
+        return refreshableEmpty(
+          'plans-needs-date-empty',
+          <EmptyState
+            heading="Nothing without a date"
+            body="Plans you've started but not scheduled show up here."
+          />,
         );
       }
       return (
@@ -234,13 +258,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
           sections={needsDateSections}
           keyExtractor={(item) => item.activityId}
           refreshControl={refresh}
-          renderItem={({ item }) => (
-            <NeedsDateCard
-              item={item}
-              onOpen={onOpen}
-              testID={`plans-needs-date-${item.activityId}`}
-            />
-          )}
+          renderItem={renderNeedsDateItem}
           contentContainerStyle={listPadding}
         />
       );
@@ -248,14 +266,26 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
 
     if (stage === 'upcoming') {
       if (upcomingSections.length === 0) {
-        return (
-          <View testID="plans-upcoming-empty">
-            <EmptyState
-              heading="No upcoming plans"
-              body="Anything with a date shows up here."
-              action={{ label: 'Add', onPress: onAdd }}
-            />
-          </View>
+        /**
+         * A zero-row window with a non-null `nextFrom` is the server saying "the next row
+         * is out there" (§P3-20): while the auto-advance chases it, the screen shows a
+         * loading state — never a false `No upcoming plans`. On failure the advance stops
+         * (see `shouldAdvance`) and the stale-error banner carries the retry.
+         */
+        if (plans.upcomingWindow?.nextFrom != null && plans.message === undefined) {
+          return (
+            <View testID="plans-upcoming-advancing">
+              <Skeleton shape="card" count={2} />
+            </View>
+          );
+        }
+        return refreshableEmpty(
+          'plans-upcoming-empty',
+          <EmptyState
+            heading="No upcoming plans"
+            body="Anything with a date shows up here."
+            action={{ label: 'Add', onPress: onAdd }}
+          />,
         );
       }
       return (
@@ -287,13 +317,12 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
     }
 
     if (pastSections === undefined || pastSections.length === 0) {
-      return (
-        <View testID="plans-past-empty">
-          <EmptyState
-            heading="Nothing here"
-            body="Plans that have happened show up here."
-          />
-        </View>
+      return refreshableEmpty(
+        'plans-past-empty',
+        <EmptyState
+          heading="Nothing here"
+          body="Plans that have happened show up here."
+        />,
       );
     }
     return (

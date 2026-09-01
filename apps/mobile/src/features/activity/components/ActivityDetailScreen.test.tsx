@@ -465,13 +465,15 @@ describe('the sections', () => {
     await loaded();
 
     expect(screen.getByText('People')).toBeDefined();
-    expect(screen.getAllByText('Coming later')).toHaveLength(1);
+    // People, and empty Attachments (its P3-41 flow is unbuilt, so the §2.2 pre-build
+    // discovery row stands in for the chip it cannot offer yet).
+    expect(screen.getAllByText('Coming later')).toHaveLength(2);
+    expect(screen.getByTestId('section-attachments-coming-later')).toBeDefined();
     expect(screen.queryByRole('button', { name: /People/ })).toBeNull();
     expect(screen.queryByText(/coming soon/i)).toBeNull();
     // The empty content sections have no headings at all now, not disabled ones.
     expect(screen.queryByText('Preparation')).toBeNull();
     expect(screen.queryByText('Related lists')).toBeNull();
-    expect(screen.queryByText('Attachments')).toBeNull();
   });
 
   /**
@@ -2775,8 +2777,9 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.getByTestId('section-reminders')).toBeDefined();
     expect(screen.getByTestId('detail-edit-recurrence')).toBeDefined();
     // People keeps its pre-build treatment: visible, subordinate, no chevron behaviour.
+    // Empty Attachments joins it as a discovery row until P3-41 wires its chip.
     expect(screen.getByTestId('section-people')).toBeDefined();
-    expect(screen.getByText('Coming later')).toBeDefined();
+    expect(screen.getAllByText('Coming later')).toHaveLength(2);
     expect(screen.queryByTestId('section-prep')).toBeNull();
     expect(screen.queryByTestId('section-lists')).toBeNull();
     expect(screen.queryByTestId('section-attachments')).toBeNull();

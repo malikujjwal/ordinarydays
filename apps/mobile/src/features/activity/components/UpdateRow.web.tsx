@@ -1,8 +1,10 @@
-import type { ActivityUpdate } from '@od/shared/types';
 import { Text, Touchable, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
-import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
+import {
+  UpdateRowBody,
+  type UpdateRowProps,
+} from '@/features/activity/components/UpdateRowBody';
 
 /**
  * One Updates entry on **web** (P3-40).
@@ -13,12 +15,7 @@ import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
  * the caller's own `user` entries: on a `system` entry the affordance is **absent**, not
  * disabled, because the record of what happened is not deletable by anyone.
  */
-export interface UpdateRowProps {
-  update: ActivityUpdate;
-  relativeTime: string;
-  /** Absent on a system entry by construction — the caller never passes it for one. */
-  onDelete?: () => void;
-}
+export type { UpdateRowProps };
 
 export function UpdateRow({ update, relativeTime, onDelete }: UpdateRowProps) {
   const theme = useTheme();
