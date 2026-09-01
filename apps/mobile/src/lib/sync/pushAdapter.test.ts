@@ -93,6 +93,7 @@ describe('ActivityPushAdapter', () => {
     const listTransport: ListPushTransport = {
       create: vi.fn(async () => ({})),
       createItem: vi.fn(async () => ({})),
+      scheduleItem: vi.fn(async () => ({})),
       patchItem: vi.fn(async () => ({})),
       removeItem: vi.fn(async () => ({})),
       patch: vi.fn(async () => ({})),
@@ -123,6 +124,7 @@ describe('ActivityPushAdapter', () => {
       return {
         create: vi.fn(async () => ({})),
         createItem: vi.fn(async () => ({})),
+        scheduleItem: vi.fn(async () => ({})),
         patchItem: vi.fn(async () => ({})),
         removeItem: vi.fn(async () => ({})),
         patch: vi.fn(async () => ({})),
@@ -210,6 +212,65 @@ describe('ActivityPushAdapter', () => {
         'undo-delete-item',
         expect.anything(),
       );
+    });
+
+    it('sends the bridge under its minted Activity identity and idempotency key', async () => {
+      const ACTIVITY = 'act_01J000000000000000000000AC';
+      const input = {
+        activityId: ACTIVITY,
+        creationTarget: { objectKind: 'plan', type: 'watch' },
+        audience: { mode: 'just_me' },
+        title: 'Severance',
+        details: { kind: 'watch', mediaTitle: 'Severance' },
+      };
+      const list = listTransport();
+      await new ActivityPushAdapter(
+        transport(() => undefined),
+        list,
+      ).execute(
+        itemIntent(
+          'item-schedule',
+          {
+            listId: LIST,
+            itemId: ITEM,
+            activityId: ACTIVITY,
+            idempotencyKey: 'schedule-item',
+            input,
+          },
+          ACTIVITY,
+        ),
+      );
+
+      expect(list.scheduleItem).toHaveBeenCalledWith(
+        LIST,
+        ITEM,
+        input,
+        'schedule-item',
+        expect.anything(),
+      );
+    });
+
+    it('refuses a bridge whose payload names a different Activity', async () => {
+      const list = listTransport();
+      await expect(
+        new ActivityPushAdapter(
+          transport(() => undefined),
+          list,
+        ).execute(
+          itemIntent(
+            'item-schedule',
+            {
+              listId: LIST,
+              itemId: ITEM,
+              activityId: 'act_01J000000000000000000000AC',
+              idempotencyKey: 'schedule-item',
+              input: {},
+            },
+            'act_01J000000000000000000000AD',
+          ),
+        ),
+      ).rejects.toThrow('entity identity does not match');
+      expect(list.scheduleItem).not.toHaveBeenCalled();
     });
 
     it('refuses an edit whose payload names a different item', async () => {

@@ -640,3 +640,167 @@ describe('a failed save', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The `Plan this item` bridge flow (P3-34, `plans-and-lists.md` §6).
+ *
+ * The Vitest half of the flow the task specifies for Playwright: kind step with nothing
+ * selected, the required audience step, the pre-filled form, and one bridge request whose
+ * body carries exactly the two explicit choices. Runs against the real store, the real
+ * adapter and the real shared client, with only the socket replaced.
+ */
+describe('the Plan this item bridge flow', () => {
+  const LIST = 'lst_01J0000000000000000000000C';
+  const ITEM = 'itm_01J0000000000000000000000M';
+
+  function scheduledBody(type: 'watch' | 'custom') {
+    const details =
+      type === 'watch' ? { kind: 'watch', mediaTitle: 'Severance' } : { kind: 'custom' };
+    return {
+      data: {
+        activity: {
+          ...createdBody().data,
+          objectKind: 'plan',
+          type,
+          title: 'Severance',
+          details,
+          listId: LIST,
+          listItemId: ITEM,
+        },
+        item: {
+          itemId: ITEM,
+          listId: LIST,
+          rank: 'a0',
+          title: 'Severance',
+          state: 'active',
+          features: {
+            progress: { kind: 'episode', mediaKind: 'show', season: 2, episode: 4 },
+          },
+        },
+        viewerLink: {
+          listId: LIST,
+          itemId: ITEM,
+          viewerUserId: 'usr_01J0000000000000000000000B',
+          activityId: 'act_01J0000000000000000000000A',
+          linkedAt: '2026-08-12T10:00:00.000Z',
+        },
+      },
+      meta: { requestId: 'req_test' },
+    };
+  }
+
+  function openBridge() {
+    useComposeDraft.getState().openPlanForItem({
+      listId: LIST,
+      itemId: ITEM,
+      list: { featureConfig: { progress: { enabled: true, kind: 'episode' } } },
+      item: {
+        title: 'Severance',
+        features: {
+          progress: { kind: 'episode', mediaKind: 'show', season: 2, episode: 4 },
+        },
+        state: 'active',
+      },
+    });
+  }
+
+  it('opens on the unselected kind step with no way further back', () => {
+    openBridge();
+    mount();
+
+    expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
+    for (const kind of ['General', 'Meal', 'Watch', 'Event']) {
+      expect(chooser(kind)).toBeDefined();
+    }
+    expect(screen.queryByTestId('compose-back')).toBeNull();
+    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('keeps the form closed until Just me is visibly tapped, then pre-fills S2 E5', () => {
+    openBridge();
+    mount();
+
+    tapChoice('Watch');
+
+    // The audience step, not the form: no title field, no save action yet. Watch's title
+    // field is labelled `Movie or show` (`fields.ts`), so that is the absence to assert.
+    expect(screen.getByRole('heading', { name: 'Who is this plan for?' })).toBeDefined();
+    expect(screen.queryByLabelText('Movie or show')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save plan' })).toBeNull();
+    expect(useComposeDraft.getState().audience).toBeUndefined();
+
+    tapChoice('Just me');
+
+    expect(useComposeDraft.getState().audience).toEqual({ mode: 'just_me' });
+    expect(screen.getByLabelText('Movie or show')).toHaveProperty('value', 'Severance');
+    // The active item at S2 E4 offers the next episode, editable (§P3-34).
+    expect(useComposeDraft.getState().details.season).toBe('2');
+    expect(useComposeDraft.getState().details.episode).toBe('5');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('sends one bridge request carrying the explicit kind, audience and edited episode', async () => {
+    stubFetch({ status: 201, body: scheduledBody('watch') });
+    openBridge();
+    const onClose = vi.fn();
+    mount(onClose);
+
+    tapChoice('Watch');
+    tapChoice('Just me');
+    fireEvent.change(screen.getByLabelText('Episode'), { target: { value: '6' } });
+    tap('Save plan');
+
+    await waitFor(() =>
+      expect(sent.filter((call) => call.url.includes('/schedule'))).toHaveLength(1),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const request = sent.find((call) => call.url.includes('/schedule'));
+    expect(request?.url).toContain(`/v1/lists/${LIST}/items/${ITEM}/schedule`);
+    expect(request?.headers['Idempotency-Key']).toBeDefined();
+    expect(request?.body).toMatchObject({
+      creationTarget: { objectKind: 'plan', type: 'watch' },
+      audience: { mode: 'just_me' },
+      details: { kind: 'watch', season: 2, episode: 6 },
+    });
+    const body = request?.body as { activityId?: unknown } | undefined;
+    expect(typeof body?.activityId).toBe('string');
+  });
+
+  it('stores custom when General is chosen on a Watch-configured list', async () => {
+    stubFetch({ status: 201, body: scheduledBody('custom') });
+    openBridge();
+    const onClose = vi.fn();
+    mount(onClose);
+
+    tapChoice('General');
+    tapChoice('Just me');
+    tap('Save plan');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const request = sent.find((call) => call.url.includes('/schedule'));
+    expect(request?.body).toMatchObject({
+      creationTarget: { objectKind: 'plan', type: 'custom' },
+    });
+    // Neither the list configuration nor the item words chose the kind: no episode fields
+    // exist in a General form and none were sent.
+    expect(request?.body).not.toHaveProperty('details.season');
+  });
+
+  it('shows the audience step unselected again after Back from the form', () => {
+    openBridge();
+    mount();
+
+    tapChoice('Watch');
+    tapChoice('Just me');
+    fireEvent.click(screen.getByTestId('compose-back'));
+
+    expect(screen.getByRole('heading', { name: 'Who is this plan for?' })).toBeDefined();
+    expect(useComposeDraft.getState().audience).toBeUndefined();
+    // The kind stays fixed: only the kind step itself may change it (§P3-34).
+    expect(useComposeDraft.getState().target).toEqual({
+      objectKind: 'plan',
+      type: 'watch',
+    });
+  });
+});

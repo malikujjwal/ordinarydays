@@ -1,4 +1,4 @@
-import { createActivityInput } from '@od/shared/schemas';
+import { createActivityInput, scheduleListItemInput } from '@od/shared/schemas';
 import type { Recurrence } from '@od/shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_DETAILS, EMPTY_LOCATION, EMPTY_SCHEDULE } from './draft';
@@ -12,6 +12,7 @@ import {
   successToast,
   targetHeading,
   toCreateActivityInput,
+  toScheduleListItemInput,
 } from './targets';
 
 /**
@@ -518,5 +519,80 @@ describe('successToast — dated rows', () => {
     expect(
       successToast({ objectKind: 'plan', type: 'event' }, dated(TODAY_2), TODAY_2),
     ).toBe('Event plan · planned for Wed, 12 Aug');
+  });
+});
+
+/**
+ * The bridge request (P3-34, §P3-13).
+ *
+ * Same discipline as the create mapping above: every produced body round-trips through the
+ * real shared `scheduleListItemInput`, and the two explicit choices — kind and audience — are
+ * required parameters this function cannot invent.
+ */
+describe('toScheduleListItemInput', () => {
+  const ZONE3 = 'America/New_York';
+  const ACTIVITY = 'act_01J0000000000000000000000A';
+  const audience = { mode: 'just_me' } as const;
+  const fields = (patch: Partial<DraftFields> = {}): DraftFields => ({
+    title: 'Severance',
+    notes: '',
+    schedule: EMPTY_SCHEDULE,
+    location: EMPTY_LOCATION,
+    reminderOffset: undefined,
+    details: EMPTY_DETAILS,
+    ...patch,
+  });
+
+  it('carries the explicit kind and audience and nothing defaulted', () => {
+    const input = toScheduleListItemInput(
+      { objectKind: 'plan', type: 'watch' },
+      fields({ details: { ...EMPTY_DETAILS, season: '2', episode: '6' } }),
+      ZONE3,
+      ACTIVITY,
+      audience,
+      () => 'rem_01J0000000000000000000000B',
+    );
+    expect(input?.activityId).toBe(ACTIVITY);
+    expect(input?.creationTarget).toEqual({ objectKind: 'plan', type: 'watch' });
+    expect(input?.audience).toEqual({ mode: 'just_me' });
+    expect(input?.details).toMatchObject({ kind: 'watch', season: 2, episode: 6 });
+    expect(scheduleListItemInput.safeParse(input).success).toBe(true);
+  });
+
+  it('mints a stable reminder id for every dated reminder', () => {
+    const input = toScheduleListItemInput(
+      { objectKind: 'plan', type: 'event' },
+      fields({
+        reminderOffset: -30,
+        schedule: {
+          date: '2026-08-15',
+          time: '19:00',
+          endTime: undefined,
+          timeFromSlot: false,
+        },
+      }),
+      ZONE3,
+      ACTIVITY,
+      audience,
+      () => 'rem_01J0000000000000000000000C',
+    );
+    expect(input?.reminders).toEqual([
+      { reminderId: 'rem_01J0000000000000000000000C', offsetMinutes: -30 },
+    ]);
+    expect(scheduleListItemInput.safeParse(input).success).toBe(true);
+  });
+
+  it('builds nothing for a non-Plan draft', () => {
+    expect(
+      toScheduleListItemInput(
+        // A Task can never reach the bridge; the type forbids it and so does the runtime.
+        { objectKind: 'plan', type: 'custom' },
+        fields({ title: '   ' }),
+        ZONE3,
+        ACTIVITY,
+        audience,
+        () => 'rem_01J0000000000000000000000D',
+      )?.title,
+    ).toBe('');
   });
 });

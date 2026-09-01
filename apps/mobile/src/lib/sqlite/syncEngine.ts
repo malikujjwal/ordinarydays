@@ -1017,6 +1017,47 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       const response = await this.serialNetwork((signal) =>
         this.push.execute(intent, signal),
       );
+      if (isListMutation(intent, 'itemSchedule')) {
+        /*
+         * The bridge settles like an Activity create wearing a list key (P3-34): the response
+         * carries the created Plan, the item is byte-identical by contract, and the caller's
+         * `viewerLink` is joined into later list-detail reads rather than stored here. The
+         * detail pull is the create path's best-effort enrichment, reminders included.
+         */
+        const pushedPlan = activityFromResponse(response);
+        if (pushedPlan?.activityId !== intent.entityId) {
+          throw new Error('The bridge acknowledged a different Activity.');
+        }
+        let planDetail: ActivityDetail | undefined;
+        try {
+          const detail = await this.serialNetwork((signal) =>
+            this.pull.activity({ kind: 'activity', activityId: intent.entityId }, signal),
+          );
+          if (detail.activity.activityId === intent.entityId) planDetail = detail;
+        } catch (error) {
+          if (__DEV__) {
+            console.info('native_bridge_detail_prefetch_failed', {
+              activityId: intent.entityId,
+              message: message(error),
+            });
+          }
+        }
+        phase = 'settlement';
+        await this.transactions.run(async (transaction) => {
+          await this.activities.installAcknowledgedActivity(
+            transaction,
+            pushedPlan,
+            planDetail,
+            { preserveLocalReminders: false },
+          );
+          await this.agenda.acceptCanonicalActivitySummary(transaction, pushedPlan);
+          await this.anytime?.acceptCanonicalActivity(transaction, pushedPlan);
+          await this.outbox.acknowledge(transaction.database, intent.intentId);
+          transaction.changed('outbox');
+        });
+        this.retryIndex = 0;
+        return 'continue';
+      }
       if (intent.mutationKey[0] === 'list') {
         phase = 'settlement';
         const canonicalRows =
@@ -1777,6 +1818,28 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     }
     if (isListMutation(intent, 'itemDelete')) {
       await this.rollbackPermanentItemDeleteRejection(intent, failure);
+      return;
+    }
+    if (isListMutation(intent, 'itemSchedule')) {
+      /*
+       * A rejected bridge leaves nothing to reconcile, exactly like a rejected item create
+       * (P3-34): the server refused to create the Plan, so the pending local projection is the
+       * only copy that ever existed and it goes with the rejection. The ListItem was never
+       * touched, so there is nothing to restore on the list side.
+       */
+      await this.transactions.run(async (transaction) => {
+        await this.outbox.needsAttention(
+          transaction.database,
+          intent.intentId,
+          rejectedAttention(failure, false),
+          failure.message,
+        );
+        await this.activities.restoreCanonicalAbsenceAfterRejection(
+          transaction,
+          intent.entityId,
+        );
+        transaction.changed('outbox');
+      });
       return;
     }
     if (isListMutation(intent, 'itemUndo')) {

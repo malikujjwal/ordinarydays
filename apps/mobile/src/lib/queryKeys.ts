@@ -40,6 +40,17 @@ export const ACTIVITIES_KEY = ['activities'] as const;
  */
 export const activityKey = (activityId: string) => ['activity', activityId] as const;
 
+/**
+ * The root of every Lists query.
+ *
+ * Moved here from `features/lists/hooks/keys.ts` when P3-34 gave it a second owner: the
+ * `Plan this item` bridge writes a caller-scoped `viewerLink` onto a list item from
+ * `features/compose`, and the reader is `features/lists`. The reasoning in this module's
+ * header applies verbatim — a writer invalidating a key the reader is not using fails
+ * silently, so both import the one literal.
+ */
+export const LISTS_KEY = ['lists'] as const;
+
 /** One authoritative detail projection; occurrence reads never alias the series cache. */
 export const activityDetailKey = (
   target:

@@ -1,12 +1,14 @@
 import { Button, Close, IconButton, ScreenShell, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { AudienceChooser } from '@/features/compose/components/AudienceChooser';
 import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
 import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
+import { useScheduleListItem } from '@/features/compose/hooks/useScheduleListItem';
 import { titleLabel } from '@/features/compose/model/fields';
 import type { ObjectChoice } from '@/features/compose/model/targets';
 import { canSave, successToast } from '@/features/compose/model/targets';
@@ -55,7 +57,10 @@ export function ComposeScreen({
   const draft = useComposeDraft();
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
+  const bridge = useScheduleListItem();
   const [discardOpen, setDiscardOpen] = useState(false);
+  /** The `Plan this item` flow saves through the bridge endpoint; everything else creates. */
+  const writer = draft.bridge === undefined ? create : bridge;
 
   function chooseObject(choice: ObjectChoice) {
     if (choice === 'list') {
@@ -91,7 +96,7 @@ export function ComposeScreen({
   async function save() {
     if (draft.target === undefined) return;
     const target = draft.target;
-    const saved = await create.save(
+    const saved = await writer.save(
       target,
       {
         title: draft.title,
@@ -113,7 +118,9 @@ export function ComposeScreen({
     showToast({ message: successToast(target, draft.schedule, today) });
   }
 
-  const showBack = draft.step !== 'object';
+  // The bridge enters at the kind step, so that step has nowhere back to go (P3-34).
+  const showBack =
+    draft.step !== 'object' && !(draft.bridge !== undefined && draft.step === 'planKind');
   /** Every step with a fixed target to write, and so the steps that have a footer. */
   const activityForm =
     draft.step === 'form' &&
@@ -127,7 +134,7 @@ export function ComposeScreen({
         saveEnabled={writeEnabled}
         attachmentUri={draft.attachmentUri}
         onSave={() => void save()}
-        isSaving={create.isSaving}
+        isSaving={writer.isSaving}
       />
     ) : undefined;
 
@@ -190,6 +197,8 @@ export function ComposeScreen({
             <ObjectChooser onChoose={chooseObject} />
           ) : draft.step === 'planKind' ? (
             <PlanKindChooser onChoose={choosePlanKind} />
+          ) : draft.step === 'audience' ? (
+            <AudienceChooser onChoose={draft.chooseAudience} />
           ) : draft.target === undefined ||
             draft.target.objectKind === 'listItem' ? null : (
             <ComposeForm
@@ -227,14 +236,20 @@ export function ComposeScreen({
                   onSourceUrlChange={draft.setSourceUrl}
                   onAttach={draft.attachImage}
                   onClearAttachment={draft.clearAttachment}
-                  fieldErrors={create.fieldErrors}
+                  fieldErrors={writer.fieldErrors}
                 />
               }
               onTitleChange={draft.setTitle}
-              onChangeTarget={() => draft.back()}
-              errorMessage={create.errorMessage}
-              errorRequestId={create.errorRequestId}
-              fieldErrors={create.fieldErrors}
+              onChangeTarget={() => {
+                draft.back();
+                // In the bridge flow the chooser that produced the target is the kind step,
+                // two steps back — the audience answer between them is dropped on the way
+                // through, so the user re-answers it after re-choosing (P3-34).
+                if (draft.bridge !== undefined) draft.back();
+              }}
+              errorMessage={writer.errorMessage}
+              errorRequestId={writer.errorRequestId}
+              fieldErrors={writer.fieldErrors}
             />
           )}
         </View>

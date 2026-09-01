@@ -60,8 +60,9 @@ async function createItem(
 /**
  * `Plan this item`, as the API sees it.
  *
- * Driven through the API rather than the UI because that flow's sheet is P3-34's and is
- * deliberately absent from this build. Every explicit choice the route requires is supplied
+ * Driven through the API rather than the UI: the P3-34 sheet has its own spec
+ * (`plan-this-item.spec.ts`), and this file is about what the server does after the flow, so
+ * seeding through HTTP keeps it fast. Every explicit choice the route requires is supplied
  * here — the Plan kind and the audience — because the client is forbidden from defaulting
  * either, and a helper that filled them in would be modelling the bug.
  */

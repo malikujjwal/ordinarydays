@@ -14,6 +14,7 @@ import type {
   ActivityScheduleVariables,
   ActivitySnoozeVariables,
   ActivityTransactionService,
+  ListItemScheduleVariables,
   ProjectionClock,
   TransactionalIntentResult,
 } from '@/lib/sqlite/activityTransactions';
@@ -60,6 +61,16 @@ export class NativeActivityActionCoordinator {
   ): Promise<NativeActionResult> {
     return this.accept((transaction) =>
       this.service.create(transaction, this.ownerUserId, variables, clock),
+    );
+  }
+
+  /** The durable `Plan this item` bridge (P3-34): one intent, one pending local Plan. */
+  scheduleListItem(
+    variables: ListItemScheduleVariables,
+    clock: ProjectionClock,
+  ): Promise<NativeActionResult> {
+    return this.accept((transaction) =>
+      this.service.scheduleListItem(transaction, this.ownerUserId, variables, clock),
     );
   }
 
