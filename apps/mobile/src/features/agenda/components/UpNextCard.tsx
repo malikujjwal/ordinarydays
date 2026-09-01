@@ -1,6 +1,6 @@
 import type { AgendaItem } from '@od/shared/types';
 import { Button, Card, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import {
   type CompletionCommitState,
   useCompletionCommitState,
@@ -187,7 +187,18 @@ export function UpNextCardWithState({
             accessibilityLabel={formattedTime}
             pointerEvents="none"
             testID="up-next-time-rail"
-            style={{ alignItems: 'center', paddingTop: theme.space[1] }}
+            /**
+             * Fixed width, like the timeline's own rail (§7.1): sized to the text, the
+             * rail's fractional width pushed everything after it to fractional pixel
+             * offsets, and the two margin rules rasterised at different weights and
+             * shades (founder reports, 2026-08-31). An integer rail keeps every rule on
+             * whole device pixels — and the margin no longer shifts when the time does.
+             */
+            style={{
+              width: theme.space[11],
+              alignItems: 'center',
+              paddingTop: theme.space[1],
+            }}
           >
             <Text variant="heading" color="textAction" aria-hidden>
               {railTime}
@@ -199,10 +210,10 @@ export function UpNextCardWithState({
             )}
           </View>
           {/**
-           * The planner margin: two hairlines, close together, per the 2026-08-31 frame.
-           * One element with two hairline borders rather than two filled views — filled
-           * 1 pt lines snap to different physical pixels at 2× and 3×, which made the left
-           * line render heavier than the right (founder report, same day).
+           * The planner margin: two rules, close together, per the 2026-08-31 frame.
+           * Plain 1 pt fills — with the rail's width fixed above they sit on whole
+           * device pixels, so both rasterise identically; the earlier hairline-border
+           * variants each drew the pair with two weights or two shades.
            */}
           <View
             aria-hidden
@@ -210,14 +221,15 @@ export function UpNextCardWithState({
             importantForAccessibility="no-hide-descendants"
             pointerEvents="none"
             style={{
-              width: 3,
+              flexDirection: 'row',
+              gap: 2,
               alignSelf: 'stretch',
-              marginHorizontal: theme.space[4],
-              borderLeftWidth: StyleSheet.hairlineWidth,
-              borderRightWidth: StyleSheet.hairlineWidth,
-              borderColor: theme.colors.border,
+              marginRight: theme.space[4],
             }}
-          />
+          >
+            <View style={{ width: 1, backgroundColor: theme.colors.border }} />
+            <View style={{ width: 1, backgroundColor: theme.colors.border }} />
+          </View>
 
           <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0 }}>
             {/**
@@ -253,17 +265,12 @@ export function UpNextCardWithState({
                 {selection.item.title}
               </Text>
             </View>
-            {/*
-             * Border, not fill: the margin pair renders as hairline borders, and a filled
-             * hairline blends where a border snaps, which read as two different colours
-             * (founder report, 2026-08-31). One renderer for every rule on the card.
-             */}
             <View
               aria-hidden
               pointerEvents="none"
               style={{
-                borderBottomWidth: StyleSheet.hairlineWidth,
-                borderColor: theme.colors.border,
+                height: 1,
+                backgroundColor: theme.colors.border,
                 marginTop: theme.space[3],
               }}
             />
@@ -282,10 +289,7 @@ export function UpNextCardWithState({
                 <View
                   aria-hidden
                   pointerEvents="none"
-                  style={{
-                    borderBottomWidth: StyleSheet.hairlineWidth,
-                    borderColor: theme.colors.border,
-                  }}
+                  style={{ height: 1, backgroundColor: theme.colors.border }}
                 />
               </>
             )}
