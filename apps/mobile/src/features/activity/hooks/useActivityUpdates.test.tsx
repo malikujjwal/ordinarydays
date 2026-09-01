@@ -1,3 +1,4 @@
+import { ApiError } from '@od/shared/client';
 import type { ActivityUpdate } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -40,6 +41,16 @@ function wrapper(client: QueryClient) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   clients.get.mockReset();
   clients.post.mockReset();
@@ -72,26 +83,114 @@ describe('useActivityUpdates web query ownership', () => {
     expect(remounted.result.current.updates).toEqual([]);
   });
 
-  it('retries a network failure under the same persisted idempotency identity', async () => {
+  it('calls the shared client once when transport ultimately fails and rolls back the pending post', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    const stored = update(2);
     clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
-    clients.post
-      .mockRejectedValueOnce(new TypeError('network unavailable'))
-      .mockResolvedValue({ update: stored, lastActivityAt: stored.createdAt });
+    const response = deferred<never>();
+    clients.post.mockReturnValue(response.promise);
     const mounted = renderHook(
       () => useActivityUpdates(ACTIVITY, { updates: [], cursor: undefined }),
       { wrapper: wrapper(client) },
     );
 
-    await act(async () => {
-      expect(await mounted.result.current.post(' Note 2 ')).toBe(true);
+    let outcome!: Promise<boolean>;
+    act(() => {
+      outcome = mounted.result.current.post(' Note 2 ');
     });
-    await waitFor(() => expect(mounted.result.current.updates).toEqual([stored]));
-    expect(clients.post).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(mounted.result.current.pending).toEqual([
+        { localId: 'local-id', body: 'Note 2' },
+      ]),
+    );
+    response.reject(new TypeError('network unavailable'));
+    await act(async () => expect(await outcome).toBe(false));
+
+    expect(clients.post).toHaveBeenCalledTimes(1);
     expect(clients.post.mock.calls[0]?.[3]).toBe('stable-idem');
-    expect(clients.post.mock.calls[1]?.[3]).toBe('stable-idem');
+    expect(mounted.result.current.pending).toEqual([]);
+    expect(mounted.result.current.updates).toEqual([]);
+    expect(mounted.result.current.errorMessage).toBe("Couldn't post this update.");
+    expect(mounted.result.current.errorAction).toBe('post');
+  });
+
+  it('restores the exact delete snapshot and preserves the server request id', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const first = update(1);
+    const second = update(2);
+    const response = deferred<never>();
+    clients.remove.mockReturnValue(response.promise);
+    const mounted = renderHook(
+      () =>
+        useActivityUpdates(ACTIVITY, {
+          updates: [first, second],
+          cursor: undefined,
+        }),
+      { wrapper: wrapper(client) },
+    );
+
+    let outcome!: Promise<boolean>;
+    act(() => {
+      outcome = mounted.result.current.remove(first);
+    });
+    await waitFor(() => expect(mounted.result.current.updates).toEqual([second]));
+    response.reject(
+      new ApiError('internal', 'database detail', 503, 'req_delete_update'),
+    );
+    await act(async () => expect(await outcome).toBe(false));
+
+    expect(mounted.result.current.updates).toEqual([second, first]);
+    expect(mounted.result.current.errorMessage).toBe('Something went wrong.');
+    expect(mounted.result.current.errorRequestId).toBe('req_delete_update');
+    expect(mounted.result.current.errorAction).toBe('delete');
+    expect(clients.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles a newer embedded head without discarding an acknowledged local post', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const stale = update(1);
+    const newer = update(2);
+    const local = update(3);
+    clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
+    clients.post.mockResolvedValue({ update: local, lastActivityAt: local.createdAt });
+    const mounted = renderHook(({ embedded }) => useActivityUpdates(ACTIVITY, embedded), {
+      initialProps: { embedded: { updates: [stale], cursor: 'cur_stale' } },
+      wrapper: wrapper(client),
+    });
+
+    mounted.rerender({ embedded: { updates: [newer], cursor: 'cur_new' } });
+    await waitFor(() => expect(mounted.result.current.updates).toEqual([newer]));
+    expect(mounted.result.current.cursor).toBe('cur_new');
+
+    await act(async () => {
+      expect(await mounted.result.current.post('Note 3')).toBe(true);
+    });
+    mounted.rerender({ embedded: { updates: [newer], cursor: 'cur_newer' } });
+    await waitFor(() => expect(mounted.result.current.updates).toEqual([local, newer]));
+    expect(mounted.result.current.cursor).toBe('cur_newer');
+  });
+
+  it('preserves page failure details for an action-specific retry', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    clients.get.mockRejectedValue(
+      new ApiError('internal', 'database detail', 503, 'req_updates_page'),
+    );
+    const mounted = renderHook(
+      () => useActivityUpdates(ACTIVITY, { updates: [], cursor: 'cur_1' }),
+      { wrapper: wrapper(client) },
+    );
+
+    act(() => mounted.result.current.loadMore());
+    await waitFor(() => expect(mounted.result.current.errorAction).toBe('load'));
+    expect(mounted.result.current.errorMessage).toBe('Something went wrong.');
+    expect(mounted.result.current.errorRequestId).toBe('req_updates_page');
+    expect(clients.get).toHaveBeenCalledTimes(1);
   });
 });

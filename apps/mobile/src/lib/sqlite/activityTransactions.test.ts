@@ -797,6 +797,68 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toBe(false);
   });
 
+  it('restores an undated Plan to saved after restart when Undo cancels its durable completion', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await coordinator.create(
+      {
+        input: {
+          activityId: ACTIVITY,
+          objectKind: 'plan',
+          type: 'custom',
+          title: 'Undated trip',
+          details: { kind: 'custom' },
+          reminders: [],
+        },
+        idempotencyKey: 'create-undated-plan',
+      },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await outbox.acknowledge(transaction.database, 'create-undated-plan');
+    });
+    await coordinator.complete(
+      ACTIVITY,
+      'complete-undated-plan',
+      { outcome: 'done' },
+      true,
+      'saved',
+      clock,
+    );
+
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('slice.sqlite');
+    subscriptions = new RepositorySubscriptions();
+    transactions = new SerializedTransactionRunner(database, subscriptions);
+    activities = new ActivityRepository(database, subscriptions);
+    agenda = new AgendaRepository(database, subscriptions);
+    outbox = new OutboxRepository(database);
+    service = new ActivityTransactionService(outbox, activities, agenda);
+    coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+    );
+    const undone = await coordinator.undoCompletion(
+      'complete-undated-plan',
+      { activityId: ACTIVITY, idempotencyKey: 'undo-undated-plan', input: {} },
+      false,
+      'saved',
+      clock,
+    );
+
+    expect(undone.kind).toBe('cancelled');
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity,
+    ).toMatchObject({ status: 'saved' });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
+        .schedule,
+    ).toBeUndefined();
+    expect((await outbox.all()).map(({ intentId }) => intentId)).toEqual([]);
+  });
+
   it('queues a participant Prep completion from the durable parent projection', async () => {
     const parent: ActivityDetail = {
       activity: {
@@ -823,6 +885,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
           activityId: OTHER,
           title: 'Pack a bag',
           status: 'scheduled',
+          restoredStatus: 'scheduled',
           isRecurring: false,
         },
       ],
@@ -858,6 +921,146 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children?.[0]
         ?.status,
     ).toBe('completed');
+  });
+
+  it('restores dated and undated completed Prep tasks exactly after an offline restart', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const timestamp = '2026-08-19T08:00:00.000Z';
+    const childDetail = (
+      activityId: string,
+      title: string,
+      schedule?: { date: string; timezone: string },
+    ): ActivityDetail => ({
+      activity: {
+        activityId,
+        ownerId: OWNER,
+        objectKind: 'task',
+        type: 'task',
+        status: 'completed',
+        title,
+        participantCount: 1,
+        childCount: 0,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        details: { kind: 'task' },
+        parentActivityId: ACTIVITY,
+        ...(schedule === undefined ? {} : { schedule }),
+        completedAt: timestamp,
+        outcome: 'done',
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+    });
+    const undated = childDetail(OTHER, 'Pack a bag');
+    const dated = childDetail(THIRD, 'Book the train', {
+      date: '2026-08-20',
+      timezone: 'America/New_York',
+    });
+    const parent: ActivityDetail = {
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title: 'Shared trip',
+        participantCount: 2,
+        childCount: 2,
+        expenseTotalCents: 0,
+        visibility: 'shared',
+        details: { kind: 'custom' },
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+      children: [
+        {
+          activityId: OTHER,
+          title: 'Pack a bag',
+          status: 'completed',
+          restoredStatus: 'saved',
+          isRecurring: false,
+        },
+        {
+          activityId: THIRD,
+          title: 'Book the train',
+          status: 'completed',
+          restoredStatus: 'scheduled',
+          isRecurring: false,
+        },
+      ],
+    };
+    await transactions.run(async (transaction) => {
+      await activities.putCanonical(transaction, parent);
+      await activities.putCanonical(transaction, undated);
+      await activities.putCanonical(transaction, dated);
+    });
+
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('slice.sqlite');
+    subscriptions = new RepositorySubscriptions();
+    transactions = new SerializedTransactionRunner(database, subscriptions);
+    activities = new ActivityRepository(database, subscriptions);
+    agenda = new AgendaRepository(database, subscriptions);
+    outbox = new OutboxRepository(database);
+    service = new ActivityTransactionService(outbox, activities, agenda);
+    coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+    );
+
+    const undatedRestoration = await activities.readChildRestoredStatus(ACTIVITY, OTHER);
+    const datedRestoration = await activities.readChildRestoredStatus(ACTIVITY, THIRD);
+    expect(undatedRestoration).toBe('saved');
+    expect(datedRestoration).toBe('scheduled');
+    if (undatedRestoration === undefined || datedRestoration === undefined) {
+      throw new Error('Prep restoration state was not installed.');
+    }
+    await coordinator.complete(
+      OTHER,
+      'undo-undated-child',
+      {},
+      false,
+      undatedRestoration,
+      clock,
+      ACTIVITY,
+    );
+    await coordinator.complete(
+      THIRD,
+      'undo-dated-child',
+      {},
+      false,
+      datedRestoration,
+      clock,
+      ACTIVITY,
+    );
+
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
+    ).toEqual([
+      { ...parent.children?.[0], status: 'saved' },
+      { ...parent.children?.[1], status: 'scheduled' },
+    ]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: OTHER }))?.activity,
+    ).toMatchObject({ status: 'saved' });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: THIRD }))?.activity,
+    ).toMatchObject({ status: 'scheduled', schedule: dated.activity.schedule });
+    expect((await outbox.all()).map(({ intentId }) => intentId)).toEqual([
+      'undo-undated-child',
+      'undo-dated-child',
+    ]);
   });
 
   it('shares one local transaction for identical completion taps on the same target', async () => {

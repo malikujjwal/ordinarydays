@@ -13,6 +13,8 @@ export interface ActivityChild {
   activityId: string;
   title: string;
   status: ActivityStatus;
+  /** Exact non-terminal state restored by Uncomplete, derived from the child's schedule. */
+  restoredStatus: 'saved' | 'scheduled';
   isRecurring: boolean;
 }
 

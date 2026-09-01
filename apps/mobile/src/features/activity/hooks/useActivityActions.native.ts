@@ -82,6 +82,16 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
     [activityId, state],
   );
+  const readRestoredStatus = useCallback(async () => {
+    const detail = await state.activities.read({ kind: 'activity', activityId });
+    if (detail === undefined) {
+      setError("This isn't here any more.");
+      return undefined;
+    }
+    return detail.activity.schedule === undefined
+      ? ('saved' as const)
+      : ('scheduled' as const);
+  }, [activityId, state]);
 
   return {
     duplicate: async () => {
@@ -137,79 +147,91 @@ export function useActivityActions(activityId: string): ActivityActions {
       return result !== undefined && resultOk(result);
     },
     resolvePassed: (outcome, scope, onProjected) => {
-      void targetsSeries(scope).then((blocked) => {
+      void (async () => {
+        const blocked = await targetsSeries(scope);
         if (blocked) return;
+        const restoredStatus = await readRestoredStatus();
+        if (restoredStatus === undefined) return;
         const intentId = randomUUID();
         lastCompletion.current = intentId;
         setCompleting(true);
-        void state.coordinator
-          .complete(
+        try {
+          const result = await state.coordinator.complete(
             activityId,
             intentId,
             { outcome, ...scopeToWire(scope) },
             true,
-            'scheduled',
+            restoredStatus,
             projectionClock(),
-          )
-          .then((result) => {
-            setCompleting(false);
-            if (!resultOk(result)) return;
-            onProjected(true);
-            useToast.getState().showUndo({
-              message: 'Outcome recorded',
-              onCommit: () => undefined,
-              onUndo: () => {
-                setUndoing(true);
-                void state.coordinator
-                  .undoCompletion(
-                    intentId,
-                    {
-                      activityId,
-                      idempotencyKey: randomUUID(),
-                      input: scopeToWire(scope),
-                    },
-                    false,
-                    'scheduled',
-                    projectionClock(),
-                  )
-                  .then((undo) => {
-                    setUndoing(false);
-                    if (resultOk(undo)) onProjected(false);
-                  });
-              },
-            });
+          );
+          if (!resultOk(result)) return;
+          onProjected(true);
+          useToast.getState().showUndo({
+            message: 'Outcome recorded',
+            onCommit: () => undefined,
+            onUndo: () => {
+              setUndoing(true);
+              void state.coordinator
+                .undoCompletion(
+                  intentId,
+                  {
+                    activityId,
+                    idempotencyKey: randomUUID(),
+                    input: scopeToWire(scope),
+                  },
+                  false,
+                  restoredStatus,
+                  projectionClock(),
+                )
+                .then((undo) => {
+                  setUndoing(false);
+                  if (resultOk(undo)) onProjected(false);
+                });
+            },
           });
-      });
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setCompleting(false);
+        }
+      })();
     },
     undoResolution: (scope, onProjected) => {
       setUndoing(true);
-      const original = lastCompletion.current;
-      const inverse = {
-        activityId,
-        idempotencyKey: randomUUID(),
-        input: scopeToWire(scope),
-      };
-      const request =
-        original === undefined
-          ? state.coordinator.complete(
-              activityId,
-              inverse.idempotencyKey,
-              inverse.input,
-              false,
-              'scheduled',
-              projectionClock(),
-            )
-          : state.coordinator.undoCompletion(
-              original,
-              inverse,
-              false,
-              'scheduled',
-              projectionClock(),
-            );
-      void request.then((result) => {
-        setUndoing(false);
-        if (resultOk(result)) onProjected?.(false);
-      });
+      void (async () => {
+        try {
+          const restoredStatus = await readRestoredStatus();
+          if (restoredStatus === undefined) return;
+          const original = lastCompletion.current;
+          const inverse = {
+            activityId,
+            idempotencyKey: randomUUID(),
+            input: scopeToWire(scope),
+          };
+          const result =
+            original === undefined
+              ? await state.coordinator.complete(
+                  activityId,
+                  inverse.idempotencyKey,
+                  inverse.input,
+                  false,
+                  restoredStatus,
+                  projectionClock(),
+                )
+              : await state.coordinator.undoCompletion(
+                  original,
+                  inverse,
+                  false,
+                  restoredStatus,
+                  projectionClock(),
+                );
+          if (resultOk(result)) onProjected?.(false);
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setUndoing(false);
+        }
+      })();
     },
     setChildCompletion: async (child, completed) => {
       if (child.isRecurring) {

@@ -3183,6 +3183,13 @@
               "cancelled"
             ]
           },
+          "restoredStatus": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled"
+            ]
+          },
           "isRecurring": {
             "type": "boolean"
           }
@@ -3191,6 +3198,7 @@
           "activityId",
           "title",
           "status",
+          "restoredStatus",
           "isRecurring"
         ],
         "additionalProperties": false

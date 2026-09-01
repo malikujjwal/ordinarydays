@@ -1204,6 +1204,8 @@ export class ActivityRepository {
             activityId: text(row, 'child_activity_id') ?? '',
             title: text(row, 'title') ?? '',
             status: (text(row, 'status') ?? 'saved') as ActivityChild['status'],
+            restoredStatus: (text(row, 'restored_status') ??
+              'saved') as ActivityChild['restoredStatus'],
             isRecurring: number(row, 'is_recurring') === 1,
           }))
         : [];
@@ -1251,7 +1253,7 @@ export class ActivityRepository {
             child.title,
             child.status,
             child.isRecurring ? 1 : 0,
-            child.status === 'saved' ? 'saved' : 'scheduled',
+            child.restoredStatus,
           ],
         );
       }

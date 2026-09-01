@@ -1,5 +1,7 @@
 import { type QueryClient, useQuery } from '@tanstack/react-query';
-import { PLAN_ACTIVITY_FLOORS_KEY } from './keys';
+
+/** Cross-feature cache key for the web Plans/Updates monotonic ordering seam. */
+export const PLAN_ACTIVITY_FLOORS_KEY = ['plans', 'activity-floors'] as const;
 
 /**
  * The web client's floor under each Plan's `lastActivityAt` (P3-40).

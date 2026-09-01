@@ -3,10 +3,24 @@ import { randomUUID } from 'expo-crypto';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
-import type { ActivityUpdatesView, PendingUpdate } from './useActivityUpdates';
+import type {
+  ActivityUpdatesFailure,
+  ActivityUpdatesView,
+  PendingUpdate,
+} from './useActivityUpdates';
 
-const describeFailure = (error: unknown) =>
-  describeApiFailure(error, "Couldn't save this.").message;
+function describeFailure(
+  error: unknown,
+  action: ActivityUpdatesFailure['action'],
+): ActivityUpdatesFailure {
+  const fallback =
+    action === 'load'
+      ? "Couldn't load older updates."
+      : action === 'post'
+        ? "Couldn't post this update."
+        : "Couldn't delete this update.";
+  return { action, ...describeApiFailure(error, fallback) };
+}
 
 /** Newest first; the id tiebreak keeps two same-instant entries in one stable order. */
 function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
@@ -42,7 +56,10 @@ export function useActivityUpdates(
     pending: [],
   }));
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string>();
+  /** True only while the local transaction is accepting a post, not while its intent is queued. */
+  const [posting, setPosting] = useState(false);
+  const [failure, setFailure] = useState<ActivityUpdatesFailure>();
+  const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
   const liveActivity = useRef(activityId);
 
   if (liveActivity.current !== activityId) {
@@ -53,7 +70,8 @@ export function useActivityUpdates(
       pending: [],
     });
     setLoadingMore(false);
-    setError(undefined);
+    setPosting(false);
+    setFailure(undefined);
   }
 
   const isCurrent = useCallback(
@@ -89,7 +107,7 @@ export function useActivityUpdates(
     const requested = activityId;
     const pullUpdates = state.sync.pullActivityUpdates;
     if (pullUpdates === undefined) {
-      setError("Couldn't load older updates.");
+      setFailure({ action: 'load', message: "Couldn't load older updates." });
       return;
     }
     setLoadingMore(true);
@@ -97,10 +115,10 @@ export function useActivityUpdates(
       .call(state.sync, requested)
       .then(async () => {
         await readCommitted(requested);
-        if (isCurrent(requested)) setError(undefined);
+        if (isCurrent(requested)) setFailure(undefined);
       })
       .catch((caught: unknown) => {
-        if (isCurrent(requested)) setError(describeFailure(caught));
+        if (isCurrent(requested)) setFailure(describeFailure(caught, 'load'));
       })
       .finally(() => {
         if (isCurrent(requested)) setLoadingMore(false);
@@ -110,7 +128,8 @@ export function useActivityUpdates(
   const post = useCallback(
     async (body: string): Promise<boolean> => {
       const trimmed = body.trim();
-      if (trimmed === '' || page.pending.length > 0) return false;
+      if (trimmed === '' || posting) return false;
+      setPosting(true);
       try {
         const idempotencyKey = randomUUID();
         const result = await state.coordinator.postUpdate({
@@ -119,17 +138,21 @@ export function useActivityUpdates(
           idempotencyKey,
         });
         if (result.kind === 'refused') {
-          if (isCurrent(activityId)) setError(describeFailure(result.error));
+          if (isCurrent(activityId)) {
+            setFailure(describeFailure(result.error, 'post'));
+          }
           return false;
         }
-        if (isCurrent(activityId)) setError(undefined);
+        if (isCurrent(activityId)) setFailure(undefined);
         return result.kind === 'accepted';
       } catch (caught: unknown) {
-        if (isCurrent(activityId)) setError(describeFailure(caught));
+        if (isCurrent(activityId)) setFailure(describeFailure(caught, 'post'));
         return false;
+      } finally {
+        if (isCurrent(activityId)) setPosting(false);
       }
     },
-    [activityId, isCurrent, page.pending.length, state],
+    [activityId, isCurrent, posting, state],
   );
 
   const remove = useCallback(
@@ -142,30 +165,48 @@ export function useActivityUpdates(
           intentId: randomUUID(),
         });
         if (result.kind === 'refused') {
-          if (isCurrent(activityId)) setError(describeFailure(result.error));
+          if (isCurrent(activityId)) {
+            setFailedDelete(update);
+            setFailure(describeFailure(result.error, 'delete'));
+          }
           return false;
         }
-        if (isCurrent(activityId)) setError(undefined);
+        if (isCurrent(activityId)) {
+          setFailedDelete(undefined);
+          setFailure(undefined);
+        }
         return result.kind === 'accepted';
       } catch (caught: unknown) {
-        if (isCurrent(activityId)) setError(describeFailure(caught));
+        if (isCurrent(activityId)) {
+          setFailedDelete(update);
+          setFailure(describeFailure(caught, 'delete'));
+        }
         return false;
       }
     },
     [activityId, isCurrent, state],
   );
 
-  const dismissError = useCallback(() => setError(undefined), []);
+  const retryFailure = useCallback(() => {
+    if (failure?.action === 'load') loadMore();
+    else if (failure?.action === 'delete' && failedDelete !== undefined) {
+      void remove(failedDelete);
+    }
+  }, [failedDelete, failure?.action, loadMore, remove]);
+  const dismissError = useCallback(() => setFailure(undefined), []);
   return {
     updates: page.updates,
     pending: page.pending,
     cursor: page.cursor,
     isLoadingMore: loadingMore,
-    isPosting: page.pending.length > 0,
+    isPosting: posting,
     loadMore,
     post,
     remove,
-    errorMessage: error,
+    errorMessage: failure?.message,
+    errorRequestId: failure?.requestId,
+    errorAction: failure?.action,
+    retryFailure,
     dismissError,
   };
 }

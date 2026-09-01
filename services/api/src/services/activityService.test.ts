@@ -1046,6 +1046,7 @@ describe('projectChildren and sourceListIdsOf', () => {
     childActivityId: string,
     rank: string,
     status = 'scheduled',
+    restoredStatus = 'scheduled',
   ): StoredItem => ({
     pk: `ACT#${PLAN}`,
     sk: `SUB#${childActivityId}`,
@@ -1053,6 +1054,7 @@ describe('projectChildren and sourceListIdsOf', () => {
     childActivityId,
     title: `Child ${childActivityId.slice(-2)}`,
     status,
+    restoredStatus,
     rank,
     isRecurring: false,
     schemaVersion: 1,
@@ -1068,6 +1070,7 @@ describe('projectChildren and sourceListIdsOf', () => {
       activityId: CHILD_B,
       title: `Child ${CHILD_B.slice(-2)}`,
       status: 'completed',
+      restoredStatus: 'scheduled',
       isRecurring: false,
     });
   });
@@ -2084,6 +2087,7 @@ describe('getPrepTasks', () => {
     childActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB',
     title: 'Book hotel',
     status: 'saved',
+    restoredStatus: 'saved',
     rank: NOW,
     isRecurring: false,
     ...overrides,
@@ -2256,10 +2260,9 @@ describe('changing a task’s parent', () => {
   });
 
   /**
-   * The pointer mirrors title, status and the recurrence bit, so any of the three moving is a
-   * pointer rewrite in the same transaction (`api-contract.md` §2.3). Before this, only a
-   * title change asked for one, and a prep task that gained recurrence left the follow-up
-   * counting it as a one-off.
+   * The pointer mirrors title, status, schedule-derived restoration state and the recurrence
+   * bit, so any of them moving is a pointer rewrite in the same transaction
+   * (`api-contract.md` §2.3).
    */
   it('refreshes the pointer when a prep task gains recurrence', async () => {
     vi.mocked(repository.getActivityMeta).mockResolvedValue(

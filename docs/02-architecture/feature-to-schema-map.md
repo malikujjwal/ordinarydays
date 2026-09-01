@@ -343,7 +343,8 @@ silently rewrite a grocery list the user is standing in a shop reading.
 pointer in the parent's partition:
 
 ```
-ACT#act_trip | SUB#act_hotel   { title: "Book hotel", status: "scheduled", rank: "a0" }
+ACT#act_trip | SUB#act_hotel   { title: "Book hotel", status: "scheduled",
+                                 restoredStatus: "scheduled", rank: "a0" }
 ACT#act_hotel | META           { objectKind: "task", type: "task",
                                  parentActivityId: "act_trip", ... }
 USER#usr_u   | IDX#act_hotel   { gsi1pk: "U#usr_u#S", ... }
@@ -751,7 +752,7 @@ Being honest about the seams is more useful than claiming there are none.
 | **Index-entry fan-out** on reschedule of a shared plan | Buys a single-partition Today query for every participant | Large participant counts with frequent time changes. Capped at 50. |
 | **The same fan-out now also fires on an RSVP reset**, and on the `#P` → `#S` bucket move | A date landing rewrites every participant's index entry *and* every `PART#` row in one transaction | At the 50-participant cap that is 103 items, past DynamoDB's 100-item limit. Handled by a threshold and a two-phase write; see below. |
 | **Read-time recurrence expansion** | Avoids materialising infinite future rows | A user with hundreds of active series makes the agenda endpoint do real CPU. Capped at 200 with a warning. |
-| **`SUB#` pointers duplicate a child's title and status** | Buys a one-query plan detail screen | Two writes on every prep-task rename. Must stay in the same transaction. |
+| **`SUB#` pointers duplicate a child's title, status, restoration state and recurrence bit** | Buys a one-query plan detail screen and exact offline Uncomplete | Every child title, schedule, status or recurrence change must rewrite the pointer in the same transaction. |
 | **`lastActivityAt` duplicates part of `updatedAt`'s job** | Keeps `If-Match` from failing on changes the editor did not make | Two timestamps to keep straight, and a write path that bumps the wrong one produces either a spurious `409` or a Needs-a-date list that does not resort. |
 | **Preset-seeded List fields are frozen at creation** | A list renders its stored state presentation, feature configuration, slot, icon and empty-state copy, so a catalogue edit cannot change a list a user is standing in a shop reading | Two users who each made a "Groceries" list six months apart can hold different seeded values. A preset improvement reaches new lists only; later user settings changes affect only the fields explicitly changed. |
 | **Shared lists trade `If-Match` on items for usability** | A checkbox that returns `409` is worse than a lost keystroke | Two members editing the same item's *title* in the same minute: one silently wins. There is no conflict banner for item fields, by design. |

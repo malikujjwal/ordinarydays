@@ -1,13 +1,16 @@
 import { MAX_UPDATE_BODY_LEN } from '@od/shared/constants';
 import type { ActivityUpdate } from '@od/shared/types';
-import { Button, Field, Text, type Theme, useTheme } from '@od/ui';
+import { Button, Field, Text, type Theme, Touchable, useTheme } from '@od/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { ActionRow } from '@/features/activity/components/ActionRow';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
 import { UpdateRow } from '@/features/activity/components/UpdateRow';
 import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
-import type { PendingUpdate } from '@/features/activity/hooks/useActivityUpdates';
+import type {
+  ActivityUpdatesFailureAction,
+  PendingUpdate,
+} from '@/features/activity/hooks/useActivityUpdates';
 import { peekRows } from '@/features/activity/model/planSections';
 
 /**
@@ -39,6 +42,11 @@ export interface UpdatesSectionProps {
   paginationSignal?: number;
   /** §5.3 failure copy for the last post/delete/page that did not land. */
   errorMessage?: string;
+  /** Server correlation identity, rendered as selectable support text. */
+  errorRequestId?: string;
+  errorAction?: ActivityUpdatesFailureAction;
+  /** Replays page/delete; a failed post reuses this component's retained draft. */
+  onRetryError?: () => void;
 }
 
 export function UpdatesSection({
@@ -53,6 +61,9 @@ export function UpdatesSection({
   isLoadingOlder = false,
   paginationSignal = 0,
   errorMessage,
+  errorRequestId,
+  errorAction,
+  onRetryError,
 }: UpdatesSectionProps) {
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -77,6 +88,18 @@ export function UpdatesSection({
   const startComposing = useCallback(() => setComposing(true), []);
   const showAll = useCallback(() => setExpanded(true), []);
   const handleSubmit = useCallback(() => void submit(), [submit]);
+  const retryLabel =
+    errorAction === 'post'
+      ? 'Try posting again'
+      : errorAction === 'delete'
+        ? 'Try deleting again'
+        : errorAction === 'load'
+          ? 'Try loading again'
+          : undefined;
+  const retryError = useCallback(() => {
+    if (errorAction === 'post') void submit();
+    else onRetryError?.();
+  }, [errorAction, onRetryError, submit]);
   useEffect(() => {
     if (!expanded) {
       handledPaginationSignal.current = paginationSignal;
@@ -99,10 +122,36 @@ export function UpdatesSection({
           accessibilityRole="alert"
           accessibilityLiveRegion="polite"
           testID="updates-error"
+          style={styles.error}
         >
-          <Text variant="footnote" color="danger">
-            {errorMessage}
-          </Text>
+          <View style={styles.errorCopy}>
+            <Text variant="footnote" color="danger">
+              {errorMessage}
+            </Text>
+            {errorRequestId === undefined ? null : (
+              <Text
+                variant="footnote"
+                color="textSecondary"
+                selectable
+                testID="updates-error-request-id"
+              >
+                {errorRequestId}
+              </Text>
+            )}
+          </View>
+          {retryLabel === undefined ||
+          (errorAction !== 'post' && onRetryError === undefined) ? null : (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={retryLabel}
+              onPress={retryError}
+              testID="updates-error-retry"
+            >
+              <Text variant="footnoteStrong" color="textAction">
+                {retryLabel}
+              </Text>
+            </Touchable>
+          )}
         </View>
       )}
       {pending.map((entry) => (
@@ -176,6 +225,13 @@ export function UpdatesSection({
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     composer: { gap: theme.space[3] },
+    error: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: theme.space[3],
+    },
+    errorCopy: { flex: 1, minWidth: 0, gap: theme.space[1] },
     actions: { flexDirection: 'row', gap: theme.space[3] },
     grow: { flex: 1 },
   });

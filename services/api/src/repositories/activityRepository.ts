@@ -358,11 +358,11 @@ export class PendingAttachmentsUnavailableError extends Error {
 /**
  * The parent's thin pointer to one prep task (`data-model.md` §3.1).
  *
- * It mirrors `title`, `status` and `isRecurring` so plan detail renders the PREP section from
- * one bounded prefix `Query` with no child lookup, and so the completion follow-up can count
- * and act on incomplete **one-off** children without inferring an occurrence for a recurring
- * one. Every writer of those three fields writes this row in the same transaction; the child
- * Activity stays the source of truth.
+ * It mirrors `title`, `status`, schedule-derived `restoredStatus`, and `isRecurring` so plan
+ * detail renders the PREP section from one bounded prefix `Query` with no child lookup, and
+ * so offline Uncomplete never has to guess whether a terminal child was dated. Every writer
+ * of those fields writes this row in the same transaction; the child Activity stays the
+ * source of truth.
  */
 function childPointerPut(
   parentActivityId: string,
@@ -376,6 +376,7 @@ function childPointerPut(
         childActivityId: activity.activityId,
         title: activity.title,
         status: activity.status,
+        restoredStatus: activity.schedule === undefined ? 'saved' : 'scheduled',
         rank: rank ?? activity.createdAt,
         isRecurring: activity.recurrence !== undefined,
       }),
@@ -1003,17 +1004,19 @@ async function patchActivityOnce(
           Update: {
             Key: childPointer(after, next.activityId),
             UpdateExpression:
-              'SET #title = :title, #status = :status, #isRecurring = :isRecurring, #updatedAt = :updatedAt',
+              'SET #title = :title, #status = :status, #restoredStatus = :restoredStatus, #isRecurring = :isRecurring, #updatedAt = :updatedAt',
             ConditionExpression: 'attribute_exists(pk)',
             ExpressionAttributeNames: {
               '#title': 'title',
               '#status': 'status',
+              '#restoredStatus': 'restoredStatus',
               '#isRecurring': 'isRecurring',
               '#updatedAt': 'updatedAt',
             },
             ExpressionAttributeValues: {
               ':title': next.title,
               ':status': next.status,
+              ':restoredStatus': next.schedule === undefined ? 'saved' : 'scheduled',
               ':isRecurring': next.recurrence !== undefined,
               ':updatedAt': next.updatedAt,
             },
@@ -1595,7 +1598,7 @@ export async function listChildPointers(activityId: string): Promise<StoredItem[
  * One prep task, as its parent's pointer projects it.
  *
  * Parsed rather than cast, like every other stored row this file returns. A pointer that has
- * lost a field it has carried since P1-09 is a denormalisation bug, and the read that feeds
+ * lost a required field is a denormalisation bug, and the read that feeds
  * `3 of 5 done` is the wrong place to paper over one with a default — the number would be
  * wrong and nothing would say so. `isRecurring` is the one exception, and a documented one:
  * rows written before P3-18 do not carry it, and absent means `false`.
@@ -1604,6 +1607,7 @@ const prepTaskPointerRow = z.object({
   childActivityId: z.string(),
   title: z.string(),
   status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
+  restoredStatus: z.enum(['saved', 'scheduled']),
   rank: z.string(),
   isRecurring: z.boolean().optional(),
 });
@@ -1612,6 +1616,7 @@ export interface PrepTaskPointer {
   readonly childActivityId: string;
   readonly title: string;
   readonly status: Activity['status'];
+  readonly restoredStatus: 'saved' | 'scheduled';
   readonly rank: string;
   readonly isRecurring: boolean;
 }

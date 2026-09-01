@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
+import { usePlanActivityFloors } from '@/lib/planActivityFloors';
 import {
   applyPlansCreate,
   applyPlansRemove,
@@ -21,7 +22,6 @@ import {
   type NeedsDateRowData,
 } from '../model/plansApply';
 import { plansProjectionKey } from './keys';
-import { usePlanActivityFloors } from './usePlanActivityFloors';
 
 export type { NeedsDateRowData } from '../model/plansApply';
 

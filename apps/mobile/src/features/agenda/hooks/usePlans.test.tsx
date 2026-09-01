@@ -5,7 +5,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { activityMutationKeys } from '@/lib/mutationKeys';
-import { raisePlanActivityFloor } from './usePlanActivityFloors';
+import { raisePlanActivityFloor } from '@/lib/planActivityFloors';
 import { type NeedsDateRowData, usePlans } from './usePlans';
 
 /**

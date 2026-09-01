@@ -486,6 +486,7 @@ export const activityChild = z
     activityId: ulidId('act'),
     title,
     status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
+    restoredStatus: z.enum(['saved', 'scheduled']),
     isRecurring: z.boolean(),
   })
   .meta({ id: 'ActivityChild' });

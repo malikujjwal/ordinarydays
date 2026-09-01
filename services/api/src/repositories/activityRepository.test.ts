@@ -481,6 +481,7 @@ describe('create composes one transaction', () => {
       childActivityId: ACT,
       title: 'Buy milk',
       status: 'saved',
+      restoredStatus: 'saved',
     });
   });
 
@@ -647,6 +648,7 @@ describe('patch', () => {
       ExpressionAttributeValues: {
         ':title': 'Buy oat milk',
         ':status': 'saved',
+        ':restoredStatus': 'saved',
       },
     });
   });
@@ -897,6 +899,7 @@ describe('prep-task pointer and parent counter', () => {
       childActivityId: ACT,
       title: 'Buy milk',
       status: 'saved',
+      restoredStatus: 'saved',
       isRecurring: false,
     });
     expect(counterFor(PARENT)).toMatchObject({
@@ -958,14 +961,17 @@ describe('prep-task pointer and parent counter', () => {
     expect(counter?.ExpressionAttributeNames).not.toHaveProperty('#updatedAt');
   });
 
-  /** The bit P3-44 counts by, so a follow-up never has to guess a child's occurrence. */
-  it('records a recurring child on the pointer at create', async () => {
+  /** The two facts native completion must never infer from a terminal status. */
+  it('records recurrence and schedule-derived restoration state on the pointer', async () => {
     await createActivity(
       ALICE,
       activity({ parentActivityId: PARENT, schedule, recurrence: series }),
     );
 
-    expect(pointerPutFor(PARENT)).toMatchObject({ isRecurring: true });
+    expect(pointerPutFor(PARENT)).toMatchObject({
+      isRecurring: true,
+      restoredStatus: 'scheduled',
+    });
   });
 
   it('refreshes title, status and the recurrence bit on the unchanged parent', async () => {
@@ -984,6 +990,7 @@ describe('prep-task pointer and parent counter', () => {
       ExpressionAttributeValues: {
         ':title': 'Buy oat milk',
         ':status': 'saved',
+        ':restoredStatus': 'scheduled',
         ':isRecurring': false,
       },
     });
@@ -1091,6 +1098,7 @@ describe('listPrepTaskPointers', () => {
           childActivityId: ACT,
           title: 'Book hotel',
           status: 'completed',
+          restoredStatus: 'saved',
           rank: '2026-08-08T10:00:00.000Z',
           schemaVersion: 1,
         },
@@ -1102,6 +1110,7 @@ describe('listPrepTaskPointers', () => {
         childActivityId: ACT,
         title: 'Book hotel',
         status: 'completed',
+        restoredStatus: 'saved',
         rank: '2026-08-08T10:00:00.000Z',
         isRecurring: false,
       },

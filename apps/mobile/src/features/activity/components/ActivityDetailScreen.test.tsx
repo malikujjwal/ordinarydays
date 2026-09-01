@@ -7,9 +7,9 @@ import type { ReactNode } from 'react';
 import { Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readPlanActivityFloor } from '@/features/agenda/hooks/usePlanActivityFloors';
 import { ClockProvider } from '@/hooks/useClock';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import { readPlanActivityFloor } from '@/lib/planActivityFloors';
 import { createOfflineQueryClient } from '@/lib/queryClient';
 import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
@@ -2747,6 +2747,7 @@ describe('the Plan detail anatomy (P3-37)', () => {
     activityId: `act_01J0000000000000000000P3${37 + index}`,
     title: `Prep ${index}`,
     status,
+    restoredStatus: 'scheduled' as const,
     isRecurring: false,
   });
 
@@ -2959,6 +2960,7 @@ describe('the prep-task entry points (P3-38)', () => {
     activityId: `act_01J0000000000000000000P3${37 + index}`,
     title: `Prep ${index}`,
     status: 'scheduled' as const,
+    restoredStatus: 'scheduled' as const,
     isRecurring: false,
   });
 
@@ -3234,6 +3236,52 @@ describe('the Updates section (P3-40)', () => {
 
     // The authoritative lastActivityAt was raised into the Plans floor (§P3-40's merge).
     expect(readPlanActivityFloor(queryClient, ID)).toBe(stored.createdAt);
+  });
+
+  it('retains a failed post draft and renders its request id with an action-specific retry', async () => {
+    const stored = userUpdate(9, '2026-08-12T12:00:00.000Z');
+    mountUpdates(
+      { updates: [systemUpdate(1, '2026-08-10T10:00:00.000Z')] },
+      plan(),
+      {
+        status: 422,
+        body: {
+          error: {
+            code: 'validation_failed',
+            message: "Couldn't post that update.",
+            requestId: 'req_update_post',
+          },
+        },
+      },
+      {
+        status: 201,
+        body: {
+          data: { update: stored, lastActivityAt: stored.createdAt },
+          meta: { requestId: 'req_update_retry' },
+        },
+      },
+    );
+    await screen.findByTestId('section-updates');
+    fireEvent.click(screen.getByRole('button', { name: 'Write an update' }));
+    fireEvent.change(screen.getByLabelText('Update'), {
+      target: { value: 'Draft survives' },
+    });
+    fireEvent.click(screen.getByTestId('update-composer-post'));
+
+    await screen.findByText("Couldn't post that update.");
+    expect(screen.getByTestId('updates-error-request-id').textContent).toBe(
+      'req_update_post',
+    );
+    expect((screen.getByLabelText('Update') as HTMLInputElement).value).toBe(
+      'Draft survives',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try posting again' }));
+    await screen.findByTestId(`update-${stored.updateId}`);
+    expect(screen.queryByTestId('update-composer')).toBeNull();
+    expect(
+      sent.filter((call) => call.method === 'POST' && call.url.includes('/updates')),
+    ).toHaveLength(2);
   });
 
   it('pages through the cursor on near-end scroll only after the section is revealed', async () => {

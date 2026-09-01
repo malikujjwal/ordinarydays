@@ -290,46 +290,60 @@ describe('serialized native convergence guard', () => {
     });
   }
 
-  it('replays a durable update post once and settles its SQLite projection atomically', async () => {
-    const confirmed = {
+  it('replays ordered durable update posts exactly once and settles their SQLite projection', async () => {
+    const first = {
       updateId: 'upd_01J0000000000000000000000A',
       activityId: ACTIVITY,
       kind: 'user' as const,
       authorUserId: OWNER,
-      body: 'Offline update',
+      body: 'Offline update A',
       createdAt: '2026-08-19T12:00:00.000Z',
       schemaVersion: 1 as const,
     };
-    await transactions.run((transaction) =>
-      service.postUpdate(transaction, {
+    const second = {
+      ...first,
+      updateId: 'upd_01J0000000000000000000000B',
+      body: 'Offline update B',
+      createdAt: '2026-08-19T12:01:00.000Z',
+    };
+    await transactions.run(async (transaction) => {
+      await service.postUpdate(transaction, {
         activityId: ACTIVITY,
-        body: confirmed.body,
-        idempotencyKey: 'durable-update-post',
-      }),
-    );
-    const postUpdate = vi.fn(async () => ({
-      update: confirmed,
-      lastActivityAt: confirmed.createdAt,
-    }));
+        body: first.body,
+        idempotencyKey: 'durable-update-post-a',
+      });
+      await service.postUpdate(transaction, {
+        activityId: ACTIVITY,
+        body: second.body,
+        idempotencyKey: 'durable-update-post-b',
+      });
+    });
+    expect((await activities.readUpdatesProjection(ACTIVITY)).pending).toEqual([
+      { localId: 'durable-update-post-b', body: second.body },
+      { localId: 'durable-update-post-a', body: first.body },
+    ]);
+    const postUpdate = vi.fn(async (_activityId: string, body: string) => {
+      const update = body === first.body ? first : second;
+      return { update, lastActivityAt: update.createdAt };
+    });
     const push = { ...pushTransport(), postUpdate };
 
     await syncEngine({ push }).syncNow();
+    await syncEngine({ push }).syncNow();
 
-    expect(postUpdate).toHaveBeenCalledWith(
-      ACTIVITY,
-      confirmed.body,
-      'durable-update-post',
-      expect.anything(),
-    );
+    expect(postUpdate.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+      [ACTIVITY, first.body, 'durable-update-post-a'],
+      [ACTIVITY, second.body, 'durable-update-post-b'],
+    ]);
     expect(await activities.readUpdatesProjection(ACTIVITY)).toMatchObject({
-      updates: [confirmed],
+      updates: [second, first],
       pending: [],
     });
     expect(await outbox.all()).toEqual([]);
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
         .lastActivityAt,
-    ).toBe(confirmed.createdAt);
+    ).toBe(second.createdAt);
   });
 
   it('reads occurrence date and capabilities from committed Agenda rows', async () => {

@@ -171,6 +171,7 @@ describe('native Activity updates projection', () => {
         activityId: 'act_01J0000000000000000000000B',
         title: 'Pack a bag',
         status: 'scheduled' as const,
+        restoredStatus: 'scheduled' as const,
         isRecurring: false,
       },
     ];

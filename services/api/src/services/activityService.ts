@@ -979,8 +979,9 @@ export async function patchActivity(
         : await getActivityMeta(next.parentActivityId);
 
   /**
-   * The pointer mirrors title, status and the recurrence bit, so any of the three moving is a
-   * pointer rewrite in this same transaction — recurrence included, per
+   * The pointer mirrors title, status, schedule-derived restoration state and the recurrence
+   * bit, so any of them moving is a pointer rewrite in this same transaction — recurrence
+   * included, per
    * `api-contract.md` §2.3, so the completion follow-up never reads a stale one. A changed
    * parent is the other shape: the repository moves the pointer and both counters.
    */
@@ -989,6 +990,7 @@ export async function patchActivity(
     current.parentActivityId !== undefined &&
     (current.title !== next.title ||
       current.status !== next.status ||
+      (current.schedule !== undefined) !== (next.schedule !== undefined) ||
       (current.recurrence !== undefined) !== (next.recurrence !== undefined));
 
   try {
@@ -1981,6 +1983,7 @@ function prepPointerToChild(row: StoredItem): ActivityChild | undefined {
     activityId: row.childActivityId,
     title: row.title,
     status: row.status,
+    restoredStatus: row.restoredStatus,
     isRecurring: row.isRecurring === true,
   });
   return parsed.success ? parsed.data : undefined;

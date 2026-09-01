@@ -1564,7 +1564,16 @@ function Loaded({
           paginationSignal={updatesPaginationSignal}
           {...(feed.errorMessage === undefined
             ? {}
-            : { errorMessage: feed.errorMessage })}
+            : {
+                errorMessage: feed.errorMessage,
+                ...(feed.errorRequestId === undefined
+                  ? {}
+                  : { errorRequestId: feed.errorRequestId }),
+                ...(feed.errorAction === undefined
+                  ? {}
+                  : { errorAction: feed.errorAction }),
+                onRetryError: feed.retryFailure,
+              })}
         />
       ) : null}
       {activity.objectKind === 'plan' && !pending ? (
