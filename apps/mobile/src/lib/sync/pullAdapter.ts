@@ -1,5 +1,6 @@
 import {
   getActivity,
+  getActivityUpdates,
   getAgenda,
   getList,
   getListItems,
@@ -12,6 +13,7 @@ import type {
   ActivityDetail,
   ActivityDetailTarget,
   ActivityListItem,
+  ActivityUpdatePage,
   AgendaData,
   List,
   User,
@@ -24,6 +26,11 @@ export interface ActivityPullAdapter {
   agenda(request: AgendaQuery, signal?: AbortSignal): Promise<AgendaData>;
   activity(target: ActivityDetailTarget, signal?: AbortSignal): Promise<ActivityDetail>;
   profile(signal?: AbortSignal): Promise<User>;
+  activityUpdates?(
+    activityId: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<ActivityUpdatePage>;
   anytimePage?(
     cursor?: string,
     signal?: AbortSignal,
@@ -106,6 +113,8 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
   agenda: (request, signal) => getAgenda(apiClient, request, signal),
   activity: (target, signal) => getActivity(apiClient, target, signal),
   profile: (signal) => getMe(apiClient, signal),
+  activityUpdates: (activityId, cursor, signal) =>
+    getActivityUpdates(apiClient, activityId, cursor, signal),
   anytimePage: async (cursor, signal) => {
     const page = await listActivities(
       apiClient,

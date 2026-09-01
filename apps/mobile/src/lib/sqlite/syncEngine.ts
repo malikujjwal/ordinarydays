@@ -4,9 +4,11 @@ import {
   type AgendaQuery,
   activityCompletionResult,
   activity as activitySchema,
+  deletedActivityUpdate,
   listItemActivityLink,
   listItemView,
   listView,
+  postActivityUpdateResult,
   scheduleActivityResult,
   timeZone,
 } from '@od/shared/schemas';
@@ -16,12 +18,14 @@ import type {
   ActivityDetail,
   ActivityDetailTarget,
   ActivityListItem,
+  ActivityUpdatePage,
   AgendaData,
   List,
   Occurrence,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
 import {
+  activityUpdateMutationKeys,
   changesRecurrenceTopology,
   isListItemProjectionMutation,
   isListMutation,
@@ -84,6 +88,7 @@ export interface NativeSyncEngine {
   request(reason: NativeSyncReason): void;
   syncNow(): Promise<void>;
   pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail>;
+  pullActivityUpdates?(activityId: string): Promise<ActivityUpdatePage>;
   pullAgenda(request: AgendaQuery): Promise<AgendaData>;
   pullReminderCoverage(): Promise<void>;
   prepareRejectedIntentRecovery(
@@ -433,6 +438,21 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     if (installed === undefined)
       throw new PendingActivityDeletionError(target.activityId);
     return installed;
+  }
+
+  async pullActivityUpdates(activityId: string): Promise<ActivityUpdatePage> {
+    const pullUpdates = this.pull.activityUpdates;
+    if (pullUpdates === undefined)
+      throw new Error('Native Updates transport is not ready.');
+    const current = await this.activities.readUpdates(activityId);
+    if (current.cursor === undefined) return current;
+    const page = await this.serialNetwork((signal) =>
+      pullUpdates(activityId, current.cursor, signal),
+    );
+    await this.transactions.run((transaction) =>
+      this.activities.installUpdatePage(transaction, activityId, page),
+    );
+    return this.activities.readUpdates(activityId);
   }
 
   /**
@@ -1018,6 +1038,39 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       const response = await this.serialNetwork((signal) =>
         this.push.execute(intent, signal),
       );
+      if (
+        intent.mutationKey[0] === 'activity' &&
+        (intent.mutationKey[1] === activityUpdateMutationKeys.post[1] ||
+          intent.mutationKey[1] === activityUpdateMutationKeys.delete[1])
+      ) {
+        phase = 'settlement';
+        await this.transactions.run(async (transaction) => {
+          if (intent.mutationKey[1] === activityUpdateMutationKeys.post[1]) {
+            const parsed = postActivityUpdateResult.parse(response);
+            await this.activities.settlePostedUpdate(
+              transaction,
+              intent.intentId,
+              parsed,
+            );
+          } else {
+            const parsed = deletedActivityUpdate.parse(response);
+            const expected = field(intent.variables, 'updateId');
+            if (parsed.updateId !== expected) {
+              throw new Error('Update deletion acknowledged a different entry.');
+            }
+            await this.activities.settleDeletedUpdate(
+              transaction,
+              intent.intentId,
+              intent.entityId,
+              parsed.updateId,
+            );
+          }
+          await this.outbox.acknowledge(transaction.database, intent.intentId);
+          transaction.changed('outbox');
+        });
+        this.retryIndex = 0;
+        return 'continue';
+      }
       if (isListMutation(intent, 'itemSchedule')) {
         /*
          * The bridge settles like an Activity create wearing a list key (P3-34): the response
@@ -1663,6 +1716,27 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     intent: OutboxIntent,
     failure: Error,
   ): Promise<void> {
+    if (
+      intent.mutationKey[0] === 'activity' &&
+      (intent.mutationKey[1] === activityUpdateMutationKeys.post[1] ||
+        intent.mutationKey[1] === activityUpdateMutationKeys.delete[1])
+    ) {
+      await this.transactions.run(async (transaction) => {
+        await this.activities.rollbackUpdateOperation(
+          transaction,
+          intent.intentId,
+          intent.entityId,
+        );
+        await this.outbox.needsAttention(
+          transaction.database,
+          intent.intentId,
+          rejectedAttention(failure, false),
+          failure.message,
+        );
+        transaction.changed('outbox');
+      });
+      return;
+    }
     if (intent.mutationKey[0] === 'list') {
       await this.rollbackPermanentListRejection(intent, failure);
       return;

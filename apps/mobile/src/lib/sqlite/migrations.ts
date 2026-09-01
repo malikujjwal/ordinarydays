@@ -1236,6 +1236,28 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           DEFAULT 'scheduled' CHECK (restored_status IN ('saved', 'scheduled'));
       `),
   },
+  {
+    version: 21,
+    name: 'durable-activity-update-actions',
+    /** Pending posts and delete masks are transactional projections beside their outbox row. */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE activity_update_operations (
+          intent_id TEXT PRIMARY KEY NOT NULL,
+          activity_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('post', 'delete')),
+          body TEXT,
+          target_update_id TEXT,
+          created_at INTEGER NOT NULL,
+          CHECK (
+            (operation = 'post' AND body IS NOT NULL AND target_update_id IS NULL) OR
+            (operation = 'delete' AND body IS NULL AND target_update_id IS NOT NULL)
+          )
+        );
+        CREATE INDEX activity_update_operations_feed
+          ON activity_update_operations (activity_id, created_at, intent_id);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

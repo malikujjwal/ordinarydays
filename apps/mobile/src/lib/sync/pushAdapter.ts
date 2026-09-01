@@ -6,6 +6,7 @@ import {
   createListItem,
   createReminder,
   deleteActivityForReplay,
+  deleteActivityUpdate,
   deleteListForReplay,
   deleteListItemForReplay,
   deleteReminderForReplay,
@@ -13,6 +14,7 @@ import {
   patchActivityForReplay,
   patchListForReplay,
   patchListItem,
+  postActivityUpdate,
   scheduleActivity,
   scheduleListItem,
   skipActivity,
@@ -36,6 +38,7 @@ import {
   patchActivityInput,
   patchListInput,
   patchListItemInput,
+  postActivityUpdateInput,
   type ReminderInput,
   reminderInput,
   type ScheduleActivityInput,
@@ -52,7 +55,7 @@ import {
   unsnoozeActivityInput,
 } from '@od/shared/schemas';
 import { apiClient } from '@/lib/apiClient';
-import { listMutationKeys } from '@/lib/mutationKeys';
+import { activityUpdateMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
 import type { OutboxIntent } from '@/lib/sqlite/outbox';
 import { field } from '@/lib/unknown';
 
@@ -125,6 +128,17 @@ export interface ActivityPushTransport {
   deleteReminder(
     activityId: string,
     reminderId: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+  postUpdate?(
+    activityId: string,
+    body: string,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+  deleteUpdate?(
+    activityId: string,
+    updateId: string,
     signal: AbortSignal,
   ): Promise<unknown>;
 }
@@ -234,6 +248,10 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
     createReminder(apiClient, activityId, input, idempotencyKey, signal),
   deleteReminder: (activityId, reminderId, signal) =>
     deleteReminderForReplay(apiClient, activityId, reminderId, signal),
+  postUpdate: (activityId, body, idempotencyKey, signal) =>
+    postActivityUpdate(apiClient, activityId, body, idempotencyKey, signal),
+  deleteUpdate: (activityId, updateId, signal) =>
+    deleteActivityUpdate(apiClient, activityId, updateId, signal),
 };
 
 export const sharedListPushTransport: ListPushTransport = {
@@ -339,6 +357,16 @@ export class ActivityPushAdapter {
         signal,
       );
     }
+    if (name === activityUpdateMutationKeys.delete[1]) {
+      if (this.transport.deleteUpdate === undefined) {
+        throw new DurableActivityIntentError('Native update deletion is not ready.');
+      }
+      return this.transport.deleteUpdate(
+        activityId,
+        requiredString(field(value, 'updateId'), 'updateId'),
+        signal,
+      );
+    }
     const idempotencyKey = requiredString(
       field(value, 'idempotencyKey'),
       'idempotencyKey',
@@ -400,6 +428,17 @@ export class ActivityPushAdapter {
       return this.transport.createReminder(
         activityId,
         parsePersisted(reminderInput, field(value, 'input')),
+        idempotencyKey,
+        signal,
+      );
+    }
+    if (name === activityUpdateMutationKeys.post[1]) {
+      if (this.transport.postUpdate === undefined) {
+        throw new DurableActivityIntentError('Native update posting is not ready.');
+      }
+      return this.transport.postUpdate(
+        activityId,
+        parsePersisted(postActivityUpdateInput, { body: field(value, 'body') }).body,
         idempotencyKey,
         signal,
       );

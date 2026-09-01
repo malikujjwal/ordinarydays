@@ -14,6 +14,8 @@ import type {
   ActivityScheduleVariables,
   ActivitySnoozeVariables,
   ActivityTransactionService,
+  ActivityUpdateDeleteVariables,
+  ActivityUpdatePostVariables,
   ListItemScheduleVariables,
   ProjectionClock,
   TransactionalIntentResult,
@@ -266,6 +268,18 @@ export class NativeActivityActionCoordinator {
   ): Promise<NativeActionResult> {
     return this.acceptExisting(variables.activityId, (transaction) =>
       this.service.removeReminder(transaction, variables),
+    );
+  }
+
+  postUpdate(variables: ActivityUpdatePostVariables): Promise<NativeActionResult> {
+    return this.acceptExisting(variables.activityId, (transaction) =>
+      this.service.postUpdate(transaction, variables),
+    );
+  }
+
+  deleteUpdate(variables: ActivityUpdateDeleteVariables): Promise<NativeActionResult> {
+    return this.acceptExisting(variables.activityId, (transaction) =>
+      this.service.deleteUpdate(transaction, variables),
     );
   }
 

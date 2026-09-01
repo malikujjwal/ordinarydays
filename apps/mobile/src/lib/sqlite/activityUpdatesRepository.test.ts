@@ -9,8 +9,11 @@ import type {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 import { ActivityRepository } from './activityRepository';
+import { ActivityTransactionService } from './activityTransactions';
+import { AgendaRepository } from './agendaRepository';
 import type { SqliteDatabase } from './database';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
+import { OutboxRepository } from './outbox';
 import { RepositorySubscriptions } from './subscriptions';
 import { SerializedTransactionRunner } from './transaction';
 
@@ -67,6 +70,9 @@ describe('native Activity updates projection', () => {
   let subscriptions: RepositorySubscriptions;
   let transactions: SerializedTransactionRunner;
   let activities: ActivityRepository;
+  let agenda: AgendaRepository;
+  let outbox: OutboxRepository;
+  let service: ActivityTransactionService;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'ordinarydays-activity-updates-'));
@@ -75,6 +81,9 @@ describe('native Activity updates projection', () => {
     subscriptions = new RepositorySubscriptions();
     transactions = new SerializedTransactionRunner(database, subscriptions);
     activities = new ActivityRepository(database, subscriptions);
+    agenda = new AgendaRepository(database, subscriptions);
+    outbox = new OutboxRepository(database);
+    service = new ActivityTransactionService(outbox, activities, agenda);
   });
 
   afterEach(async () => {
@@ -192,5 +201,86 @@ describe('native Activity updates projection', () => {
     await expect(
       activities.read({ kind: 'activity', activityId: ACTIVITY }),
     ).resolves.toMatchObject({ children, sourceLists });
+  });
+
+  it('keeps post and delete projections durable until atomic acknowledgement', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const first = update('A', '2026-08-19T11:00:00.000Z');
+    const confirmed = update('B', '2026-08-19T12:00:00.000Z');
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, detail(first.createdAt, [first])),
+    );
+    await transactions.run((transaction) =>
+      service.postUpdate(transaction, {
+        activityId: ACTIVITY,
+        body: 'Update B',
+        idempotencyKey: 'stable-update-post',
+      }),
+    );
+    expect(await activities.readUpdatesProjection(ACTIVITY)).toMatchObject({
+      updates: [first],
+      pending: [{ localId: 'stable-update-post', body: 'Update B' }],
+    });
+
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('updates.sqlite');
+    subscriptions = new RepositorySubscriptions();
+    transactions = new SerializedTransactionRunner(database, subscriptions);
+    activities = new ActivityRepository(database, subscriptions);
+    outbox = new OutboxRepository(database);
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'stable-update-post',
+      mutationKey: ['activity', 'update-post'],
+      variables: { idempotencyKey: 'stable-update-post' },
+    });
+    expect((await activities.readUpdatesProjection(ACTIVITY)).pending).toHaveLength(1);
+
+    await expect(
+      transactions.run(async (transaction) => {
+        await activities.settlePostedUpdate(transaction, 'stable-update-post', {
+          update: confirmed,
+          lastActivityAt: confirmed.createdAt,
+        });
+        await outbox.acknowledge(transaction.database, 'stable-update-post');
+        throw new Error('interrupt acknowledgement');
+      }),
+    ).rejects.toThrow('interrupt acknowledgement');
+    expect((await activities.readUpdatesProjection(ACTIVITY)).pending).toHaveLength(1);
+
+    await transactions.run(async (transaction) => {
+      await activities.settlePostedUpdate(transaction, 'stable-update-post', {
+        update: confirmed,
+        lastActivityAt: confirmed.createdAt,
+      });
+      await outbox.acknowledge(transaction.database, 'stable-update-post');
+    });
+    expect(await activities.readUpdatesProjection(ACTIVITY)).toMatchObject({
+      updates: [confirmed, first],
+      pending: [],
+    });
+
+    service = new ActivityTransactionService(
+      outbox,
+      activities,
+      new AgendaRepository(database, subscriptions),
+    );
+    await transactions.run((transaction) =>
+      service.deleteUpdate(transaction, {
+        activityId: ACTIVITY,
+        updateId: confirmed.updateId,
+        intentId: 'stable-update-delete',
+      }),
+    );
+    expect((await activities.readUpdatesProjection(ACTIVITY)).updates).toEqual([first]);
+    await transactions.run(async (transaction) => {
+      await activities.settleDeletedUpdate(
+        transaction,
+        'stable-update-delete',
+        ACTIVITY,
+        confirmed.updateId,
+      );
+      await outbox.acknowledge(transaction.database, 'stable-update-delete');
+    });
+    expect((await activities.readUpdatesProjection(ACTIVITY)).updates).toEqual([first]);
   });
 });

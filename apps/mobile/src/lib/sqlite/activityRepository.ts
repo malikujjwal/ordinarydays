@@ -27,6 +27,15 @@ export type NativeRowState = 'canonical' | 'queued' | 'updating' | 'needs_attent
 
 export type CapabilityHydrationState = 'installed' | 'missing' | 'deferred';
 
+export interface DurablePendingUpdate {
+  readonly localId: string;
+  readonly body: string;
+}
+
+export interface ActivityUpdatesProjection extends ActivityUpdatePage {
+  readonly pending: readonly DurablePendingUpdate[];
+}
+
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];
   return typeof value === 'string' ? value : undefined;
@@ -301,6 +310,12 @@ export class ActivityRepository {
     const rows = await this.reader.all(
       `SELECT * FROM activity_updates
        WHERE activity_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM activity_update_operations operation
+           WHERE operation.activity_id = activity_updates.activity_id
+             AND operation.operation = 'delete'
+             AND operation.target_update_id = activity_updates.update_id
+         )
        ORDER BY created_at DESC, update_id DESC;`,
       [activityId],
     );
@@ -313,6 +328,128 @@ export class ActivityRepository {
       updates: rows.map(activityUpdateFromRow),
       ...(cursor === undefined ? {} : { cursor }),
     };
+  }
+
+  async readUpdatesProjection(activityId: string): Promise<ActivityUpdatesProjection> {
+    const [page, operations] = await Promise.all([
+      this.readUpdates(activityId),
+      this.reader.all(
+        `SELECT intent_id, body FROM activity_update_operations
+         WHERE activity_id = ? AND operation = 'post'
+         ORDER BY created_at DESC, intent_id DESC;`,
+        [activityId],
+      ),
+    ]);
+    return {
+      ...page,
+      pending: operations.map((row) => ({
+        localId: text(row, 'intent_id') ?? '',
+        body: text(row, 'body') ?? '',
+      })),
+    };
+  }
+
+  async queueUpdatePost(
+    transaction: TransactionContext,
+    activityId: string,
+    intentId: string,
+    body: string,
+    createdAt: number,
+  ): Promise<void> {
+    const activity = await transaction.database.first(
+      'SELECT activity_id FROM activities WHERE activity_id = ?;',
+      [activityId],
+    );
+    if (activity === undefined) throw new Error('No Activity is loaded for this update.');
+    await transaction.database.run(
+      `INSERT OR IGNORE INTO activity_update_operations
+         (intent_id, activity_id, operation, body, target_update_id, created_at)
+       VALUES (?, ?, 'post', ?, NULL, ?);`,
+      [intentId, activityId, body, createdAt],
+    );
+    transaction.changed(this.updatesScope(activityId));
+  }
+
+  async queueUpdateDelete(
+    transaction: TransactionContext,
+    activityId: string,
+    updateId: string,
+    intentId: string,
+    createdAt: number,
+  ): Promise<void> {
+    const update = await transaction.database.first(
+      `SELECT kind FROM activity_updates
+       WHERE activity_id = ? AND update_id = ?;`,
+      [activityId, updateId],
+    );
+    if (text(update ?? {}, 'kind') !== 'user') {
+      throw new Error('Only a saved user update can be deleted.');
+    }
+    await transaction.database.run(
+      `INSERT OR IGNORE INTO activity_update_operations
+         (intent_id, activity_id, operation, body, target_update_id, created_at)
+       VALUES (?, ?, 'delete', NULL, ?, ?);`,
+      [intentId, activityId, updateId, createdAt],
+    );
+    transaction.changed(this.updatesScope(activityId));
+  }
+
+  async settlePostedUpdate(
+    transaction: TransactionContext,
+    intentId: string,
+    result: PostActivityUpdateResult,
+  ): Promise<void> {
+    const operation = await transaction.database.first(
+      `SELECT activity_id FROM activity_update_operations
+       WHERE intent_id = ? AND operation = 'post';`,
+      [intentId],
+    );
+    if (text(operation ?? {}, 'activity_id') !== result.update.activityId) {
+      throw new Error('Update acknowledgement crossed its durable Activity boundary.');
+    }
+    await this.installConfirmedUpdate(transaction, result);
+    await transaction.database.run(
+      'DELETE FROM activity_update_operations WHERE intent_id = ?;',
+      [intentId],
+    );
+    transaction.changed(this.updatesScope(result.update.activityId));
+  }
+
+  async settleDeletedUpdate(
+    transaction: TransactionContext,
+    intentId: string,
+    activityId: string,
+    updateId: string,
+  ): Promise<void> {
+    const operation = await transaction.database.first(
+      `SELECT activity_id, target_update_id FROM activity_update_operations
+       WHERE intent_id = ? AND operation = 'delete';`,
+      [intentId],
+    );
+    if (
+      text(operation ?? {}, 'activity_id') !== activityId ||
+      text(operation ?? {}, 'target_update_id') !== updateId
+    ) {
+      throw new Error('Delete acknowledgement crossed its durable update boundary.');
+    }
+    await this.deleteConfirmedUpdate(transaction, activityId, updateId);
+    await transaction.database.run(
+      'DELETE FROM activity_update_operations WHERE intent_id = ?;',
+      [intentId],
+    );
+    transaction.changed(this.updatesScope(activityId));
+  }
+
+  async rollbackUpdateOperation(
+    transaction: TransactionContext,
+    intentId: string,
+    activityId: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      'DELETE FROM activity_update_operations WHERE intent_id = ?;',
+      [intentId],
+    );
+    transaction.changed(this.updatesScope(activityId));
   }
 
   /** Whether a server-authored authorisation projection has ever been installed. */
@@ -703,6 +840,10 @@ export class ActivityRepository {
     );
     await transaction.database.run(
       'DELETE FROM activity_update_feed_state WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_update_operations WHERE activity_id = ?;',
       [activityId],
     );
     await transaction.database.run(

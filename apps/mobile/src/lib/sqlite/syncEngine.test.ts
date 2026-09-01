@@ -290,6 +290,48 @@ describe('serialized native convergence guard', () => {
     });
   }
 
+  it('replays a durable update post once and settles its SQLite projection atomically', async () => {
+    const confirmed = {
+      updateId: 'upd_01J0000000000000000000000A',
+      activityId: ACTIVITY,
+      kind: 'user' as const,
+      authorUserId: OWNER,
+      body: 'Offline update',
+      createdAt: '2026-08-19T12:00:00.000Z',
+      schemaVersion: 1 as const,
+    };
+    await transactions.run((transaction) =>
+      service.postUpdate(transaction, {
+        activityId: ACTIVITY,
+        body: confirmed.body,
+        idempotencyKey: 'durable-update-post',
+      }),
+    );
+    const postUpdate = vi.fn(async () => ({
+      update: confirmed,
+      lastActivityAt: confirmed.createdAt,
+    }));
+    const push = { ...pushTransport(), postUpdate };
+
+    await syncEngine({ push }).syncNow();
+
+    expect(postUpdate).toHaveBeenCalledWith(
+      ACTIVITY,
+      confirmed.body,
+      'durable-update-post',
+      expect.anything(),
+    );
+    expect(await activities.readUpdatesProjection(ACTIVITY)).toMatchObject({
+      updates: [confirmed],
+      pending: [],
+    });
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
+        .lastActivityAt,
+    ).toBe(confirmed.createdAt);
+  });
+
   it('reads occurrence date and capabilities from committed Agenda rows', async () => {
     const activity = await seedRecurring();
     const target = {

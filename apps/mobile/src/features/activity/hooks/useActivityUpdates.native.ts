@@ -1,19 +1,6 @@
-import {
-  deleteActivityUpdate,
-  getActivityUpdates,
-  postActivityUpdate,
-} from '@od/shared/client';
 import type { ActivityUpdate } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
-import { apiClient } from '@/lib/apiClient';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import type { ActivityUpdatesView, PendingUpdate } from './useActivityUpdates';
@@ -31,9 +18,9 @@ function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
 }
 
 /**
- * Native P3-40 adapter. Confirmed entries, paging state, and the Activity ordering timestamp
- * are read from SQLite; hook state contains only transient presentation such as the pending
- * composer row and an optimistic delete mask.
+ * Native P3-40 adapter. Confirmed entries, pending posts, delete masks, paging state, and the
+ * Activity ordering timestamp are read from SQLite. Network transport belongs exclusively to
+ * the serialized sync owner; an accepted hook action is already durable and may finish offline.
  */
 export function useActivityUpdates(
   activityId: string,
@@ -45,21 +32,26 @@ export function useActivityUpdates(
     () => state.activities.updatesVersion(activityId),
     () => 0,
   );
-  const [page, setPage] = useState(() => ({
+  const [page, setPage] = useState<{
+    updates: readonly ActivityUpdate[];
+    cursor: string | undefined;
+    pending: readonly PendingUpdate[];
+  }>(() => ({
     updates: newestFirst(embedded.updates),
     cursor: embedded.cursor,
+    pending: [],
   }));
-  const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
-  const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
   const liveActivity = useRef(activityId);
 
   if (liveActivity.current !== activityId) {
     liveActivity.current = activityId;
-    setPage({ updates: newestFirst(embedded.updates), cursor: embedded.cursor });
-    setPending([]);
-    setDeleted(new Set());
+    setPage({
+      updates: newestFirst(embedded.updates),
+      cursor: embedded.cursor,
+      pending: [],
+    });
     setLoadingMore(false);
     setError(undefined);
   }
@@ -72,9 +64,13 @@ export function useActivityUpdates(
 
   const readCommitted = useCallback(
     async (requested: string) => {
-      const committed = await state.activities.readUpdates(requested);
+      const committed = await state.activities.readUpdatesProjection(requested);
       if (isCurrent(requested)) {
-        setPage({ updates: committed.updates, cursor: committed.cursor });
+        setPage({
+          updates: committed.updates,
+          cursor: committed.cursor,
+          pending: committed.pending,
+        });
       }
       return committed;
     },
@@ -87,22 +83,19 @@ export function useActivityUpdates(
     void readCommitted(activityId);
   }, [activityId, readCommitted, version]);
 
-  const updates = useMemo(
-    () => page.updates.filter((entry) => !deleted.has(entry.updateId)),
-    [deleted, page.updates],
-  );
-
   const loadMore = useCallback(() => {
     const cursor = page.cursor;
     if (cursor === undefined || loadingMore) return;
     const requested = activityId;
+    const pullUpdates = state.sync.pullActivityUpdates;
+    if (pullUpdates === undefined) {
+      setError("Couldn't load older updates.");
+      return;
+    }
     setLoadingMore(true);
-    void getActivityUpdates(apiClient, requested, cursor)
-      .then(async (response) => {
-        if (getActiveNativeState() !== state) return;
-        await state.account.transactions.run((transaction) =>
-          state.activities.installUpdatePage(transaction, requested, response),
-        );
+    void pullUpdates
+      .call(state.sync, requested)
+      .then(async () => {
         await readCommitted(requested);
         if (isCurrent(requested)) setError(undefined);
       })
@@ -117,84 +110,58 @@ export function useActivityUpdates(
   const post = useCallback(
     async (body: string): Promise<boolean> => {
       const trimmed = body.trim();
-      if (trimmed === '' || pending.length > 0) return false;
-      const requested = activityId;
-      const localId = randomUUID();
-      setPending((current) => [{ localId, body: trimmed }, ...current]);
+      if (trimmed === '' || page.pending.length > 0) return false;
       try {
-        const result = await postActivityUpdate(
-          apiClient,
-          requested,
-          trimmed,
-          randomUUID(),
-        );
-        if (getActiveNativeState() !== state) return false;
-        await state.account.transactions.run((transaction) =>
-          state.activities.installConfirmedUpdate(transaction, result),
-        );
-        await readCommitted(requested);
-        if (isCurrent(requested)) setError(undefined);
-        // Reconcile after the durable acknowledgement. A stale response is safe because the
-        // repository clamps `last_activity_at` and preserves the confirmed feed row.
-        void state.sync
-          .pullActivity({ kind: 'activity', activityId: requested })
-          .catch(() => undefined);
-        return true;
-      } catch (caught) {
-        if (isCurrent(requested)) setError(describeFailure(caught));
-        return false;
-      } finally {
-        if (isCurrent(requested)) {
-          setPending((current) => current.filter((entry) => entry.localId !== localId));
+        const idempotencyKey = randomUUID();
+        const result = await state.coordinator.postUpdate({
+          activityId,
+          body: trimmed,
+          idempotencyKey,
+        });
+        if (result.kind === 'refused') {
+          if (isCurrent(activityId)) setError(describeFailure(result.error));
+          return false;
         }
+        if (isCurrent(activityId)) setError(undefined);
+        return result.kind === 'accepted';
+      } catch (caught: unknown) {
+        if (isCurrent(activityId)) setError(describeFailure(caught));
+        return false;
       }
     },
-    [activityId, isCurrent, pending.length, readCommitted, state],
+    [activityId, isCurrent, page.pending.length, state],
   );
 
   const remove = useCallback(
     async (update: ActivityUpdate): Promise<boolean> => {
       if (update.kind !== 'user') return false;
-      const requested = activityId;
-      setDeleted((current) => new Set(current).add(update.updateId));
       try {
-        await deleteActivityUpdate(apiClient, requested, update.updateId);
-        if (getActiveNativeState() !== state) return false;
-        await state.account.transactions.run((transaction) =>
-          state.activities.deleteConfirmedUpdate(transaction, requested, update.updateId),
-        );
-        await readCommitted(requested);
-        if (isCurrent(requested)) {
-          setDeleted((current) => {
-            const next = new Set(current);
-            next.delete(update.updateId);
-            return next;
-          });
-          setError(undefined);
+        const result = await state.coordinator.deleteUpdate({
+          activityId,
+          updateId: update.updateId,
+          intentId: randomUUID(),
+        });
+        if (result.kind === 'refused') {
+          if (isCurrent(activityId)) setError(describeFailure(result.error));
+          return false;
         }
-        return true;
-      } catch (caught) {
-        if (isCurrent(requested)) {
-          setDeleted((current) => {
-            const next = new Set(current);
-            next.delete(update.updateId);
-            return next;
-          });
-          setError(describeFailure(caught));
-        }
+        if (isCurrent(activityId)) setError(undefined);
+        return result.kind === 'accepted';
+      } catch (caught: unknown) {
+        if (isCurrent(activityId)) setError(describeFailure(caught));
         return false;
       }
     },
-    [activityId, isCurrent, readCommitted, state],
+    [activityId, isCurrent, state],
   );
 
   const dismissError = useCallback(() => setError(undefined), []);
   return {
-    updates,
-    pending,
+    updates: page.updates,
+    pending: page.pending,
     cursor: page.cursor,
     isLoadingMore: loadingMore,
-    isPosting: pending.length > 0,
+    isPosting: page.pending.length > 0,
     loadMore,
     post,
     remove,

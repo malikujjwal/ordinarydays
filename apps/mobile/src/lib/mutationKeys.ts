@@ -17,6 +17,12 @@ export const activityMutationKeys = {
 
 export type ActivityMutationName = keyof typeof activityMutationKeys;
 
+/** Durable update-feed writes do not alter Agenda row topology. */
+export const activityUpdateMutationKeys = {
+  post: ['activity', 'update-post'],
+  delete: ['activity', 'update-delete'],
+} as const;
+
 /** Persisted List mutation identifiers and the one source of truth for their wire tags. */
 export const listMutationKeys = {
   create: ['list', 'create'],

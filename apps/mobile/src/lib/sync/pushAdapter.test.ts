@@ -44,6 +44,8 @@ function transport(called: (name: string, values: readonly unknown[]) => void) {
     unsnooze: operation('unsnooze'),
     createReminder: operation('createReminder'),
     deleteReminder: operation('deleteReminder'),
+    postUpdate: operation('postUpdate'),
+    deleteUpdate: operation('deleteUpdate'),
   } satisfies ActivityPushTransport;
 }
 
@@ -429,6 +431,24 @@ describe('ActivityPushAdapter', () => {
         reminderId: REMINDER,
         intentId: 'reminder-delete-key',
         idempotencyKey: 'reminder-delete-key',
+      },
+    },
+    {
+      mutation: 'update-post',
+      method: 'postUpdate',
+      variables: {
+        activityId: ACTIVITY,
+        body: 'The gate changed',
+        idempotencyKey: 'stable-update-post',
+      },
+    },
+    {
+      mutation: 'update-delete',
+      method: 'deleteUpdate',
+      variables: {
+        activityId: ACTIVITY,
+        updateId: 'upd_01J0000000000000000000000A',
+        intentId: 'stable-update-delete',
       },
     },
   ])('dispatches $mutation through the typed $method endpoint', async (fixture) => {

@@ -7,6 +7,7 @@ import type {
 } from '@od/shared/schemas';
 import {
   activity as activitySchema,
+  postActivityUpdateInput,
   recurrence as recurrenceSchema,
 } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
@@ -29,6 +30,7 @@ import { applyCreate } from '@/features/agenda/model/applyCreate';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
 import { applySnooze } from '@/features/agenda/model/applySnooze';
+import { activityUpdateMutationKeys } from '@/lib/mutationKeys';
 import { pendingActivityFromInput } from '@/lib/pendingActivity';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
@@ -105,6 +107,18 @@ export interface ActivityReminderVariables {
 export interface ActivityReminderDeleteVariables {
   readonly activityId: string;
   readonly reminderId: string;
+  readonly intentId: string;
+}
+
+export interface ActivityUpdatePostVariables {
+  readonly activityId: string;
+  readonly body: string;
+  readonly idempotencyKey: string;
+}
+
+export interface ActivityUpdateDeleteVariables {
+  readonly activityId: string;
+  readonly updateId: string;
   readonly intentId: string;
 }
 
@@ -932,6 +946,59 @@ export class ActivityTransactionService {
     return appended;
   }
 
+  async postUpdate(
+    transaction: TransactionContext,
+    variables: ActivityUpdatePostVariables,
+    projectExisting = false,
+  ): Promise<TransactionalIntentResult> {
+    const input = postActivityUpdateInput.parse({ body: variables.body });
+    const appended = await this.outbox.append(
+      transaction.database,
+      mutation(
+        activityUpdateMutationKeys.post[1],
+        variables.idempotencyKey,
+        variables.activityId,
+        { ...variables, body: input.body },
+      ),
+    );
+    if (appended.kind === 'existing' && !projectExisting) return appended;
+    await this.activities.queueUpdatePost(
+      transaction,
+      variables.activityId,
+      variables.idempotencyKey,
+      input.body,
+      appended.intent.seq,
+    );
+    transaction.changed('outbox');
+    return appended;
+  }
+
+  async deleteUpdate(
+    transaction: TransactionContext,
+    variables: ActivityUpdateDeleteVariables,
+    projectExisting = false,
+  ): Promise<TransactionalIntentResult> {
+    const appended = await this.outbox.append(
+      transaction.database,
+      mutation(
+        activityUpdateMutationKeys.delete[1],
+        variables.intentId,
+        variables.activityId,
+        variables,
+      ),
+    );
+    if (appended.kind === 'existing' && !projectExisting) return appended;
+    await this.activities.queueUpdateDelete(
+      transaction,
+      variables.activityId,
+      variables.updateId,
+      variables.intentId,
+      appended.intent.seq,
+    );
+    transaction.changed('outbox');
+    return appended;
+  }
+
   /** Remaps persisted local projections; the coordinator remaps the outbox in the same write. */
   async remapPendingCreateIdentity(
     transaction: TransactionContext,
@@ -998,6 +1065,22 @@ export class ActivityTransactionService {
       return;
     }
     if (name === 'duplicate' || name === 'convert-recurrence') return;
+    if (name === activityUpdateMutationKeys.post[1]) {
+      await this.postUpdate(
+        transaction,
+        variables as unknown as ActivityUpdatePostVariables,
+        true,
+      );
+      return;
+    }
+    if (name === activityUpdateMutationKeys.delete[1]) {
+      await this.deleteUpdate(
+        transaction,
+        variables as unknown as ActivityUpdateDeleteVariables,
+        true,
+      );
+      return;
+    }
     const detail = await this.activities.read({
       kind: 'activity',
       activityId: intent.entityId,
