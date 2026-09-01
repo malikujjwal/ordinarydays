@@ -4,12 +4,13 @@ import {
   postActivityUpdate,
 } from '@od/shared/client';
 import type { ActivityUpdate } from '@od/shared/types';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { raisePlanActivityFloor } from '@/features/agenda/hooks/usePlanActivityFloors';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
-import { raisePlanActivityFloor } from '@/stores/planActivityFloor';
+import { activityUpdatesKey } from './keys';
 
 /**
  * The plan's Updates feed (P3-40, `plans-and-lists.md` §2.1 row 9).
@@ -69,119 +70,113 @@ function dedupe(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
   });
 }
 
+interface ActivityUpdatesCache {
+  readonly updates: readonly ActivityUpdate[];
+  readonly cursor: string | undefined;
+}
+
+interface PostVariables {
+  readonly body: string;
+  readonly localId: string;
+  readonly idempotencyKey: string;
+}
+
 export function useActivityUpdates(
   activityId: string,
   embedded: { updates: readonly ActivityUpdate[]; cursor: string | undefined },
 ): ActivityUpdatesView {
-  /**
-   * Entries the user's own actions produced since the seed: posted rows (canonical, from the
-   * response) and deleted ids. Kept **apart** from the embedded page so a detail refetch —
-   * which replaces `embedded` wholesale — reconciles rather than resurrects: the merged view
-   * below always reflects both the freshest server page and every local action.
-   */
-  const [posted, setPosted] = useState<readonly ActivityUpdate[]>([]);
-  const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
-  const [older, setOlder] = useState<readonly ActivityUpdate[]>([]);
   const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
-  const [cursor, setCursor] = useState<string | undefined>(embedded.cursor);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
   const queryClient = useQueryClient();
+  const queryKey = useMemo(() => activityUpdatesKey(activityId), [activityId]);
+  const feed = useQuery({
+    queryKey,
+    queryFn: () => Promise.resolve<ActivityUpdatesCache>(embedded),
+    initialData: embedded,
+    enabled: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  }).data;
 
-  /**
-   * A **different activity** under the same mounted screen (a `router.replace` between plans
-   * reuses the component) resets every piece of feed state — one plan's local posts, deletes
-   * and paged-in history must never bleed into another's feed. A refetched detail (same
-   * activity, new embedded cursor) resets only the paging.
-   *
-   * The seed marker is **state**, not a ref: React's adjust-on-prop-change pattern re-runs
-   * with the queued updates on the next attempt if a render is discarded, whereas a ref
-   * mutated during an interrupted render would advance while the resets were thrown away —
-   * exactly the bleed this block exists to prevent.
-   */
-  const [seeded, setSeeded] = useState({ activityId, cursor: embedded.cursor });
-  if (seeded.activityId !== activityId) {
-    setSeeded({ activityId, cursor: embedded.cursor });
-    setPosted([]);
-    setDeleted(new Set());
-    setPending([]);
-    setError(undefined);
-    setOlder([]);
-    setCursor(embedded.cursor);
-    setLoadingMore(false);
-  } else if (seeded.cursor !== embedded.cursor) {
-    setSeeded({ activityId, cursor: embedded.cursor });
-    setCursor(embedded.cursor);
-    setOlder([]);
-  }
-  /**
-   * Guards every async callback below: a response that started under a previous activity is
-   * dropped, not merged. Assigned unconditionally, so it is safe under discarded renders —
-   * it only ever holds the identity of the activity currently rendering.
-   */
-  const liveActivity = useRef(activityId);
-  liveActivity.current = activityId;
+  const loadMoreMutation = useMutation({
+    mutationFn: (cursor: string) => getActivityUpdates(apiClient, activityId, cursor),
+    retry: 2,
+    onSuccess: (page) => {
+      queryClient.setQueryData<ActivityUpdatesCache>(queryKey, (current = embedded) => ({
+        updates: newestFirst(dedupe([...current.updates, ...page.updates])),
+        cursor: page.cursor,
+      }));
+      setError(undefined);
+    },
+    onError: (caught) => setError(describeFailure(caught)),
+  });
 
-  const updates = useMemo(
-    () =>
-      newestFirst(
-        dedupe([...posted, ...embedded.updates, ...older]).filter(
-          (entry) => !deleted.has(entry.updateId),
-        ),
-      ),
-    [posted, embedded.updates, older, deleted],
-  );
+  const postMutation = useMutation({
+    mutationFn: (variables: PostVariables) =>
+      postActivityUpdate(apiClient, activityId, variables.body, variables.idempotencyKey),
+    retry: 2,
+    onMutate: (variables) => {
+      setPending((current) => [
+        { localId: variables.localId, body: variables.body },
+        ...current,
+      ]);
+    },
+    onSuccess: (result) => {
+      raisePlanActivityFloor(queryClient, activityId, result.lastActivityAt);
+      queryClient.setQueryData<ActivityUpdatesCache>(queryKey, (current = embedded) => ({
+        ...current,
+        updates: newestFirst(dedupe([result.update, ...current.updates])),
+      }));
+      setError(undefined);
+    },
+    onError: (caught) => setError(describeFailure(caught)),
+    onSettled: (_data, _caught, variables) => {
+      setPending((current) =>
+        current.filter((entry) => entry.localId !== variables.localId),
+      );
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (update: ActivityUpdate) =>
+      deleteActivityUpdate(apiClient, activityId, update.updateId),
+    retry: 2,
+    onMutate: (update) => {
+      const snapshot = queryClient.getQueryData<ActivityUpdatesCache>(queryKey);
+      queryClient.setQueryData<ActivityUpdatesCache>(queryKey, (current = embedded) => ({
+        ...current,
+        updates: current.updates.filter((entry) => entry.updateId !== update.updateId),
+      }));
+      return snapshot;
+    },
+    onSuccess: () => setError(undefined),
+    onError: (caught, _update, snapshot) => {
+      if (snapshot !== undefined) queryClient.setQueryData(queryKey, snapshot);
+      setError(describeFailure(caught));
+    },
+  });
 
   const loadMore = useCallback(() => {
-    if (cursor === undefined || loadingMore) return;
-    const requested = activityId;
-    setLoadingMore(true);
-    getActivityUpdates(apiClient, activityId, cursor)
-      .then((page) => {
-        if (liveActivity.current !== requested) return;
-        setOlder((current) => [...current, ...page.updates]);
-        setCursor(page.cursor);
-        setError(undefined);
-      })
-      .catch((caught: unknown) => {
-        if (liveActivity.current !== requested) return;
-        setError(describeFailure(caught));
-      })
-      .finally(() => {
-        if (liveActivity.current === requested) setLoadingMore(false);
-      });
-  }, [activityId, cursor, loadingMore]);
+    if (feed.cursor === undefined || loadMoreMutation.isPending) return;
+    loadMoreMutation.mutate(feed.cursor);
+  }, [feed.cursor, loadMoreMutation]);
 
   const post = useCallback(
     async (body: string): Promise<boolean> => {
       const trimmed = body.trim();
-      if (trimmed === '' || pending.length > 0) return false;
-      const requested = activityId;
+      if (trimmed === '' || postMutation.isPending) return false;
       const localId = randomUUID();
-      setPending((current) => [{ localId, body: trimmed }, ...current]);
       try {
-        const result = await postActivityUpdate(
-          apiClient,
-          activityId,
-          trimmed,
-          randomUUID(),
-        );
-        // The floor is per-activity truth, so it is raised even if the screen moved on.
-        raisePlanActivityFloor(queryClient, requested, result.lastActivityAt);
-        if (liveActivity.current !== requested) return true;
-        setPosted((current) => [result.update, ...current]);
-        setError(undefined);
+        await postMutation.mutateAsync({
+          body: trimmed,
+          localId,
+          idempotencyKey: randomUUID(),
+        });
         return true;
-      } catch (caught) {
-        if (liveActivity.current === requested) setError(describeFailure(caught));
+      } catch {
         return false;
-      } finally {
-        if (liveActivity.current === requested) {
-          setPending((current) => current.filter((entry) => entry.localId !== localId));
-        }
       }
     },
-    [activityId, pending.length, queryClient],
+    [postMutation],
   );
 
   const remove = useCallback(
@@ -189,33 +184,22 @@ export function useActivityUpdates(
       // The affordance never exists on a system entry; this guard makes the rule hold even
       // for a caller that bypassed the row.
       if (update.kind !== 'user') return false;
-      const requested = activityId;
-      setDeleted((current) => new Set(current).add(update.updateId));
       try {
-        await deleteActivityUpdate(apiClient, activityId, update.updateId);
-        if (liveActivity.current === requested) setError(undefined);
+        await deleteMutation.mutateAsync(update);
         return true;
-      } catch (caught) {
-        if (liveActivity.current !== requested) return false;
-        setDeleted((current) => {
-          const next = new Set(current);
-          next.delete(update.updateId);
-          return next;
-        });
-        setError(describeFailure(caught));
+      } catch {
         return false;
       }
     },
-    [activityId],
+    [deleteMutation],
   );
 
   return {
-    updates,
+    updates: newestFirst(feed.updates),
     pending,
-    cursor,
-    isLoadingMore: loadingMore,
-    /** One optimistic entry at a time, so the pending row *is* the posting state. */
-    isPosting: pending.length > 0,
+    cursor: feed.cursor,
+    isLoadingMore: loadMoreMutation.isPending,
+    isPosting: postMutation.isPending,
     loadMore,
     post,
     remove,

@@ -7,10 +7,10 @@ import type { ReactNode } from 'react';
 import { Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readPlanActivityFloor } from '@/features/agenda/hooks/usePlanActivityFloors';
 import { ClockProvider } from '@/hooks/useClock';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { createOfflineQueryClient } from '@/lib/queryClient';
-import { readPlanActivityFloor } from '@/stores/planActivityFloor';
 import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 

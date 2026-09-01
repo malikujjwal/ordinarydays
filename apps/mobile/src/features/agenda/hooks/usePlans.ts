@@ -14,13 +14,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
-import { usePlanActivityFloors } from '@/stores/planActivityFloor';
 import {
   applyPlansCreate,
   applyPlansRemove,
   createdActivityFrom,
   type NeedsDateRowData,
 } from '../model/plansApply';
+import { plansProjectionKey } from './keys';
+import { usePlanActivityFloors } from './usePlanActivityFloors';
 
 export type { NeedsDateRowData } from '../model/plansApply';
 
@@ -147,9 +148,6 @@ const EMPTY: PlansState = {
   failure: undefined,
   upcomingStalled: false,
 };
-
-const plansProjectionKey = (timezone: string) =>
-  ['plans', 'projection', timezone] as const;
 
 async function loadInitialPlans(timezone: string): Promise<PlansState> {
   const data = await getPlans(apiClient, { mode: 'initial', tz: timezone });
@@ -544,7 +542,11 @@ export function usePlans(
    * only while the client holds an authoritative value newer than the projection, because
    * that is the one moment the server's order is provably behind the order it defines.
    */
-  const floors = usePlanActivityFloors();
+  const needsDateIds = useMemo(
+    () => state.needsDate.map((row) => row.activityId),
+    [state.needsDate],
+  );
+  const floors = usePlanActivityFloors(needsDateIds);
   const needsDate = useMemo(() => {
     let changed = false;
     const clamped = state.needsDate.map((row) => {
