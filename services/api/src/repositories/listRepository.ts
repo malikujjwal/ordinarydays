@@ -30,6 +30,7 @@ import type {
   ListPlace,
   ListSubItem,
   ProgressValue,
+  SourceListSummary,
 } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
@@ -687,6 +688,44 @@ export async function getListMetaForDeletion(
 export interface UserListEntry {
   readonly list: List;
   readonly index: ListIndex;
+}
+
+/**
+ * The trimmed rows plan detail's LISTS section renders (P3-37, access pattern 4).
+ *
+ * One bounded `BatchGetItem` over `LIST#<id>` / `META` keys — never one read per List and
+ * never a Query over anything — keyed back by `listId` so the caller can restore the
+ * partition's own `SOURCE_LIST#` order. A missing META is simply absent from the map: the
+ * List was deleted after the projection was read, and a summary of a ghost is worse than a
+ * shorter section (P3-50 clears the projection in its own pass).
+ *
+ * Deliberately tolerant of the stored shape: a summary is navigation, and a legacy aggregate
+ * that would fail the full parse should still name itself on the plan that made it.
+ */
+export async function batchGetSourceListSummaries(
+  listIds: readonly string[],
+): Promise<Map<string, SourceListSummary>> {
+  const unique = [...new Set(listIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await batchGetItems<StoredItem>(
+    unique.map((listId) => listMeta(listId)),
+    { consistentRead: true },
+  );
+  const summaries = new Map<string, SourceListSummary>();
+  for (const row of rows) {
+    if (row.entity !== ENTITY.list) continue;
+    const listId = typeof row.listId === 'string' ? row.listId : undefined;
+    const title = typeof row.title === 'string' ? row.title : undefined;
+    if (listId === undefined || title === undefined) continue;
+    summaries.set(listId, {
+      listId,
+      title,
+      icon: typeof row.icon === 'string' ? row.icon : 'list',
+      itemCount: typeof row.itemCount === 'number' ? row.itemCount : 0,
+      doneCount: typeof row.doneCount === 'number' ? row.doneCount : 0,
+    });
+  }
+  return summaries;
 }
 
 /**

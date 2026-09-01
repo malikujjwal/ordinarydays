@@ -347,16 +347,18 @@ describe('reading one activity back', () => {
     expect(res.status).toBe(200);
     /**
      * Each collection is **added** as its phase lands rather than changing the envelope —
-     * `updates` is P3-19's and `attachments` is P3-22's. An activity with neither still
-     * carries both keys, as empty arrays, so a client never has to tell "no entries" from
-     * "this server does not have the section".
+     * `updates` is P3-19's, `attachments` is P3-22's, and `children` / `sourceLists` are
+     * P3-37's. An activity with none of them still carries every key, as empty arrays, so a
+     * client never has to tell "no entries" from "this server does not have the section".
      */
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
       'attachments',
       'capabilities',
+      'children',
       'completedOccurrenceCount',
       'reminders',
+      'sourceLists',
       'updates',
     ]);
     expect(body.data.updates).toEqual([]);

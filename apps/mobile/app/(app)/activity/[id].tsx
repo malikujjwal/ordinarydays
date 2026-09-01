@@ -44,6 +44,10 @@ export default function ActivityDetailRoute() {
        * detail screens for two versions of one thing is a stack nobody asked for.
        */
       onOpenActivity={(next) => router.replace(`/activity/${next}` as Href)}
+      // The LISTS and PREP rows (P3-37): a plan's own List or child is somewhere the user
+      // goes and comes **back** from, so `push`, unlike the duplicate's replace above.
+      onOpenList={(listId) => router.push(`/lists/${listId}` as Href)}
+      onOpenChild={(childId) => router.push(`/activity/${childId}` as Href)}
     />
   );
 }

@@ -68,6 +68,9 @@ const ALLOWED = new Set(
     'apps/mobile/src/features/agenda/model/applySkip.ts',
     'apps/mobile/src/features/activity/model/occurrenceActions.ts',
     'apps/mobile/src/features/agenda/model/plansWindow.ts',
+    // P3-36: the /v1/plans store's row identity and its local completion projection —
+    // the same cached-window class as the agenda models above, never a hand-built write.
+    'apps/mobile/src/features/agenda/hooks/usePlans.ts',
     'apps/mobile/src/lib/agenda/partition.ts',
     'apps/mobile/src/lib/agenda/upNext.ts',
     'apps/mobile/src/features/agenda/components/AgendaSection.tsx',

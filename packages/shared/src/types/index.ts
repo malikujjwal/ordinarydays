@@ -24,9 +24,11 @@ export type {
 } from './activity.js';
 /** Its own file so ADR-047's guard on `activity.ts` stays tight — see the note there. */
 export type {
+  ActivityChild,
   ActivityDetail,
   ActivityDetailTarget,
   OccurrenceDetailProjection,
+  SourceListSummary,
 } from './activityDetail.js';
 export type {
   ActivityUpdate,

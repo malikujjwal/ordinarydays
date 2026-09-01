@@ -35,6 +35,13 @@ import { SnoozeSheet } from '@/components/SnoozeSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
 import {
+  AddToPlanRow,
+  AttachmentsSection,
+  ListsSection,
+  PrepSection,
+  UpdatesSection,
+} from '@/features/activity/components/PlanSections';
+import {
   ReminderSheet,
   reminderSummary,
 } from '@/features/activity/components/ReminderSheet';
@@ -58,6 +65,11 @@ import {
   effectiveSchedule,
   occurrenceAgendaItem,
 } from '@/features/activity/model/occurrenceActions';
+import {
+  addToPlanChips,
+  relativeUpdateTime,
+  updatesSectionVisible,
+} from '@/features/activity/model/planSections';
 import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
@@ -106,6 +118,14 @@ export interface ActivityDetailScreenProps {
   onBack: () => void;
   /** Where a duplicate lands: its own detail screen (P1-27, `activities.md` §7.1). */
   onOpenActivity: (activityId: string) => void;
+  /** Opens one of this Plan's own Lists from its LISTS section (P3-37, P3-39). */
+  onOpenList?: (listId: string) => void;
+  /**
+   * Opens a prep child's detail (P3-37). A push, unlike `onOpenActivity`'s replace: a child
+   * is somewhere the user goes and comes back from, not a copy taking this screen's place.
+   * Defaults to `onOpenActivity` when the route offers nothing better.
+   */
+  onOpenChild?: (activityId: string) => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
@@ -123,6 +143,8 @@ export function ActivityDetailScreen({
   today,
   onBack,
   onOpenActivity,
+  onOpenList,
+  onOpenChild,
   resolutionOccurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
@@ -519,6 +541,8 @@ export function ActivityDetailScreen({
           activity={activity}
           detail={detail}
           today={today}
+          onOpenChild={onOpenChild ?? onOpenActivity}
+          {...(onOpenList === undefined ? {} : { onOpenList })}
           onOpenReschedule={() => setRescheduleOpen(true)}
           onOpenRepeat={() => setRepeatOpen(true)}
           onOpenReminders={() => setRemindersOpen(true)}
@@ -873,6 +897,10 @@ interface LoadedProps {
   activity: Activity | PendingActivity;
   detail: ReturnType<typeof useActivityDetail>;
   today: WallDate;
+  /** Opens a prep child's own detail (P3-37); the child is an ordinary Activity. */
+  onOpenChild: (activityId: string) => void;
+  /** Opens one of this Plan's Lists (P3-37, P3-39). Absent leaves the rows plain. */
+  onOpenList?: (listId: string) => void;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
   onOpenReminders: () => void;
@@ -943,6 +971,8 @@ function Loaded({
   activity,
   detail,
   today,
+  onOpenChild,
+  onOpenList,
   onOpenReschedule,
   onOpenRepeat,
   onOpenReminders,
@@ -970,7 +1000,28 @@ function Loaded({
   onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
-  const sections = sectionsFor(activity);
+  /**
+   * The reconciled §2.1 rule (P3-37): sections exist only once they hold something, so the
+   * section list is a function of the loaded content. A pending or offline read carries no
+   * collections, which correctly renders settings, `People · Coming later` and nothing else.
+   */
+  const children = detail.detail?.children ?? [];
+  const sourceLists = detail.detail?.sourceLists ?? [];
+  const attachments = detail.detail?.attachments ?? [];
+  const updates = detail.detail?.updates ?? [];
+  const sections = sectionsFor(activity, {
+    childCount: children.length,
+    sourceListCount: sourceLists.length,
+    attachmentCount: attachments.length,
+    updateCount: updates.length,
+  });
+  const chips = addToPlanChips({
+    children,
+    sourceLists,
+    updatesVisible: updatesSectionVisible(activity.visibility, updates.length),
+    // P3-38, P3-39 and P3-40 wire these flows; until each lands its chip stays absent.
+    wired: { prepTask: false, list: false, update: false },
+  });
 
   return (
     <View style={{ gap: theme.space[6] }} testID="detail-content">
@@ -1247,6 +1298,15 @@ function Loaded({
       <RowGroup testID="detail-sections">
         {sections.map((section) => {
           if (section.key === 'whenWhere') return null;
+          /** Content sections render below the ruled settings group, in anatomy order. */
+          if (
+            section.key === 'prep' ||
+            section.key === 'lists' ||
+            section.key === 'attachments' ||
+            section.key === 'updates'
+          ) {
+            return null;
+          }
 
           /** Reminder and Repeat are setting rows: value on the right, sheet on tap. */
           if (section.key === 'reminders') {
@@ -1357,6 +1417,28 @@ function Loaded({
           );
         })}
       </RowGroup>
+
+      {/**
+       * The content sections (P3-37, §2.1 amended): each exists only because `sectionsFor`
+       * said its collection is populated, in the anatomy's fixed order, followed by the one
+       * `Add to this plan` chip row that keeps the empty capabilities discoverable.
+       */}
+      {sections.some((section) => section.key === 'prep') ? (
+        <PrepSection prepTasks={children} onOpenChild={onOpenChild} />
+      ) : null}
+      {sections.some((section) => section.key === 'lists') && onOpenList !== undefined ? (
+        <ListsSection sourceLists={sourceLists} onOpenList={onOpenList} />
+      ) : null}
+      {sections.some((section) => section.key === 'attachments') ? (
+        <AttachmentsSection attachments={attachments} />
+      ) : null}
+      {sections.some((section) => section.key === 'updates') && updates.length > 0 ? (
+        <UpdatesSection
+          updates={updates}
+          relativeTime={(createdAt) => relativeUpdateTime(createdAt, today)}
+        />
+      ) : null}
+      {activity.objectKind === 'plan' && !pending ? <AddToPlanRow chips={chips} /> : null}
     </View>
   );
 }

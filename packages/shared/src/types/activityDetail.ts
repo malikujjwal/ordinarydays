@@ -3,6 +3,27 @@ import type { ActivityUpdate } from './activityUpdate.js';
 import type { AgendaCapabilities, AgendaItemStatus } from './agenda.js';
 import type { Attachment } from './attachment.js';
 import type { Reminder } from './reminder.js';
+import type { ActivityStatus } from './vocabulary.js';
+
+/**
+ * One prep task as its parent's pointer projects it (P3-18, P3-37). The child Activity stays
+ * the source of truth; the PREP section renders these from the one detail read.
+ */
+export interface ActivityChild {
+  activityId: string;
+  title: string;
+  status: ActivityStatus;
+  isRecurring: boolean;
+}
+
+/** One List this Plan explicitly created, trimmed to what the LISTS section renders. */
+export interface SourceListSummary {
+  listId: string;
+  title: string;
+  icon: string;
+  itemCount: number;
+  doneCount: number;
+}
 
 /** An activity read is either the stored series/one-off or one named virtual occurrence. */
 export type ActivityDetailTarget =
@@ -87,4 +108,11 @@ export interface ActivityDetail {
    * the API returns a key only for an image this caller may already see.
    */
   attachments?: Attachment[];
+  /**
+   * The complete prep collection (P3-37): the model cap makes one bounded page the whole
+   * collection, so `n of m done` needs no second read and there is no cursor beside it.
+   */
+  children?: ActivityChild[];
+  /** Every List this Plan explicitly created, in stored order (P3-37, P3-39). */
+  sourceLists?: SourceListSummary[];
 }

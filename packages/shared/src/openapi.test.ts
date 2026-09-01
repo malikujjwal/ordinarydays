@@ -129,6 +129,7 @@ describe('the generated document', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
       'Activity',
       'ActivityAgendaData',
+      'ActivityChild',
       'ActivityCompletionResult',
       'ActivityDetail',
       'ActivityListItem',
@@ -198,6 +199,7 @@ describe('the generated document', () => {
       'ScheduledListItem',
       'SkipActivityInput',
       'SnoozeActivityInput',
+      'SourceListSummary',
       'UncompleteActivityInput',
       'UndoListOperationInput',
       'UnsnoozeActivityInput',
@@ -222,9 +224,11 @@ describe('the generated document', () => {
       'activity',
       'attachments',
       'capabilities',
+      'children',
       'completedOccurrenceCount',
       'occurrence',
       'reminders',
+      'sourceLists',
       'updates',
       'updatesCursor',
     ]);

@@ -597,133 +597,125 @@ export function ItemSheet({
   };
 
   return (
-    <>
-      <Sheet
-        open={open}
-        onClose={close}
-        title="Item details"
-        detent="fit"
-        testID={testID}
-      >
-        <View style={{ gap: theme.space[5], paddingBottom: theme.space[1] }}>
-          <Field
-            label="Title"
-            value={title}
-            onChangeText={(value) => {
-              setTitle(value);
-              titleSave.schedule(() => {
-                const nextTitle = value.trim();
-                if (nextTitle === '' || nextTitle === lastDispatchedTitle.current) {
-                  return;
+    <Sheet open={open} onClose={close} title="Item details" detent="fit" testID={testID}>
+      <View style={{ gap: theme.space[5], paddingBottom: theme.space[1] }}>
+        <Field
+          label="Title"
+          value={title}
+          onChangeText={(value) => {
+            setTitle(value);
+            titleSave.schedule(() => {
+              const nextTitle = value.trim();
+              if (nextTitle === '' || nextTitle === lastDispatchedTitle.current) {
+                return;
+              }
+              const current = latestItem.current;
+              const patch = titlePatch(current, value);
+              if (patch === undefined) return;
+              // A value is de-duplicated only once its write actually leaves this field.
+              // Pending drafts remain replaceable, so valid → blank → valid inside one
+              // debounce window cannot cancel the only write of the valid value.
+              lastDispatchedTitle.current = nextTitle;
+              void actions.save(current, patch).then((accepted) => {
+                if (!accepted && lastDispatchedTitle.current === nextTitle) {
+                  lastDispatchedTitle.current = latestItem.current.title;
                 }
-                const current = latestItem.current;
-                const patch = titlePatch(current, value);
-                if (patch === undefined) return;
-                // A value is de-duplicated only once its write actually leaves this field.
-                // Pending drafts remain replaceable, so valid → blank → valid inside one
-                // debounce window cannot cancel the only write of the valid value.
-                lastDispatchedTitle.current = nextTitle;
-                void actions.save(current, patch).then((accepted) => {
-                  if (!accepted && lastDispatchedTitle.current === nextTitle) {
-                    lastDispatchedTitle.current = latestItem.current.title;
-                  }
-                });
               });
-            }}
-            onBlur={titleSave.flush}
-            {...(title.trim() === '' ? { error: 'Title is required.' } : {})}
-            maxLength={MAX_TITLE_LEN}
-            testID="item-sheet-title"
-          />
-          <Field
-            label="Note"
-            optional
-            value={note}
-            onChangeText={(value) => {
-              setNote(value);
-              noteSave.schedule(() => commit(notePatch(latestItem.current, value)));
-            }}
-            onBlur={noteSave.flush}
-            maxLength={MAX_NOTES_LEN}
-            multiline
-            testID="item-sheet-note"
-          />
+            });
+          }}
+          onBlur={titleSave.flush}
+          {...(title.trim() === '' ? { error: 'Title is required.' } : {})}
+          maxLength={MAX_TITLE_LEN}
+          testID="item-sheet-title"
+        />
+        <Field
+          label="Note"
+          optional
+          value={note}
+          onChangeText={(value) => {
+            setNote(value);
+            noteSave.schedule(() => commit(notePatch(latestItem.current, value)));
+          }}
+          onBlur={noteSave.flush}
+          maxLength={MAX_NOTES_LEN}
+          multiline
+          testID="item-sheet-note"
+        />
 
-          {provenance === undefined ? null : (
-            <SettingRow
-              label={provenanceLine(provenance)}
-              {...(provenance.sourceActivityId === undefined || onOpenSource === undefined
-                ? {}
-                : {
-                    opens: true,
-                    onPress: () => onOpenSource(provenance.sourceActivityId as string),
-                  })}
-            />
-          )}
-
-          {list.itemStateMode.mode === 'none' ? null : list.itemStateMode.mode ===
-            'checkbox' ? (
-            <RowGroup label="State" testID="item-state-editor">
-              <SettingRow
-                label={item.state === 'done' ? 'Mark as not done' : 'Mark as done'}
-                summary={item.state === 'done' ? 'Completed' : 'Not completed'}
-                icon={Check}
-                iconTone="success"
-                density="compact"
-                onPress={() =>
-                  void actions.save(item, {
-                    state: item.state === 'done' ? 'open' : 'done',
-                  })
-                }
-                testID="item-state-action"
-              />
-            </RowGroup>
-          ) : (
-            <RowGroup label="State" testID="item-state-editor">
-              {STATES.map((state) => (
-                <SettingRow
-                  key={state}
-                  label={stageLabels[state]}
-                  selected={item.state === state}
-                  onPress={() => void actions.save(item, { state })}
-                />
-              ))}
-            </RowGroup>
-          )}
-
-          {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
-
-          {onPlanItem === undefined ? null : (
-            <SettingRow
-              label="Plan this item"
-              icon={Diamond}
-              iconTone="neutral"
-              density="compact"
-              separated
-              opens
-              onPress={() => {
-                close();
-                onPlanItem();
-              }}
-              testID="item-sheet-plan"
-            />
-          )}
-
+        {provenance === undefined ? null : (
           <SettingRow
-            label="Delete item"
-            icon={Trash}
-            iconTone="danger"
-            density="compact"
-            danger
-            separated
-            onPress={() => {
-              actions.remove(item);
-              onClose();
-            }}
-            testID="item-sheet-delete"
+            label={provenanceLine(provenance)}
+            {...(provenance.sourceActivityId === undefined || onOpenSource === undefined
+              ? {}
+              : {
+                  opens: true,
+                  onPress: () => onOpenSource(provenance.sourceActivityId as string),
+                })}
           />
-        </View>
-      </Sheet>
-    </>
+        )}
+
+        {list.itemStateMode.mode === 'none' ? null : list.itemStateMode.mode ===
+          'checkbox' ? (
+          <RowGroup label="State" testID="item-state-editor">
+            <SettingRow
+              label={item.state === 'done' ? 'Mark as not done' : 'Mark as done'}
+              summary={item.state === 'done' ? 'Completed' : 'Not completed'}
+              icon={Check}
+              iconTone="success"
+              density="compact"
+              onPress={() =>
+                void actions.save(item, {
+                  state: item.state === 'done' ? 'open' : 'done',
+                })
+              }
+              testID="item-state-action"
+            />
+          </RowGroup>
+        ) : (
+          <RowGroup label="State" testID="item-state-editor">
+            {STATES.map((state) => (
+              <SettingRow
+                key={state}
+                label={stageLabels[state]}
+                selected={item.state === state}
+                onPress={() => void actions.save(item, { state })}
+              />
+            ))}
+          </RowGroup>
+        )}
+
+        {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
+
+        {onPlanItem === undefined ? null : (
+          <SettingRow
+            label="Plan this item"
+            icon={Diamond}
+            iconTone="neutral"
+            density="compact"
+            separated
+            opens
+            onPress={() => {
+              close();
+              onPlanItem();
+            }}
+            testID="item-sheet-plan"
+          />
+        )}
+
+        <SettingRow
+          label="Delete item"
+          icon={Trash}
+          iconTone="danger"
+          density="compact"
+          danger
+          separated
+          onPress={() => {
+            actions.remove(item);
+            onClose();
+          }}
+          testID="item-sheet-delete"
+        />
+      </View>
+    </Sheet>
   );
 }

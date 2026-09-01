@@ -11,8 +11,10 @@ import {
   deriveStatus,
   getPrepTasks,
   patchActivity,
+  projectChildren,
   projectDetail,
   removeActivity,
+  sourceListIdsOf,
   toSchedule,
 } from './activityService.js';
 
@@ -1032,6 +1034,72 @@ describe('projectDetail', () => {
     ]) {
       expect(activity).not.toHaveProperty(field);
     }
+  });
+});
+
+/** The two P3-37 collections the one detail read composes from the partition it holds. */
+describe('projectChildren and sourceListIdsOf', () => {
+  const CHILD_A = 'act_01J8XKQ2M4N5P6R7S8T9V0W1CA';
+  const CHILD_B = 'act_01J8XKQ2M4N5P6R7S8T9V0W1CB';
+
+  const pointer = (
+    childActivityId: string,
+    rank: string,
+    status = 'scheduled',
+  ): StoredItem => ({
+    pk: `ACT#${PLAN}`,
+    sk: `SUB#${childActivityId}`,
+    entity: 'ChildPointer',
+    childActivityId,
+    title: `Child ${childActivityId.slice(-2)}`,
+    status,
+    rank,
+    isRecurring: false,
+    schemaVersion: 1,
+  });
+
+  it('orders children by rank, the ordering P3-49 depends on, not by id', () => {
+    const children = projectChildren([
+      pointer(CHILD_A, 'b'),
+      pointer(CHILD_B, 'a', 'completed'),
+    ]);
+    expect(children.map((child) => child.activityId)).toEqual([CHILD_B, CHILD_A]);
+    expect(children[0]).toEqual({
+      activityId: CHILD_B,
+      title: `Child ${CHILD_B.slice(-2)}`,
+      status: 'completed',
+      isRecurring: false,
+    });
+  });
+
+  it('degrades a malformed pointer to absence rather than failing the read', () => {
+    const malformed: StoredItem = {
+      pk: `ACT#${PLAN}`,
+      sk: `SUB#${CHILD_A}`,
+      entity: 'ChildPointer',
+      childActivityId: CHILD_A,
+      status: 'nonsense',
+      rank: 'a',
+      schemaVersion: 1,
+    };
+    expect(projectChildren([malformed, pointer(CHILD_B, 'b')])).toHaveLength(1);
+  });
+
+  it('reads SOURCE_LIST# ids in stored order and nothing else', () => {
+    const source = (listId: string): StoredItem => ({
+      pk: `ACT#${PLAN}`,
+      sk: `SOURCE_LIST#${listId}`,
+      entity: 'SourceList',
+      listId,
+      schemaVersion: 1,
+    });
+    expect(
+      sourceListIdsOf([
+        source('lst_01J8XKQ2M4N5P6R7S8T9V0W1LA'),
+        pointer(CHILD_A, 'a'),
+        source('lst_01J8XKQ2M4N5P6R7S8T9V0W1LB'),
+      ]),
+    ).toEqual(['lst_01J8XKQ2M4N5P6R7S8T9V0W1LA', 'lst_01J8XKQ2M4N5P6R7S8T9V0W1LB']);
   });
 });
 
