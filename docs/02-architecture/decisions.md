@@ -2457,9 +2457,11 @@ Meanwhile the web builds of the same screens had been exercised for days.
 **Decision.** The native projection surface stays exactly as migration 25 leaves it. No new
 native projection or reconciliation mechanism is added for Phase 3 screens until
 the Plans tab, plan detail and Updates have been used on a phone through the normal flows and
-the log-trace review at the Phase 3 checkpoint has run. Defects found on the device are fixed
-in place; such a fix may add a corrective migration (an index or a constraint — migration 26,
-the child-keyed Prep pointer index, is one) but never edits a committed migration. The unused overlay tables from migrations 23–25 are left in the plan (contiguity
+the log-trace review at the Phase 3 checkpoint has run. Defects are fixed in place wherever
+they are found. A corrective migration is allowed when it restores an existing mechanism's
+compliance (an index, a constraint, a backfill) without expanding what native projects —
+migration 26, the child-keyed Prep pointer index, is one; a committed migration is never
+edited. The unused overlay tables from migrations 23–25 are left in the plan (contiguity
 rule) and dropped in a later migration once no development database depends on them.
 
 **Consequences.** Native screens may lag web by one reconciliation until the checkpoint;

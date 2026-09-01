@@ -1091,9 +1091,9 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     );
 
     expect(accepted).toBe(true);
-    expect(
-      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
-    ).toEqual([]);
+    const restored = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    expect(restored?.children).toEqual([]);
+    expect(restored?.activity.childCount).toBe(0);
   });
 
   it('restores dated and undated completed Prep tasks exactly after an offline restart', async () => {

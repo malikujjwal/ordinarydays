@@ -918,7 +918,9 @@ export class ActivityRepository {
       'DELETE FROM activity_children WHERE parent_activity_id = ?;',
       [activityId],
     );
-    // A deleted Prep task also leaves its parent's section; the parent is told so it re-reads.
+    // A deleted Prep task also leaves its parent's section and its parent's count: the
+    // server decrements `childCount` in the child's delete transaction (P3-18), so the local
+    // projection mirrors both halves or neither. The parent is told so it re-reads.
     const parents = await transaction.database.all(
       'SELECT parent_activity_id FROM activity_children WHERE child_activity_id = ?;',
       [activityId],
@@ -929,8 +931,13 @@ export class ActivityRepository {
     );
     for (const parent of parents) {
       const parentActivityId = text(parent, 'parent_activity_id');
-      if (parentActivityId !== undefined)
-        transaction.changed(this.scope(parentActivityId));
+      if (parentActivityId === undefined) continue;
+      await transaction.database.run(
+        `UPDATE activities SET child_count = MAX(child_count - 1, 0)
+         WHERE activity_id = ?;`,
+        [parentActivityId],
+      );
+      transaction.changed(this.scope(parentActivityId));
     }
     await transaction.database.run(
       'DELETE FROM activity_source_lists WHERE activity_id = ?;',
