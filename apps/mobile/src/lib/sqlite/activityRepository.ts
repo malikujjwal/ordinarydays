@@ -316,6 +316,12 @@ export class ActivityRepository {
              AND operation.operation = 'delete'
              AND operation.target_update_id = activity_updates.update_id
          )
+         AND NOT EXISTS (
+           SELECT 1 FROM activity_update_acknowledgements acknowledgement
+           WHERE acknowledgement.activity_id = activity_updates.activity_id
+             AND acknowledgement.operation = 'delete'
+             AND acknowledgement.target_update_id = activity_updates.update_id
+         )
        ORDER BY created_at DESC, update_id DESC;`,
       [activityId],
     );
@@ -400,7 +406,7 @@ export class ActivityRepository {
     result: PostActivityUpdateResult,
   ): Promise<void> {
     const operation = await transaction.database.first(
-      `SELECT activity_id FROM activity_update_operations
+      `SELECT activity_id, created_at FROM activity_update_operations
        WHERE intent_id = ? AND operation = 'post';`,
       [intentId],
     );
@@ -408,6 +414,17 @@ export class ActivityRepository {
       throw new Error('Update acknowledgement crossed its durable Activity boundary.');
     }
     await this.installConfirmedUpdate(transaction, result);
+    await transaction.database.run(
+      `INSERT OR REPLACE INTO activity_update_acknowledgements
+         (intent_id, activity_id, operation, target_update_id, created_at)
+       VALUES (?, ?, 'post', ?, ?);`,
+      [
+        intentId,
+        result.update.activityId,
+        result.update.updateId,
+        number(operation ?? {}, 'created_at') ?? 0,
+      ],
+    );
     await transaction.database.run(
       'DELETE FROM activity_update_operations WHERE intent_id = ?;',
       [intentId],
@@ -422,7 +439,7 @@ export class ActivityRepository {
     updateId: string,
   ): Promise<void> {
     const operation = await transaction.database.first(
-      `SELECT activity_id, target_update_id FROM activity_update_operations
+      `SELECT activity_id, target_update_id, created_at FROM activity_update_operations
        WHERE intent_id = ? AND operation = 'delete';`,
       [intentId],
     );
@@ -433,6 +450,12 @@ export class ActivityRepository {
       throw new Error('Delete acknowledgement crossed its durable update boundary.');
     }
     await this.deleteConfirmedUpdate(transaction, activityId, updateId);
+    await transaction.database.run(
+      `INSERT OR REPLACE INTO activity_update_acknowledgements
+         (intent_id, activity_id, operation, target_update_id, created_at)
+       VALUES (?, ?, 'delete', ?, ?);`,
+      [intentId, activityId, updateId, number(operation ?? {}, 'created_at') ?? 0],
+    );
     await transaction.database.run(
       'DELETE FROM activity_update_operations WHERE intent_id = ?;',
       [intentId],
@@ -582,6 +605,11 @@ export class ActivityRepository {
         throw new Error('Activity update page crossed activity boundary.');
       }
       await this.putUpdate(transaction.database, update);
+      await transaction.database.run(
+        `DELETE FROM activity_update_acknowledgements
+         WHERE activity_id = ? AND operation = 'post' AND target_update_id = ?;`,
+        [activityId, update.updateId],
+      );
     }
     await this.putUpdateCursor(transaction.database, activityId, page.cursor);
     transaction.changed(this.updatesScope(activityId));
@@ -780,8 +808,26 @@ export class ActivityRepository {
       }
     }
     if (detail.updates !== undefined) {
+      // A strong embedded head starts a new canonical cursor chain. Keep only this device's
+      // acknowledged posts as overlays until the server head itself contains them.
+      await transaction.database.run(
+        `DELETE FROM activity_updates
+         WHERE activity_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM activity_update_acknowledgements acknowledgement
+             WHERE acknowledgement.activity_id = activity_updates.activity_id
+               AND acknowledgement.operation = 'post'
+               AND acknowledgement.target_update_id = activity_updates.update_id
+           );`,
+        [detail.activity.activityId],
+      );
       for (const update of detail.updates) {
         await this.putUpdate(transaction.database, update);
+        await transaction.database.run(
+          `DELETE FROM activity_update_acknowledgements
+           WHERE activity_id = ? AND operation = 'post' AND target_update_id = ?;`,
+          [detail.activity.activityId, update.updateId],
+        );
       }
       await this.putUpdateCursor(
         transaction.database,
@@ -845,6 +891,10 @@ export class ActivityRepository {
     );
     await transaction.database.run(
       'DELETE FROM activity_update_operations WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_update_acknowledgements WHERE activity_id = ?;',
       [activityId],
     );
     await transaction.database.run(

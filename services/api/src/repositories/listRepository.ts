@@ -1,4 +1,8 @@
-import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_LIST_ITEMS } from '@od/shared';
+import {
+  MAX_AUTOMATIC_INTENT_AGE_DAYS,
+  MAX_LIST_ITEMS,
+  MAX_OWNED_LISTS,
+} from '@od/shared';
 import {
   compareListItems,
   LexoRankOverflowError,
@@ -76,6 +80,7 @@ import {
   listTombstone,
   listUndo,
   sourceList,
+  sourceListPrefix,
 } from './keys.js';
 import {
   LIST_ITEM_ACTIVITY_LINK_ENTITY,
@@ -707,10 +712,34 @@ export async function batchGetSourceListSummaries(
   userId: string,
   listIds: readonly string[],
 ): Promise<Map<string, SourceListSummary>> {
+  return (await batchGetDetailHydration(userId, listIds, [])).sourceLists;
+}
+
+export interface DetailBatchHydration {
+  readonly sourceLists: Map<string, SourceListSummary>;
+  readonly childRestoredStatuses: Map<string, 'saved' | 'scheduled'>;
+}
+
+/**
+ * The one third-round-trip batch for Plan detail: caller/List grants + List META and the
+ * canonical child META rows needed only by additive legacy pointers. Keeping both key sets in
+ * one BatchGet preserves the endpoint's three-round-trip budget without an N+1 fallback.
+ */
+export async function batchGetDetailHydration(
+  userId: string,
+  listIds: readonly string[],
+  legacyChildActivityIds: readonly string[],
+): Promise<DetailBatchHydration> {
   const unique = [...new Set(listIds)];
-  if (unique.length === 0) return new Map();
+  const uniqueChildren = [...new Set(legacyChildActivityIds)];
+  if (unique.length === 0 && uniqueChildren.length === 0) {
+    return { sourceLists: new Map(), childRestoredStatuses: new Map() };
+  }
   const rows = await batchGetItems<StoredItem>(
-    unique.flatMap((listId) => [listPointer(userId, listId), listMeta(listId)]),
+    [
+      ...unique.flatMap((listId) => [listPointer(userId, listId), listMeta(listId)]),
+      ...uniqueChildren.map(activityMeta),
+    ],
     { consistentRead: true },
   );
   const requested = new Set(unique);
@@ -722,7 +751,19 @@ export async function batchGetSourceListSummaries(
     if (row.pk === expected.pk && row.sk === expected.sk) authorized.add(row.listId);
   }
   const summaries = new Map<string, SourceListSummary>();
+  const requestedChildren = new Set(uniqueChildren);
+  const childRestoredStatuses = new Map<string, 'saved' | 'scheduled'>();
   for (const row of rows) {
+    if (row.entity === 'Activity') {
+      const child = activitySchema.safeParse(row);
+      if (child.success && requestedChildren.has(child.data.activityId)) {
+        childRestoredStatuses.set(
+          child.data.activityId,
+          child.data.schedule === undefined ? 'saved' : 'scheduled',
+        );
+      }
+      continue;
+    }
     if (row.entity !== ENTITY.list) continue;
     const listId = typeof row.listId === 'string' ? row.listId : undefined;
     const title = typeof row.title === 'string' ? row.title : undefined;
@@ -735,7 +776,23 @@ export async function batchGetSourceListSummaries(
       doneCount: typeof row.doneCount === 'number' ? row.doneCount : 0,
     });
   }
-  return summaries;
+  return { sourceLists: summaries, childRestoredStatuses };
+}
+
+/** One model-bounded strong page of id-only source-list projections. */
+export async function listSourceListIds(activityId: string): Promise<string[]> {
+  const prefix = sourceListPrefix(activityId);
+  const page = await query<StoredItem>(
+    { pk: prefix.pk },
+    {
+      skPrefix: prefix.skPrefix,
+      limit: MAX_OWNED_LISTS,
+      consistentRead: true,
+    },
+  );
+  return page.items
+    .filter((row) => row.entity === ENTITY.sourceList && typeof row.listId === 'string')
+    .map((row) => String(row.listId));
 }
 
 /**

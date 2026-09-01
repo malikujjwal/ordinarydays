@@ -85,6 +85,8 @@ export interface ActivityActions {
   isUndoing: boolean;
   /** `interaction-contract.md` §5.3 copy for whichever action failed. */
   errorMessage: string | undefined;
+  errorRequestId: string | undefined;
+  retryError: () => void;
   dismissError: () => void;
 }
 
@@ -122,6 +124,7 @@ function describe(error: unknown): string {
 export function useActivityActions(activityId: string): ActivityActions {
   const queryClient = useQueryClient();
   const resolutionToastId = useRef<number | undefined>(undefined);
+  const retryRef = useRef<(() => void) | undefined>(undefined);
 
   const duplicateMutation = useMutation<Activity, Error, DuplicateActivityVariables>({
     mutationKey: activityMutationKeys.duplicate,
@@ -142,6 +145,7 @@ export function useActivityActions(activityId: string): ActivityActions {
   >({
     mutationKey: activityMutationKeys.complete,
     onSuccess: ({ activity }) => {
+      retryRef.current = undefined;
       queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
         previous === undefined
           ? previous
@@ -169,6 +173,7 @@ export function useActivityActions(activityId: string): ActivityActions {
   >({
     mutationKey: activityMutationKeys.uncomplete,
     onSuccess: ({ activity }) => {
+      retryRef.current = undefined;
       queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
         previous === undefined
           ? previous
@@ -198,24 +203,43 @@ export function useActivityActions(activityId: string): ActivityActions {
     childCompleteMutation.error ??
     childUncompleteMutation.error;
 
+  function resetFailures(): void {
+    duplicateMutation.reset();
+    deleteMutation.reset();
+    completeMutation.reset();
+    skipMutation.reset();
+    snoozeMutation.reset();
+    uncompleteMutation.reset();
+    childCompleteMutation.reset();
+    childUncompleteMutation.reset();
+  }
+
   return {
     duplicate: async () => {
+      const variables = { activityId, idempotencyKey: randomUUID() };
       try {
-        return await duplicateMutation.mutateAsync({
-          activityId,
-          idempotencyKey: randomUUID(),
-        });
+        const copy = await duplicateMutation.mutateAsync(variables);
+        retryRef.current = undefined;
+        return copy;
       } catch {
+        retryRef.current = () => {
+          void duplicateMutation.mutateAsync(variables).catch(() => undefined);
+        };
         // Handled: the message is on the mutation and rendered as the banner. Rethrowing
         // would surface an unhandled rejection for a failure the UI has absorbed.
         return undefined;
       }
     },
     remove: async () => {
+      const variables = { activityId, intentId: randomUUID() };
       try {
-        await deleteMutation.mutateAsync({ activityId, intentId: randomUUID() });
+        await deleteMutation.mutateAsync(variables);
+        retryRef.current = undefined;
         return true;
       } catch {
+        retryRef.current = () => {
+          void deleteMutation.mutateAsync(variables).catch(() => undefined);
+        };
         return false;
       }
     },
@@ -223,14 +247,19 @@ export function useActivityActions(activityId: string): ActivityActions {
       /** A bare skip on a series would retire every future occurrence. Same rule, same guard. */
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
       if (isUnscopedSeries(snapshot, scope)) return false;
+      const variables = {
+        activityId,
+        input: scopeToWire(scope),
+        idempotencyKey: randomUUID(),
+      };
       try {
-        await skipMutation.mutateAsync({
-          activityId,
-          input: scopeToWire(scope),
-          idempotencyKey: randomUUID(),
-        });
+        await skipMutation.mutateAsync(variables);
+        retryRef.current = undefined;
         return true;
       } catch {
+        retryRef.current = () => {
+          void skipMutation.mutateAsync(variables).catch(() => undefined);
+        };
         return false;
       }
     },
@@ -248,15 +277,20 @@ export function useActivityActions(activityId: string): ActivityActions {
         date: renderedDate,
         time: until,
       });
+      const variables = {
+        activityId,
+        input: { ...scopeToWire(scope), until },
+        idempotencyKey: randomUUID(),
+      };
       try {
-        await snoozeMutation.mutateAsync({
-          activityId,
-          input: { ...scopeToWire(scope), until },
-          idempotencyKey: randomUUID(),
-        });
+        await snoozeMutation.mutateAsync(variables);
+        retryRef.current = undefined;
         return true;
       } catch {
         restoreAgenda();
+        retryRef.current = () => {
+          void snoozeMutation.mutateAsync(variables).catch(() => undefined);
+        };
         return false;
       }
     },
@@ -273,6 +307,12 @@ export function useActivityActions(activityId: string): ActivityActions {
         activityId,
         input: scopeToWire(scope),
         idempotencyKey: randomUUID(),
+      };
+      retryRef.current = () => {
+        void completeMutation
+          .mutateAsync(original)
+          .then(() => onProjected(true))
+          .catch(() => undefined);
       };
 
       startUndoable({
@@ -405,35 +445,40 @@ export function useActivityActions(activityId: string): ActivityActions {
        */
       onProjected?.(false);
 
-      void uncompleteMutation
-        .mutateAsync({
-          activityId,
-          input: scopeToWire(scope),
-          idempotencyKey: randomUUID(),
-        })
-        .catch(() => {
-          // Put the completion back: the screen must not claim an undo the server refused.
-          // The message is on the mutation and renders as the screen's banner.
-          if (snapshot !== undefined)
-            queryClient.setQueryData(activityKey(activityId), snapshot);
-          restoreAgenda();
-          onProjected?.(true);
-        });
+      const variables = {
+        activityId,
+        input: scopeToWire(scope),
+        idempotencyKey: randomUUID(),
+      };
+      retryRef.current = () => {
+        void uncompleteMutation
+          .mutateAsync(variables)
+          .then(() => onProjected?.(false))
+          .catch(() => undefined);
+      };
+      void uncompleteMutation.mutateAsync(variables).catch(() => {
+        // Put the completion back: the screen must not claim an undo the server refused.
+        // The message is on the mutation and renders as the screen's banner.
+        if (snapshot !== undefined)
+          queryClient.setQueryData(activityKey(activityId), snapshot);
+        restoreAgenda();
+        onProjected?.(true);
+      });
     },
     setChildCompletion: async (child, completed) => {
       if (child.isRecurring) return false;
-      try {
-        const result = completed
-          ? await childCompleteMutation.mutateAsync({
-              activityId: child.activityId,
-              input: { outcome: 'done' },
-              idempotencyKey: randomUUID(),
-            })
-          : await childUncompleteMutation.mutateAsync({
-              activityId: child.activityId,
-              input: {},
-              idempotencyKey: randomUUID(),
-            });
+      const intentId = randomUUID();
+      const completeVariables: CompleteActivityVariables = {
+        activityId: child.activityId,
+        input: { outcome: 'done' },
+        idempotencyKey: intentId,
+      };
+      const uncompleteVariables: UncompleteActivityVariables = {
+        activityId: child.activityId,
+        input: {},
+        idempotencyKey: intentId,
+      };
+      const applyResult = (result: ActivityCompletionResult) => {
         queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) => {
           if (previous?.children === undefined) return previous;
           return {
@@ -445,8 +490,21 @@ export function useActivityActions(activityId: string): ActivityActions {
             ),
           };
         });
+      };
+      try {
+        const result = completed
+          ? await childCompleteMutation.mutateAsync(completeVariables)
+          : await childUncompleteMutation.mutateAsync(uncompleteVariables);
+        retryRef.current = undefined;
+        applyResult(result);
         return true;
       } catch {
+        retryRef.current = () => {
+          const retry = completed
+            ? childCompleteMutation.mutateAsync(completeVariables)
+            : childUncompleteMutation.mutateAsync(uncompleteVariables);
+          void retry.then(applyResult).catch(() => undefined);
+        };
         return false;
       }
     },
@@ -463,15 +521,15 @@ export function useActivityActions(activityId: string): ActivityActions {
     isUndoing: uncompleteMutation.isPending,
     errorMessage:
       failure === null || failure === undefined ? undefined : describe(failure),
+    errorRequestId: failure instanceof ApiError ? failure.requestId : undefined,
+    retryError: () => {
+      const retry = retryRef.current;
+      resetFailures();
+      retry?.();
+    },
     dismissError: () => {
-      duplicateMutation.reset();
-      deleteMutation.reset();
-      completeMutation.reset();
-      skipMutation.reset();
-      snoozeMutation.reset();
-      uncompleteMutation.reset();
-      childCompleteMutation.reset();
-      childUncompleteMutation.reset();
+      retryRef.current = undefined;
+      resetFailures();
     },
   };
 }

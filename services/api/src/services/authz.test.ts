@@ -2,6 +2,7 @@ import type { Activity } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertActivityAccess,
+  assertActivityReadAccessFromMeta,
   assertActivityReadAccessFromPartition,
   assertListAccess,
   readableActivities,
@@ -19,6 +20,7 @@ vi.mock('../repositories/activityRepository.js', () => ({
   activityFromPartition: vi.fn((partition: Array<Record<string, unknown>>) =>
     partition.find((row) => row.sk === 'META'),
   ),
+  getActivityIndex: vi.fn(),
   getActivityMeta: vi.fn(),
   getActivityPartitionStrong: vi.fn(),
   batchGetActivityMeta: vi.fn(() => Promise.resolve([])),
@@ -78,11 +80,83 @@ const participantRow = (userId: string) => ({
 });
 
 beforeEach(() => {
+  vi.mocked(repository.getActivityIndex).mockReset();
   vi.mocked(repository.getActivityMeta).mockReset();
   vi.mocked(repository.getActivityPartitionStrong).mockReset();
   vi.mocked(repository.listParticipants).mockReset();
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
   vi.mocked(listRepository.getListPointer).mockReset();
+});
+
+describe('bounded META/index detail access', () => {
+  it('admits the owner without reading an index grant', async () => {
+    await expect(assertActivityReadAccessFromMeta(OWNER, activity())).resolves.toEqual({
+      activity: activity(),
+      isOwner: true,
+      viaParent: false,
+    });
+    expect(repository.getActivityIndex).not.toHaveBeenCalled();
+  });
+
+  it('admits the exact direct caller grant with a strong keyed read', async () => {
+    vi.mocked(repository.getActivityIndex).mockResolvedValue({ entity: 'ActivityIndex' });
+
+    await expect(
+      assertActivityReadAccessFromMeta(PARTICIPANT, activity()),
+    ).resolves.toMatchObject({ isOwner: false, viaParent: false });
+    expect(repository.getActivityIndex).toHaveBeenCalledWith(PARTICIPANT, PLAN, {
+      consistentRead: true,
+    });
+  });
+
+  it('inherits through the canonical parent owner without opening a partition', async () => {
+    vi.mocked(repository.getActivityIndex).mockResolvedValue(undefined);
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+
+    await expect(
+      assertActivityReadAccessFromMeta(
+        OWNER,
+        activity({
+          activityId: PREP,
+          ownerId: STRANGER,
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          parentActivityId: PLAN,
+        }),
+      ),
+    ).resolves.toMatchObject({ isOwner: false, viaParent: true });
+    expect(repository.getActivityMeta).toHaveBeenCalledWith(PLAN, {
+      consistentRead: true,
+    });
+    expect(repository.getActivityPartitionStrong).not.toHaveBeenCalled();
+  });
+
+  it('inherits through the exact parent participant grant', async () => {
+    vi.mocked(repository.getActivityIndex)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ entity: 'ActivityIndex' });
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(
+      activity({ ownerId: STRANGER }),
+    );
+
+    await expect(
+      assertActivityReadAccessFromMeta(
+        PARTICIPANT,
+        activity({
+          activityId: PREP,
+          ownerId: STRANGER,
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          parentActivityId: PLAN,
+        }),
+      ),
+    ).resolves.toMatchObject({ isOwner: false, viaParent: true });
+    expect(repository.getActivityIndex).toHaveBeenLastCalledWith(PARTICIPANT, PLAN, {
+      consistentRead: true,
+    });
+  });
 });
 
 describe('list access', () => {

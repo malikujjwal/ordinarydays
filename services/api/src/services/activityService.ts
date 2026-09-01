@@ -54,7 +54,9 @@ import {
   listByBucket as listBucket,
   listParticipants,
   listPrepTaskPointers,
+  listStoredPrepTaskPointers,
   markActivityDeleting,
+  materializePrepTaskPointers,
   newActivityId,
   newReminderId,
   ParentUnavailableError,
@@ -71,11 +73,17 @@ import {
   toStoredAttachment,
 } from '../repositories/attachmentRepository.js';
 import {
-  batchGetSourceListSummaries,
+  batchGetDetailHydration,
   clearSourceActivity,
   findViewerLinksTo,
+  listSourceListIds,
 } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
+import {
+  countCompleted,
+  get as getOccurrence,
+} from '../repositories/occurrenceRepository.js';
+import { listForUser as listRemindersForUser } from '../repositories/reminderRepository.js';
 import {
   assertAttachmentsConfirmable,
   assertCoverIsLinked,
@@ -86,7 +94,7 @@ import {
 } from './attachmentService.js';
 import {
   assertActivityAccess,
-  assertActivityReadAccessFromPartition,
+  assertActivityReadAccessFromMeta,
   assertPatchableFields,
 } from './authz.js';
 
@@ -1129,12 +1137,17 @@ export async function convertRecurrence(
     getActivityPartition(activityId),
     listParticipants(activityId),
   ]);
-  const selected = projectOccurrenceDetail(current, partition, input.occurrenceDate);
   const rawOccurrence = partition.find(
     (row) =>
       row.entity === 'Occurrence' &&
       row.activityId === activityId &&
       row.date === input.occurrenceDate,
+  );
+  const parsedOccurrence = occurrenceSchema.safeParse(rawOccurrence);
+  const selected = projectOccurrenceDetail(
+    current,
+    parsedOccurrence.success ? (parsedOccurrence.data as Occurrence) : undefined,
+    input.occurrenceDate,
   );
 
   const { recurrence: _removed, ...withoutRecurrence } = current;
@@ -1863,13 +1876,13 @@ async function releaseChildren(
 /**
  * One activity and the caller's own reminders, behind `GET /v1/activities/:id` (P1-12).
  *
- * ## One strong snapshot
+ * ## Strong bounded detail
  *
  * Native treats this endpoint's `404` as authoritative absence, so the target Activity META,
- * participant proof and projection must come from one strongly consistent base-table
- * partition Query. The shared authorisation helper consumes that already-read partition; it
- * does not duplicate the rules or rediscover META through an eventually consistent read.
- * Parent-inherited access may strongly read the parent partition separately.
+ * exact caller grant and every projected section are strongly consistent. META is one keyed
+ * read; non-owner proof is the exact caller/activity index; collections use their model-capped
+ * sort-key prefixes. No user-growing Activity partition is read wholesale. Parent-inherited
+ * access repeats the same META/index pair for the parent.
  *
  * `read`, so a participant may see a plan they are on and a participant of a parent may see
  * its prep task. A caller with no relationship gets `not_found`, never `403`.
@@ -1884,17 +1897,17 @@ export async function getActivityDetail(
    */
   now: string,
 ): Promise<ActivityDetail> {
-  const partition = await getActivityPartitionStrong(target.activityId);
-  const access = await assertActivityReadAccessFromPartition(userId, partition);
+  const activity = await getActivityMeta(target.activityId, { consistentRead: true });
+  if (activity === undefined) throw new AppError('not_found', 'Activity not found.');
+  const access = await assertActivityReadAccessFromMeta(userId, activity);
+  const projectedActivity = toActivity(activity as unknown as StoredItem);
 
   const mayAct = access.isOwner || access.viaParent;
   /**
    * The feed's first page, from its **own bounded Query** rather than filtered out of the
    * partition above (§2.3, P3-19).
    *
-   * Filtering would be one fewer round trip and wrong twice. The partition read is unbounded
-   * — P3-37 replaces it with bounded prefix reads, and until then filtering would silently
-   * make the embedded page as large as the feed. And a page assembled in memory has no
+   * Filtering would be wrong: no whole-partition read exists, and a page assembled in memory has no
    * cursor: `LastEvaluatedKey` comes from a Query that actually stopped at fifty, so a client
    * paging older entries needs this read to have happened.
    *
@@ -1903,42 +1916,79 @@ export async function getActivityDetail(
    * conversion is not allowed to erase or strand.
    */
   /**
-   * The PREP collection, from the pointers the partition read already holds (P3-37,
-   * pattern 16), and the LISTS section's id-only `SOURCE_LIST#` projections resolved
+   * The PREP collection from its bounded pointers (P3-37, pattern 16), and the LISTS
+   * section's id-only `SOURCE_LIST#` projections resolved
    * through **one** bounded `BatchGetItem` restored to stored order — never one read per
    * List. A List deleted since the projection was written simply drops out; P3-50's clear
    * owns the projection's lifecycle, not this read.
    */
-  const children = projectChildren(partition);
-  const sourceListIds = sourceListIdsOf(partition);
-
   /**
-   * Three independent reads, one round trip's worth of waiting. Given the partition, the
-   * feed page, the List summaries and the attachment chain need nothing from each other, so
-   * they run concurrently on the app's most-opened endpoint. The **only** ordering that
-   * matters is inside the third arm: the caller's bounded pending-upload drain must land
+   * The bounded section reads run in one parallel round after META/authority. The **only**
+   * ordering that matters is in the attachments arm: the caller's bounded pending-upload drain must land
    * before the attachments are projected (§2.3, access pattern 4, P3-22) — opening a plan is
    * when an interrupted confirmation is noticed, and the drain is what turns a verified copy
    * into the linked row this same read then returns. The drain runs for the **caller**, not
    * the owner: pending records are keyed by uploader.
    */
-  const [feed, summaries, attachments] = await Promise.all([
+  const [
+    feed,
+    reminders,
+    storedChildren,
+    sourceListIds,
+    completedOccurrenceCount,
+    occurrence,
+    attachments,
+  ] = await Promise.all([
     listActivityUpdates(target.activityId),
-    batchGetSourceListSummaries(userId, sourceListIds),
+    listRemindersForUser(target.activityId, userId, { consistentRead: true }),
+    listStoredPrepTaskPointers(target.activityId),
+    listSourceListIds(target.activityId),
+    countCompleted(target.activityId),
+    target.kind === 'occurrence'
+      ? getOccurrence(target.activityId, target.date, { consistentRead: true })
+      : Promise.resolve(null),
     drainPendingUploads(userId, Date.parse(now)).then(() =>
       listAttachments(target.activityId),
     ),
   ]);
+  const legacyChildIds = storedChildren
+    .filter((child) => child.restoredStatus === undefined)
+    .map((child) => child.childActivityId);
+  const hydration = await batchGetDetailHydration(userId, sourceListIds, legacyChildIds);
+  const children = materializePrepTaskPointers(
+    storedChildren,
+    hydration.childRestoredStatuses,
+  ).map((child) =>
+    activityChildSchema.parse({
+      activityId: child.childActivityId,
+      title: child.title,
+      status: child.status,
+      restoredStatus: child.restoredStatus,
+      isRecurring: child.isRecurring,
+    }),
+  );
   const sourceLists = sourceListIds
-    .map((listId) => summaries.get(listId))
+    .map((listId) => hydration.sourceLists.get(listId))
     .filter((summary): summary is SourceListSummary => summary !== undefined);
 
   return {
-    ...projectDetail(partition, userId, target, {
+    activity: projectedActivity,
+    capabilities: {
       complete: mayAct,
       skip: mayAct,
       snooze: mayAct,
-    }),
+    },
+    reminders,
+    ...(target.kind === 'occurrence'
+      ? {
+          occurrence: projectOccurrenceDetail(
+            projectedActivity,
+            occurrence ?? undefined,
+            target.date,
+          ),
+        }
+      : {}),
+    completedOccurrenceCount,
     updates: feed.updates,
     ...(feed.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
     attachments,
@@ -1990,8 +2040,7 @@ function prepPointerToChild(row: StoredItem): ActivityChild | undefined {
 }
 
 /**
- * The client-facing projection of one activity's partition — **and the caller-scoped reminder
- * filter** (rule 6).
+ * Legacy pure projection helper for partition-shaped fixtures and migrations.
  *
  * ## Why the filter is here and not in the repository
  *
@@ -2013,8 +2062,8 @@ function prepPointerToChild(row: StoredItem): ActivityChild | undefined {
  * `no-key-literals` rule matches quoted key prefixes anywhere outside the repository layer,
  * comments included — and nothing here is lost by describing them.)
  *
- * There is exactly one client-facing serialiser for an activity, so there is exactly one
- * place this can be forgotten.
+ * The live detail route uses exact bounded reads above; this remains exported only for legacy
+ * compatibility tests that pin the field-level projection rules.
  */
 export function projectDetail(
   partition: StoredItem[],
@@ -2029,7 +2078,21 @@ export function projectDetail(
 
   const occurrence =
     target.kind === 'occurrence'
-      ? projectOccurrenceDetail(projected, partition, target.date)
+      ? projectOccurrenceDetail(
+          projected,
+          (() => {
+            const raw = partition.find(
+              (row) =>
+                row.entity === 'Occurrence' &&
+                row.activityId === projected.activityId &&
+                row.date === target.date,
+            );
+            return raw === undefined
+              ? undefined
+              : (occurrenceSchema.parse(raw) as Occurrence);
+          })(),
+          target.date,
+        )
       : undefined;
 
   return {
@@ -2051,7 +2114,7 @@ export function projectDetail(
 
 function projectOccurrenceDetail(
   activity: Activity,
-  partition: StoredItem[],
+  override: Occurrence | undefined,
   nominalDate: string,
 ): OccurrenceDetailProjection {
   if (
@@ -2076,14 +2139,6 @@ function projectOccurrenceDetail(
     );
   }
 
-  const raw = partition.find(
-    (row) =>
-      row.entity === 'Occurrence' &&
-      row.activityId === activity.activityId &&
-      row.date === nominalDate,
-  );
-  const override: Occurrence | undefined =
-    raw === undefined ? undefined : (occurrenceSchema.parse(raw) as Occurrence);
   const segment = [...activity.recurrence.segments]
     .reverse()
     .find((candidate) => candidate.effectiveFrom <= nominalDate);

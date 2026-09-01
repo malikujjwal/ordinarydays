@@ -77,10 +77,11 @@ All items carry: `pk`, `sk`, `entity` (discriminator string), `createdAt`, `upda
 
 ### 3.1 Activity partition
 
-The canonical Activity, its child records and every reverse-projection id live in one
-partition, so plan detail starts with one authoritative `Query`. Objects that remain canonical
-in another aggregate—related Lists—are hydrated from returned `SOURCE_LIST#` ids with one
-bounded `BatchGetItem`, never a scan or one read per List.
+The canonical Activity, its child records and every reverse-projection id share one partition,
+but plan detail never reads that partition wholesale. It starts with one authoritative META
+`GetItem`, then issues bounded sort-key-prefix Queries for only the sections it projects.
+Objects that remain canonical in another aggregate—related Lists—are hydrated from returned
+`SOURCE_LIST#` ids with one bounded `BatchGetItem`, never a scan or one read per List.
 
 | Item | `pk` | `sk` | `entity` |
 | --- | --- | --- | --- |
@@ -121,6 +122,10 @@ transaction as the child's title, status, schedule, or recurrence. `restoredStat
 offline Uncomplete restore an undated terminal child to `saved` and a dated child to
 `scheduled`; the recurrence bit lets the completion follow-up act only on incomplete one-off
 children without guessing an occurrence.
+Pointers written before `restoredStatus` was added remain readable: the bounded pointer page
+collects only missing child ids and derives their value from canonical child META rows in the
+same strong detail-hydration `BatchGetItem` used for related Lists. Ordinary child writes then
+maintain the attribute transactionally; no default guesses a terminal child's prior state.
 
 ### 3.2 User partition
 

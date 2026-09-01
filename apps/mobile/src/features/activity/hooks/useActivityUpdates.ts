@@ -9,6 +9,11 @@ import { randomUUID } from 'expo-crypto';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
+import type {
+  ActivityUpdateDeleteVariables,
+  ActivityUpdatePostVariables,
+} from '@/lib/mutationDefaults';
+import { activityUpdateMutationKeys } from '@/lib/mutationKeys';
 import { raisePlanActivityFloor } from '@/lib/planActivityFloors';
 import { activityUpdatesKey } from './keys';
 
@@ -57,7 +62,7 @@ export interface ActivityUpdatesView {
   readonly errorRequestId: string | undefined;
   readonly errorAction: ActivityUpdatesFailureAction | undefined;
   /** Replays failed paging/deletion; post retry is owned by the draft-preserving composer. */
-  readonly retryFailure: () => void;
+  readonly retryFailure: () => Promise<boolean>;
   readonly dismissError: () => void;
 }
 
@@ -136,6 +141,7 @@ function reconcileEmbedded(
   return {
     ...current,
     head: embedded.updates,
+    older: [],
     acknowledged: current.acknowledged.filter(
       (entry) => !embeddedIds.has(entry.updateId),
     ),
@@ -153,11 +159,7 @@ function materialize(cache: ActivityUpdatesCache): ActivityUpdate[] {
   );
 }
 
-interface PostVariables {
-  readonly body: string;
-  readonly localId: string;
-  readonly idempotencyKey: string;
-}
+type PostVariables = ActivityUpdatePostVariables;
 
 export function useActivityUpdates(
   activityId: string,
@@ -165,6 +167,7 @@ export function useActivityUpdates(
 ): ActivityUpdatesView {
   const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
   const [failure, setFailure] = useState<ActivityUpdatesFailure>();
+  const [failedPost, setFailedPost] = useState<PostVariables>();
   const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
   const [failedCursor, setFailedCursor] = useState<string>();
   const queryClient = useQueryClient();
@@ -203,8 +206,14 @@ export function useActivityUpdates(
   });
 
   const postMutation = useMutation({
+    mutationKey: activityUpdateMutationKeys.post,
     mutationFn: (variables: PostVariables) =>
-      postActivityUpdate(apiClient, activityId, variables.body, variables.idempotencyKey),
+      postActivityUpdate(
+        apiClient,
+        variables.activityId,
+        variables.body,
+        variables.idempotencyKey,
+      ),
     onMutate: (variables) => {
       setPending((current) => [
         { localId: variables.localId, body: variables.body },
@@ -220,9 +229,13 @@ export function useActivityUpdates(
           acknowledged: dedupe([result.update, ...current.acknowledged]),
         }),
       );
+      setFailedPost(undefined);
       setFailure(undefined);
     },
-    onError: (caught) => setFailure(describeFailure(caught, 'post')),
+    onError: (caught, variables) => {
+      setFailedPost(variables);
+      setFailure(describeFailure(caught, 'post'));
+    },
     onSettled: (_data, _caught, variables) => {
       setPending((current) =>
         current.filter((entry) => entry.localId !== variables.localId),
@@ -231,10 +244,15 @@ export function useActivityUpdates(
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (update: ActivityUpdate) =>
-      deleteActivityUpdate(apiClient, activityId, update.updateId),
-    onMutate: (update) => {
+    mutationKey: activityUpdateMutationKeys.delete,
+    mutationFn: (variables: ActivityUpdateDeleteVariables) =>
+      deleteActivityUpdate(apiClient, variables.activityId, variables.updateId),
+    onMutate: (variables: ActivityUpdateDeleteVariables) => {
+      const update = feed.head
+        .concat(feed.older, feed.acknowledged)
+        .find((entry) => entry.updateId === variables.updateId);
       const snapshot = queryClient.getQueryData<ActivityUpdatesCache>(queryKey);
+      if (update === undefined) return snapshot;
       queryClient.setQueryData<ActivityUpdatesCache>(
         queryKey,
         (current = initialCache(embedded)) => ({
@@ -248,8 +266,11 @@ export function useActivityUpdates(
       setFailedDelete(undefined);
       setFailure(undefined);
     },
-    onError: (caught, update, snapshot) => {
+    onError: (caught, variables, snapshot) => {
       if (snapshot !== undefined) queryClient.setQueryData(queryKey, snapshot);
+      const update = feed.head
+        .concat(feed.older, feed.acknowledged)
+        .find((entry) => entry.updateId === variables.updateId);
       setFailedDelete(update);
       setFailure(describeFailure(caught, 'delete'));
     },
@@ -267,6 +288,7 @@ export function useActivityUpdates(
       const localId = randomUUID();
       try {
         await postMutation.mutateAsync({
+          activityId,
           body: trimmed,
           localId,
           idempotencyKey: randomUUID(),
@@ -276,7 +298,7 @@ export function useActivityUpdates(
         return false;
       }
     },
-    [postMutation],
+    [activityId, postMutation],
   );
 
   const remove = useCallback(
@@ -285,22 +307,46 @@ export function useActivityUpdates(
       // for a caller that bypassed the row.
       if (update.kind !== 'user') return false;
       try {
-        await deleteMutation.mutateAsync(update);
+        await deleteMutation.mutateAsync({ activityId, updateId: update.updateId });
         return true;
       } catch {
         return false;
       }
     },
-    [deleteMutation],
+    [activityId, deleteMutation],
   );
 
-  const retryFailure = useCallback(() => {
-    if (failure?.action === 'load' && failedCursor !== undefined) {
-      loadMoreMutation.mutate(failedCursor);
-    } else if (failure?.action === 'delete' && failedDelete !== undefined) {
-      deleteMutation.mutate(failedDelete);
+  const retryFailure = useCallback(async (): Promise<boolean> => {
+    try {
+      if (failure?.action === 'load' && failedCursor !== undefined) {
+        await loadMoreMutation.mutateAsync(failedCursor);
+        return true;
+      }
+      if (failure?.action === 'post' && failedPost !== undefined) {
+        await postMutation.mutateAsync(failedPost);
+        return true;
+      }
+      if (failure?.action === 'delete' && failedDelete !== undefined) {
+        await deleteMutation.mutateAsync({
+          activityId,
+          updateId: failedDelete.updateId,
+        });
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
-  }, [deleteMutation, failedCursor, failedDelete, failure?.action, loadMoreMutation]);
+  }, [
+    activityId,
+    deleteMutation,
+    failedCursor,
+    failedDelete,
+    failedPost,
+    failure?.action,
+    loadMoreMutation,
+    postMutation,
+  ]);
 
   return {
     updates: materialize(feed),

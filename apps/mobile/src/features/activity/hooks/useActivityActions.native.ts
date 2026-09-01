@@ -29,6 +29,8 @@ export interface ActivityActions {
   isCompleting: boolean;
   isUndoing: boolean;
   errorMessage: string | undefined;
+  errorRequestId: string | undefined;
+  retryError: () => void;
   dismissError: () => void;
 }
 
@@ -40,6 +42,12 @@ export function useActivityActions(activityId: string): ActivityActions {
   const [undoing, setUndoing] = useState(false);
   const [error, setError] = useState<string>();
   const lastCompletion = useRef<string | undefined>(undefined);
+  const retryRef = useRef<(() => void) | undefined>(undefined);
+
+  const fail = useCallback((retry?: () => void, message = "Couldn't do that.") => {
+    retryRef.current = retry;
+    setError(message);
+  }, []);
 
   const projectionClock = useCallback(() => {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -51,216 +59,337 @@ export function useActivityActions(activityId: string): ActivityActions {
   }, [clock]);
 
   const accepted = useCallback(
-    async <T>(operation: () => Promise<T>): Promise<T | undefined> => {
+    async <T>(operation: () => Promise<T>, retry: () => void): Promise<T | undefined> => {
       setBusy(true);
       setError(undefined);
       try {
-        return await operation();
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        const result = await operation();
+        retryRef.current = undefined;
+        return result;
+      } catch {
+        fail(retry);
         return undefined;
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [fail],
   );
 
   const resultOk = useCallback(
-    (result: Awaited<ReturnType<typeof state.coordinator.skip>>) => {
+    (result: Awaited<ReturnType<typeof state.coordinator.skip>>, retry: () => void) => {
       if (result.kind !== 'refused') return true;
-      setError(result.error.message);
+      fail(retry);
       return false;
     },
-    [],
+    [fail],
   );
   const targetsSeries = useCallback(
-    async (scope: ActivityScope) => {
+    async (scope: ActivityScope, retry: () => void) => {
       if (scope.kind !== 'activity') return false;
-      const detail = await state.activities.read({ kind: 'activity', activityId });
-      return detail?.activity.recurrence !== undefined;
+      try {
+        const detail = await state.activities.read({ kind: 'activity', activityId });
+        return detail?.activity.recurrence !== undefined;
+      } catch {
+        fail(retry);
+        return undefined;
+      }
     },
-    [activityId, state],
+    [activityId, fail, state],
   );
-  const readRestoredStatus = useCallback(async () => {
-    const detail = await state.activities.read({ kind: 'activity', activityId });
-    if (detail === undefined) {
-      setError("This isn't here any more.");
-      return undefined;
-    }
-    return detail.activity.schedule === undefined
-      ? ('saved' as const)
-      : ('scheduled' as const);
-  }, [activityId, state]);
+  const readRestoredStatus = useCallback(
+    async (retry: () => void) => {
+      try {
+        const detail = await state.activities.read({ kind: 'activity', activityId });
+        if (detail === undefined) {
+          fail(retry, "This isn't here any more.");
+          return undefined;
+        }
+        return detail.activity.schedule === undefined
+          ? ('saved' as const)
+          : ('scheduled' as const);
+      } catch {
+        fail(retry);
+        return undefined;
+      }
+    },
+    [activityId, fail, state],
+  );
 
-  return {
-    duplicate: async () => {
-      const copyActivityId = nextCanonicalId('act');
-      const result = await accepted(() =>
-        state.coordinator.duplicate(
-          activityId,
-          copyActivityId,
-          randomUUID(),
-          projectionClock(),
-        ),
+  async function duplicateWith(copyActivityId: string, intentId: string) {
+    const retry = () => void duplicateWith(copyActivityId, intentId);
+    const result = await accepted(async () => {
+      const write = await state.coordinator.duplicate(
+        activityId,
+        copyActivityId,
+        intentId,
+        projectionClock(),
       );
-      if (result === undefined || !resultOk(result)) return undefined;
-      return (
+      if (write.kind === 'refused') return { write, copy: undefined };
+      const copy = (
         await state.activities.read({ kind: 'activity', activityId: copyActivityId })
       )?.activity;
-    },
-    remove: async () => {
-      const result = await accepted(() =>
-        state.coordinator.remove(activityId, randomUUID()),
-      );
-      return result !== undefined && resultOk(result);
-    },
-    skip: async (scope) => {
-      if (await targetsSeries(scope)) return false;
-      const result = await accepted(() =>
+      return { write, copy };
+    }, retry);
+    if (result === undefined || !resultOk(result.write, retry)) return undefined;
+    if (result.copy === undefined) {
+      fail(retry, "This isn't here any more.");
+      return undefined;
+    }
+    return result.copy;
+  }
+
+  async function removeWith(intentId: string): Promise<boolean> {
+    const retry = () => void removeWith(intentId);
+    const result = await accepted(
+      () => state.coordinator.remove(activityId, intentId),
+      retry,
+    );
+    return result !== undefined && resultOk(result, retry);
+  }
+
+  async function skipWith(scope: ActivityScope, intentId: string): Promise<boolean> {
+    const retry = () => void skipWith(scope, intentId);
+    if ((await targetsSeries(scope, retry)) !== false) return false;
+    const result = await accepted(
+      () =>
         state.coordinator.skip(
-          {
-            activityId,
-            idempotencyKey: randomUUID(),
-            input: scopeToWire(scope),
-          },
+          { activityId, idempotencyKey: intentId, input: scopeToWire(scope) },
           true,
           projectionClock(),
         ),
-      );
-      return result !== undefined && resultOk(result);
-    },
-    snooze: async (scope, until, renderedDate) => {
-      if (await targetsSeries(scope)) return false;
-      const result = await accepted(() =>
+      retry,
+    );
+    return result !== undefined && resultOk(result, retry);
+  }
+
+  async function snoozeWith(
+    scope: ActivityScope,
+    until: string,
+    renderedDate: string,
+    intentId: string,
+  ): Promise<boolean> {
+    const retry = () => void snoozeWith(scope, until, renderedDate, intentId);
+    if ((await targetsSeries(scope, retry)) !== false) return false;
+    const result = await accepted(
+      () =>
         state.coordinator.snooze(
           {
             activityId,
-            idempotencyKey: randomUUID(),
+            idempotencyKey: intentId,
             input: { ...scopeToWire(scope), until },
           },
           true,
           renderedDate,
           projectionClock(),
         ),
-      );
-      return result !== undefined && resultOk(result);
-    },
-    resolvePassed: (outcome, scope, onProjected) => {
-      void (async () => {
-        const blocked = await targetsSeries(scope);
-        if (blocked) return;
-        const restoredStatus = await readRestoredStatus();
-        if (restoredStatus === undefined) return;
-        const intentId = randomUUID();
-        lastCompletion.current = intentId;
-        setCompleting(true);
-        try {
-          const result = await state.coordinator.complete(
-            activityId,
-            intentId,
-            { outcome, ...scopeToWire(scope) },
-            true,
-            restoredStatus,
-            projectionClock(),
-          );
-          if (!resultOk(result)) return;
-          onProjected(true);
-          useToast.getState().showUndo({
-            message: 'Outcome recorded',
-            onCommit: () => undefined,
-            onUndo: () => {
-              setUndoing(true);
-              void state.coordinator
-                .undoCompletion(
-                  intentId,
-                  {
-                    activityId,
-                    idempotencyKey: randomUUID(),
-                    input: scopeToWire(scope),
-                  },
-                  false,
-                  restoredStatus,
-                  projectionClock(),
-                )
-                .then((undo) => {
-                  setUndoing(false);
-                  if (resultOk(undo)) onProjected(false);
-                });
-            },
-          });
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-        } finally {
-          setCompleting(false);
-        }
-      })();
-    },
-    undoResolution: (scope, onProjected) => {
-      setUndoing(true);
-      void (async () => {
-        try {
-          const restoredStatus = await readRestoredStatus();
-          if (restoredStatus === undefined) return;
-          const original = lastCompletion.current;
-          const inverse = {
-            activityId,
-            idempotencyKey: randomUUID(),
-            input: scopeToWire(scope),
-          };
-          const result =
-            original === undefined
-              ? await state.coordinator.complete(
-                  activityId,
-                  inverse.idempotencyKey,
-                  inverse.input,
-                  false,
-                  restoredStatus,
-                  projectionClock(),
-                )
-              : await state.coordinator.undoCompletion(
-                  original,
-                  inverse,
-                  false,
-                  restoredStatus,
-                  projectionClock(),
-                );
-          if (resultOk(result)) onProjected?.(false);
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-        } finally {
-          setUndoing(false);
-        }
-      })();
-    },
-    setChildCompletion: async (child, completed) => {
-      if (child.isRecurring) {
-        setError('Open the task to choose which repeating occurrence to complete.');
-        return false;
+      retry,
+    );
+    return result !== undefined && resultOk(result, retry);
+  }
+
+  function resolveWith(
+    outcome: ActivityOutcome,
+    scope: ActivityScope,
+    onProjected: (resolved: boolean) => void,
+    intentId: string,
+  ): void {
+    const retry = () => resolveWith(outcome, scope, onProjected, intentId);
+    void (async () => {
+      if ((await targetsSeries(scope, retry)) !== false) return;
+      const restoredStatus = await readRestoredStatus(retry);
+      if (restoredStatus === undefined) return;
+      lastCompletion.current = intentId;
+      setCompleting(true);
+      setError(undefined);
+      try {
+        const result = await state.coordinator.complete(
+          activityId,
+          intentId,
+          { outcome, ...scopeToWire(scope) },
+          true,
+          restoredStatus,
+          projectionClock(),
+        );
+        if (!resultOk(result, retry)) return;
+        retryRef.current = undefined;
+        onProjected(true);
+        useToast.getState().showUndo({
+          message: 'Outcome recorded',
+          onCommit: () => undefined,
+          onUndo: () => {
+            const inverseIntentId = randomUUID();
+            const retryUndo = () =>
+              void undoToastWith(
+                intentId,
+                inverseIntentId,
+                scope,
+                restoredStatus,
+                onProjected,
+              );
+            void undoToastWith(
+              intentId,
+              inverseIntentId,
+              scope,
+              restoredStatus,
+              onProjected,
+              retryUndo,
+            );
+          },
+        });
+      } catch {
+        fail(retry);
+      } finally {
+        setCompleting(false);
       }
+    })();
+  }
+
+  async function undoToastWith(
+    originalIntentId: string,
+    inverseIntentId: string,
+    scope: ActivityScope,
+    restoredStatus: 'saved' | 'scheduled',
+    onProjected: (resolved: boolean) => void,
+    suppliedRetry?: () => void,
+  ): Promise<void> {
+    const retry =
+      suppliedRetry ??
+      (() =>
+        void undoToastWith(
+          originalIntentId,
+          inverseIntentId,
+          scope,
+          restoredStatus,
+          onProjected,
+        ));
+    setUndoing(true);
+    setError(undefined);
+    try {
+      const result = await state.coordinator.undoCompletion(
+        originalIntentId,
+        { activityId, idempotencyKey: inverseIntentId, input: scopeToWire(scope) },
+        false,
+        restoredStatus,
+        projectionClock(),
+      );
+      if (resultOk(result, retry)) {
+        retryRef.current = undefined;
+        onProjected(false);
+      }
+    } catch {
+      fail(retry);
+    } finally {
+      setUndoing(false);
+    }
+  }
+
+  function undoWith(
+    scope: ActivityScope,
+    onProjected: ((resolved: boolean) => void) | undefined,
+    originalIntentId: string | undefined,
+    inverseIntentId: string,
+  ): void {
+    const retry = () => undoWith(scope, onProjected, originalIntentId, inverseIntentId);
+    setUndoing(true);
+    setError(undefined);
+    void (async () => {
+      try {
+        const restoredStatus = await readRestoredStatus(retry);
+        if (restoredStatus === undefined) return;
+        const inverse = {
+          activityId,
+          idempotencyKey: inverseIntentId,
+          input: scopeToWire(scope),
+        };
+        const result =
+          originalIntentId === undefined
+            ? await state.coordinator.complete(
+                activityId,
+                inverse.idempotencyKey,
+                inverse.input,
+                false,
+                restoredStatus,
+                projectionClock(),
+              )
+            : await state.coordinator.undoCompletion(
+                originalIntentId,
+                inverse,
+                false,
+                restoredStatus,
+                projectionClock(),
+              );
+        if (resultOk(result, retry)) {
+          retryRef.current = undefined;
+          onProjected?.(false);
+        }
+      } catch {
+        fail(retry);
+      } finally {
+        setUndoing(false);
+      }
+    })();
+  }
+
+  async function setChildCompletionWith(
+    child: ActivityChild,
+    completed: boolean,
+    intentId: string,
+  ): Promise<boolean> {
+    if (child.isRecurring) {
+      fail(undefined, 'Open the task to choose which repeating occurrence to complete.');
+      return false;
+    }
+    const retry = () => void setChildCompletionWith(child, completed, intentId);
+    const result = await accepted(async () => {
       const restoredStatus = await state.activities.readChildRestoredStatus(
         activityId,
         child.activityId,
       );
-      if (restoredStatus === undefined) return false;
-      const result = await accepted(() =>
-        state.coordinator.complete(
-          child.activityId,
-          randomUUID(),
-          completed ? { outcome: 'done' } : {},
-          completed,
-          restoredStatus,
-          projectionClock(),
-          activityId,
-        ),
+      if (restoredStatus === undefined) return undefined;
+      return state.coordinator.complete(
+        child.activityId,
+        intentId,
+        completed ? { outcome: 'done' } : {},
+        completed,
+        restoredStatus,
+        projectionClock(),
+        activityId,
       );
-      return result !== undefined && resultOk(result);
-    },
+    }, retry);
+    if (result === undefined) {
+      fail(retry);
+      return false;
+    }
+    return resultOk(result, retry);
+  }
+
+  return {
+    duplicate: () => duplicateWith(nextCanonicalId('act'), randomUUID()),
+    remove: () => removeWith(randomUUID()),
+    skip: (scope) => skipWith(scope, randomUUID()),
+    snooze: (scope, until, renderedDate) =>
+      snoozeWith(scope, until, renderedDate, randomUUID()),
+    resolvePassed: (outcome, scope, onProjected) =>
+      resolveWith(outcome, scope, onProjected, randomUUID()),
+    undoResolution: (scope, onProjected) =>
+      undoWith(scope, onProjected, lastCompletion.current, randomUUID()),
+    setChildCompletion: (child, completed) =>
+      setChildCompletionWith(child, completed, randomUUID()),
     isBusy: busy || completing || undoing,
     isCompleting: completing,
     isUndoing: undoing,
     errorMessage: error,
-    dismissError: () => setError(undefined),
+    errorRequestId: undefined,
+    retryError: () => {
+      const retry = retryRef.current;
+      setError(undefined);
+      retry?.();
+    },
+    dismissError: () => {
+      retryRef.current = undefined;
+      setError(undefined);
+    },
   };
 }
 

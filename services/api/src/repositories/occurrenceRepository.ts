@@ -37,8 +37,12 @@ function parseOccurrence(value: unknown): Occurrence {
 }
 
 /** The sole DynamoDB owner of `ACT#<id>` / `OCC#<nominal-date>` rows. */
-export async function get(activityId: string, date: string): Promise<Occurrence | null> {
-  const item = await getItem<StoredItem>(occurrence(activityId, date));
+export async function get(
+  activityId: string,
+  date: string,
+  options: { readonly consistentRead?: boolean } = {},
+): Promise<Occurrence | null> {
+  const item = await getItem<StoredItem>(occurrence(activityId, date), options);
   return item === undefined ? null : parseOccurrence(item);
 }
 
@@ -323,7 +327,11 @@ export async function countCompleted(activityId: string): Promise<number> {
   const prefix = occurrenceRange(activityId, '', '');
   return queryCount(
     { pk: prefix.pk },
-    { skPrefix: 'OCC#', filterEquals: { attribute: 'status', value: 'completed' } },
+    {
+      skPrefix: 'OCC#',
+      filterEquals: { attribute: 'status', value: 'completed' },
+      consistentRead: true,
+    },
   );
 }
 

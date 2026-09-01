@@ -59,6 +59,11 @@ export function useActivityUpdates(
   /** True only while the local transaction is accepting a post, not while its intent is queued. */
   const [posting, setPosting] = useState(false);
   const [failure, setFailure] = useState<ActivityUpdatesFailure>();
+  const [failedPost, setFailedPost] = useState<{
+    readonly activityId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }>();
   const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
   const liveActivity = useRef(activityId);
 
@@ -71,6 +76,7 @@ export function useActivityUpdates(
     });
     setLoadingMore(false);
     setPosting(false);
+    setFailedPost(undefined);
     setFailure(undefined);
   }
 
@@ -125,34 +131,51 @@ export function useActivityUpdates(
       });
   }, [activityId, isCurrent, loadingMore, page.cursor, readCommitted, state]);
 
-  const post = useCallback(
-    async (body: string): Promise<boolean> => {
-      const trimmed = body.trim();
-      if (trimmed === '' || posting) return false;
+  const attemptPost = useCallback(
+    async (variables: {
+      readonly activityId: string;
+      readonly body: string;
+      readonly idempotencyKey: string;
+    }): Promise<boolean> => {
       setPosting(true);
       try {
-        const idempotencyKey = randomUUID();
         const result = await state.coordinator.postUpdate({
-          activityId,
-          body: trimmed,
-          idempotencyKey,
+          activityId: variables.activityId,
+          body: variables.body,
+          idempotencyKey: variables.idempotencyKey,
         });
         if (result.kind === 'refused') {
-          if (isCurrent(activityId)) {
+          if (isCurrent(variables.activityId)) {
+            setFailedPost(variables);
             setFailure(describeFailure(result.error, 'post'));
           }
           return false;
         }
-        if (isCurrent(activityId)) setFailure(undefined);
+        if (isCurrent(variables.activityId)) {
+          setFailedPost(undefined);
+          setFailure(undefined);
+        }
         return result.kind === 'accepted';
       } catch (caught: unknown) {
-        if (isCurrent(activityId)) setFailure(describeFailure(caught, 'post'));
+        if (isCurrent(variables.activityId)) {
+          setFailedPost(variables);
+          setFailure(describeFailure(caught, 'post'));
+        }
         return false;
       } finally {
-        if (isCurrent(activityId)) setPosting(false);
+        if (isCurrent(variables.activityId)) setPosting(false);
       }
     },
-    [activityId, isCurrent, posting, state],
+    [isCurrent, state],
+  );
+
+  const post = useCallback(
+    async (body: string): Promise<boolean> => {
+      const trimmed = body.trim();
+      if (trimmed === '' || posting) return false;
+      return attemptPost({ activityId, body: trimmed, idempotencyKey: randomUUID() });
+    },
+    [activityId, attemptPost, posting],
   );
 
   const remove = useCallback(
@@ -187,12 +210,19 @@ export function useActivityUpdates(
     [activityId, isCurrent, state],
   );
 
-  const retryFailure = useCallback(() => {
-    if (failure?.action === 'load') loadMore();
-    else if (failure?.action === 'delete' && failedDelete !== undefined) {
-      void remove(failedDelete);
+  const retryFailure = useCallback(async (): Promise<boolean> => {
+    if (failure?.action === 'load') {
+      loadMore();
+      return true;
     }
-  }, [failedDelete, failure?.action, loadMore, remove]);
+    if (failure?.action === 'post' && failedPost !== undefined) {
+      return attemptPost(failedPost);
+    }
+    if (failure?.action === 'delete' && failedDelete !== undefined) {
+      return remove(failedDelete);
+    }
+    return false;
+  }, [attemptPost, failedDelete, failedPost, failure?.action, loadMore, remove]);
   const dismissError = useCallback(() => setFailure(undefined), []);
   return {
     updates: page.updates,

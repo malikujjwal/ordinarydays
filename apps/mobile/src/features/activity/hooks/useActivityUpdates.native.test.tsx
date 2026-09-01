@@ -49,6 +49,52 @@ afterEach(() => {
 });
 
 describe('native useActivityUpdates durable adapter', () => {
+  it('reuses the accepted native post identity for an explicit retry', async () => {
+    const postUpdate = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: 'refused',
+        error: new TypeError('local transaction interrupted'),
+      })
+      .mockResolvedValueOnce({
+        kind: 'accepted',
+        status: 'queued',
+        intent: {},
+        commitRevision: 2,
+      });
+    nativeState.current = {
+      activities: {
+        subscribeUpdates: () => () => undefined,
+        updatesVersion: () => 0,
+        readUpdatesProjection: async () => ({
+          updates: [stored],
+          pending: [],
+          cursor: undefined,
+        }),
+      },
+      coordinator: { postUpdate, deleteUpdate: vi.fn() },
+      sync: {},
+    };
+    crypto.uuid.mockReturnValue('stable-native-post');
+    const mounted = renderHook(() =>
+      useActivityUpdates(ACTIVITY, { updates: [stored], cursor: undefined }),
+    );
+
+    await act(async () =>
+      expect(await mounted.result.current.post('Retry me')).toBe(false),
+    );
+    await act(async () => expect(await mounted.result.current.retryFailure()).toBe(true));
+
+    expect(postUpdate).toHaveBeenCalledTimes(2);
+    expect(postUpdate.mock.calls[0]).toEqual(postUpdate.mock.calls[1]);
+    expect(postUpdate).toHaveBeenLastCalledWith({
+      activityId: ACTIVITY,
+      body: 'Retry me',
+      idempotencyKey: 'stable-native-post',
+    });
+    expect(crypto.uuid).toHaveBeenCalledTimes(1);
+  });
+
   it('presents an accepted offline post from SQLite again after remount', async () => {
     let version = 0;
     let listener: (() => void) | undefined;

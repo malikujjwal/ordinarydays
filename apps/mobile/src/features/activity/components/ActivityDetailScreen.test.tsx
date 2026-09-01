@@ -2902,6 +2902,38 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.getByRole('checkbox', { name: 'Prep 1, not completed' })).toBeDefined();
   });
 
+  it('rolls back a failed Prep toggle and renders a safe retryable action error', async () => {
+    const prep = child(1);
+    const failure = {
+      error: {
+        code: 'internal',
+        message: 'database implementation detail',
+        requestId: 'req_child_failure',
+      },
+    };
+    mountAnatomy({ children: [prep] }, plan(), [
+      { status: 503, body: failure },
+      { status: 503, body: failure },
+    ]);
+    await screen.findByTestId('section-prep');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Prep 1, not completed' }));
+
+    await waitFor(() => expect(screen.getByTestId('detail-action-error')).toBeDefined());
+    expect(screen.getByText('Something went wrong.')).toBeDefined();
+    expect(screen.getByTestId('detail-action-error-request-id').textContent).toBe(
+      'req_child_failure',
+    );
+    expect(screen.getByRole('checkbox', { name: 'Prep 1, not completed' })).toBeDefined();
+
+    const attemptsBeforeRetry = sent.length;
+    fireEvent.click(screen.getByTestId('detail-action-error-retry'));
+    await waitFor(() => expect(sent.length).toBeGreaterThan(attemptsBeforeRetry));
+    expect(sent.at(-1)?.url).toMatch(
+      new RegExp(`/v1/activities/${prep.activityId}/complete$`),
+    );
+  });
+
   it('peeks a 4+ section at three rows and expands through Show all n', async () => {
     mountAnatomy({ children: [child(1), child(2), child(3), child(4), child(5)] });
     await screen.findByTestId('section-prep');

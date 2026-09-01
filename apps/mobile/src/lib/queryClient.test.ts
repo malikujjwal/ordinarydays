@@ -4,6 +4,8 @@ import type { MutationKey, QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type ActivityPostVariables,
+  type ActivityUpdateDeleteVariables,
+  type ActivityUpdatePostVariables,
   type ConvertRecurrenceVariables,
   type CreateActivityVariables,
   changesActivityLists,
@@ -14,7 +16,7 @@ import {
   refreshActivityDetails,
   registerActivityMutationDefaults,
 } from '@/lib/mutationDefaults';
-import { activityMutationKeys } from '@/lib/mutationKeys';
+import { activityMutationKeys, activityUpdateMutationKeys } from '@/lib/mutationKeys';
 import { shouldWarnBeforeUnload } from '@/lib/onlineManager';
 import { dehydratePersistedClient } from '@/lib/persister';
 import { createOfflineQueryClient } from '@/lib/queryClient';
@@ -136,6 +138,27 @@ const cases: Array<{ key: MutationKey; variables: Variables }> = [
 
 function fakeHttpClient() {
   const request = vi.fn((options: { path: string }) => {
+    if (options.path.endsWith('/updates')) {
+      return Promise.resolve({
+        data: {
+          update: {
+            updateId: 'upd_01J0000000000000000000000A',
+            activityId: ACTIVITY_ID,
+            kind: 'user',
+            authorUserId: activity.ownerId,
+            body: 'A durable note',
+            createdAt: '2026-08-08T11:00:00.000Z',
+            schemaVersion: 1,
+          },
+          lastActivityAt: '2026-08-08T11:00:00.000Z',
+        },
+      });
+    }
+    if (options.path.includes('/updates/')) {
+      return Promise.resolve({
+        data: { updateId: 'upd_01J0000000000000000000000A' },
+      });
+    }
     if (options.path.endsWith('/reminders')) {
       return Promise.resolve({
         data: {
@@ -231,6 +254,8 @@ describe('the query client defaults', () => {
   it('does not refresh activity lists for reminder-only writes', () => {
     expect(changesActivityLists(activityMutationKeys.reminderCreate)).toBe(false);
     expect(changesActivityLists(activityMutationKeys.reminderDelete)).toBe(false);
+    expect(changesActivityLists(activityUpdateMutationKeys.post)).toBe(false);
+    expect(changesActivityLists(activityUpdateMutationKeys.delete)).toBe(false);
   });
 
   it('marks the series and every occurrence detail stale after an activity write', () => {
@@ -362,5 +387,63 @@ describe('persisted mutation defaults', () => {
     expect(headers.every((value) => value?.['Idempotency-Key'] === IDEMPOTENCY_KEY)).toBe(
       true,
     );
+  });
+
+  it('registers replay-complete update post and delete recipes under their stable keys', async () => {
+    const target = createOfflineQueryClient();
+    const fake = fakeHttpClient();
+    registerActivityMutationDefaults(target, fake.client);
+    const post: ActivityUpdatePostVariables = {
+      activityId: ACTIVITY_ID,
+      body: 'A durable note',
+      localId: 'local-update-id',
+      idempotencyKey: IDEMPOTENCY_KEY,
+    };
+    const remove: ActivityUpdateDeleteVariables = {
+      activityId: ACTIVITY_ID,
+      updateId: 'upd_01J0000000000000000000000A',
+    };
+    const postFn = target.getMutationDefaults(activityUpdateMutationKeys.post).mutationFn;
+    const deleteFn = target.getMutationDefaults(
+      activityUpdateMutationKeys.delete,
+    ).mutationFn;
+    expect(postFn).toBeTypeOf('function');
+    expect(deleteFn).toBeTypeOf('function');
+
+    for (const variables of [post, post]) {
+      await postFn?.(variables, {
+        client: target,
+        meta: undefined,
+        mutationKey: activityUpdateMutationKeys.post,
+      });
+    }
+    for (const variables of [remove, remove]) {
+      await deleteFn?.(variables, {
+        client: target,
+        meta: undefined,
+        mutationKey: activityUpdateMutationKeys.delete,
+      });
+    }
+
+    expect(
+      fake.request.mock.calls.map(
+        ([options]) => (options as { path: string; method?: string }).path,
+      ),
+    ).toEqual([
+      `/v1/activities/${ACTIVITY_ID}/updates`,
+      `/v1/activities/${ACTIVITY_ID}/updates`,
+      `/v1/activities/${ACTIVITY_ID}/updates/${remove.updateId}`,
+      `/v1/activities/${ACTIVITY_ID}/updates/${remove.updateId}`,
+    ]);
+    expect(
+      fake.request.mock.calls
+        .slice(0, 2)
+        .map(
+          ([options]) =>
+            (options as { headers?: Record<string, string> }).headers?.[
+              'Idempotency-Key'
+            ],
+        ),
+    ).toEqual([IDEMPOTENCY_KEY, IDEMPOTENCY_KEY]);
   });
 });

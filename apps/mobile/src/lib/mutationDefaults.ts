@@ -4,10 +4,12 @@ import {
   createActivity,
   createReminder,
   deleteActivityForReplay,
+  deleteActivityUpdate,
   deleteReminderForReplay,
   duplicateActivity,
   type HttpClient,
   patchActivityForReplay,
+  postActivityUpdate,
   scheduleActivity,
   skipActivity,
   snoozeActivity,
@@ -30,7 +32,7 @@ import type { AgendaData } from '@od/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { projectPendingActivityCreate } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
-import { activityMutationKeys } from '@/lib/mutationKeys';
+import { activityMutationKeys, activityUpdateMutationKeys } from '@/lib/mutationKeys';
 import { activityKey } from '@/lib/queryKeys';
 
 export interface CreateActivityVariables {
@@ -86,6 +88,18 @@ export interface ReminderDeleteVariables {
   activityId: string;
   reminderId: string;
   intentId: string;
+}
+
+export interface ActivityUpdatePostVariables {
+  readonly activityId: string;
+  readonly body: string;
+  readonly localId: string;
+  readonly idempotencyKey: string;
+}
+
+export interface ActivityUpdateDeleteVariables {
+  readonly activityId: string;
+  readonly updateId: string;
 }
 
 const ACTIVITY_LIST_KEY = ['activities'] as const;
@@ -206,7 +220,13 @@ export function changesActivityLists(mutationKey: unknown): boolean {
   // the key — its response shape is the bridge's, not an Activity envelope — so this buys the
   // stale-marking only, which the next natural refetch reconciles.
   if (scope === 'list' && name === 'item-schedule') return true;
-  return scope === 'activity' && name !== 'reminder-create' && name !== 'reminder-delete';
+  return (
+    scope === 'activity' &&
+    name !== 'reminder-create' &&
+    name !== 'reminder-delete' &&
+    name !== 'update-post' &&
+    name !== 'update-delete'
+  );
 }
 
 /** Registers the process-wide web mutation functions and optimistic handlers. */
@@ -286,5 +306,13 @@ export function registerActivityMutationDefaults(
   client.setMutationDefaults(activityMutationKeys.reminderDelete, {
     mutationFn: ({ activityId, reminderId }: ReminderDeleteVariables) =>
       deleteReminderForReplay(httpClient, activityId, reminderId),
+  });
+  client.setMutationDefaults(activityUpdateMutationKeys.post, {
+    mutationFn: ({ activityId, body, idempotencyKey }: ActivityUpdatePostVariables) =>
+      postActivityUpdate(httpClient, activityId, body, idempotencyKey),
+  });
+  client.setMutationDefaults(activityUpdateMutationKeys.delete, {
+    mutationFn: ({ activityId, updateId }: ActivityUpdateDeleteVariables) =>
+      deleteActivityUpdate(httpClient, activityId, updateId),
   });
 }

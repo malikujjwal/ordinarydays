@@ -917,6 +917,48 @@ describe('projectDetail', () => {
     ).toBe(2);
   });
 
+  it('projects an explicitly targeted stored occurrence from a legacy partition fixture', () => {
+    const date = '2026-08-09';
+    const recurring: StoredItem = {
+      ...meta,
+      status: 'scheduled',
+      schedule: {
+        date,
+        time: '19:30',
+        timezone: 'America/New_York',
+        scheduledAtUtc: '2026-08-09T23:30:00.000Z',
+      },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: date }],
+      },
+    };
+    const completed: StoredItem = {
+      pk: `ACT#${PLAN}`,
+      sk: `OCC#${date}`,
+      entity: 'Occurrence',
+      activityId: PLAN,
+      date,
+      status: 'completed',
+      completedAt: '2026-08-09T23:45:00.000Z',
+      schemaVersion: 1,
+    };
+
+    expect(
+      projectDetail([recurring, completed], 'usr_a', {
+        kind: 'occurrence',
+        activityId: PLAN,
+        date,
+      }).occurrence,
+    ).toMatchObject({
+      nominalDate: date,
+      date,
+      time: '19:30',
+      status: 'completed_occurrence',
+      completedAt: '2026-08-09T23:45:00.000Z',
+    });
+  });
+
   it('never leaks the storage attributes', () => {
     const detail = projectDetail(partition, 'usr_a', detailTarget);
 

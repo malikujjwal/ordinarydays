@@ -3,6 +3,7 @@ import { AppError } from '../lib/errors.js';
 import {
   activityFromPartition,
   batchGetActivityMeta,
+  getActivityIndex,
   getActivityMeta,
   getActivityPartitionStrong,
   listParticipants,
@@ -280,9 +281,8 @@ export async function readableActivities(
 }
 
 /**
- * Authorises a target activity from the same strongly read partition used for projection.
- * Parent inheritance may read the parent separately; the target META and participant proof
- * are never rediscovered through an eventually consistent index.
+ * Legacy partition-shaped authorization helper retained for non-detail callers and fixtures.
+ * The bounded detail route uses {@link assertActivityReadAccessFromMeta} below.
  */
 export async function assertActivityReadAccessFromPartition(
   userId: string,
@@ -311,6 +311,46 @@ export async function assertActivityReadAccessFromPartition(
         ))
     ) {
       return { activity, isOwner: false, viaParent: true };
+    }
+  }
+  throw new AppError('not_found', NOT_FOUND);
+}
+
+/**
+ * Bounded detail authorization from the already-read canonical META row.
+ *
+ * Non-owner evidence is the exact caller/activity index grant named by access pattern 4,
+ * strongly read by key. Parent inheritance repeats the same pair for the parent and never
+ * opens either user-growing Activity partition.
+ */
+export async function assertActivityReadAccessFromMeta(
+  userId: string,
+  activity: Activity,
+): Promise<ActivityAccess> {
+  if (activity.ownerId === userId) {
+    return { activity, isOwner: true, viaParent: false };
+  }
+  const direct = await getActivityIndex(userId, activity.activityId, {
+    consistentRead: true,
+  });
+  if (direct !== undefined) {
+    return { activity, isOwner: false, viaParent: false };
+  }
+  if (activity.parentActivityId !== undefined) {
+    const parent = await getActivityMeta(
+      activity.parentActivityId,
+      AUTHORITATIVE_ACTIVITY_READ,
+    );
+    if (parent?.ownerId === userId) {
+      return { activity, isOwner: false, viaParent: true };
+    }
+    if (parent !== undefined) {
+      const inherited = await getActivityIndex(userId, parent.activityId, {
+        consistentRead: true,
+      });
+      if (inherited !== undefined) {
+        return { activity, isOwner: false, viaParent: true };
+      }
     }
   }
   throw new AppError('not_found', NOT_FOUND);

@@ -50,7 +50,7 @@ export function PrepSection({
         if (completed === undefined) return child;
         return {
           ...child,
-          status: completed ? ('completed' as const) : ('scheduled' as const),
+          status: completed ? ('completed' as const) : child.restoredStatus,
         };
       }),
     [completionOverrides, prepTasks],
@@ -66,7 +66,13 @@ export function PrepSection({
       setCompletionOverrides((current) =>
         new Map(current).set(child.activityId, completed),
       );
-      const accepted = await onToggleChild(child, completed);
+      let accepted = false;
+      try {
+        accepted = await onToggleChild(child, completed);
+      } catch {
+        // The action owner presents the safe failure copy. This component owns the optimistic
+        // checkbox, so its only failure responsibility is to put that projection back.
+      }
       if (!accepted) {
         setCompletionOverrides((current) => {
           const next = new Map(current);

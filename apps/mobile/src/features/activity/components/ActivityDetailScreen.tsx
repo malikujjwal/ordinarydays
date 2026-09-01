@@ -89,9 +89,10 @@ import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 /**
  * The Activity detail screen (P1-26).
  *
- * One `GET /v1/activities/:id`, which is one DynamoDB Query. Editing is **in place**: there
- * is no edit mode and no per-field Save button. Text commits on blur, pickers commit on
- * selection, and each issues its own `PATCH` with `If-Match` (`activities.md` §6.1).
+ * One `GET /v1/activities/:id`, composed server-side from exact strong reads and bounded
+ * section prefixes. Editing is **in place**: there is no edit mode and no per-field Save
+ * button. Text commits on blur, pickers commit on selection, and each issues its own `PATCH`
+ * with `If-Match` (`activities.md` §6.1).
  *
  * ## The two rules this screen exists to hold
  *
@@ -570,6 +571,16 @@ export function ActivityDetailScreen({
           today={today}
           onOpenChild={onOpenChild ?? onOpenActivity}
           onToggleChild={actions.setChildCompletion}
+          {...(actions.errorMessage === undefined
+            ? {}
+            : {
+                actionErrorMessage: actions.errorMessage,
+                ...(actions.errorRequestId === undefined
+                  ? {}
+                  : { actionErrorRequestId: actions.errorRequestId }),
+                onRetryAction: actions.retryError,
+                onDismissActionError: actions.dismissError,
+              })}
           updatesPaginationSignal={updatesPaginationSignal}
           {...(onOpenList === undefined ? {} : { onOpenList })}
           {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
@@ -937,6 +948,11 @@ interface LoadedProps {
   onOpenChild: (activityId: string) => void;
   /** Complete or uncomplete one Prep task through the platform action owner. */
   onToggleChild: (child: ActivityChild, completed: boolean) => Promise<boolean>;
+  /** A public action failed after the detail loaded; keep it visible and retryable in place. */
+  actionErrorMessage?: string;
+  actionErrorRequestId?: string;
+  onRetryAction?: () => void;
+  onDismissActionError?: () => void;
   /** Screen-owned near-end scroll events that drive Updates cursor pagination. */
   updatesPaginationSignal: number;
   /** Opens one of this Plan's Lists (P3-37, P3-39). Absent leaves the rows plain. */
@@ -1017,6 +1033,10 @@ function Loaded({
   today,
   onOpenChild,
   onToggleChild,
+  actionErrorMessage,
+  actionErrorRequestId,
+  onRetryAction,
+  onDismissActionError,
   updatesPaginationSignal,
   onOpenList,
   onAddPrepTask,
@@ -1128,6 +1148,51 @@ function Loaded({
           {...(canCancelPending ? { onCancel: onCancelPending } : {})}
         />
       ) : null}
+      {actionErrorMessage === undefined ? null : (
+        <View
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          testID="detail-action-error"
+          style={{
+            gap: theme.space[2],
+            padding: theme.space[5],
+            borderRadius: theme.radius.md,
+            backgroundColor: theme.colors.warningSurface,
+          }}
+        >
+          <Text variant="subhead" color="textPrimary">
+            {actionErrorMessage}
+          </Text>
+          {actionErrorRequestId === undefined ? null : (
+            <Text
+              variant="footnote"
+              color="textSecondary"
+              selectable
+              testID="detail-action-error-request-id"
+            >
+              {actionErrorRequestId}
+            </Text>
+          )}
+          <View style={{ flexDirection: 'row', gap: theme.space[2] }}>
+            {onRetryAction === undefined ? null : (
+              <Button
+                label="Try again"
+                variant="ghost"
+                onPress={onRetryAction}
+                testID="detail-action-error-retry"
+              />
+            )}
+            {onDismissActionError === undefined ? null : (
+              <Button
+                label="Dismiss"
+                variant="ghost"
+                onPress={onDismissActionError}
+                testID="detail-action-error-dismiss"
+              />
+            )}
+          </View>
+        </View>
+      )}
       {detail.conflict === undefined ? null : (
         <View
           accessibilityRole="alert"

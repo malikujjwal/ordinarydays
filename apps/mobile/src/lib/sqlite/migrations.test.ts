@@ -662,4 +662,47 @@ describe('versioned SQLite migrations', () => {
       local_failure_count: 0,
     });
   });
+
+  it('derives legacy child restoration from each child Activity schedule', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 19));
+    const parentId = 'act_migration_parent';
+    const savedId = 'act_migration_saved_child';
+    const scheduledId = 'act_migration_scheduled_child';
+    const insertActivity = async (activityId: string, scheduleDate?: string) =>
+      database?.run(
+        `INSERT INTO activities (
+           activity_id, owner_id, object_kind, type, status, title, schedule_date,
+           participant_count, child_count, expense_total_cents, visibility, details_json,
+           ics_sequence, created_at, last_activity_at, updated_at, schema_version
+         ) VALUES (?, 'usr_migration', 'task', 'task', 'completed', ?, ?,
+           0, 0, 0, 'private', '{"kind":"task"}', 0,
+           '2026-08-19T00:00:00.000Z', '2026-08-19T00:00:00.000Z',
+           '2026-08-19T00:00:00.000Z', 1);`,
+        [activityId, activityId, scheduleDate ?? null],
+      );
+    await insertActivity(savedId);
+    await insertActivity(scheduledId, '2026-08-20');
+    await database.run(
+      `INSERT INTO activity_children
+         (parent_activity_id, child_activity_id, ordinal, title, status, is_recurring)
+       VALUES
+         (?, ?, 0, 'Saved child', 'completed', 0),
+         (?, ?, 1, 'Scheduled child', 'completed', 0);`,
+      [parentId, savedId, parentId, scheduledId],
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.all(
+        `SELECT child_activity_id, restored_status FROM activity_children
+         WHERE parent_activity_id = ? ORDER BY ordinal;`,
+        [parentId],
+      ),
+    ).toEqual([
+      { child_activity_id: savedId, restored_status: 'saved' },
+      { child_activity_id: scheduledId, restored_status: 'scheduled' },
+    ]);
+  });
 });

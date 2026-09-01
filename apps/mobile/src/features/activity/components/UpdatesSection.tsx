@@ -45,8 +45,8 @@ export interface UpdatesSectionProps {
   /** Server correlation identity, rendered as selectable support text. */
   errorRequestId?: string;
   errorAction?: ActivityUpdatesFailureAction;
-  /** Replays page/delete; a failed post reuses this component's retained draft. */
-  onRetryError?: () => void;
+  /** Replays the exact failed action variables, including a post's accepted identity. */
+  onRetryError?: () => Promise<boolean>;
 }
 
 export function UpdatesSection({
@@ -97,9 +97,14 @@ export function UpdatesSection({
           ? 'Try loading again'
           : undefined;
   const retryError = useCallback(() => {
-    if (errorAction === 'post') void submit();
-    else onRetryError?.();
-  }, [errorAction, onRetryError, submit]);
+    void (async () => {
+      const retried = await onRetryError?.();
+      if (retried === true && errorAction === 'post') {
+        setDraft('');
+        setComposing(false);
+      }
+    })();
+  }, [errorAction, onRetryError]);
   useEffect(() => {
     if (!expanded) {
       handledPaginationSignal.current = paginationSignal;
@@ -139,8 +144,7 @@ export function UpdatesSection({
               </Text>
             )}
           </View>
-          {retryLabel === undefined ||
-          (errorAction !== 'post' && onRetryError === undefined) ? null : (
+          {retryLabel === undefined || onRetryError === undefined ? null : (
             <Touchable
               accessibilityRole="button"
               accessibilityLabel={retryLabel}

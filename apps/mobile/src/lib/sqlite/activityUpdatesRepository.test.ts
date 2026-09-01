@@ -131,12 +131,19 @@ describe('native Activity updates projection', () => {
     await transactions.run((transaction) =>
       activities.putCanonical(transaction, detail(first.createdAt, [first], 'cur_1')),
     );
-    await transactions.run((transaction) =>
-      activities.installConfirmedUpdate(transaction, {
+    await transactions.run(async (transaction) => {
+      await activities.queueUpdatePost(
+        transaction,
+        ACTIVITY,
+        'stable-stale-head-post',
+        confirmed.body,
+        1,
+      );
+      await activities.settlePostedUpdate(transaction, 'stable-stale-head-post', {
         update: confirmed,
         lastActivityAt: confirmed.createdAt,
-      }),
-    );
+      });
+    });
 
     await database.close();
     database = await createNodeSqliteFactory(directory).open('updates.sqlite');
@@ -202,6 +209,37 @@ describe('native Activity updates projection', () => {
     await expect(
       activities.read({ kind: 'activity', activityId: ACTIVITY }),
     ).resolves.toMatchObject({ children, sourceLists });
+  });
+
+  it('rebases older pages on an authoritative head and does not resurrect remote deletes', async () => {
+    const older = update('A', '2026-08-19T11:00:00.000Z');
+    const head = update('B', '2026-08-19T12:00:00.000Z');
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, detail(head.createdAt, [head], 'cur_old')),
+    );
+    await transactions.run((transaction) =>
+      activities.installUpdatePage(transaction, ACTIVITY, {
+        updates: [older],
+        cursor: 'cur_tail',
+      }),
+    );
+    expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([head, older]);
+
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, detail(head.createdAt, [head], 'cur_new')),
+    );
+    expect(await activities.readUpdates(ACTIVITY)).toEqual({
+      updates: [head],
+      cursor: 'cur_new',
+    });
+
+    await transactions.run((transaction) =>
+      activities.installUpdatePage(transaction, ACTIVITY, {
+        updates: [],
+        cursor: undefined,
+      }),
+    );
+    expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([head]);
   });
 
   it('keeps post and delete projections durable until atomic acknowledgement', async () => {

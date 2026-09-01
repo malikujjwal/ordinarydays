@@ -1,7 +1,8 @@
+import { MAX_REMINDERS_PER_USER_PER_ACTIVITY } from '@od/shared';
 import { reminder as reminderSchema } from '@od/shared/schemas';
 import type { Reminder } from '@od/shared/types';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
-import { deleteItem, queryAll } from './base.js';
+import { deleteItem, query } from './base.js';
 import { receiptItem } from './idempotencyRepository.js';
 import { activityMeta, reminder as reminderKey, reminderPrefix } from './keys.js';
 import type { StoredItem } from './migrate.js';
@@ -14,13 +15,18 @@ const SCHEMA_VERSION = 1;
 export async function listForUser(
   activityId: string,
   userId: string,
+  options: { readonly consistentRead?: boolean } = {},
 ): Promise<Reminder[]> {
   const prefix = reminderPrefix(activityId, userId);
-  const rows = await queryAll<StoredItem>(
+  const page = await query<StoredItem>(
     { pk: prefix.pk },
-    { skPrefix: prefix.skPrefix },
+    {
+      skPrefix: prefix.skPrefix,
+      limit: MAX_REMINDERS_PER_USER_PER_ACTIVITY,
+      ...(options.consistentRead === true ? { consistentRead: true } : {}),
+    },
   );
-  return rows.map((row) => reminderSchema.parse(row));
+  return page.items.map((row) => reminderSchema.parse(row));
 }
 
 /** Writes one caller-owned reminder and its successful replay receipt atomically. */

@@ -72,39 +72,51 @@ const reminderOf = (userId: keyof typeof REMINDER_OF, offsetMinutes: number) => 
   schemaVersion: 1,
 });
 
-/**
- * Seeds the strong partition snapshot used for authorisation and projection, and answers the
- * feed's own bounded `UPD#` read separately.
- *
- * Two Queries, discriminated by their key condition, because that is what the endpoint now
- * issues: §2.3 composes detail from bounded sort-key-prefix Queries, and P3-19's feed page is
- * one of them. A single blanket mock would hand partition rows to the feed reader and hide
- * that the two reads have different shapes.
- */
+/** Seeds the exact strong META/index/occurrence reads and every bounded prefix collection. */
 const seed = (
   partition: Record<string, unknown>[],
   updates: Record<string, unknown>[] = [],
   attachments: Record<string, unknown>[] = [],
 ) => {
-  /**
-   * Routed by sort-key prefix, because the endpoint issues four Queries and they are not
-   * interchangeable: the partition, the feed's own page (P3-19), the caller's bounded
-   * pending-upload drain and the attachment collection (P3-22). A fixture that answered all
-   * four with the partition would hand `ATT#` rows to a parser expecting attachments — which
-   * is what a real `begins_with` Query can never do, so the mock has to be as specific as
-   * DynamoDB is.
-   */
+  ddbMock.on(GetCommand).callsFake((input) => {
+    const key = input.Key as Record<string, unknown>;
+    if (key.pk === `ACT#${ACT}` && key.sk === 'META') {
+      return { Item: partition.find((row) => row.sk === 'META') as never };
+    }
+    if (key.pk === `ACT#${ACT}` && String(key.sk).startsWith('OCC#')) {
+      return { Item: partition.find((row) => row.sk === key.sk) as never };
+    }
+    if (String(key.pk).startsWith('USER#') && key.sk === `IDX#${ACT}`) {
+      const userId = String(key.pk).slice('USER#'.length);
+      const granted = partition.some(
+        (row) => row.entity === 'Participant' && row.userId === userId,
+      );
+      return granted
+        ? { Item: { ...key, entity: 'ActivityIndex', activityId: ACT, userId } as never }
+        : {};
+    }
+    return {};
+  });
   ddbMock.on(QueryCommand).callsFake((input) => {
     const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
-    switch (values[':skPrefix']) {
+    const prefix = String(values[':skPrefix'] ?? '');
+    switch (prefix) {
       case 'UPD#':
         return { Items: updates as never };
       case 'ATT#':
         return { Items: attachments as never };
       case 'UPLOAD#':
         return { Items: [] as never };
+      case 'OCC#':
+        return {
+          Count: partition.filter(
+            (row) => String(row.sk).startsWith(prefix) && row.status === 'completed',
+          ).length,
+        };
       default:
-        return { Items: partition as never };
+        return {
+          Items: partition.filter((row) => String(row.sk).startsWith(prefix)) as never,
+        };
     }
   });
 };
@@ -226,14 +238,10 @@ describe('reading an activity you own', () => {
 
     expect(body.data.completedOccurrenceCount).toBe(1);
     /**
-     * **Four Queries, and no more**: the authoritative partition snapshot, the feed's bounded
-     * newest-first page (P3-19), the caller's bounded pending-upload drain and the bounded
-     * attachment collection (P3-22). It was one until the feed was embedded; §2.3 has always
-     * specified bounded prefix Queries — plural — assembling the named sections, and the
-     * property worth pinning is that **none is per-row and none is unbounded**. A count that
-     * grew with the number of attachments, or a read per attachment, is what this catches.
+     * Seven fixed reads: updates, caller reminders, Prep pointers, source-List pointers,
+     * occurrence count, pending uploads and attachments. None grows with partition size.
      */
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(4);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(7);
   });
 
   it('returns an empty reminders array when there are none', async () => {
@@ -270,16 +278,90 @@ describe('reading an activity you own', () => {
     expect(activityDetail.safeParse(body.data).success).toBe(true);
   });
 
-  it('authorises and projects from one strongly consistent partition Query', async () => {
+  it('coalesces legacy child restoration and source-List hydration into one strong batch', async () => {
+    const savedChild = 'act_01J8XKQ2M4N5P6R7S8T9V0W1C1';
+    const datedChild = 'act_01J8XKQ2M4N5P6R7S8T9V0W1C2';
+    const pointer = (childActivityId: string, title: string, rank: string) => ({
+      pk: `ACT#${ACT}`,
+      sk: `SUB#${childActivityId}`,
+      entity: 'ChildPointer',
+      childActivityId,
+      title,
+      status: 'completed',
+      rank,
+      schemaVersion: 1,
+    });
+    const childMeta = (activityId: string, title: string, dated: boolean) => ({
+      ...meta({
+        activityId,
+        objectKind: 'task',
+        type: 'task',
+        title,
+        status: 'completed',
+        details: { kind: 'task' },
+        ...(dated
+          ? { schedule: { date: '2026-08-20', timezone: 'America/New_York' } }
+          : {}),
+      }),
+      pk: `ACT#${activityId}`,
+    });
+    seed([
+      meta(),
+      pointer(savedChild, 'Saved child', 'a'),
+      pointer(datedChild, 'Dated child', 'b'),
+      sourceList(),
+    ]);
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: {
+        'od-main-local': [
+          childMeta(savedChild, 'Saved child', false),
+          childMeta(datedChild, 'Dated child', true),
+          privateListMeta(),
+          listPointer(DEV),
+        ] as never,
+      },
+    });
+
+    const body = await (await get(createApp())).json();
+
+    expect(body.data.children).toEqual([
+      expect.objectContaining({ activityId: savedChild, restoredStatus: 'saved' }),
+      expect.objectContaining({ activityId: datedChild, restoredStatus: 'scheduled' }),
+    ]);
+    expect(body.data.sourceLists).toHaveLength(1);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(1);
+    expect(
+      ddbMock.commandCalls(BatchGetCommand)[0]?.args[0].input.RequestItems?.[
+        'od-main-local'
+      ],
+    ).toMatchObject({ ConsistentRead: true });
+  });
+
+  it('authorises from META and projects only bounded strong prefixes', async () => {
     seed([meta()]);
 
     await get(createApp());
 
-    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(4);
-    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ConsistentRead).toBe(
-      true,
-    );
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(1);
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'META' },
+      ConsistentRead: true,
+    });
+    const queries = ddbMock.commandCalls(QueryCommand).map((call) => call.args[0].input);
+    expect(queries).toHaveLength(7);
+    expect(queries.every((input) => input.ConsistentRead === true)).toBe(true);
+    expect(
+      queries.every(
+        (input) =>
+          (input.ExpressionAttributeValues as Record<string, unknown>)[':skPrefix'] !==
+          undefined,
+      ),
+    ).toBe(true);
+    expect(
+      queries
+        .filter((input) => input.Select !== 'COUNT')
+        .every((input) => typeof input.Limit === 'number'),
+    ).toBe(true);
   });
 });
 
@@ -329,7 +411,7 @@ describe('an explicitly targeted recurring occurrence', () => {
       status: 'scheduled',
       isSnoozed: false,
     });
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(4);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(7);
   });
 
   it('projects a moved occurrence from its nominal identity', async () => {
@@ -543,7 +625,7 @@ describe('a caller with no relationship', () => {
   });
 
   it('gets the identical answer for an activity that does not exist', async () => {
-    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    ddbMock.on(GetCommand).resolves({});
 
     const res = await get(createApp());
     const body = await res.json();
@@ -552,26 +634,23 @@ describe('a caller with no relationship', () => {
     expect(body.error.message).toBe('Activity not found.');
   });
 
-  it('refuses from the same single strong snapshot without a preliminary META read', async () => {
+  it('refuses after exact strong META and caller-index reads without collection reads', async () => {
     seed([meta(), reminderOf(DEV, -15)]);
 
     await get(asUser('usr_stranger'));
 
-    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
-    /**
-     * **One**, not two. Authorisation fails before the feed is read, so a stranger never
-     * causes a `UPD#` Query — they cannot learn that a plan has a feed, or that it exists, by
-     * timing the refusal.
-     */
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
-    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ConsistentRead).toBe(
-      true,
-    );
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2);
+    expect(
+      ddbMock
+        .commandCalls(GetCommand)
+        .every((call) => call.args[0].input.ConsistentRead === true),
+    ).toBe(true);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
   });
 
   /** A malformed id resolves to nothing and answers 404, rather than a second status. */
   it('404s a malformed id rather than 400ing it', async () => {
-    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    ddbMock.on(GetCommand).resolves({});
 
     const res = await get(createApp(), 'not-an-id');
 

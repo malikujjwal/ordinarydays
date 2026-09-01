@@ -1233,7 +1233,14 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
     apply: (database) =>
       database.exec(`
         ALTER TABLE activity_children ADD COLUMN restored_status TEXT NOT NULL
-          DEFAULT 'scheduled' CHECK (restored_status IN ('saved', 'scheduled'));
+          DEFAULT 'saved' CHECK (restored_status IN ('saved', 'scheduled'));
+        UPDATE activity_children
+        SET restored_status = 'scheduled'
+        WHERE EXISTS (
+          SELECT 1 FROM activities child
+          WHERE child.activity_id = activity_children.child_activity_id
+            AND child.schedule_date IS NOT NULL
+        );
       `),
   },
   {
@@ -1305,6 +1312,26 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           covered_through TEXT NOT NULL,
           PRIMARY KEY (timezone, ordinal)
         );
+      `),
+  },
+  {
+    version: 23,
+    name: 'activity-update-acknowledgement-overlays',
+    /**
+     * A strong embedded head rebases canonical pages. These tiny markers retain this device's
+     * acknowledged posts/deletes until that head converges, without retaining stale remote rows.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE activity_update_acknowledgements (
+          intent_id TEXT PRIMARY KEY NOT NULL,
+          activity_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('post', 'delete')),
+          target_update_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX activity_update_acknowledgements_feed
+          ON activity_update_acknowledgements (activity_id, operation, target_update_id);
       `),
   },
 ];

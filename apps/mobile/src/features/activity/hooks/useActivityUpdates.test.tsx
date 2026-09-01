@@ -115,6 +115,38 @@ describe('useActivityUpdates web query ownership', () => {
     expect(mounted.result.current.errorAction).toBe('post');
   });
 
+  it('reuses the accepted post idempotency key for an explicit retry', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const posted = update(2);
+    clients.uuid.mockReturnValueOnce('local-id').mockReturnValueOnce('stable-idem');
+    clients.post
+      .mockRejectedValueOnce(new TypeError('response lost'))
+      .mockResolvedValueOnce({ update: posted, lastActivityAt: posted.createdAt });
+    const mounted = renderHook(
+      () => useActivityUpdates(ACTIVITY, { updates: [], cursor: undefined }),
+      { wrapper: wrapper(client) },
+    );
+
+    await act(async () =>
+      expect(await mounted.result.current.post('Note 2')).toBe(false),
+    );
+    expect(mounted.result.current.errorAction).toBe('post');
+
+    await act(async () => {
+      await mounted.result.current.retryFailure();
+    });
+    await waitFor(() => expect(clients.post).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mounted.result.current.updates).toEqual([posted]));
+
+    expect(clients.post.mock.calls.map((call) => call[3])).toEqual([
+      'stable-idem',
+      'stable-idem',
+    ]);
+    expect(clients.uuid).toHaveBeenCalledTimes(2);
+  });
+
   it('restores the exact delete snapshot and preserves the server request id', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -173,6 +205,36 @@ describe('useActivityUpdates web query ownership', () => {
     mounted.rerender({ embedded: { updates: [newer], cursor: 'cur_newer' } });
     await waitFor(() => expect(mounted.result.current.updates).toEqual([local, newer]));
     expect(mounted.result.current.cursor).toBe('cur_newer');
+  });
+
+  it('drops remotely deleted older entries when an authoritative head starts a new chain', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const firstHead = update(3);
+    const remotelyDeletedOlder = update(1);
+    const refreshedHead = update(4);
+    clients.get
+      .mockResolvedValueOnce({ updates: [remotelyDeletedOlder], cursor: 'cur_tail' })
+      .mockResolvedValueOnce({ updates: [], cursor: undefined });
+    const mounted = renderHook(({ embedded }) => useActivityUpdates(ACTIVITY, embedded), {
+      initialProps: { embedded: { updates: [firstHead], cursor: 'cur_old' } },
+      wrapper: wrapper(client),
+    });
+
+    act(() => mounted.result.current.loadMore());
+    await waitFor(() =>
+      expect(mounted.result.current.updates).toEqual([firstHead, remotelyDeletedOlder]),
+    );
+
+    mounted.rerender({
+      embedded: { updates: [refreshedHead], cursor: 'cur_refreshed' },
+    });
+    await waitFor(() => expect(mounted.result.current.updates).toEqual([refreshedHead]));
+
+    act(() => mounted.result.current.loadMore());
+    await waitFor(() => expect(clients.get).toHaveBeenCalledTimes(2));
+    expect(mounted.result.current.updates).toEqual([refreshedHead]);
   });
 
   it('preserves page failure details for an action-specific retry', async () => {

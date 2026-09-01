@@ -1,5 +1,6 @@
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
+  BatchGetCommand,
   BatchWriteCommand,
   DynamoDBDocumentClient,
   QueryCommand,
@@ -698,6 +699,42 @@ describe('schedule transaction composition', () => {
     expect(items.some((entry) => 'Update' in entry)).toBe(true);
   });
 
+  it.each([
+    ['scheduling', undefined, schedule, 'scheduled'],
+    ['unscheduling', schedule, undefined, 'saved'],
+  ] as const)(
+    'repairs a completed child pointer when %s leaves its terminal status unchanged',
+    async (_label, previousSchedule, nextSchedule, restoredStatus) => {
+      const parentActivityId = 'act_parent';
+      const previous = activity({
+        parentActivityId,
+        status: 'completed',
+        ...(previousSchedule === undefined ? {} : { schedule: previousSchedule }),
+      });
+      const next = activity({
+        parentActivityId,
+        status: 'completed',
+        ...(nextSchedule === undefined ? {} : { schedule: nextSchedule }),
+      });
+
+      await writeSchedule(next, {
+        previous,
+        indexedUserIds: [ALICE],
+        idempotencyReceipt: receipt,
+      });
+
+      expect(
+        sentItems().find((entry) => entry.Update !== undefined)?.Update,
+      ).toMatchObject({
+        Key: { pk: `ACT#${parentActivityId}`, sk: `SUB#${ACT}` },
+        ExpressionAttributeValues: {
+          ':status': 'completed',
+          ':restoredStatus': restoredStatus,
+        },
+      });
+    },
+  );
+
   it('commits durable cleanup in the same transaction as the receipt', async () => {
     const previous = activity({ status: 'scheduled', schedule });
     await writeSchedule(activity(), {
@@ -1115,5 +1152,60 @@ describe('listPrepTaskPointers', () => {
         isRecurring: false,
       },
     ]);
+  });
+
+  it('hydrates legacy restoration from one strong child-META batch without guessing', async () => {
+    const datedChild = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          pk: `ACT#${PARENT}`,
+          sk: `SUB#${ACT}`,
+          entity: 'ChildPointer',
+          childActivityId: ACT,
+          title: 'Saved child',
+          status: 'completed',
+          rank: 'a',
+          schemaVersion: 1,
+        },
+        {
+          pk: `ACT#${PARENT}`,
+          sk: `SUB#${datedChild}`,
+          entity: 'ChildPointer',
+          childActivityId: datedChild,
+          title: 'Dated child',
+          status: 'completed',
+          rank: 'b',
+          schemaVersion: 1,
+        },
+      ],
+    });
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: {
+        'od-main-local': [
+          { ...activity(), pk: `ACT#${ACT}`, sk: 'META', entity: 'Activity' },
+          {
+            ...activity({ activityId: datedChild, schedule }),
+            pk: `ACT#${datedChild}`,
+            sk: 'META',
+            entity: 'Activity',
+          },
+        ] as never,
+      },
+    });
+
+    await expect(listPrepTaskPointers(PARENT)).resolves.toEqual([
+      expect.objectContaining({ childActivityId: ACT, restoredStatus: 'saved' }),
+      expect.objectContaining({
+        childActivityId: datedChild,
+        restoredStatus: 'scheduled',
+      }),
+    ]);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(1);
+    expect(
+      ddbMock.commandCalls(BatchGetCommand)[0]?.args[0].input.RequestItems?.[
+        'od-main-local'
+      ],
+    ).toMatchObject({ ConsistentRead: true });
   });
 });

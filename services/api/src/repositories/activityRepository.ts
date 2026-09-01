@@ -1,6 +1,7 @@
 import {
   assertNever,
   MAX_AUTOMATIC_INTENT_AGE_DAYS,
+  MAX_PARTICIPANTS,
   MAX_PREP_TASKS_PER_PLAN,
 } from '@od/shared';
 import { deriveGsi1Bucket } from '@od/shared/activity';
@@ -648,10 +649,20 @@ export function putActivityMeta(
 /** Batch-hydrates canonical META rows; missing rows are omitted. */
 export async function batchGetActivityMeta(
   activityIds: readonly string[],
+  options: { readonly consistentRead?: boolean } = {},
 ): Promise<Activity[]> {
   const uniqueIds = [...new Set(activityIds)];
-  const rows = await batchGetItems<StoredItem>(uniqueIds.map(activityMeta));
+  const rows = await batchGetItems<StoredItem>(uniqueIds.map(activityMeta), options);
   return rows.map(parseActivity);
+}
+
+/** Exact caller/activity index grant used by bounded Activity detail authorization. */
+export async function getActivityIndex(
+  userId: string,
+  activityId: string,
+  options: { readonly consistentRead?: boolean } = {},
+): Promise<StoredItem | undefined> {
+  return getItem<StoredItem>(activityIndex(userId, activityId), options);
 }
 
 function parseActivity(value: unknown): Activity {
@@ -678,13 +689,15 @@ export async function listParticipants(
   options: { readonly consistentRead?: boolean } = {},
 ): Promise<StoredItem[]> {
   const prefix = participantPrefix(activityId);
-  return queryAll<StoredItem>(
+  const page = await query<StoredItem>(
     { pk: prefix.pk },
     {
       skPrefix: prefix.skPrefix,
+      limit: MAX_PARTICIPANTS,
       ...(options.consistentRead === true ? { consistentRead: true } : {}),
     },
   );
+  return page.items;
 }
 
 /**
@@ -1230,11 +1243,12 @@ async function writeScheduleOnce(
     items.push({ Put: { Item: { ...row, updatedAt: next.updatedAt } } });
   }
   items.push(...(options.extraItems ?? []));
-  if (next.parentActivityId !== undefined && next.status !== options.previous.status) {
+  if (next.parentActivityId !== undefined) {
     items.push({
       Update: {
         Key: childPointer(next.parentActivityId, next.activityId),
-        UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
+        UpdateExpression:
+          'SET #status = :status, #restoredStatus = :restoredStatus, #updatedAt = :updatedAt',
         /**
          * The same guard the patch path carries, added in P3-18. An `UpdateItem` **creates**
          * the row it cannot find, so an unconditional status write against a missing pointer
@@ -1243,9 +1257,14 @@ async function writeScheduleOnce(
          * would then hand to plan detail.
          */
         ConditionExpression: 'attribute_exists(pk)',
-        ExpressionAttributeNames: { '#status': 'status', '#updatedAt': 'updatedAt' },
+        ExpressionAttributeNames: {
+          '#status': 'status',
+          '#restoredStatus': 'restoredStatus',
+          '#updatedAt': 'updatedAt',
+        },
         ExpressionAttributeValues: {
           ':status': next.status,
+          ':restoredStatus': next.schedule === undefined ? 'saved' : 'scheduled',
           ':updatedAt': next.updatedAt,
         },
       },
@@ -1607,7 +1626,7 @@ const prepTaskPointerRow = z.object({
   childActivityId: z.string(),
   title: z.string(),
   status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
-  restoredStatus: z.enum(['saved', 'scheduled']),
+  restoredStatus: z.enum(['saved', 'scheduled']).optional(),
   rank: z.string(),
   isRecurring: z.boolean().optional(),
 });
@@ -1619,6 +1638,58 @@ export interface PrepTaskPointer {
   readonly restoredStatus: 'saved' | 'scheduled';
   readonly rank: string;
   readonly isRecurring: boolean;
+}
+
+export interface StoredPrepTaskPointer {
+  readonly childActivityId: string;
+  readonly title: string;
+  readonly status: Activity['status'];
+  readonly restoredStatus?: 'saved' | 'scheduled';
+  readonly rank: string;
+  readonly isRecurring: boolean;
+}
+
+/** One bounded strong page in its stored, additive-compatible shape. */
+export async function listStoredPrepTaskPointers(
+  activityId: string,
+): Promise<StoredPrepTaskPointer[]> {
+  const prefix = childPointerPrefix(activityId);
+  const page = await query<StoredItem>(
+    { pk: prefix.pk },
+    {
+      skPrefix: prefix.skPrefix,
+      limit: MAX_PREP_TASKS_PER_PLAN,
+      consistentRead: true,
+    },
+  );
+  return page.items.map((row) => {
+    const pointer = prepTaskPointerRow.parse(row);
+    return {
+      childActivityId: pointer.childActivityId,
+      title: pointer.title,
+      status: pointer.status,
+      rank: pointer.rank,
+      isRecurring: pointer.isRecurring ?? false,
+      ...(pointer.restoredStatus === undefined
+        ? {}
+        : { restoredStatus: pointer.restoredStatus }),
+    };
+  });
+}
+
+/** Applies the authoritative legacy restoration map without guessing a completed child's state. */
+export function materializePrepTaskPointers(
+  pointers: readonly StoredPrepTaskPointer[],
+  legacyRestoredStatuses: ReadonlyMap<string, 'saved' | 'scheduled'>,
+): PrepTaskPointer[] {
+  return pointers.map((pointer) => {
+    const restoredStatus =
+      pointer.restoredStatus ?? legacyRestoredStatuses.get(pointer.childActivityId);
+    if (restoredStatus === undefined) {
+      throw new Error('A legacy Prep pointer has no readable child Activity.');
+    }
+    return { ...pointer, restoredStatus };
+  });
 }
 
 /**
@@ -1643,20 +1714,18 @@ export interface PrepTaskPointer {
 export async function listPrepTaskPointers(
   activityId: string,
 ): Promise<PrepTaskPointer[]> {
-  const prefix = childPointerPrefix(activityId);
-  const page = await query<StoredItem>(
-    { pk: prefix.pk },
-    {
-      skPrefix: prefix.skPrefix,
-      limit: MAX_PREP_TASKS_PER_PLAN,
-      consistentRead: true,
-    },
+  const pointers = await listStoredPrepTaskPointers(activityId);
+  const legacyIds = pointers
+    .filter((pointer) => pointer.restoredStatus === undefined)
+    .map((pointer) => pointer.childActivityId);
+  const legacyChildren = await batchGetActivityMeta(legacyIds, { consistentRead: true });
+  const restored = new Map(
+    legacyChildren.map((child) => [
+      child.activityId,
+      child.schedule === undefined ? ('saved' as const) : ('scheduled' as const),
+    ]),
   );
-
-  return page.items.map((row) => {
-    const pointer = prepTaskPointerRow.parse(row);
-    return { ...pointer, isRecurring: pointer.isRecurring ?? false };
-  });
+  return materializePrepTaskPointers(pointers, restored);
 }
 
 /**
