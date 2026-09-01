@@ -274,11 +274,30 @@ export class ActivityRepository {
     return status === 'saved' || status === 'scheduled' ? status : undefined;
   }
 
+  /** The stored parent of a Prep task, so a completion from any screen can reach its section. */
+  async readParentActivityId(
+    database: SqliteExecutor,
+    activityId: string,
+  ): Promise<string | undefined> {
+    const row = await database.first(
+      'SELECT parent_activity_id FROM activities WHERE activity_id = ?;',
+      [activityId],
+    );
+    return row === undefined ? undefined : text(row, 'parent_activity_id');
+  }
+
+  /**
+   * Mirrors a child's status onto its parent's installed Prep projection. `required` is for
+   * the parent's own section acting on a row it just showed; a completion that reached the
+   * child by another route (its detail screen, Today's checkbox, an acknowledgement) must
+   * not fail because this device never installed the parent's detail.
+   */
   async setChildStatusLocal(
     transaction: TransactionContext,
     parentActivityId: string,
     childActivityId: string,
     status: ActivityChild['status'],
+    options: { readonly required?: boolean } = {},
   ): Promise<void> {
     const changed = await transaction.database.run(
       `UPDATE activity_children SET status = ?,
@@ -288,7 +307,10 @@ export class ActivityRepository {
       [status, status, status, parentActivityId, childActivityId],
     );
     if (changed.changes !== 1) {
-      throw new Error('The parent no longer contains this Prep task.');
+      if (options.required !== false) {
+        throw new Error('The parent no longer contains this Prep task.');
+      }
+      return;
     }
     transaction.changed(this.scope(parentActivityId));
   }
@@ -303,6 +325,7 @@ export class ActivityRepository {
       parentActivityId,
       activity.activityId,
       activity.status,
+      { required: false },
     );
   }
 

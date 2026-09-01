@@ -28,7 +28,7 @@ import type {
   UncompleteActivityInput,
   UnsnoozeActivityInput,
 } from '@od/shared/schemas';
-import type { AgendaData } from '@od/shared/types';
+import type { ActivityDetail, AgendaData } from '@od/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { projectPendingActivityCreate } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
@@ -193,6 +193,23 @@ export function refreshActivityDetails(
     queryKey: activityKey(activityId),
     refetchType: 'none',
   });
+  /**
+   * A Prep task's completion also changes its parent's `SUB#` pointer, which the parent's
+   * detail (its Prep section) renders. The Prep section names the parent in the variables;
+   * the child's own screen and Today's checkbox do not, so fall back to the cached child
+   * detail. The parent read is strongly consistent, so it may refetch at once.
+   */
+  if (name === 'complete' || name === 'uncomplete') {
+    const named = (variables as { parentActivityId?: unknown }).parentActivityId;
+    const parentActivityId =
+      typeof named === 'string'
+        ? named
+        : client.getQueryData<ActivityDetail>(activityKey(activityId))?.activity
+            .parentActivityId;
+    if (parentActivityId !== undefined) {
+      void client.invalidateQueries({ queryKey: activityKey(parentActivityId) });
+    }
+  }
   return true;
 }
 

@@ -1292,7 +1292,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           );
           await this.agenda.acceptCanonicalActivitySummary(transaction, installable);
         }
-        const parentActivityId = field(intent.variables, 'parentActivityId');
+        const parentActivityId =
+          field(intent.variables, 'parentActivityId') ?? installable?.parentActivityId;
         if (
           installable !== undefined &&
           typeof parentActivityId === 'string' &&

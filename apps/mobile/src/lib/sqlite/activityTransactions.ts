@@ -736,12 +736,21 @@ export class ActivityTransactionService {
         completed ? variables.input.outcome : undefined,
         completed && !negative ? systemClock.now() : undefined,
       );
-      if (variables.parentActivityId !== undefined) {
+      // The parent's Prep section reflects the child whichever screen completed it: the
+      // section itself names the parent, every other route derives it from the child row.
+      const parentActivityId =
+        variables.parentActivityId ??
+        (await this.activities.readParentActivityId(
+          transaction.database,
+          variables.activityId,
+        ));
+      if (parentActivityId !== undefined) {
         await this.activities.setChildStatusLocal(
           transaction,
-          variables.parentActivityId,
+          parentActivityId,
           variables.activityId,
           negative ? 'skipped' : completed ? 'completed' : restoredStatus,
+          { required: variables.parentActivityId !== undefined },
         );
       }
     } else {

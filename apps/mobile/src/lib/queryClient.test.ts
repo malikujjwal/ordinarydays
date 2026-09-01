@@ -307,6 +307,25 @@ describe('the query client defaults', () => {
     ).toBe(true);
   });
 
+  it('refreshes the parent detail when a Prep task completes from its own screen', () => {
+    const client = createOfflineQueryClient();
+    const PARENT_ID = 'act_01J0000000000000000000000P';
+    client.setQueryData(['activity', ACTIVITY_ID], {
+      activity: { ...activity, parentActivityId: PARENT_ID },
+    });
+    client.setQueryData(['activity', PARENT_ID], { activity });
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+
+    expect(
+      refreshActivityDetails(client, activityMutationKeys.uncomplete, {
+        activityId: ACTIVITY_ID,
+      }),
+    ).toBe(true);
+
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['activity', PARENT_ID] });
+    expect(client.getQueryState(['activity', PARENT_ID])?.isInvalidated).toBe(true);
+  });
+
   it.each([activityMutationKeys.create, activityMutationKeys.duplicate])(
     'does not invent a detail target for %s/%s',
     (scope, name) => {

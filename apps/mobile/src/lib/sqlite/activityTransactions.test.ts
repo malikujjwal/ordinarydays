@@ -923,6 +923,84 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toBe('completed');
   });
 
+  it('reflects a Prep completion in the parent section when the child acts from its own screen', async () => {
+    const timestamp = '2026-08-19T08:00:00.000Z';
+    const parent: ActivityDetail = {
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title: 'Shared trip',
+        participantCount: 1,
+        childCount: 1,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        details: { kind: 'custom' },
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+      children: [
+        {
+          activityId: OTHER,
+          title: 'Pack a bag',
+          status: 'completed',
+          restoredStatus: 'scheduled',
+          isRecurring: false,
+        },
+      ],
+    };
+    const child: ActivityDetail = {
+      activity: {
+        activityId: OTHER,
+        ownerId: OWNER,
+        objectKind: 'task',
+        type: 'task',
+        status: 'completed',
+        title: 'Pack a bag',
+        participantCount: 1,
+        childCount: 0,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        details: { kind: 'task' },
+        parentActivityId: ACTIVITY,
+        schedule: { date: '2026-08-20', timezone: 'America/New_York' },
+        completedAt: timestamp,
+        outcome: 'done',
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+    };
+    await transactions.run(async (transaction) => {
+      await activities.putCanonical(transaction, parent);
+      await activities.putCanonical(transaction, child);
+    });
+
+    // Undo from the child's own detail screen (or Today's checkbox) names no parent.
+    const accepted = await coordinator.complete(
+      OTHER,
+      'child-undo-from-its-own-screen',
+      {},
+      false,
+      'scheduled',
+      clock,
+    );
+
+    expect(accepted).toMatchObject({ kind: 'accepted' });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
+    ).toEqual([{ ...parent.children?.[0], status: 'scheduled' }]);
+  });
+
   it('restores dated and undated completed Prep tasks exactly after an offline restart', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     const timestamp = '2026-08-19T08:00:00.000Z';
