@@ -628,4 +628,38 @@ describe('versioned SQLite migrations', () => {
       await database.first('SELECT next_seq FROM outbox_meta WHERE singleton = 1;'),
     ).toEqual({ next_seq: 8 });
   });
+
+  it('adds durable local-failure streak fields without changing existing intents', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, -1));
+    await database.run(
+      `INSERT INTO outbox_intents (
+         intent_id, mutation_key_json, variables_json, entity_id, ordering_key,
+         status, created_at, seq, semantic_key
+       ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?);`,
+      [
+        'existing-intent',
+        JSON.stringify(['activity', 'patch']),
+        JSON.stringify({ input: { title: 'Existing' } }),
+        'act_existing',
+        'activity:act_existing',
+        1,
+        1,
+        'existing-semantic-key',
+      ],
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT intent_id, local_failure_fingerprint, local_failure_count
+         FROM outbox_intents WHERE intent_id = 'existing-intent';`,
+      ),
+    ).toEqual({
+      intent_id: 'existing-intent',
+      local_failure_fingerprint: null,
+      local_failure_count: 0,
+    });
+  });
 });

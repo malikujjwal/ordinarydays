@@ -80,6 +80,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       },
       pullAgenda: async () => ({ days: [], warnings: [] }),
       pullReminderCoverage: async () => undefined,
+      prepareRejectedIntentRecovery: async () => undefined,
       recoverRejectedIntent: async () => false,
       stop: () => undefined,
     };
@@ -108,6 +109,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       },
       pullAgenda: async () => ({ days: [], warnings: [] }),
       pullReminderCoverage: async () => undefined,
+      prepareRejectedIntentRecovery: async () => undefined,
       recoverRejectedIntent: async () => false,
       stop: () => undefined,
     };

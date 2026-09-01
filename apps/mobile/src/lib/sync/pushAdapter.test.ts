@@ -155,8 +155,14 @@ describe('ActivityPushAdapter', () => {
         }),
       );
 
-      expect(list.patchItem).toHaveBeenCalledWith(LIST, ITEM, { title: 'Oat milk' });
-      expect(vi.mocked(list.patchItem).mock.calls[0]).toHaveLength(3);
+      expect(list.patchItem).toHaveBeenCalledWith(
+        LIST,
+        ITEM,
+        { title: 'Oat milk' },
+        expect.anything(),
+      );
+      // The fourth argument is transport cancellation, not an idempotency key.
+      expect(vi.mocked(list.patchItem).mock.calls[0]).toHaveLength(4);
     });
 
     it('sends a replay-protected delete under its durable identity', async () => {
@@ -174,7 +180,12 @@ describe('ActivityPushAdapter', () => {
         }),
       );
 
-      expect(list.removeItem).toHaveBeenCalledWith(LIST, ITEM, 'delete-item');
+      expect(list.removeItem).toHaveBeenCalledWith(
+        LIST,
+        ITEM,
+        'delete-item',
+        expect.anything(),
+      );
     });
 
     it('sends an item compensation only with the server-authored opaque token', async () => {
@@ -197,6 +208,7 @@ describe('ActivityPushAdapter', () => {
         LIST,
         'opaque-item-token',
         'undo-delete-item',
+        expect.anything(),
       );
     });
 

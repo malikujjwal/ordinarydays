@@ -800,7 +800,7 @@ export class OutboxRepository {
   ): Promise<OutboxIntent> {
     const intent = await this.get(database, intentId);
     if (
-      intent?.status !== 'queued' ||
+      (intent?.status !== 'queued' && intent?.status !== 'needs_attention') ||
       intent.mutationKey[0] !== 'list' ||
       intent.mutationKey[1] !== 'patch'
     ) {
@@ -826,7 +826,49 @@ export class OutboxRepository {
     });
     await database.run(
       `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
-       WHERE intent_id = ? AND status = 'queued';`,
+       WHERE intent_id = ? AND status IN ('queued', 'needs_attention');`,
+      [JSON.stringify(rebasedVariables), semanticKey, intentId],
+    );
+    const rebased = await this.get(database, intentId);
+    if (rebased === undefined) throw new OutboxInvariantError(intentId);
+    return rebased;
+  }
+
+  /** Rebases one explicitly retried Activity PATCH onto the recovered canonical version. */
+  async rebaseActivityPatchIntent(
+    database: SqliteExecutor,
+    intentId: string,
+    serverVersion: string,
+  ): Promise<OutboxIntent> {
+    const intent = await this.get(database, intentId);
+    if (
+      (intent?.status !== 'queued' && intent?.status !== 'needs_attention') ||
+      intent.mutationKey[0] !== 'activity' ||
+      intent.mutationKey[1] !== 'patch'
+    ) {
+      throw new OutboxInvariantError(intentId);
+    }
+    const variables = record(intent.variables);
+    if (variables === undefined || typeof variables.ifMatch !== 'string') {
+      throw new OutboxInvariantError(intentId);
+    }
+    const rebasedVariables = { ...variables, ifMatch: serverVersion };
+    const semanticKey = outboxSemanticKey({
+      intentId: intent.intentId,
+      mutationKey: intent.mutationKey,
+      variables: rebasedVariables,
+      entityId: intent.entityId,
+      orderingKey: intent.orderingKey,
+      ...(intent.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: intent.dependsOnIntentId }),
+      ...(intent.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: intent.compensationForIntentId }),
+    });
+    await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status IN ('queued', 'needs_attention');`,
       [JSON.stringify(rebasedVariables), semanticKey, intentId],
     );
     const rebased = await this.get(database, intentId);
@@ -1283,7 +1325,8 @@ export class OutboxRepository {
         `UPDATE outbox_intents
          SET status = 'acknowledged', reconciliation_version = ?, last_error = NULL,
              attention_kind = NULL, attention_reason = NULL, attention_status = NULL,
-             attention_code = NULL, attention_details_json = NULL
+             attention_code = NULL, attention_details_json = NULL,
+             local_failure_fingerprint = NULL, local_failure_count = 0
          WHERE intent_id = ?;`,
         [reconciliationVersion ?? null, intentId],
       );
@@ -1406,6 +1449,41 @@ export class OutboxRepository {
     );
   }
 
+  /** Records one same-fingerprint local failure and returns its durable consecutive count. */
+  async recordLocalFailure(
+    database: SqliteExecutor,
+    intentId: string,
+    fingerprint: string,
+  ): Promise<number> {
+    await database.run(
+      `UPDATE outbox_intents SET
+         local_failure_count = CASE
+           WHEN local_failure_fingerprint = ? THEN local_failure_count + 1
+           ELSE 1
+         END,
+         local_failure_fingerprint = ?
+       WHERE intent_id = ? AND status = 'in_flight';`,
+      [fingerprint, fingerprint, intentId],
+    );
+    const row = await database.first(
+      'SELECT local_failure_count FROM outbox_intents WHERE intent_id = ?;',
+      [intentId],
+    );
+    const count = row === undefined ? undefined : numberValue(row, 'local_failure_count');
+    if (count === undefined) throw new OutboxInvariantError(intentId);
+    return count;
+  }
+
+  /** A transport/server outcome breaks a local poison streak without spending its budget. */
+  async clearLocalFailure(database: SqliteExecutor, intentId: string): Promise<void> {
+    await database.run(
+      `UPDATE outbox_intents
+       SET local_failure_fingerprint = NULL, local_failure_count = 0
+       WHERE intent_id = ?;`,
+      [intentId],
+    );
+  }
+
   async needsAttention(
     database: SqliteExecutor,
     intentId: string,
@@ -1414,8 +1492,9 @@ export class OutboxRepository {
   ): Promise<void> {
     await database.run(
       `UPDATE outbox_intents SET
-        status = 'needs_attention', attention_kind = ?, attention_reason = ?,
-        attention_status = ?, attention_code = ?, attention_details_json = ?, last_error = ?
+         status = 'needs_attention', attention_kind = ?, attention_reason = ?,
+         attention_status = ?, attention_code = ?, attention_details_json = ?, last_error = ?,
+         local_failure_fingerprint = NULL, local_failure_count = 0
        WHERE intent_id = ?;`,
       [
         attention.kind,
@@ -1559,7 +1638,8 @@ export class OutboxRepository {
       `UPDATE outbox_intents SET intent_id = ?, variables_json = ?, semantic_key = ?,
          status = 'queued', created_at = ?, attempts = 0, last_error = NULL,
          attention_kind = NULL, attention_reason = NULL, attention_status = NULL,
-         attention_code = NULL, attention_details_json = NULL
+         attention_code = NULL, attention_details_json = NULL,
+         local_failure_fingerprint = NULL, local_failure_count = 0
        WHERE intent_id = ? AND status = 'needs_attention';`,
       [freshIntentId, JSON.stringify(variables), semanticKey, now, intentId],
     );
@@ -1569,6 +1649,67 @@ export class OutboxRepository {
       [now],
     );
     return this.get(database, freshIntentId);
+  }
+
+  /**
+   * Requeues ambiguous response loss without changing the request identity.
+   *
+   * `retry_exhausted` is not a server rejection: the write may have committed before local
+   * settlement failed. Reusing the durable identity is therefore the safety property, not an
+   * implementation detail — a replay-protected endpoint must see the same idempotency key.
+   */
+  async retryResponseLoss(
+    database: SqliteExecutor,
+    intentId: string,
+    now = Date.now(),
+  ): Promise<OutboxIntent | undefined> {
+    const current = await this.get(database, intentId);
+    if (
+      current?.status !== 'needs_attention' ||
+      current.attention?.kind !== 'parked' ||
+      current.attention.reason !== 'retry_exhausted'
+    ) {
+      return current;
+    }
+    await database.run(
+      `UPDATE outbox_intents SET status = 'queued', created_at = ?, attempts = 0,
+         last_error = NULL,
+         attention_kind = NULL, attention_reason = NULL, attention_status = NULL,
+         attention_code = NULL, attention_details_json = NULL,
+         local_failure_fingerprint = NULL, local_failure_count = 0
+       WHERE intent_id = ? AND status = 'needs_attention';`,
+      [now, intentId],
+    );
+    await database.run(
+      `UPDATE outbox_meta SET clock_witness = MAX(clock_witness, ?)
+       WHERE singleton = 1;`,
+      [now],
+    );
+    return this.get(database, intentId);
+  }
+
+  /** Releases a later write after its rejected predecessor was retried or discarded. */
+  async resumePredecessorBlocked(
+    database: SqliteExecutor,
+    intentId: string,
+  ): Promise<OutboxIntent | undefined> {
+    const current = await this.get(database, intentId);
+    if (
+      current?.status !== 'needs_attention' ||
+      current.attention?.kind !== 'parked' ||
+      current.attention.reason !== 'predecessor_rejected'
+    ) {
+      return current;
+    }
+    await database.run(
+      `UPDATE outbox_intents SET status = 'queued', attempts = 0, last_error = NULL,
+         attention_kind = NULL, attention_reason = NULL, attention_status = NULL,
+         attention_code = NULL, attention_details_json = NULL,
+         local_failure_fingerprint = NULL, local_failure_count = 0
+       WHERE intent_id = ? AND status = 'needs_attention';`,
+      [intentId],
+    );
+    return this.get(database, intentId);
   }
 
   /**
@@ -1711,6 +1852,19 @@ export class OutboxRepository {
   async discardAttention(database: SqliteExecutor, intentId: string): Promise<boolean> {
     const target = await this.get(database, intentId);
     if (target?.status !== 'needs_attention') return false;
+    return this.discardUnsent(database, intentId);
+  }
+
+  /**
+   * Retires queued/parked work whose authoritative target is absent, including compensations
+   * and presentation offers. It is deliberately unavailable for in-flight work: a request that
+   * can still reach the server must settle before its durable identity can be removed.
+   */
+  async discardUnsent(database: SqliteExecutor, intentId: string): Promise<boolean> {
+    const target = await this.get(database, intentId);
+    if (target?.status !== 'queued' && target?.status !== 'needs_attention') {
+      return false;
+    }
     const dependencyId = target.dependsOnIntentId;
     await database.run(
       `WITH RECURSIVE doomed(intent_id) AS (

@@ -13,11 +13,16 @@ import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 
 export interface TargetedAgendaTransport {
-  load(activityId: string, request: AgendaQuery): Promise<ActivityAgendaData>;
+  load(
+    activityId: string,
+    request: AgendaQuery,
+    signal?: AbortSignal,
+  ): Promise<ActivityAgendaData>;
 }
 
 export const sharedTargetedAgendaTransport: TargetedAgendaTransport = {
-  load: (activityId, request) => getActivityAgenda(apiClient, activityId, request),
+  load: (activityId, request, signal) =>
+    getActivityAgenda(apiClient, activityId, request, signal),
 };
 
 export interface ReconciliationResult {
@@ -39,9 +44,9 @@ export class RecurrenceReconciler {
     private readonly activities: ActivityRepository,
     private readonly agenda: AgendaRepository,
     private readonly transport: TargetedAgendaTransport = sharedTargetedAgendaTransport,
-    private readonly network: <T>(operation: () => Promise<T>) => Promise<T> = (
-      operation,
-    ) => operation(),
+    private readonly network: <T>(
+      operation: (signal: AbortSignal) => Promise<T>,
+    ) => Promise<T> = (operation) => operation(new AbortController().signal),
   ) {}
 
   async reconcilePending(): Promise<ReconciliationResult> {
@@ -83,8 +88,8 @@ export class RecurrenceReconciler {
       }> = [];
       for (const coverage of coverages) {
         const request = agendaQueryForCoverage(coverage);
-        const data = await this.network(() =>
-          this.transport.load(intent.entityId, request),
+        const data = await this.network((signal) =>
+          this.transport.load(intent.entityId, request, signal),
         );
         if (
           data.activityId !== intent.entityId ||

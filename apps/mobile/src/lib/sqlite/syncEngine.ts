@@ -47,7 +47,10 @@ import {
   type OutboxRepository,
   undoOfferInverseIntentId,
 } from '@/lib/sqlite/outbox';
-import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
+import type {
+  SerializedTransactionRunner,
+  TransactionContext,
+} from '@/lib/sqlite/transaction';
 import {
   type ActivityPullAdapter,
   sharedActivityPullAdapter,
@@ -71,12 +74,20 @@ export type NativeSyncReason =
   | 'manual'
   | 'retry';
 
+export interface PreparedRejectedIntentRecovery {
+  readonly targetState: 'present' | 'absent' | 'unchanged';
+  install(transaction: TransactionContext): Promise<boolean>;
+}
+
 export interface NativeSyncEngine {
   request(reason: NativeSyncReason): void;
   syncNow(): Promise<void>;
   pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail>;
   pullAgenda(request: AgendaQuery): Promise<AgendaData>;
   pullReminderCoverage(): Promise<void>;
+  prepareRejectedIntentRecovery(
+    intentId: string,
+  ): Promise<PreparedRejectedIntentRecovery | undefined>;
   recoverRejectedIntent(intentId: string): Promise<boolean>;
   pullAnytime?(): Promise<readonly ActivityListItem[]>;
   /** Drains every List pointer page and replaces the materialized index (P3-25). */
@@ -93,6 +104,8 @@ const RETRY_BACKOFF_MS = [2_000, 10_000, 30_000, 60_000] as const;
 
 /** Consecutive local failures before an intent parks for recovery instead of looping. */
 const MAX_LOCAL_FAILURE_STREAK = 3;
+const RETRY_EXHAUSTED_MESSAGE =
+  "This change couldn't finish syncing. Retry it or discard it.";
 
 function isPermanent(error: unknown): boolean {
   const status = field(error, 'status');
@@ -118,6 +131,20 @@ function isPermanent(error: unknown): boolean {
  */
 function isLocalFailure(error: unknown): boolean {
   return !(error instanceof NetworkError) && !(error instanceof ApiError);
+}
+
+function localFailureFingerprint(error: Error, phase: 'push' | 'settlement'): string {
+  return JSON.stringify([phase, error.name, error.message]);
+}
+
+function isRetryExhausted(intent: OutboxIntent): boolean {
+  return (
+    intent.attention?.kind === 'parked' && intent.attention.reason === 'retry_exhausted'
+  );
+}
+
+function requiresAuthoritativeRecovery(intent: OutboxIntent): boolean {
+  return intent.recoveryRequired === true || isRetryExhausted(intent);
 }
 
 function message(error: unknown): string {
@@ -303,13 +330,6 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private readonly activeCoverageKeys = new Set<string>();
   private readonly requestedCoverages = new Map<string, AgendaQuery>();
   private cycleError: Error | undefined;
-  /**
-   * Consecutive local-failure counts per intent, session-scoped on purpose: a restart
-   * grants a fresh budget, which biases toward retrying — the safe direction — while any
-   * single session still bounds a deterministic failure at {@link MAX_LOCAL_FAILURE_STREAK}
-   * claims. Durable counting would need a schema column for what a Map does here.
-   */
-  private readonly localFailureStreaks = new Map<string, number>();
   private anytimeRunning: Promise<readonly ActivityListItem[]> | undefined;
   private listsRunning: Promise<readonly List[]> | undefined;
   private readonly itemsRunning = new Map<string, Promise<void>>();
@@ -391,55 +411,75 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
      * lets it run before the next coverage pull. Repository guards prevent its response from
      * overwriting unresolved local work for this Activity.
      */
-    return this.serialNetwork(async () => {
-      let detail: ActivityDetail;
-      try {
-        detail = await this.pull.activity(target);
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          await this.transactions.run((transaction) =>
-            this.activities.acceptCanonicalDeletion(transaction, target.activityId),
-          );
-        }
-        throw error;
+    let detail: ActivityDetail;
+    try {
+      detail = await this.serialNetwork((signal) => this.pull.activity(target, signal));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        await this.transactions.run((transaction) =>
+          this.activities.acceptCanonicalDeletion(transaction, target.activityId),
+        );
       }
-      const accepted = await this.transactions.run((transaction) =>
-        this.activities.putCanonical(transaction, detail),
-      );
-      if (!accepted) {
-        throw new CanonicalActivityInstallDeferredError(target.activityId);
-      }
-      const installed = await this.activities.read(target);
-      if (installed === undefined)
-        throw new PendingActivityDeletionError(target.activityId);
-      return installed;
-    });
+      throw error;
+    }
+    const accepted = await this.transactions.run((transaction) =>
+      this.activities.putCanonical(transaction, detail),
+    );
+    if (!accepted) {
+      throw new CanonicalActivityInstallDeferredError(target.activityId);
+    }
+    const installed = await this.activities.read(target);
+    if (installed === undefined)
+      throw new PendingActivityDeletionError(target.activityId);
+    return installed;
   }
 
   /**
-   * Restores one rejected write from the exact durable target before Discard may retire it.
+   * Restores one blocked write from the exact durable target before Retry or Discard may
+   * retire it. Permanent rejection and locally exhausted ambiguous settlement share the same
+   * authoritative read, but retain their distinct persisted attention reasons.
    * Activity detail and every retained Agenda coverage are fetched first, then installed with
    * the receipt transition in one writer transaction. A version mismatch or partial read leaves
    * recoveryRequired intact so neither restart nor another pull can bless stale local data.
    */
   async recoverRejectedIntent(intentId: string): Promise<boolean> {
+    const prepared = await this.prepareRejectedIntentRecovery(intentId);
+    if (prepared === undefined) return false;
+    return this.transactions.run((transaction) => prepared.install(transaction));
+  }
+
+  /**
+   * Fetches authoritative recovery outside SQLite, then returns a guarded installer. The action
+   * coordinator runs that installer in the same writer transaction as Retry/Discard and FIFO
+   * reprojection, so subscribers never observe canonical truth with later local writes missing.
+   */
+  async prepareRejectedIntentRecovery(
+    intentId: string,
+  ): Promise<PreparedRejectedIntentRecovery | undefined> {
     const intent = await this.transactions.run((transaction) =>
       this.outbox.get(transaction.database, intentId),
     );
     if (intent?.status !== 'needs_attention') {
-      return false;
+      return undefined;
     }
     if (intent.mutationKey[0] === 'list') {
+      if (isRetryExhausted(intent) && intent.mutationKey[1].startsWith('item-')) {
+        return this.prepareListItemAttention(intent);
+      }
       // A rejected item create rolled its own row back already, with no read to repeat and
       // no List index to refresh. A rejected edit may still owe one (P3-29).
-      if (intent.mutationKey[1] === 'item-create') return true;
-      if (isListMutation(intent, 'itemUndo')) return true;
-      if (intent.mutationKey[1] === 'item-patch') {
-        return this.recoverRejectedItemPatchIntent(intent);
+      if (intent.mutationKey[1] === 'item-create') {
+        return this.noopPreparedRecovery(intent, 'absent');
       }
-      return this.recoverRejectedListIntent(intent);
+      if (isListMutation(intent, 'itemUndo')) {
+        return this.noopPreparedRecovery(intent, 'unchanged');
+      }
+      if (intent.mutationKey[1] === 'item-patch') {
+        return this.prepareListItemAttention(intent);
+      }
+      return this.prepareRejectedListIntent(intent);
     }
-    if (intent.recoveryRequired !== true) return false;
+    if (!requiresAuthoritativeRecovery(intent)) return undefined;
     const occurrenceDate = occurrenceDateFromIntent(intent);
     const target: ActivityDetailTarget =
       occurrenceDate === undefined
@@ -450,15 +490,18 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       let activityMissing = false;
       let occurrenceMissing = false;
       try {
-        detail = await this.serialNetwork(() => this.pull.activity(target));
+        detail = await this.serialNetwork((signal) => this.pull.activity(target, signal));
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 404) throw error;
         if (occurrenceDate === undefined) {
           activityMissing = true;
         } else {
           try {
-            detail = await this.serialNetwork(() =>
-              this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+            detail = await this.serialNetwork((signal) =>
+              this.pull.activity(
+                { kind: 'activity', activityId: intent.entityId },
+                signal,
+              ),
             );
             occurrenceMissing = true;
           } catch (parentError) {
@@ -471,43 +514,47 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
 
       if (activityMissing) {
-        return this.transactions.run(async (transaction) => {
-          const current = await this.outbox.get(transaction.database, intentId);
-          if (
-            current?.status !== 'needs_attention' ||
-            current.recoveryRequired !== true ||
-            current.entityId !== intent.entityId ||
-            occurrenceDateFromIntent(current) !== occurrenceDate
-          ) {
-            return false;
-          }
-          await this.activities.restoreCanonicalAbsenceAfterRejection(
-            transaction,
-            intent.entityId,
-          );
-          if (
-            !(await this.outbox.completeAuthoritativeRecovery(
-              transaction.database,
-              intentId,
-            ))
-          ) {
-            throw new Error(
-              'The authoritative recovery receipt changed during installation.',
+        return {
+          targetState: 'absent',
+          install: async (transaction) => {
+            const current = await this.outbox.get(transaction.database, intentId);
+            if (
+              current?.status !== 'needs_attention' ||
+              !requiresAuthoritativeRecovery(current) ||
+              current.entityId !== intent.entityId ||
+              occurrenceDateFromIntent(current) !== occurrenceDate
+            ) {
+              return false;
+            }
+            await this.activities.restoreCanonicalAbsenceAfterRejection(
+              transaction,
+              intent.entityId,
             );
-          }
-          transaction.changed('outbox');
-          return true;
-        });
+            if (
+              current.recoveryRequired === true &&
+              !(await this.outbox.completeAuthoritativeRecovery(
+                transaction.database,
+                intentId,
+              ))
+            ) {
+              throw new Error(
+                'The authoritative recovery receipt changed during installation.',
+              );
+            }
+            transaction.changed('outbox');
+            return true;
+          },
+        };
       }
 
-      if (detail === undefined) return false;
+      if (detail === undefined) return undefined;
       if (
         detail.activity.activityId !== intent.entityId ||
         (occurrenceDate !== undefined &&
           !occurrenceMissing &&
           detail.occurrence?.nominalDate !== occurrenceDate)
       ) {
-        return false;
+        return undefined;
       }
       const coverages = latestNativeAgendaCoverage(await this.agenda.coverage());
       const coverageKeys = new Set(
@@ -519,82 +566,86 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }> = [];
       for (const coverage of coverages) {
         const request = agendaQueryForCoverage(coverage);
-        const data = await this.serialNetwork(() =>
-          this.targeted.load(intent.entityId, request),
+        const data = await this.serialNetwork((signal) =>
+          this.targeted.load(intent.entityId, request, signal),
         );
         if (
           data.activityId !== intent.entityId ||
           data.activityVersion !== detail.activity.updatedAt
         ) {
-          return false;
+          return undefined;
         }
         responses.push({ request, data });
       }
       const now = systemClock.now();
-      return this.transactions.run(async (transaction) => {
-        const current = await this.outbox.get(transaction.database, intentId);
-        if (
-          current?.status !== 'needs_attention' ||
-          current.recoveryRequired !== true ||
-          current.entityId !== intent.entityId ||
-          occurrenceDateFromIntent(current) !== occurrenceDate
-        ) {
-          return false;
-        }
-        const currentCoverageKeys = new Set(
-          latestNativeAgendaCoverage(
-            await this.agenda.coverage(transaction.database),
-          ).map((coverage) => agendaQueryKey(agendaQueryForCoverage(coverage))),
-        );
-        if (
-          currentCoverageKeys.size !== coverageKeys.size ||
-          [...currentCoverageKeys].some((key) => !coverageKeys.has(key))
-        ) {
-          return false;
-        }
-        if (
-          !(await this.activities.restoreCanonicalAfterRejection(transaction, detail))
-        ) {
-          return false;
-        }
-        if (occurrenceMissing && occurrenceDate !== undefined) {
-          await this.activities.restoreCanonicalOccurrenceAbsenceAfterRejection(
-            transaction,
-            intent.entityId,
-            occurrenceDate,
+      return {
+        targetState: 'present',
+        install: async (transaction) => {
+          const current = await this.outbox.get(transaction.database, intentId);
+          if (
+            current?.status !== 'needs_attention' ||
+            !requiresAuthoritativeRecovery(current) ||
+            current.entityId !== intent.entityId ||
+            occurrenceDateFromIntent(current) !== occurrenceDate
+          ) {
+            return false;
+          }
+          const currentCoverageKeys = new Set(
+            latestNativeAgendaCoverage(
+              await this.agenda.coverage(transaction.database),
+            ).map((coverage) => agendaQueryKey(agendaQueryForCoverage(coverage))),
           );
-          await this.agenda.removeCanonicalOccurrenceAfterRejection(
-            transaction,
-            intent.entityId,
-            occurrenceDate,
-          );
-        }
-        for (const response of responses) {
-          const zone = timeZone.parse(response.request.tz);
-          await this.agenda.replaceCanonicalActivityRows(
-            transaction,
-            response.request,
-            response.data,
-            {
-              today: systemClock.todayIn(zone),
-              currentMinute: toWallTime(now, zone),
-            },
-          );
-        }
-        await this.anytime?.acceptCanonicalActivity(transaction, detail.activity);
-        if (
-          !(await this.outbox.completeAuthoritativeRecovery(
-            transaction.database,
-            intentId,
-          ))
-        ) {
-          throw new Error(
-            'The authoritative recovery receipt changed during installation.',
-          );
-        }
-        transaction.changed('outbox');
-        return true;
-      });
+          if (
+            currentCoverageKeys.size !== coverageKeys.size ||
+            [...currentCoverageKeys].some((key) => !coverageKeys.has(key))
+          ) {
+            return false;
+          }
+          if (
+            !(await this.activities.restoreCanonicalAfterRejection(transaction, detail))
+          ) {
+            return false;
+          }
+          if (occurrenceMissing && occurrenceDate !== undefined) {
+            await this.activities.restoreCanonicalOccurrenceAbsenceAfterRejection(
+              transaction,
+              intent.entityId,
+              occurrenceDate,
+            );
+            await this.agenda.removeCanonicalOccurrenceAfterRejection(
+              transaction,
+              intent.entityId,
+              occurrenceDate,
+            );
+          }
+          for (const response of responses) {
+            const zone = timeZone.parse(response.request.tz);
+            await this.agenda.replaceCanonicalActivityRows(
+              transaction,
+              response.request,
+              response.data,
+              {
+                today: systemClock.todayIn(zone),
+                currentMinute: toWallTime(now, zone),
+              },
+            );
+          }
+          await this.anytime?.acceptCanonicalActivity(transaction, detail.activity);
+          if (
+            current.recoveryRequired === true &&
+            !(await this.outbox.completeAuthoritativeRecovery(
+              transaction.database,
+              intentId,
+            ))
+          ) {
+            throw new Error(
+              'The authoritative recovery receipt changed during installation.',
+            );
+          }
+          transaction.changed('outbox');
+          return true;
+        },
+      };
     } catch (error) {
       if (__DEV__) {
         console.warn('native_rejected_intent_recovery_failed', {
@@ -602,38 +653,36 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           message: message(error),
         });
       }
-      return false;
+      return undefined;
     }
   }
 
   async pullReminderCoverage(): Promise<void> {
-    await this.serialNetwork(async () => {
-      const user = await this.pull.profile();
-      const today = systemClock.todayIn(timeZone.parse(user.timezone));
-      const request = {
-        from: today,
-        to: addWallDays(today, 7),
-        tz: user.timezone,
-        include: 'reminders' as const,
-      };
-      this.queueCoverage(request);
-      await this.transactions.run(async (transaction) => {
-        await transaction.database.run(
-          `INSERT INTO native_reminder_profile (
+    const user = await this.serialNetwork((signal) => this.pull.profile(signal));
+    const today = systemClock.todayIn(timeZone.parse(user.timezone));
+    const request = {
+      from: today,
+      to: addWallDays(today, 7),
+      tz: user.timezone,
+      include: 'reminders' as const,
+    };
+    this.queueCoverage(request);
+    await this.transactions.run(async (transaction) => {
+      await transaction.database.run(
+        `INSERT INTO native_reminder_profile (
             singleton, timezone, all_day_reminder_hour, quiet_hours_json, refreshed_at
           ) VALUES (1, ?, ?, ?, ?)
           ON CONFLICT(singleton) DO UPDATE SET timezone=excluded.timezone,
             all_day_reminder_hour=excluded.all_day_reminder_hour,
             quiet_hours_json=excluded.quiet_hours_json, refreshed_at=excluded.refreshed_at;`,
-          [
-            user.timezone,
-            user.allDayReminderHour ?? null,
-            user.quietHours === undefined ? null : JSON.stringify(user.quietHours),
-            systemClock.now(),
-          ],
-        );
-        transaction.changed('reminders');
-      });
+        [
+          user.timezone,
+          user.allDayReminderHour ?? null,
+          user.quietHours === undefined ? null : JSON.stringify(user.quietHours),
+          systemClock.now(),
+        ],
+      );
+      transaction.changed('reminders');
     });
     await this.syncNow();
   }
@@ -659,7 +708,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
-      const page = await this.serialNetwork(() => pullAnytimePage(cursor));
+      const page = await this.serialNetwork((signal) => pullAnytimePage(cursor, signal));
       items.push(...page.data);
       cursor = page.nextCursor;
       if (cursor !== undefined) {
@@ -781,7 +830,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     if (lists === undefined || pullDetail === undefined) {
       throw new Error('Native list item state is not ready.');
     }
-    const detail = await this.serialNetwork(() => pullDetail(listId));
+    const detail = await this.serialNetwork((signal) => pullDetail(listId, signal));
     const page: ListItemPageState = {
       rankVersion: detail.list.rankVersion,
       ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),
@@ -817,7 +866,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const items = this.requireItems();
     const pullPage = this.pull.listItemsPage;
     if (pullPage === undefined) throw new Error('Native list item state is not ready.');
-    const next = await this.serialNetwork(() => pullPage(listId, cursor));
+    const next = await this.serialNetwork((signal) => pullPage(listId, cursor, signal));
     await this.transactions.run(async (transaction) => {
       /*
        * Re-read inside the writer: the cursor may have been discarded by a fence recovery
@@ -884,7 +933,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
-      const page = await this.serialNetwork(() => pullListsPage(cursor));
+      const page = await this.serialNetwork((signal) => pullListsPage(cursor, signal));
       rows.push(...page.data);
       cursor = page.nextCursor;
       if (cursor !== undefined) {
@@ -965,7 +1014,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const startedAt = Date.now();
     let phase: 'push' | 'settlement' = 'push';
     try {
-      const response = await this.serialNetwork(() => this.push.execute(intent));
+      const response = await this.serialNetwork((signal) =>
+        this.push.execute(intent, signal),
+      );
       if (intent.mutationKey[0] === 'list') {
         phase = 'settlement';
         const canonicalRows =
@@ -980,15 +1031,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           if (typeof listId !== 'string' || pullItem === undefined) {
             throw new Error('Native list item state is not ready.');
           }
-          canonicalItem = await this.serialNetwork(() =>
-            pullItem(listId, intent.entityId),
+          canonicalItem = await this.serialNetwork((signal) =>
+            pullItem(listId, intent.entityId, signal),
           );
           if (canonicalItem.itemId !== intent.entityId) {
             throw new Error('List item Undo restored a different item.');
           }
         }
         await this.settleListIntent(intent, response, canonicalRows, canonicalItem);
-        this.localFailureStreaks.delete(intent.intentId);
         this.retryIndex = 0;
         return 'continue';
       }
@@ -1000,8 +1050,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         pushedActivity?.activityId === intent.entityId
       ) {
         try {
-          const detail = await this.serialNetwork(() =>
-            this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+          const detail = await this.serialNetwork((signal) =>
+            this.pull.activity({ kind: 'activity', activityId: intent.entityId }, signal),
           );
           if (detail.activity.activityId === intent.entityId) createdDetail = detail;
           else if (__DEV__) {
@@ -1176,7 +1226,6 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           durationMs: Date.now() - startedAt,
         });
       }
-      this.localFailureStreaks.delete(intent.intentId);
       this.retryIndex = 0;
       return 'continue';
     } catch (error) {
@@ -1188,15 +1237,21 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
        */
       const failure = error instanceof Error ? error : new Error(String(error));
       const permanent = isPermanent(failure);
-      const localStreak =
-        !permanent && isLocalFailure(failure)
-          ? (this.localFailureStreaks.get(intent.intentId) ?? 0) + 1
-          : 0;
-      if (localStreak > 0) {
-        this.localFailureStreaks.set(intent.intentId, localStreak);
-      } else {
-        this.localFailureStreaks.delete(intent.intentId);
-      }
+      const localStreak = await this.transactions.run(async (transaction) => {
+        const count =
+          !permanent && isLocalFailure(failure)
+            ? await this.outbox.recordLocalFailure(
+                transaction.database,
+                intent.intentId,
+                localFailureFingerprint(failure, phase),
+              )
+            : 0;
+        if (count === 0) {
+          await this.outbox.clearLocalFailure(transaction.database, intent.intentId);
+        }
+        transaction.changed('outbox');
+        return count;
+      });
       if (__DEV__) {
         console.warn('native_outbox_intent_failed', {
           intentId: intent.intentId,
@@ -1222,14 +1277,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
        * it would behind any other `needs_attention` predecessor.
        */
       if (localStreak >= MAX_LOCAL_FAILURE_STREAK) {
-        this.localFailureStreaks.delete(intent.intentId);
         this.cycleError ??= failure;
         await this.transactions.run(async (transaction) => {
           await this.outbox.needsAttention(
             transaction.database,
             intent.intentId,
             { kind: 'parked', reason: 'retry_exhausted' },
-            failure.message,
+            RETRY_EXHAUSTED_MESSAGE,
           );
           transaction.changed('outbox');
         });
@@ -1540,15 +1594,20 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     let activityMissing = false;
     let occurrenceMissing = false;
     try {
-      canonical = await this.serialNetwork(() => this.pull.activity(target));
+      canonical = await this.serialNetwork((signal) =>
+        this.pull.activity(target, signal),
+      );
     } catch (rollbackError) {
       if (rollbackError instanceof ApiError && rollbackError.status === 404) {
         if (occurrenceDate === undefined) {
           activityMissing = true;
         } else {
           try {
-            canonical = await this.serialNetwork(() =>
-              this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+            canonical = await this.serialNetwork((signal) =>
+              this.pull.activity(
+                { kind: 'activity', activityId: intent.entityId },
+                signal,
+              ),
             );
             occurrenceMissing = true;
           } catch (parentError) {
@@ -1580,7 +1639,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           const request = agendaQueryForCoverage(coverage);
           canonicalAgendas.push({
             request,
-            data: await this.serialNetwork(() => this.pull.agenda(request)),
+            data: await this.serialNetwork((signal) => this.pull.agenda(request, signal)),
           });
         }
       } catch (rollbackError) {
@@ -1824,7 +1883,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     let missing = false;
     if (pullItem !== undefined && typeof listId === 'string') {
       try {
-        canonical = await this.serialNetwork(() => pullItem(listId, intent.entityId));
+        canonical = await this.serialNetwork((signal) =>
+          pullItem(listId, intent.entityId, signal),
+        );
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           missing = true;
@@ -1968,15 +2029,33 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   /**
-   * Repeats the one targeted read a rejected item edit could not complete (P3-29).
-   *
-   * `recoveryRequired` is set only when {@link rollbackPermanentItemPatchRejection} could not
-   * reach the server, so the common case returns immediately: the row is already the server's
-   * and Retry or Discard may proceed. When it is set, the row on screen is still the refused
-   * edit, and blessing it would be exactly the stale-data promotion the receipt exists to stop.
+   * Restores the exact item before resolving ambiguous local exhaustion or an unfinished
+   * rejected-patch recovery (P3-29). A 404 is authoritative absence; any other read failure
+   * keeps the receipt blocked instead of promoting an optimistic row to server truth.
    */
-  private async recoverRejectedItemPatchIntent(intent: OutboxIntent): Promise<boolean> {
-    if (intent.recoveryRequired !== true) return true;
+  private noopPreparedRecovery(
+    intent: OutboxIntent,
+    targetState: PreparedRejectedIntentRecovery['targetState'],
+  ): PreparedRejectedIntentRecovery {
+    return {
+      targetState,
+      install: async (transaction) => {
+        const current = await this.outbox.get(transaction.database, intent.intentId);
+        return (
+          current?.status === 'needs_attention' &&
+          current.entityId === intent.entityId &&
+          current.orderingKey === intent.orderingKey
+        );
+      },
+    };
+  }
+
+  private async prepareListItemAttention(
+    intent: OutboxIntent,
+  ): Promise<PreparedRejectedIntentRecovery | undefined> {
+    if (!requiresAuthoritativeRecovery(intent)) {
+      return this.noopPreparedRecovery(intent, 'unchanged');
+    }
     try {
       const listTransactions = this.requireListTransactions();
       const listId = field(intent.variables, 'listId');
@@ -1986,94 +2065,99 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
       let canonical: ListItemRow | undefined;
       try {
-        canonical = await this.serialNetwork(() => pullItem(listId, intent.entityId));
+        canonical = await this.serialNetwork((signal) =>
+          pullItem(listId, intent.entityId, signal),
+        );
       } catch (error) {
         // `404` is an answer: the item is gone, and removing it locally is the restore.
         if (!(error instanceof ApiError) || error.status !== 404) throw error;
       }
-      return await this.transactions.run(async (transaction) => {
-        const current = await this.outbox.get(transaction.database, intent.intentId);
-        if (
-          current?.status !== 'needs_attention' ||
-          current.mutationKey[0] !== 'list' ||
-          current.entityId !== intent.entityId
-        ) {
-          return false;
-        }
-        if (canonical === undefined) {
-          await listTransactions.removeItem(transaction, listId, intent.entityId);
-        } else {
-          await listTransactions.installCanonicalItem(transaction, canonical);
-        }
-        if (
-          current.recoveryRequired === true &&
-          !(await this.outbox.completeAuthoritativeRecovery(
-            transaction.database,
-            intent.intentId,
-          ))
-        ) {
-          throw new Error(
-            'The authoritative list item recovery receipt changed during installation.',
-          );
-        }
-        transaction.changed('outbox');
-        return true;
-      });
+      return {
+        targetState: canonical === undefined ? 'absent' : 'present',
+        install: async (transaction) => {
+          const current = await this.outbox.get(transaction.database, intent.intentId);
+          if (
+            current?.status !== 'needs_attention' ||
+            current.mutationKey[0] !== 'list' ||
+            current.entityId !== intent.entityId
+          ) {
+            return false;
+          }
+          if (canonical === undefined) {
+            await listTransactions.removeItem(transaction, listId, intent.entityId);
+          } else {
+            await listTransactions.installCanonicalItem(transaction, canonical);
+          }
+          if (
+            current.recoveryRequired === true &&
+            !(await this.outbox.completeAuthoritativeRecovery(
+              transaction.database,
+              intent.intentId,
+            ))
+          ) {
+            throw new Error(
+              'The authoritative list item recovery receipt changed during installation.',
+            );
+          }
+          transaction.changed('outbox');
+          return true;
+        },
+      };
     } catch (error) {
       if (__DEV__) {
-        console.warn('native_rejected_item_patch_recovery_failed', {
+        console.warn('native_list_item_attention_recovery_failed', {
           intentId: intent.intentId,
           message: message(error),
         });
       }
-      return false;
+      return undefined;
     }
   }
 
   /** Restores authoritative List state before a Retry/Discard retires its recovery receipt. */
-  private async recoverRejectedListIntent(intent: OutboxIntent): Promise<boolean> {
+  private async prepareRejectedListIntent(
+    intent: OutboxIntent,
+  ): Promise<PreparedRejectedIntentRecovery | undefined> {
     try {
       const lists = this.lists;
       if (lists === undefined) throw new Error('Native Lists state is not ready.');
       const rows = await this.pullAllLists();
-      return this.transactions.run(async (transaction) => {
-        const current = await this.outbox.get(transaction.database, intent.intentId);
-        if (
-          current?.status !== 'needs_attention' ||
-          current.mutationKey[0] !== 'list' ||
-          current.entityId !== intent.entityId
-        ) {
-          return false;
-        }
-        const protectedListIds = new Set(
-          await this.outbox.protectedListIds(transaction.database),
-        );
-        // This receipt is the authority to replace this one optimistic row. Other Lists may
-        // still have unrelated queued work and retain their local fields during the refresh.
-        protectedListIds.delete(intent.entityId);
-        const protectedAggregateIds = await this.outbox.protectedListAggregateIds(
-          transaction.database,
-        );
-        await lists.replaceCanonical(
-          transaction,
-          rows,
-          protectedListIds,
-          protectedAggregateIds,
-        );
-        if (
-          current.recoveryRequired === true &&
-          !(await this.outbox.completeAuthoritativeRecovery(
-            transaction.database,
-            intent.intentId,
-          ))
-        ) {
-          throw new Error(
-            'The authoritative List recovery receipt changed during installation.',
-          );
-        }
-        transaction.changed('outbox');
-        return true;
-      });
+      const canonical = rows.find((row) => row.listId === intent.entityId);
+      const position = rows.findIndex((row) => row.listId === intent.entityId);
+      return {
+        targetState: canonical === undefined ? 'absent' : 'present',
+        install: async (transaction) => {
+          const current = await this.outbox.get(transaction.database, intent.intentId);
+          if (
+            current?.status !== 'needs_attention' ||
+            current.mutationKey[0] !== 'list' ||
+            current.entityId !== intent.entityId
+          ) {
+            return false;
+          }
+          // Recovery owns only this root. The coordinator replays or retires successors in
+          // this same transaction before any repository invalidation is published.
+          if (canonical === undefined) {
+            await lists.removeCanonical(transaction, intent.entityId);
+            await this.listItems?.removeList(transaction, intent.entityId);
+          } else {
+            await lists.upsertCanonical(transaction, canonical, position);
+          }
+          if (
+            current.recoveryRequired === true &&
+            !(await this.outbox.completeAuthoritativeRecovery(
+              transaction.database,
+              intent.intentId,
+            ))
+          ) {
+            throw new Error(
+              'The authoritative List recovery receipt changed during installation.',
+            );
+          }
+          transaction.changed('outbox');
+          return true;
+        },
+      };
     } catch (error) {
       if (__DEV__) {
         console.warn('native_rejected_list_recovery_failed', {
@@ -2081,7 +2165,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           message: message(error),
         });
       }
-      return false;
+      return undefined;
     }
   }
 
@@ -2108,7 +2192,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       const pullStartedAt = Date.now();
       try {
         if (__DEV__) console.info('native_agenda_pull_started', { request });
-        const data = await this.serialNetwork(() => this.pull.agenda(request));
+        const data = await this.serialNetwork((signal) =>
+          this.pull.agenda(request, signal),
+        );
         const receivedAt = Date.now();
         if (__DEV__) {
           console.info('native_agenda_pull_received', {
@@ -2188,8 +2274,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       return this.recoverListCreateCollision(intent);
     }
     try {
-      const detail = await this.serialNetwork(() =>
-        this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+      const detail = await this.serialNetwork((signal) =>
+        this.pull.activity({ kind: 'activity', activityId: intent.entityId }, signal),
       );
       await this.transactions.run(async (transaction) => {
         const later = await transaction.database.first(
@@ -2275,7 +2361,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       throw new Error('Native Lists state is not ready.');
     }
     try {
-      const canonical = await this.serialNetwork(() => pullList(intent.entityId));
+      const canonical = await this.serialNetwork((signal) =>
+        pullList(intent.entityId, signal),
+      );
       if (canonical.listId !== intent.entityId) {
         throw new Error('List collision recovery answered for a different list.');
       }
@@ -2342,7 +2430,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       throw new Error('Native list item state is not ready.');
     }
     try {
-      const canonical = await this.serialNetwork(() => pullItem(listId, intent.entityId));
+      const canonical = await this.serialNetwork((signal) =>
+        pullItem(listId, intent.entityId, signal),
+      );
       if (canonical.itemId !== intent.entityId) {
         throw new Error('Item collision recovery answered for a different item.');
       }
@@ -2395,66 +2485,74 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   /**
-   * Defence in depth for the serialized lane (the 2026-08-31 freeze post-mortem): the HTTP
-   * client bounds its own requests, but this lane must not trust any injected operation to
-   * settle. Public so a test can prove the lane frees without waiting a minute.
+   * Defence in depth for the serialized lane (the 2026-08-31 freeze post-mortem). The caller
+   * gets a bounded answer and the active transport receives a real abort signal. A broken
+   * transport cannot leave callers in Syncing, but it retains internal ownership until it
+   * settles so no still-side-effecting write is overlapped. Public so fake time can prove both
+   * invariants without waiting a minute.
    */
   networkLaneDeadlineMs = 60_000;
 
-  private serialNetwork<T>(operation: () => Promise<T>): Promise<T> {
-    const guarded = () => this.boundedNetwork(operation);
-    const pending = this.networkTail.then(guarded, guarded);
-    this.networkTail = pending.then(
+  private serialNetwork<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const guarded = () => {
+      if (controller.signal.aborted) {
+        throw new NetworkError('The network lane timed out.', undefined);
+      }
+      return operation(controller.signal);
+    };
+    const underlying = this.networkTail.then(guarded, guarded);
+    /*
+     * The public caller is bounded below, but ownership remains with the underlying transport
+     * until it actually settles. Releasing an abort-ignoring PATCH would let later work overtake
+     * a still-side-effecting write and violate the outbox ordering contract. A production fetch
+     * honours the propagated signal and settles promptly; a broken injected transport cannot
+     * keep the UI in Syncing because both its caller and queued callers retain their deadlines.
+     */
+    this.networkTail = underlying.then(
       () => undefined,
       () => undefined,
     );
-    return pending;
+    return this.withNetworkCallerDeadline(underlying, controller);
   }
 
   /**
-   * One hung promise here used to freeze the whole engine: the drain awaited it, every
-   * wake only set flags behind it, and the tail never advanced. The deadline rejects as
-   * expected transport loss — the intent requeues, the backoff owns the retry — and the
-   * abandoned operation keeps its handlers so a late settlement is swallowed, never an
-   * unhandled rejection.
-   *
-   * **The deadline releases the lane; it does not cancel the operation.** An abandoned
-   * operation that later un-hangs may still run its tail — including a SQLite install —
-   * after newer lane work has started. What bounds that: every write goes through the
-   * serialized transaction runner, so nothing interleaves inside a transaction, and the
-   * repositories' freshness guards decide whether a late canonical install may land, the
-   * same way they judge any delayed response. The lane's strict ordering is deliberately
-   * traded for liveness at this one edge; threading real cancellation through the
-   * transports is the recorded follow-up. Late settlements are logged so a recovered
-   * operation is visible rather than silent.
+   * Bounds one caller. Late settlement is observed but cannot reach caller-side SQLite
+   * installation; all lane callbacks are transport-only.
    */
-  private boundedNetwork<T>(operation: () => Promise<T>): Promise<T> {
+  private withNetworkCallerDeadline<T>(
+    underlying: Promise<T>,
+    controller: AbortController,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      let abandonedAt: number | undefined;
+      let timedOutAt: number | undefined;
       const deadline = setTimeout(() => {
-        abandonedAt = Date.now();
+        timedOutAt = Date.now();
         reject(new NetworkError('The network lane timed out.', undefined));
+        controller.abort();
       }, this.networkLaneDeadlineMs);
-      operation().then(
+      underlying.then(
         (value) => {
           clearTimeout(deadline);
-          if (abandonedAt !== undefined && __DEV__) {
+          if (timedOutAt !== undefined && __DEV__) {
             console.warn('native_network_lane_late_settlement', {
               outcome: 'resolved',
-              latenessMs: Date.now() - abandonedAt,
+              latenessMs: Date.now() - timedOutAt,
             });
           }
+          if (timedOutAt !== undefined) return;
           resolve(value);
         },
         (error: unknown) => {
           clearTimeout(deadline);
-          if (abandonedAt !== undefined && __DEV__) {
+          if (timedOutAt !== undefined && __DEV__) {
             console.warn('native_network_lane_late_settlement', {
               outcome: 'rejected',
-              latenessMs: Date.now() - abandonedAt,
+              latenessMs: Date.now() - timedOutAt,
               message: error instanceof Error ? error.message : String(error),
             });
           }
+          if (timedOutAt !== undefined) return;
           reject(error);
         },
       );

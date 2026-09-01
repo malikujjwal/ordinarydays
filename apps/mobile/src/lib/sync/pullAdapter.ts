@@ -21,10 +21,13 @@ import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 
 /** Typed reads used by the one native sync owner; returned bodies are never UI fallbacks. */
 export interface ActivityPullAdapter {
-  agenda(request: AgendaQuery): Promise<AgendaData>;
-  activity(target: ActivityDetailTarget): Promise<ActivityDetail>;
-  profile(): Promise<User>;
-  anytimePage?(cursor?: string): Promise<{
+  agenda(request: AgendaQuery, signal?: AbortSignal): Promise<AgendaData>;
+  activity(target: ActivityDetailTarget, signal?: AbortSignal): Promise<ActivityDetail>;
+  profile(signal?: AbortSignal): Promise<User>;
+  anytimePage?(
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<{
     readonly data: readonly ActivityListItem[];
     readonly nextCursor?: string;
   }>;
@@ -35,7 +38,10 @@ export interface ActivityPullAdapter {
    * together and the index filters client-side — so this returns the page verbatim and the
    * caller drains every cursor before deciding anything.
    */
-  listsPage?(cursor?: string): Promise<{
+  listsPage?(
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<{
     readonly data: readonly List[];
     readonly nextCursor?: string;
   }>;
@@ -49,7 +55,7 @@ export interface ActivityPullAdapter {
    *
    * Items are deliberately not requested. Recovery is about identity, and a create has none.
    */
-  list?(listId: string): Promise<List>;
+  list?(listId: string, signal?: AbortSignal): Promise<List>;
   /**
    * One List's META **and** its fenced first item page (P3-27).
    *
@@ -58,7 +64,10 @@ export interface ActivityPullAdapter {
    * produce a projection whose rows and cursor belong to different generations — the exact
    * thing the `503` fence exists to make impossible.
    */
-  listDetail?(listId: string): Promise<{
+  listDetail?(
+    listId: string,
+    signal?: AbortSignal,
+  ): Promise<{
     readonly list: List;
     readonly items: readonly ListItemRow[];
     readonly nextCursor?: string;
@@ -67,32 +76,37 @@ export interface ActivityPullAdapter {
   listItemsPage?(
     listId: string,
     cursor: string,
+    signal?: AbortSignal,
   ): Promise<{ readonly items: readonly ListItemRow[]; readonly nextCursor?: string }>;
   /** One item by its exact id, for durable-create collision recovery (§P3-08). */
-  listItem?(listId: string, itemId: string): Promise<ListItemRow>;
+  listItem?(listId: string, itemId: string, signal?: AbortSignal): Promise<ListItemRow>;
 }
 
 export const sharedActivityPullAdapter: ActivityPullAdapter = {
-  agenda: (request) => getAgenda(apiClient, request),
-  activity: (target) => getActivity(apiClient, target),
-  profile: () => getMe(apiClient),
-  anytimePage: async (cursor) => {
-    const page = await listActivities(apiClient, {
-      filter: 'saved',
-      limit: 200,
-      ...(cursor === undefined ? {} : { cursor }),
-    });
+  agenda: (request, signal) => getAgenda(apiClient, request, signal),
+  activity: (target, signal) => getActivity(apiClient, target, signal),
+  profile: (signal) => getMe(apiClient, signal),
+  anytimePage: async (cursor, signal) => {
+    const page = await listActivities(
+      apiClient,
+      {
+        filter: 'saved',
+        limit: 200,
+        ...(cursor === undefined ? {} : { cursor }),
+      },
+      signal,
+    );
     return {
       data: page.data as ActivityListItem[],
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
     };
   },
-  list: async (listId) => {
-    const detail = await getList(apiClient, listId);
+  list: async (listId, signal) => {
+    const detail = await getList(apiClient, listId, {}, signal);
     return detail.list as List;
   },
-  listDetail: async (listId) => {
-    const detail = await getList(apiClient, listId, { includeItems: true });
+  listDetail: async (listId, signal) => {
+    const detail = await getList(apiClient, listId, { includeItems: true }, signal);
     return {
       list: detail.list as List,
       // The detail item is a union carrying the caller's link when there is one; P3-35 renders
@@ -101,20 +115,20 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
       ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),
     };
   },
-  listItemsPage: async (listId, cursor) => {
-    const page = await getListItems(apiClient, listId, cursor);
+  listItemsPage: async (listId, cursor, signal) => {
+    const page = await getListItems(apiClient, listId, cursor, signal);
     return {
       // P3-35 renders the caller's link; this slice takes the item, as page one does.
       items: page.data.map((entry) => entry.item as ListItemRow),
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
     };
   },
-  listItem: async (listId, itemId) => {
+  listItem: async (listId, itemId, signal) => {
     const { getListItem } = await import('@od/shared/client');
-    return (await getListItem(apiClient, listId, itemId)) as ListItemRow;
+    return (await getListItem(apiClient, listId, itemId, signal)) as ListItemRow;
   },
-  listsPage: async (cursor) => {
-    const page = await getLists(apiClient, cursor);
+  listsPage: async (cursor, signal) => {
+    const page = await getLists(apiClient, cursor, signal);
     return {
       data: page.data as List[],
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),

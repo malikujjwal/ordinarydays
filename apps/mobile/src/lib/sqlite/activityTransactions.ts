@@ -885,6 +885,13 @@ export class ActivityTransactionService {
     const name = intent.mutationKey[1];
     const variables = variablesObject(intent.variables);
     if (name === 'create') {
+      const existing = await this.activities.read({
+        kind: 'activity',
+        activityId: intent.entityId,
+      });
+      // Response-loss recovery may already have installed the server-created entity. Keep
+      // that canonical version; the same durable create is merely being requeued for replay.
+      if (existing !== undefined) return;
       await this.create(
         transaction,
         ownerUserId,
@@ -917,9 +924,14 @@ export class ActivityTransactionService {
       return;
     }
     if (name === 'patch') {
+      const rebased = await this.outbox.rebaseActivityPatchIntent(
+        transaction.database,
+        intent.intentId,
+        detail.activity.updatedAt,
+      );
       await this.patch(
         transaction,
-        variables as unknown as ActivityPatchVariables,
+        variablesObject(rebased.variables) as unknown as ActivityPatchVariables,
         clock,
         true,
       );

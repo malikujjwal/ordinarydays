@@ -54,71 +54,117 @@ import type { OutboxIntent } from '@/lib/sqlite/outbox';
 import { field } from '@/lib/unknown';
 
 export interface ActivityPushTransport {
-  create(input: CreateActivityInput, idempotencyKey: string): Promise<unknown>;
-  duplicate(activityId: string, idempotencyKey: string): Promise<unknown>;
-  remove(activityId: string): Promise<unknown>;
-  patch(activityId: string, input: PatchActivityInput, ifMatch: string): Promise<unknown>;
+  create(
+    input: CreateActivityInput,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+  duplicate(
+    activityId: string,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+  remove(activityId: string, signal: AbortSignal): Promise<unknown>;
+  patch(
+    activityId: string,
+    input: PatchActivityInput,
+    ifMatch: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
   convertRecurrence(
     activityId: string,
     selectedDate: string,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   schedule(
     activityId: string,
     input: ScheduleActivityInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   complete(
     activityId: string,
     input: CompleteActivityInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   uncomplete(
     activityId: string,
     input: UncompleteActivityInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   skip(
     activityId: string,
     input: SkipActivityInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   snooze(
     activityId: string,
     input: SnoozeActivityInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   unsnooze(
     activityId: string,
     input: UnsnoozeActivityInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   createReminder(
     activityId: string,
     input: ReminderInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
-  deleteReminder(activityId: string, reminderId: string): Promise<unknown>;
+  deleteReminder(
+    activityId: string,
+    reminderId: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
 }
 
 export interface ListPushTransport {
-  create(input: CreateListInput, idempotencyKey: string): Promise<unknown>;
+  create(
+    input: CreateListInput,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
   createItem(
     listId: string,
     input: CreateListItemInput,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
   /** No `Idempotency-Key`: the route is not replay-protected, per §5.11.5 (P3-29). */
-  patchItem(listId: string, itemId: string, input: PatchListItemInput): Promise<unknown>;
-  removeItem(listId: string, itemId: string, idempotencyKey: string): Promise<unknown>;
+  patchItem(
+    listId: string,
+    itemId: string,
+    input: PatchListItemInput,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+  removeItem(
+    listId: string,
+    itemId: string,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
   patch(
     listId: string,
     input: PatchListInput,
     ifMatch: string,
     idempotencyKey: string,
+    signal: AbortSignal,
   ): Promise<unknown>;
-  remove(listId: string): Promise<unknown>;
-  undo(listId: string, undoToken: string, idempotencyKey: string): Promise<unknown>;
+  remove(listId: string, signal: AbortSignal): Promise<unknown>;
+  undo(
+    listId: string,
+    undoToken: string,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
 }
 
 /** A persisted payload that cannot become valid by waiting for connectivity or retrying. */
@@ -152,44 +198,47 @@ function parsePersisted<T>(
 }
 
 export const sharedActivityPushTransport: ActivityPushTransport = {
-  create: (input, idempotencyKey) => createActivity(apiClient, input, idempotencyKey),
-  duplicate: (activityId, idempotencyKey) =>
-    duplicateActivity(apiClient, activityId, idempotencyKey),
-  remove: (activityId) => deleteActivityForReplay(apiClient, activityId),
-  patch: (activityId, input, ifMatch) =>
-    patchActivityForReplay(apiClient, activityId, input, ifMatch),
-  convertRecurrence: (activityId, selectedDate, idempotencyKey) =>
-    convertRecurrence(apiClient, activityId, selectedDate, idempotencyKey),
-  schedule: (activityId, input, idempotencyKey) =>
-    scheduleActivity(apiClient, activityId, input, idempotencyKey),
-  complete: (activityId, input, idempotencyKey) =>
-    completeActivity(apiClient, activityId, input, idempotencyKey),
-  uncomplete: (activityId, input, idempotencyKey) =>
-    uncompleteActivity(apiClient, activityId, input, idempotencyKey),
-  skip: (activityId, input, idempotencyKey) =>
-    skipActivity(apiClient, activityId, input, idempotencyKey),
-  snooze: (activityId, input, idempotencyKey) =>
-    snoozeActivity(apiClient, activityId, input, idempotencyKey),
-  unsnooze: (activityId, input, idempotencyKey) =>
-    unsnoozeActivity(apiClient, activityId, input, idempotencyKey),
-  createReminder: (activityId, input, idempotencyKey) =>
-    createReminder(apiClient, activityId, input, idempotencyKey),
-  deleteReminder: (activityId, reminderId) =>
-    deleteReminderForReplay(apiClient, activityId, reminderId),
+  create: (input, idempotencyKey, signal) =>
+    createActivity(apiClient, input, idempotencyKey, signal),
+  duplicate: (activityId, idempotencyKey, signal) =>
+    duplicateActivity(apiClient, activityId, idempotencyKey, signal),
+  remove: (activityId, signal) => deleteActivityForReplay(apiClient, activityId, signal),
+  patch: (activityId, input, ifMatch, signal) =>
+    patchActivityForReplay(apiClient, activityId, input, ifMatch, signal),
+  convertRecurrence: (activityId, selectedDate, idempotencyKey, signal) =>
+    convertRecurrence(apiClient, activityId, selectedDate, idempotencyKey, signal),
+  schedule: (activityId, input, idempotencyKey, signal) =>
+    scheduleActivity(apiClient, activityId, input, idempotencyKey, signal),
+  complete: (activityId, input, idempotencyKey, signal) =>
+    completeActivity(apiClient, activityId, input, idempotencyKey, signal),
+  uncomplete: (activityId, input, idempotencyKey, signal) =>
+    uncompleteActivity(apiClient, activityId, input, idempotencyKey, signal),
+  skip: (activityId, input, idempotencyKey, signal) =>
+    skipActivity(apiClient, activityId, input, idempotencyKey, signal),
+  snooze: (activityId, input, idempotencyKey, signal) =>
+    snoozeActivity(apiClient, activityId, input, idempotencyKey, signal),
+  unsnooze: (activityId, input, idempotencyKey, signal) =>
+    unsnoozeActivity(apiClient, activityId, input, idempotencyKey, signal),
+  createReminder: (activityId, input, idempotencyKey, signal) =>
+    createReminder(apiClient, activityId, input, idempotencyKey, signal),
+  deleteReminder: (activityId, reminderId, signal) =>
+    deleteReminderForReplay(apiClient, activityId, reminderId, signal),
 };
 
 export const sharedListPushTransport: ListPushTransport = {
-  create: (input, idempotencyKey) => createList(apiClient, input, idempotencyKey),
-  createItem: (listId, input, idempotencyKey) =>
-    createListItem(apiClient, listId, input, idempotencyKey),
-  patchItem: (listId, itemId, input) => patchListItem(apiClient, listId, itemId, input),
-  removeItem: (listId, itemId, idempotencyKey) =>
-    deleteListItemForReplay(apiClient, listId, itemId, idempotencyKey),
-  patch: (listId, input, ifMatch, idempotencyKey) =>
-    patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
-  remove: (listId) => deleteListForReplay(apiClient, listId),
-  undo: (listId, undoToken, idempotencyKey) =>
-    undoListOperation(apiClient, listId, undoToken, idempotencyKey).then(
+  create: (input, idempotencyKey, signal) =>
+    createList(apiClient, input, idempotencyKey, signal),
+  createItem: (listId, input, idempotencyKey, signal) =>
+    createListItem(apiClient, listId, input, idempotencyKey, signal),
+  patchItem: (listId, itemId, input, signal) =>
+    patchListItem(apiClient, listId, itemId, input, signal),
+  removeItem: (listId, itemId, idempotencyKey, signal) =>
+    deleteListItemForReplay(apiClient, listId, itemId, idempotencyKey, signal),
+  patch: (listId, input, ifMatch, idempotencyKey, signal) =>
+    patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey, signal),
+  remove: (listId, signal) => deleteListForReplay(apiClient, listId, signal),
+  undo: (listId, undoToken, idempotencyKey, signal) =>
+    undoListOperation(apiClient, listId, undoToken, idempotencyKey, signal).then(
       (response) => response.data,
     ),
 };
@@ -217,8 +266,11 @@ export class ActivityPushAdapter {
     private readonly listTransport: ListPushTransport = sharedListPushTransport,
   ) {}
 
-  async execute(intent: OutboxIntent): Promise<unknown> {
-    if (intent.mutationKey[0] === 'list') return this.executeList(intent);
+  async execute(
+    intent: OutboxIntent,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<unknown> {
+    if (intent.mutationKey[0] === 'list') return this.executeList(intent, signal);
     if (intent.mutationKey[0] !== 'activity') {
       throw new DurableActivityIntentError(
         `Unsupported native outbox domain: ${intent.mutationKey[0] ?? ''}.`,
@@ -239,20 +291,23 @@ export class ActivityPushAdapter {
       return this.transport.create(
         parsePersisted(createActivityInput, field(value, 'input')),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     if (name === 'duplicate') {
       return this.transport.duplicate(
         activityId,
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
-    if (name === 'delete') return this.transport.remove(activityId);
+    if (name === 'delete') return this.transport.remove(activityId, signal);
     if (name === 'patch') {
       return this.transport.patch(
         activityId,
         parsePersisted(patchActivityInput, field(value, 'input')),
         requiredString(field(value, 'ifMatch'), 'ifMatch'),
+        signal,
       );
     }
     if (name === 'convert-recurrence') {
@@ -261,12 +316,14 @@ export class ActivityPushAdapter {
         activityId,
         requiredString(field(input, 'selectedDate'), 'selectedDate'),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     if (name === 'reminder-delete') {
       return this.transport.deleteReminder(
         activityId,
         requiredString(field(value, 'reminderId'), 'reminderId'),
+        signal,
       );
     }
     const idempotencyKey = requiredString(
@@ -278,6 +335,7 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(scheduleActivityInput, field(value, 'input')),
         idempotencyKey,
+        signal,
       );
     }
     if (name === 'complete') {
@@ -285,6 +343,7 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(completeActivityInput, field(value, 'input')),
         idempotencyKey,
+        signal,
       );
     }
     if (name === 'uncomplete') {
@@ -292,6 +351,7 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(uncompleteActivityInput, field(value, 'input')),
         idempotencyKey,
+        signal,
       );
     }
     if (name === 'skip') {
@@ -299,6 +359,7 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(skipActivityInput, field(value, 'input')),
         idempotencyKey,
+        signal,
       );
     }
     if (name === 'snooze') {
@@ -306,6 +367,7 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(snoozeActivityInput, field(value, 'input')),
         idempotencyKey,
+        signal,
       );
     }
     if (name === 'unsnooze') {
@@ -318,6 +380,7 @@ export class ActivityPushAdapter {
             : {}),
         }),
         idempotencyKey,
+        signal,
       );
     }
     if (name === 'reminder-create') {
@@ -325,6 +388,7 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(reminderInput, field(value, 'input')),
         idempotencyKey,
+        signal,
       );
     }
     throw new DurableActivityIntentError(
@@ -332,7 +396,7 @@ export class ActivityPushAdapter {
     );
   }
 
-  private executeList(intent: OutboxIntent): Promise<unknown> {
+  private executeList(intent: OutboxIntent, signal: AbortSignal): Promise<unknown> {
     const name = intent.mutationKey[1];
     const value = variables(intent);
     const listId = requiredString(field(value, 'listId'), 'listId');
@@ -352,6 +416,7 @@ export class ActivityPushAdapter {
         listId,
         parsePersisted(createListItemInput, field(value, 'input')),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     if (name === 'item-patch') {
@@ -366,6 +431,7 @@ export class ActivityPushAdapter {
         listId,
         itemId,
         parsePersisted(patchListItemInput, field(value, 'input')),
+        signal,
       );
     }
     if (name === listMutationKeys.itemDelete[1]) {
@@ -379,6 +445,7 @@ export class ActivityPushAdapter {
         listId,
         itemId,
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     if (name === listMutationKeys.itemUndo[1]) {
@@ -392,6 +459,7 @@ export class ActivityPushAdapter {
         listId,
         requiredString(field(field(value, 'receipt'), 'undoToken'), 'undoToken'),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     if (listId !== intent.entityId) {
@@ -408,6 +476,7 @@ export class ActivityPushAdapter {
       return this.listTransport.create(
         parsePersisted(createListInput, field(value, 'input')),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     if (name === 'patch') {
@@ -419,14 +488,16 @@ export class ActivityPushAdapter {
           field(value, 'idempotencyKey') ?? field(value, 'intentId'),
           'idempotencyKey',
         ),
+        signal,
       );
     }
-    if (name === 'delete') return this.listTransport.remove(listId);
+    if (name === 'delete') return this.listTransport.remove(listId, signal);
     if (name === 'undo') {
       return this.listTransport.undo(
         listId,
         requiredString(field(value, 'undoToken'), 'undoToken'),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
       );
     }
     throw new DurableActivityIntentError(

@@ -885,6 +885,9 @@ export class ListTransactionService {
        * The rollback removed the row this create was showing. Put it back from the durable
        * payload, at the rank the user saw it at.
        */
+      const items = this.requireItems();
+      const existing = await items.getLocal(intent.entityId, transaction.database);
+      if (existing !== undefined) return intent;
       await this.createItem(
         transaction,
         parseItemCreateVariables(variables, intent.entityId),
@@ -932,6 +935,8 @@ export class ListTransactionService {
        * — from the durable payload, which carries the seed frozen at confirmation rather than
        * whatever the shipped catalogue says now.
        */
+      const existing = await this.lists.getLocal(transaction.database, intent.entityId);
+      if (existing !== undefined) return intent;
       await this.create(
         transaction,
         ownerUserId,

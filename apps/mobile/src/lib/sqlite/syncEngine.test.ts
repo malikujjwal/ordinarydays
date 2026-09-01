@@ -56,6 +56,7 @@ function syncStub(overrides: Partial<NativeSyncEngine> = {}): NativeSyncEngine {
       throw new Error('Agenda pull is unavailable in this test.');
     }),
     pullReminderCoverage: vi.fn(async () => undefined),
+    prepareRejectedIntentRecovery: vi.fn(async () => undefined),
     recoverRejectedIntent: vi.fn(async () => false),
     stop: vi.fn(),
     ...overrides,
@@ -64,6 +65,8 @@ function syncStub(overrides: Partial<NativeSyncEngine> = {}): NativeSyncEngine {
 
 function recoveryOnly(engine: SerializedNativeSyncEngine): NativeSyncEngine {
   return syncStub({
+    prepareRejectedIntentRecovery: (intentId: string) =>
+      engine.prepareRejectedIntentRecovery(intentId),
     recoverRejectedIntent: (intentId: string) => engine.recoverRejectedIntent(intentId),
   });
 }
@@ -78,6 +81,7 @@ describe('serialized native convergence guard', () => {
   let outbox: OutboxRepository;
   let service: ActivityTransactionService;
   let client: QueryClient;
+  let subscriptions: RepositorySubscriptions;
 
   function executeDefault(name: string, variables: unknown): Promise<unknown> {
     const key = ['activity', name] as const;
@@ -214,7 +218,7 @@ describe('serialized native convergence guard', () => {
         (from_date, to_date, timezone, include_key, refreshed_at, warnings_json)
        VALUES ('2026-08-19', '2026-08-19', 'UTC', '', 'now', '[]');`,
     );
-    const subscriptions = new RepositorySubscriptions();
+    subscriptions = new RepositorySubscriptions();
     transactions = new SerializedTransactionRunner(database, subscriptions);
     activities = new ActivityRepository(database, subscriptions);
     agenda = new AgendaRepository(database, subscriptions);
@@ -1779,20 +1783,26 @@ describe('serialized native convergence guard', () => {
   });
 
   /**
-   * The 2026-08-31 freeze, locked down at the engine seam: the HTTP client bounds its own
-   * requests, but the serialized lane must not trust any injected operation to settle. A
-   * hung transport call rejects at the lane deadline as expected transport loss, the tail
-   * advances, and the next drain converges — the engine never freezes behind one promise.
+   * A transport is required to honour abort. If a broken implementation does not, every caller
+   * still receives a bounded answer, while the unresolved write retains lane ownership so later
+   * work cannot overtake a side effect whose outcome is unknown.
    */
-  it('frees the serialized lane when a transport call never settles', async () => {
+  it('bounds queued callers without overlapping a transport that never settles', async () => {
+    vi.useFakeTimers();
+    await transactions.run((transaction) =>
+      transaction.database.run('DELETE FROM agenda_coverage;'),
+    );
     const base = pushTransport();
-    let hang = true;
+    let callCount = 0;
+    const patch = vi.fn<ActivityPushTransport['patch']>(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        await new Promise<void>(() => undefined);
+      }
+    });
     const push: ActivityPushTransport = {
       ...base,
-      patch: async () => {
-        if (hang) return new Promise<never>(() => undefined);
-        return undefined;
-      },
+      patch,
     };
     await transactions.run((transaction) =>
       service.patch(transaction, {
@@ -1804,19 +1814,173 @@ describe('serialized native convergence guard', () => {
     );
     const sync = syncEngine({ push });
     sync.networkLaneDeadlineMs = 100;
+    try {
+      const firstDrain = sync.syncNow();
+      const firstResult = expect(firstDrain).rejects.toThrow(
+        'The network lane timed out.',
+      );
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(100);
+      await firstResult;
 
-    await expect(sync.syncNow()).rejects.toThrow('The network lane timed out.');
+      expect((await outbox.all())[0]).toMatchObject({
+        intentId: 'hung-edit',
+        status: 'queued',
+        attempts: 1,
+      });
 
-    expect((await outbox.all())[0]).toMatchObject({
-      intentId: 'hung-edit',
-      status: 'queued',
-      attempts: 1,
+      const nextDrain = sync.syncNow();
+      const nextResult = expect(nextDrain).rejects.toThrow('The network lane timed out.');
+      await vi.advanceTimersByTimeAsync(100);
+      await nextResult;
+      expect(patch).toHaveBeenCalledTimes(1);
+      expect((await outbox.all())[0]).toMatchObject({
+        intentId: 'hung-edit',
+        status: 'queued',
+        attempts: 2,
+      });
+    } finally {
+      sync.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a cooperative transport at the caller deadline before releasing the lane', async () => {
+    vi.useFakeTimers();
+    await transactions.run((transaction) =>
+      transaction.database.run('DELETE FROM agenda_coverage;'),
+    );
+    const detail = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (detail === undefined) throw new Error('missing cooperative lane fixture');
+    const base = pushTransport();
+    const signals: AbortSignal[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    let successorSawAbortedOwner = false;
+    const patch = vi.fn<ActivityPushTransport['patch']>(
+      async (_activityId, _input, _ifMatch, signal) => {
+        signals.push(signal);
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        if (signals.length === 1) {
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => reject(new NetworkError('The request was cancelled.', undefined)),
+              { once: true },
+            );
+          }).finally(() => {
+            active -= 1;
+          });
+          return;
+        }
+        active -= 1;
+      },
+    );
+    const pullActivity = vi.fn<ActivityPullAdapter['activity']>(async () => {
+      successorSawAbortedOwner = signals[0]?.aborted === true;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      active -= 1;
+      return detail;
     });
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'abortable-edit',
+        input: { title: 'Abort safely' },
+        ifMatch: 'v1',
+      }),
+    );
+    const sync = syncEngine({
+      push: { ...base, patch },
+      pull: { ...pullAdapter(), activity: pullActivity },
+    });
+    sync.networkLaneDeadlineMs = 100;
+    try {
+      const firstDrain = sync.syncNow();
+      const firstResult = expect(firstDrain).rejects.toThrow(
+        'The network lane timed out.',
+      );
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1);
+      const queuedSuccessor = sync.pullActivity({
+        kind: 'activity',
+        activityId: ACTIVITY,
+      });
+      const queuedSuccessorResult = expect(queuedSuccessor).rejects.toThrow(
+        CanonicalActivityInstallDeferredError,
+      );
+      expect(pullActivity).not.toHaveBeenCalled();
+      await vi.advanceTimersToNextTimerAsync();
+      await firstResult;
+      await queuedSuccessorResult;
 
-    hang = false;
-    await sync.syncNow();
-    sync.stop();
-    expect(await outbox.all()).toEqual([]);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(successorSawAbortedOwner).toBe(true);
+      const nextDrain = sync.syncNow();
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+      await nextDrain;
+      expect(maximumActive).toBe(1);
+      expect(await outbox.all()).toEqual([]);
+    } finally {
+      sync.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a late pull result and starts the successor only after settlement', async () => {
+    vi.useFakeTimers();
+    const initial = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (initial === undefined) throw new Error('missing pull lane fixture');
+    const stale = {
+      ...initial,
+      activity: { ...initial.activity, title: 'Stale response' },
+    };
+    const current = {
+      ...initial,
+      activity: {
+        ...initial.activity,
+        title: 'Current response',
+        updatedAt: '2026-08-19T02:00:00.000Z',
+      },
+    };
+    let releaseStale: ((detail: typeof stale) => void) | undefined;
+    const activity = vi.fn<ActivityPullAdapter['activity']>(async () => {
+      if (activity.mock.calls.length === 1) {
+        return new Promise<typeof stale>((resolve) => {
+          releaseStale = resolve;
+        });
+      }
+      return current;
+    });
+    const sync = syncEngine({ pull: { ...pullAdapter(), activity } });
+    sync.networkLaneDeadlineMs = 100;
+    try {
+      const firstPull = sync.pullActivity({ kind: 'activity', activityId: ACTIVITY });
+      const firstResult = expect(firstPull).rejects.toThrow(
+        'The network lane timed out.',
+      );
+      await vi.waitFor(() => expect(activity).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(100);
+      await firstResult;
+
+      const secondPull = sync.pullActivity({ kind: 'activity', activityId: ACTIVITY });
+      expect(activity).toHaveBeenCalledTimes(1);
+      releaseStale?.(stale);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(activity).toHaveBeenCalledTimes(2);
+      await expect(secondPull).resolves.toMatchObject({
+        activity: { title: 'Current response' },
+      });
+      expect(
+        (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
+          .title,
+      ).toBe('Current response');
+    } finally {
+      sync.stop();
+      vi.useRealTimers();
+    }
   });
 
   /**
@@ -1859,11 +2023,345 @@ describe('serialized native convergence guard', () => {
       status: 'needs_attention',
       attempts: 3,
       attention: { kind: 'parked', reason: 'retry_exhausted' },
+      lastError: "This change couldn't finish syncing. Retry it or discard it.",
     });
     // Parked, not rolled back: the local optimistic edit is still what the user sees.
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
     ).toBe('Poisoned');
+  });
+
+  it('persists a same-failure streak across engine restarts', async () => {
+    const base = pushTransport();
+    const push: ActivityPushTransport = {
+      ...base,
+      patch: async () => {
+        throw new Error('Stable local settlement invariant.');
+      },
+    };
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'restart-poisoned-edit',
+        input: { title: 'Restart poison' },
+        ifMatch: 'v1',
+      }),
+    );
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const sync = syncEngine({ push });
+      await expect(sync.syncNow()).rejects.toThrow('Stable local settlement invariant.');
+      sync.stop();
+      expect((await outbox.all())[0]).toMatchObject({
+        status: attempt === 3 ? 'needs_attention' : 'queued',
+      });
+    }
+  });
+
+  it('resets the durable streak when the local failure fingerprint changes', async () => {
+    const base = pushTransport();
+    const failures = [
+      'First local settlement invariant.',
+      'First local settlement invariant.',
+      'Different local decoder invariant.',
+      'First local settlement invariant.',
+      'First local settlement invariant.',
+      'First local settlement invariant.',
+    ];
+    const push: ActivityPushTransport = {
+      ...base,
+      patch: async () => {
+        throw new Error(failures.shift() ?? 'unexpected extra claim');
+      },
+    };
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'changing-poisoned-edit',
+        input: { title: 'Changing poison' },
+        ifMatch: 'v1',
+      }),
+    );
+    const sync = syncEngine({ push });
+
+    await expect(sync.syncNow()).rejects.toThrow('First local settlement invariant.');
+    await expect(sync.syncNow()).rejects.toThrow('First local settlement invariant.');
+    await expect(sync.syncNow()).rejects.toThrow('Different local decoder invariant.');
+    expect((await outbox.all())[0]).toMatchObject({ status: 'queued' });
+
+    await expect(sync.syncNow()).rejects.toThrow('First local settlement invariant.');
+    await expect(sync.syncNow()).rejects.toThrow('First local settlement invariant.');
+    await expect(sync.syncNow()).rejects.toThrow('First local settlement invariant.');
+    sync.stop();
+    expect((await outbox.all())[0]).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'parked', reason: 'retry_exhausted' },
+    });
+  });
+
+  it('recovers server truth before discarding a retry-exhausted Activity patch', async () => {
+    const initial = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (initial === undefined) throw new Error('missing canonical Activity fixture');
+    const canonical = {
+      ...initial,
+      activity: {
+        ...initial.activity,
+        title: 'Canonical v2',
+        updatedAt: '2026-08-19T02:00:00.000Z',
+      },
+    };
+    const base = pushTransport();
+    const push: ActivityPushTransport = {
+      ...base,
+      patch: async () => {
+        throw new Error('Local settlement failed after the server response.');
+      },
+    };
+    const sync = syncEngine({
+      push,
+      pull: { ...pullAdapter(), activity: async () => canonical },
+      targeted: {
+        load: async () => ({
+          activityId: ACTIVITY,
+          activityVersion: canonical.activity.updatedAt,
+          rows: [],
+        }),
+      },
+    });
+    await transactions.run(async (transaction) => {
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'discard-poisoned-edit',
+        input: { title: 'Optimistic title' },
+        ifMatch: 'v1',
+      });
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'later-discard-edit',
+        input: { notes: 'Later local note survives' },
+        ifMatch: 'v1',
+      });
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(sync.syncNow()).rejects.toThrow('Local settlement failed');
+    }
+    await transactions.run(async (transaction) => {
+      await outbox.needsAttention(
+        transaction.database,
+        'later-discard-edit',
+        { kind: 'parked', reason: 'replay_age_expired' },
+        'This later edit also needs attention.',
+      );
+      transaction.changed('outbox');
+    });
+
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoveryOnly(sync),
+    );
+    const invalidated = vi.fn();
+    const unsubscribe = activities.subscribe(ACTIVITY, invalidated);
+    await expect(
+      coordinator.discardBlocked('discard-poisoned-edit', clock),
+    ).resolves.toBe(true);
+    unsubscribe();
+    sync.stop();
+
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(await outbox.all()).toMatchObject([
+      {
+        intentId: 'later-discard-edit',
+        status: 'needs_attention',
+        attention: { kind: 'parked', reason: 'replay_age_expired' },
+        variables: expect.objectContaining({ ifMatch: canonical.activity.updatedAt }),
+      },
+    ]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity,
+    ).toMatchObject({
+      title: 'Canonical v2',
+      notes: 'Later local note survives',
+    });
+  });
+
+  it('retries a response-loss Activity under its original identity and replays later edits', async () => {
+    if (database === undefined) throw new Error('missing Activity Retry database');
+    const initial = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (initial === undefined) throw new Error('missing Activity Retry fixture');
+    const canonicalV2 = {
+      ...initial,
+      activity: {
+        ...initial.activity,
+        title: 'Canonical v2',
+        updatedAt: '2026-08-19T02:00:00.000Z',
+      },
+    };
+    const observedIfMatch: string[] = [];
+    let failures = 3;
+    const push: ActivityPushTransport = {
+      ...pushTransport(),
+      patch: async (_activityId, input, ifMatch) => {
+        observedIfMatch.push(ifMatch);
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('Local settlement failed after the server response.');
+        }
+        const version =
+          observedIfMatch.length === 4
+            ? '2026-08-19T03:00:00.000Z'
+            : '2026-08-19T04:00:00.000Z';
+        return { ...canonicalV2.activity, ...input, updatedAt: version } as Activity;
+      },
+    };
+    const sync = syncEngine({
+      push,
+      pull: { ...pullAdapter(), activity: async () => canonicalV2 },
+      targeted: {
+        load: async () => ({
+          activityId: ACTIVITY,
+          activityVersion: canonicalV2.activity.updatedAt,
+          rows: [],
+        }),
+      },
+    });
+    await transactions.run(async (transaction) => {
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'retry-poisoned-edit',
+        input: { title: 'Retried title' },
+        ifMatch: 'v1',
+      });
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'later-retry-edit',
+        input: { notes: 'Later local note survives' },
+        ifMatch: 'v1',
+      });
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(sync.syncNow()).rejects.toThrow('Local settlement failed');
+    }
+    await transactions.run((transaction) =>
+      transaction.database.run(
+        'UPDATE outbox_intents SET created_at = 1 WHERE intent_id = ?;',
+        ['retry-poisoned-edit'],
+      ),
+    );
+
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoveryOnly(sync),
+    );
+    const invalidated = vi.fn();
+    const unsubscribe = activities.subscribe(ACTIVITY, invalidated);
+    const retried = await coordinator.retryBlocked(
+      'retry-poisoned-edit',
+      'must-not-replace-response-loss-identity',
+      clock,
+    );
+    unsubscribe();
+
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(retried).toMatchObject({
+      kind: 'accepted',
+      intent: {
+        intentId: 'retry-poisoned-edit',
+        variables: expect.objectContaining({
+          intentId: 'retry-poisoned-edit',
+          ifMatch: canonicalV2.activity.updatedAt,
+        }),
+      },
+    });
+    expect(
+      (await outbox.get(database, 'retry-poisoned-edit'))?.createdAt,
+    ).toBeGreaterThan(1);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity,
+    ).toMatchObject({
+      title: 'Retried title',
+      notes: 'Later local note survives',
+    });
+
+    await sync.syncNow();
+    sync.stop();
+    expect(observedIfMatch).toEqual([
+      'v1',
+      'v1',
+      'v1',
+      canonicalV2.activity.updatedAt,
+      '2026-08-19T03:00:00.000Z',
+    ]);
+    expect(await outbox.all()).toEqual([]);
+  });
+
+  it('discards later Activity writes when recovery proves their created target absent', async () => {
+    const createIntentId = 'discard-absent-activity';
+    const sync = syncEngine({
+      push: {
+        ...pushTransport(),
+        create: async () => {
+          throw new Error('Activity create settlement failed after the server response.');
+        },
+      },
+      pull: {
+        ...pullAdapter(),
+        activity: async (target) => {
+          if (target.activityId === OTHER) {
+            throw new ApiError('not_found', "This isn't here any more.", 404, 'req-404');
+          }
+          const detail = await activities.read(target);
+          if (detail === undefined) throw new Error('missing test activity');
+          return detail;
+        },
+      },
+    });
+    await transactions.run(async (transaction) => {
+      await service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: OTHER,
+            objectKind: 'task',
+            type: 'task',
+            title: 'Never landed',
+          },
+          idempotencyKey: createIntentId,
+        },
+        clock,
+        '2026-08-19T01:00:00.000Z',
+      );
+      await service.patch(transaction, {
+        activityId: OTHER,
+        intentId: 'later-absent-activity-edit',
+        input: { notes: 'Has no remote target' },
+        ifMatch: '2026-08-19T01:00:00.000Z',
+      });
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(sync.syncNow()).rejects.toThrow('Activity create settlement failed');
+    }
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoveryOnly(sync),
+    );
+
+    await expect(coordinator.discardBlocked(createIntentId, clock)).resolves.toBe(true);
+    sync.stop();
+
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await activities.read({ kind: 'activity', activityId: OTHER }),
+    ).toBeUndefined();
   });
 
   /**
@@ -2277,7 +2775,7 @@ describe('serialized native convergence guard', () => {
     await recoverySync.syncNow();
     recoverySync.stop();
 
-    expect(detailRead).toHaveBeenCalledWith(target);
+    expect(detailRead).toHaveBeenCalledWith(target, expect.anything());
     expect(targetedRead).toHaveBeenCalledTimes(1);
     expect(await outbox.all()).toEqual([]);
     expect(
@@ -2378,15 +2876,20 @@ describe('serialized native convergence guard', () => {
     );
     rejectingSync.stop();
 
-    expect(detailRead).toHaveBeenNthCalledWith(1, {
-      kind: 'occurrence',
-      activityId: ACTIVITY,
-      date: '2026-08-19',
-    });
-    expect(detailRead).toHaveBeenNthCalledWith(2, {
-      kind: 'activity',
-      activityId: ACTIVITY,
-    });
+    expect(detailRead).toHaveBeenNthCalledWith(
+      1,
+      {
+        kind: 'occurrence',
+        activityId: ACTIVITY,
+        date: '2026-08-19',
+      },
+      expect.anything(),
+    );
+    expect(detailRead).toHaveBeenNthCalledWith(
+      2,
+      { kind: 'activity', activityId: ACTIVITY },
+      expect.anything(),
+    );
     const rejected = (await outbox.all())[0];
     expect(rejected).toMatchObject({
       intentId: 'immediate-occurrence-404',
@@ -2507,10 +3010,10 @@ describe('serialized native convergence guard', () => {
     await recoverySync.syncNow();
     recoverySync.stop();
 
-    expect(detailRead).toHaveBeenCalledWith({
-      kind: 'activity',
-      activityId: ACTIVITY,
-    });
+    expect(detailRead).toHaveBeenCalledWith(
+      { kind: 'activity', activityId: ACTIVITY },
+      expect.anything(),
+    );
     expect(await outbox.all()).toEqual([]);
     for (const table of [
       'activities',
@@ -2634,15 +3137,20 @@ describe('serialized native convergence guard', () => {
     await recoverySync.syncNow();
     recoverySync.stop();
 
-    expect(detailRead).toHaveBeenNthCalledWith(1, {
-      kind: 'occurrence',
-      activityId: ACTIVITY,
-      date: '2026-08-19',
-    });
-    expect(detailRead).toHaveBeenNthCalledWith(2, {
-      kind: 'activity',
-      activityId: ACTIVITY,
-    });
+    expect(detailRead).toHaveBeenNthCalledWith(
+      1,
+      {
+        kind: 'occurrence',
+        activityId: ACTIVITY,
+        date: '2026-08-19',
+      },
+      expect.anything(),
+    );
+    expect(detailRead).toHaveBeenNthCalledWith(
+      2,
+      { kind: 'activity', activityId: ACTIVITY },
+      expect.anything(),
+    );
     expect(targetedRead).toHaveBeenCalledTimes(1);
     expect(await outbox.all()).toEqual([]);
     expect(
@@ -2802,7 +3310,10 @@ describe('serialized native convergence guard', () => {
     sync.stop();
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(detail).toHaveBeenCalledWith({ kind: 'activity', activityId: OTHER });
+    expect(detail).toHaveBeenCalledWith(
+      { kind: 'activity', activityId: OTHER },
+      expect.anything(),
+    );
     expect(
       (await outbox.all()).find((intent) => intent.intentId === 'lost-create'),
     ).toBeUndefined();
@@ -3377,12 +3888,15 @@ describe('serialized native convergence guard', () => {
     sync.stop();
     /* The follow-up pass refreshes the known window and includes the newly queued one. */
     expect(agendaPull).toHaveBeenCalledTimes(3);
-    expect(agendaPull).toHaveBeenLastCalledWith({
-      from: '2026-08-20',
-      to: '2026-08-20',
-      tz: 'UTC',
-      include: 'anytime_unscheduled,overdue',
-    });
+    expect(agendaPull).toHaveBeenLastCalledWith(
+      {
+        from: '2026-08-20',
+        to: '2026-08-20',
+        tz: 'UTC',
+        include: 'anytime_unscheduled,overdue',
+      },
+      expect.anything(),
+    );
   });
 
   it('does not repeat coverage already present in the active pull snapshot', async () => {
@@ -3862,6 +4376,8 @@ describe('serialized native convergence guard', () => {
     );
     const sync = {
       request: vi.fn(),
+      prepareRejectedIntentRecovery: (intentId: string) =>
+        recoveryEngine.prepareRejectedIntentRecovery(intentId),
       recoverRejectedIntent: (intentId: string) =>
         recoveryEngine.recoverRejectedIntent(intentId),
     } as unknown as SerializedNativeSyncEngine;
@@ -3967,6 +4483,7 @@ describe('serialized native convergence guard', () => {
       { archived: true },
       list.updatedAt,
       'expired-archive-retry',
+      expect.anything(),
     );
     expect(await lists.read()).toEqual([acknowledged]);
     expect(await outbox.all()).toEqual([]);
@@ -4061,6 +4578,7 @@ describe('serialized native convergence guard', () => {
       { itemStateMode: acknowledged.itemStateMode },
       list.updatedAt,
       'upgrade-intent',
+      expect.anything(),
     );
     expect(await lists.read()).toEqual([acknowledged]);
     expect(await outbox.all()).toEqual([]);
@@ -4164,6 +4682,7 @@ describe('serialized native convergence guard', () => {
       archived.listId,
       'server-undo-token',
       'accepted-list-undo',
+      expect.anything(),
     );
     expect(listsPage).toHaveBeenCalledTimes(1);
     expect(await lists.read()).toEqual([restored]);
@@ -4219,14 +4738,20 @@ describe('serialized native convergence guard', () => {
     });
 
     function listHarness(currentDatabase: SqliteDatabase) {
-      const lists = new ListsRepository(currentDatabase, new RepositorySubscriptions());
-      return { lists, listService: new ListTransactionService(outbox, lists) };
+      const lists = new ListsRepository(currentDatabase, subscriptions);
+      const items = new ListItemsRepository(currentDatabase, subscriptions);
+      return {
+        lists,
+        items,
+        listService: new ListTransactionService(outbox, lists, items),
+      };
     }
 
     function engine(
       lists: ListsRepository,
       listPush: ListPushTransport,
       pull: Partial<ActivityPullAdapter> = {},
+      items?: ListItemsRepository,
     ) {
       return new SerializedNativeSyncEngine(
         transactions,
@@ -4239,6 +4764,7 @@ describe('serialized native convergence guard', () => {
         anytime,
         lists,
         listPush,
+        items,
       );
     }
 
@@ -4283,7 +4809,11 @@ describe('serialized native convergence guard', () => {
       await sync.syncNow();
       sync.stop();
 
-      expect(create).toHaveBeenCalledWith(CREATE.input, 'create-costco-run');
+      expect(create).toHaveBeenCalledWith(
+        CREATE.input,
+        'create-costco-run',
+        expect.anything(),
+      );
       expect(await lists.read()).toEqual([canonical()]);
       expect(await outbox.all()).toEqual([]);
     });
@@ -4316,11 +4846,205 @@ describe('serialized native convergence guard', () => {
       await sync.syncNow();
       sync.stop();
 
-      expect(create.mock.calls).toEqual([
+      expect(create.mock.calls.map((call) => call.slice(0, 2))).toEqual([
         [CREATE.input, 'create-costco-run'],
         [CREATE.input, 'create-costco-run'],
       ]);
       expect(await lists.read()).toEqual([canonical()]);
+    });
+
+    it('retries a response-loss List under its original identity and replays a later rename', async () => {
+      if (database === undefined) throw new Error('missing List response-loss database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const optimistic = (await lists.read())[0];
+      if (optimistic === undefined) throw new Error('missing optimistic List');
+      await transactions.run((transaction) =>
+        listService.patchSettings(
+          transaction,
+          optimistic,
+          { title: 'Weekly shop' },
+          'later-list-rename',
+        ),
+      );
+      let failures = 3;
+      const create = vi.fn(async () => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('List settlement failed after the server response.');
+        }
+        return canonical();
+      });
+      const sync = engine(lists, listPushTransport(create), {
+        listsPage: async () => ({ data: [canonical()] }),
+      });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(sync.syncNow()).rejects.toThrow('List settlement failed');
+      }
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        listService,
+      );
+
+      const invalidated = vi.fn();
+      const unsubscribe = lists.subscribe(invalidated);
+      const retried = await coordinator.retryBlocked(
+        CREATE.intentId,
+        'must-not-replace-list-response-loss-identity',
+        clock,
+      );
+      unsubscribe();
+      sync.stop();
+
+      expect(invalidated).toHaveBeenCalledTimes(1);
+      expect(retried).toMatchObject({
+        kind: 'accepted',
+        intent: {
+          intentId: CREATE.intentId,
+          variables: expect.objectContaining({
+            intentId: CREATE.intentId,
+            idempotencyKey: CREATE.idempotencyKey,
+          }),
+        },
+      });
+      expect(await outbox.all()).toMatchObject([
+        { intentId: CREATE.intentId, status: 'queued' },
+        {
+          intentId: 'later-list-rename',
+          status: 'queued',
+          variables: expect.objectContaining({ ifMatch: canonical().updatedAt }),
+        },
+      ]);
+      expect((await lists.read())[0]?.title).toBe('Weekly shop');
+    });
+
+    it('discards a response-loss List while preserving a later rename', async () => {
+      if (database === undefined) throw new Error('missing List Discard database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const optimistic = (await lists.read())[0];
+      if (optimistic === undefined) throw new Error('missing optimistic List');
+      await transactions.run((transaction) =>
+        listService.patchSettings(
+          transaction,
+          optimistic,
+          { title: 'Weekly shop' },
+          'later-list-discard-rename',
+        ),
+      );
+      const sync = engine(
+        lists,
+        listPushTransport(async () => {
+          throw new Error('List settlement failed after the server response.');
+        }),
+        { listsPage: async () => ({ data: [canonical()] }) },
+      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(sync.syncNow()).rejects.toThrow('List settlement failed');
+      }
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        listService,
+      );
+
+      await expect(coordinator.discardBlocked(CREATE.intentId, clock)).resolves.toBe(
+        true,
+      );
+      sync.stop();
+
+      expect(await outbox.all()).toMatchObject([
+        {
+          intentId: 'later-list-discard-rename',
+          status: 'queued',
+          variables: expect.objectContaining({ ifMatch: canonical().updatedAt }),
+        },
+      ]);
+      expect((await lists.read())[0]?.title).toBe('Weekly shop');
+    });
+
+    it('discards later List writes when recovery proves their created target absent', async () => {
+      if (database === undefined) throw new Error('missing absent List database');
+      const { lists, items, listService } = listHarness(database);
+      await transactions.run(async (transaction) => {
+        await listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        );
+        const optimistic = (await lists.read())[0];
+        if (optimistic === undefined) throw new Error('missing absent List fixture');
+        await listService.patchSettings(
+          transaction,
+          optimistic,
+          { title: 'Rename without a target' },
+          'later-absent-list-rename',
+        );
+        await listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: 'itm_01J0000000000000000000000H',
+          intentId: 'later-absent-list-item',
+          idempotencyKey: 'later-absent-list-item',
+          input: {
+            itemId: 'itm_01J0000000000000000000000H',
+            title: 'Milk without a List',
+          },
+          rank: 'zzz',
+        });
+      });
+      const sync = engine(
+        lists,
+        listPushTransport(async () => {
+          throw new Error('List create settlement failed after the server response.');
+        }),
+        { listsPage: async () => ({ data: [] }) },
+        items,
+      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(sync.syncNow()).rejects.toThrow('List create settlement failed');
+      }
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        listService,
+      );
+
+      await expect(coordinator.discardBlocked(CREATE.intentId, clock)).resolves.toBe(
+        true,
+      );
+      sync.stop();
+
+      expect(await outbox.all()).toEqual([]);
+      expect(await lists.read()).toEqual([]);
+      expect(await items.read(LIST_ID)).toEqual([]);
     });
 
     /**
@@ -4351,7 +5075,7 @@ describe('serialized native convergence guard', () => {
       await sync.syncNow();
       sync.stop();
 
-      expect(list).toHaveBeenCalledWith(LIST_ID);
+      expect(list).toHaveBeenCalledWith(LIST_ID, expect.anything());
       expect(await lists.read()).toEqual([canonical()]);
       expect(await outbox.all()).toEqual([]);
     });
@@ -4691,6 +5415,7 @@ describe('serialized native convergence guard', () => {
         LIST_ID,
         { itemId: ITEM_ID, title: 'Milk' },
         'create-milk',
+        expect.anything(),
       );
       expect(await items.read(LIST_ID)).toEqual([canonical]);
       expect(await outbox.all()).toEqual([]);
@@ -4721,9 +5446,209 @@ describe('serialized native convergence guard', () => {
       await sync.syncNow();
       sync.stop();
 
-      expect(createItem.mock.calls).toEqual([
+      expect(createItem.mock.calls.map((call) => call.slice(0, 3))).toEqual([
         [LIST_ID, { itemId: ITEM_ID, title: 'Milk' }, 'create-milk'],
         [LIST_ID, { itemId: ITEM_ID, title: 'Milk' }, 'create-milk'],
+      ]);
+    });
+
+    it('retries a response-loss item under its original identity and replays a later edit', async () => {
+      if (database === undefined) throw new Error('missing item response-loss database');
+      const built = itemHarness(database);
+      await transactions.run(async (transaction) => {
+        await built.listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'response-loss-milk',
+          idempotencyKey: 'response-loss-milk',
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        });
+        await built.listService.patchItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'later-item-edit',
+          idempotencyKey: 'later-item-edit',
+          input: { title: 'Oat milk' },
+        });
+      });
+      const canonical = row(ITEM_ID, 'm', 'Milk');
+      let failures = 3;
+      const sync = itemEngine(
+        built.lists,
+        built.items,
+        { listItem: async () => canonical },
+        {
+          createItem: async () => {
+            if (failures > 0) {
+              failures -= 1;
+              throw new Error('Item settlement failed after the server response.');
+            }
+            return canonical;
+          },
+        },
+      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(sync.syncNow()).rejects.toThrow('Item settlement failed');
+      }
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        built.listService,
+      );
+
+      const retried = await coordinator.retryBlocked(
+        'response-loss-milk',
+        'must-not-replace-item-response-loss-identity',
+        clock,
+      );
+      sync.stop();
+
+      expect(retried).toMatchObject({
+        kind: 'accepted',
+        intent: {
+          intentId: 'response-loss-milk',
+          variables: expect.objectContaining({
+            intentId: 'response-loss-milk',
+            idempotencyKey: 'response-loss-milk',
+          }),
+        },
+      });
+      expect(await outbox.all()).toMatchObject([
+        { intentId: 'response-loss-milk', status: 'queued' },
+        { intentId: 'later-item-edit', status: 'queued' },
+      ]);
+      expect((await built.items.read(LIST_ID))[0]?.title).toBe('Oat milk');
+    });
+
+    it('discards a response-loss item while preserving a later edit', async () => {
+      if (database === undefined) throw new Error('missing item Discard database');
+      const built = itemHarness(database);
+      await transactions.run(async (transaction) => {
+        await built.listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'discard-response-loss-milk',
+          idempotencyKey: 'discard-response-loss-milk',
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        });
+        await built.listService.patchItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'later-item-discard-edit',
+          idempotencyKey: 'later-item-discard-edit',
+          input: { title: 'Oat milk' },
+        });
+      });
+      const canonical = row(ITEM_ID, 'm', 'Milk');
+      const sync = itemEngine(
+        built.lists,
+        built.items,
+        { listItem: async () => canonical },
+        {
+          createItem: async () => {
+            throw new Error('Item settlement failed after the server response.');
+          },
+        },
+      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(sync.syncNow()).rejects.toThrow('Item settlement failed');
+      }
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        built.listService,
+      );
+
+      await expect(
+        coordinator.discardBlocked('discard-response-loss-milk', clock),
+      ).resolves.toBe(true);
+      sync.stop();
+
+      expect(await outbox.all()).toMatchObject([
+        { intentId: 'later-item-discard-edit', status: 'queued' },
+      ]);
+      expect((await built.items.read(LIST_ID))[0]?.title).toBe('Oat milk');
+    });
+
+    it('discards later item writes when recovery proves their created target absent', async () => {
+      if (database === undefined) throw new Error('missing absent item database');
+      const built = itemHarness(database);
+      const rootIntentId = 'discard-absent-milk';
+      const siblingItemId = 'itm_01J000000000000000000000AB';
+      await transactions.run(async (transaction) => {
+        await built.listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: rootIntentId,
+          idempotencyKey: rootIntentId,
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        });
+        await built.listService.patchItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'later-absent-item-edit',
+          idempotencyKey: 'later-absent-item-edit',
+          input: { title: 'Oat milk' },
+        });
+        await built.listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: siblingItemId,
+          intentId: 'keep-sibling-bread',
+          idempotencyKey: 'keep-sibling-bread',
+          input: { itemId: siblingItemId, title: 'Bread' },
+          rank: 'zzzz',
+        });
+      });
+      const sync = itemEngine(
+        built.lists,
+        built.items,
+        {
+          listItem: async () => {
+            throw new ApiError('not_found', "This isn't here any more.", 404, 'req-404');
+          },
+        },
+        {
+          createItem: async () => {
+            throw new Error('Item create settlement failed after the server response.');
+          },
+        },
+      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(sync.syncNow()).rejects.toThrow('Item create settlement failed');
+      }
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        built.listService,
+      );
+
+      await expect(coordinator.discardBlocked(rootIntentId, clock)).resolves.toBe(true);
+      sync.stop();
+
+      expect(await outbox.all()).toMatchObject([
+        {
+          intentId: 'keep-sibling-bread',
+          entityId: siblingItemId,
+          status: 'queued',
+        },
+      ]);
+      expect(await built.items.read(LIST_ID)).toEqual([
+        expect.objectContaining({ itemId: siblingItemId, title: 'Bread' }),
       ]);
     });
 
@@ -4826,7 +5751,7 @@ describe('serialized native convergence guard', () => {
       await sync.syncNow();
       sync.stop();
 
-      expect(listItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID);
+      expect(listItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID, expect.anything());
       expect(await items.read(LIST_ID)).toEqual([canonical]);
       expect(await outbox.all()).toEqual([]);
     });
@@ -4883,7 +5808,12 @@ describe('serialized native convergence guard', () => {
         await sync.syncNow();
         sync.stop();
 
-        expect(patchItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID, { title: 'Oat milk' });
+        expect(patchItem).toHaveBeenCalledWith(
+          LIST_ID,
+          ITEM_ID,
+          { title: 'Oat milk' },
+          expect.anything(),
+        );
         expect(await items.read(LIST_ID)).toEqual([canonical]);
         expect(await outbox.all()).toEqual([]);
       });
@@ -4953,7 +5883,7 @@ describe('serialized native convergence guard', () => {
         await expect(sync.syncNow()).rejects.toThrow('No.');
         sync.stop();
 
-        expect(listItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID);
+        expect(listItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID, expect.anything());
         expect(await items.read(LIST_ID)).toEqual([canonical]);
         expect(await outbox.get(database, 'patch-milk')).toMatchObject({
           status: 'needs_attention',
@@ -5257,7 +6187,12 @@ describe('serialized native convergence guard', () => {
         sync.stop();
 
         expect(patchItem).toHaveBeenCalledTimes(1);
-        expect(removeItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID, 'delete-milk');
+        expect(removeItem).toHaveBeenCalledWith(
+          LIST_ID,
+          ITEM_ID,
+          'delete-milk',
+          expect.anything(),
+        );
         expect(await built.items.read(LIST_ID)).toEqual([]);
         expect(await outbox.all()).toEqual([]);
       });

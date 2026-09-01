@@ -1,6 +1,10 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { ActivityOutcome } from '@od/shared/types';
-import { changesRecurrenceTopology, isListMutation } from '@/lib/mutationKeys';
+import {
+  changesRecurrenceTopology,
+  isListItemProjectionMutation,
+  isListMutation,
+} from '@/lib/mutationKeys';
 import type {
   ActivityCompletionVariables,
   ActivityCreateVariables,
@@ -292,16 +296,23 @@ export class NativeActivityActionCoordinator {
       const blocked = await this.transactions.run((transaction) =>
         this.outbox.get(transaction.database, intentId),
       );
-      if (
+      const requiresRecovery =
         blocked?.status === 'needs_attention' &&
-        blocked.mutationKey[0] === 'list' &&
         !isAmbiguousCollision(blocked) &&
-        !(await this.sync.recoverRejectedIntent(intentId))
-      ) {
-        throw new Error("Couldn't refresh the latest List before retrying.");
+        (blocked.mutationKey[0] === 'list' ||
+          blocked.recoveryRequired === true ||
+          isRetryExhausted(blocked));
+      const recovery = requiresRecovery
+        ? await this.sync.prepareRejectedIntentRecovery(intentId)
+        : undefined;
+      if (requiresRecovery && recovery === undefined) {
+        throw new Error("Couldn't refresh the latest saved state before retrying.");
       }
       const { value: intent, commitRevision } = await this.transactions.runCommitted(
         async (transaction) => {
+          if (recovery !== undefined && !(await recovery.install(transaction))) {
+            throw new Error("Couldn't refresh the latest saved state before retrying.");
+          }
           const current = await this.outbox.get(transaction.database, intentId);
           if (
             current?.status === 'queued' &&
@@ -398,11 +409,14 @@ export class NativeActivityActionCoordinator {
             transaction.changed('outbox');
             return retried;
           }
-          const retried = await this.outbox.retryAttention(
-            transaction.database,
-            intentId,
-            freshIntentId,
-          );
+          const responseLoss = current !== undefined && isRetryExhausted(current);
+          const retried = responseLoss
+            ? await this.outbox.retryResponseLoss(transaction.database, intentId)
+            : await this.outbox.retryAttention(
+                transaction.database,
+                intentId,
+                freshIntentId,
+              );
           if (retried === undefined || retried.status !== 'queued') {
             throw new Error('This change is no longer waiting for recovery.');
           }
@@ -410,43 +424,38 @@ export class NativeActivityActionCoordinator {
             if (this.listService === undefined) {
               throw new Error('Native List retry state is not ready.');
             }
-            await this.outbox.reidentifyListArchiveUndoOffer(
-              transaction.database,
-              intentId,
-              freshIntentId,
-            );
-            if (isListMutation(retried, 'itemUndo')) {
-              await this.outbox.reidentifyListItemUndoIntent(
+            if (!responseLoss) {
+              await this.outbox.reidentifyListArchiveUndoOffer(
                 transaction.database,
                 intentId,
                 freshIntentId,
               );
-            } else {
-              await this.outbox.reidentifyListItemDeleteUndoOffer(
-                transaction.database,
-                intentId,
-                freshIntentId,
-              );
+              if (isListMutation(retried, 'itemUndo')) {
+                await this.outbox.reidentifyListItemUndoIntent(
+                  transaction.database,
+                  intentId,
+                  freshIntentId,
+                );
+              } else {
+                await this.outbox.reidentifyListItemDeleteUndoOffer(
+                  transaction.database,
+                  intentId,
+                  freshIntentId,
+                );
+              }
             }
-            const projected = await this.listService.reprojectRetry(
-              transaction,
-              this.ownerUserId,
-              retried,
-            );
+            const projected = await this.reprojectIntent(transaction, retried, clock);
+            await this.reprojectLaterIntents(transaction, retried, clock);
             transaction.changed('outbox');
             transaction.changed('anytime');
             return projected;
           } else {
-            await this.service.reprojectRetry(
-              transaction,
-              this.ownerUserId,
-              retried,
-              clock,
-            );
+            const projected = await this.reprojectIntent(transaction, retried, clock);
+            await this.reprojectLaterIntents(transaction, retried, clock);
+            transaction.changed('outbox');
+            transaction.changed('anytime');
+            return projected;
           }
-          transaction.changed('outbox');
-          transaction.changed('anytime');
-          return retried;
         },
         'interactive',
       );
@@ -473,10 +482,18 @@ export class NativeActivityActionCoordinator {
       // Idempotent completion also clears a presentation snapshot that lost a race with SQLite.
       return true;
     }
-    if (recovery?.mutationKey[0] === 'list' || recovery?.recoveryRequired === true) {
-      if (!(await this.sync.recoverRejectedIntent(intentId))) return false;
-    }
+    const requiresRecovery =
+      recovery?.mutationKey[0] === 'list' ||
+      recovery?.recoveryRequired === true ||
+      (recovery !== undefined && isRetryExhausted(recovery));
+    const prepared = requiresRecovery
+      ? await this.sync.prepareRejectedIntentRecovery(intentId)
+      : undefined;
+    if (requiresRecovery && prepared === undefined) return false;
     const discarded = await this.transactions.run(async (transaction) => {
+      if (prepared !== undefined && !(await prepared.install(transaction))) {
+        return false;
+      }
       const intent = await this.outbox.get(transaction.database, intentId);
       if (
         intent?.status === 'queued' &&
@@ -505,14 +522,22 @@ export class NativeActivityActionCoordinator {
       if (!(await this.outbox.discardAttention(transaction.database, intentId))) {
         return false;
       }
+      if (prepared?.targetState === 'absent') {
+        await this.discardLaterForAbsentTarget(transaction, intent);
+        transaction.changed('outbox');
+        transaction.changed('anytime');
+        return true;
+      }
       if (intent.mutationKey[0] === 'list') {
+        await this.reprojectLaterIntents(transaction, intent, clock);
         transaction.changed('outbox');
         return true;
       }
       if (
-        intent.mutationKey[1] === 'create' ||
-        (intent.attention?.kind === 'parked' &&
-          intent.attention.reason !== 'predecessor_rejected')
+        !isRetryExhausted(intent) &&
+        (intent.mutationKey[1] === 'create' ||
+          (intent.attention?.kind === 'parked' &&
+            intent.attention.reason !== 'predecessor_rejected'))
       ) {
         await transaction.database.run(
           'DELETE FROM activity_reminders WHERE activity_id = ?;',
@@ -532,12 +557,93 @@ export class NativeActivityActionCoordinator {
         transaction.changed('agenda');
         transaction.changed('reminders');
       }
+      await this.reprojectLaterIntents(transaction, intent, clock);
       transaction.changed('outbox');
       transaction.changed('anytime');
       return true;
     }, 'interactive');
     if (discarded) this.sync.request('manual');
     return discarded;
+  }
+
+  /** Re-applies one unresolved durable projection without changing its queue identity. */
+  private async reprojectIntent(
+    transaction: TransactionContext,
+    intent: OutboxIntent,
+    clock: ProjectionClock,
+  ): Promise<OutboxIntent> {
+    if (intent.mutationKey[0] === 'list') {
+      if (this.listService === undefined) {
+        throw new Error('Native List retry state is not ready.');
+      }
+      return this.listService.reprojectRetry(transaction, this.ownerUserId, intent);
+    }
+    await this.service.reprojectRetry(transaction, this.ownerUserId, intent, clock);
+    return (await this.outbox.get(transaction.database, intent.intentId)) ?? intent;
+  }
+
+  /**
+   * Canonical recovery intentionally overwrites one ordering domain. Restore every surviving
+   * later projection in FIFO order before the user action commits, and release writes that
+   * were parked only because this predecessor needed a decision.
+   */
+  private async reprojectLaterIntents(
+    transaction: TransactionContext,
+    predecessor: OutboxIntent,
+    clock: ProjectionClock,
+  ): Promise<void> {
+    const later = await this.outbox.laterInOrdering(
+      transaction.database,
+      predecessor.orderingKey,
+      predecessor.seq,
+    );
+    for (const candidate of later) {
+      let current = await this.outbox.get(transaction.database, candidate.intentId);
+      if (
+        current?.status === 'needs_attention' &&
+        current.attention?.kind === 'parked' &&
+        current.attention.reason === 'predecessor_rejected'
+      ) {
+        current = await this.outbox.resumePredecessorBlocked(
+          transaction.database,
+          current.intentId,
+        );
+      }
+      if (current === undefined) continue;
+      await this.reprojectIntent(transaction, current, clock);
+    }
+  }
+
+  /**
+   * Later writes against a target proven absent have no truthful projection or remote target.
+   * Discarding the root therefore retires the same-entity FIFO suffix atomically; keeping it
+   * queued would create an orphan retry loop, while replaying it would redraw data the server
+   * has authoritatively said does not exist.
+   */
+  private async discardLaterForAbsentTarget(
+    transaction: TransactionContext,
+    predecessor: OutboxIntent,
+  ): Promise<void> {
+    /*
+     * A List item is one target inside a List-wide FIFO domain, so an absent item retires only
+     * that item's successors. An absent List root proves the aggregate itself is gone: every
+     * later item and settings write in the same ordering suffix is then orphaned work.
+     */
+    const discardWholeOrderingSuffix =
+      predecessor.mutationKey[0] === 'list' && !isListItemProjectionMutation(predecessor);
+    const later = await this.outbox.laterInOrdering(
+      transaction.database,
+      predecessor.orderingKey,
+      predecessor.seq,
+    );
+    for (const candidate of later) {
+      if (!discardWholeOrderingSuffix && candidate.entityId !== predecessor.entityId) {
+        continue;
+      }
+      if (!(await this.outbox.discardUnsent(transaction.database, candidate.intentId))) {
+        throw new Error('Later work became active during absent-target recovery.');
+      }
+    }
   }
 
   private async accept(
@@ -630,5 +736,11 @@ function isAmbiguousCollision(intent: OutboxIntent): boolean {
     (intent.mutationKey[1] === 'create' || intent.mutationKey[1] === 'item-create') &&
     intent.attention?.kind === 'parked' &&
     intent.attention.reason === 'ambiguous_collision'
+  );
+}
+
+function isRetryExhausted(intent: OutboxIntent): boolean {
+  return (
+    intent.attention?.kind === 'parked' && intent.attention.reason === 'retry_exhausted'
   );
 }

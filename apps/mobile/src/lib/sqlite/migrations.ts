@@ -1122,6 +1122,20 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ON list_item_delete_undo_offers (list_id, created_at);
       `),
   },
+  {
+    version: 16,
+    name: 'durable-outbox-local-failure-streak',
+    /**
+     * A poison intent must make the same bounded decision after process restart. The
+     * fingerprint is diagnostic state only; user-facing error copy remains in `last_error`.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE outbox_intents ADD COLUMN local_failure_fingerprint TEXT;
+        ALTER TABLE outbox_intents ADD COLUMN local_failure_count INTEGER NOT NULL DEFAULT 0
+          CHECK (local_failure_count >= 0);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {
