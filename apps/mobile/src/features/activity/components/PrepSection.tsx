@@ -1,10 +1,10 @@
 import type { ActivityChild } from '@od/shared/types';
 import { Checkbox, Text, Touchable, useTheme } from '@od/ui';
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { ActionRow } from '@/features/activity/components/ActionRow';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
-import { peekRows, prepProgress } from '@/features/activity/model/planSections';
+import { prepProgress } from '@/features/activity/model/planSections';
 
 /**
  * The PREP section (P3-37/P3-38): 1–3 rows in full, 4+ peek at three with `Show all n`
@@ -17,7 +17,7 @@ export interface PrepSectionProps {
   prepTasks: readonly ActivityChild[];
   onOpenChild: (activityId: string) => void;
   /** The completion write; absent renders the checkbox disabled. */
-  onToggleChild?: (child: ActivityChild, completed: boolean) => void;
+  onToggleChild?: (child: ActivityChild, completed: boolean) => Promise<boolean>;
   /** P3-38's `+ Add prep task`; absent renders no affordance. */
   onAddPrepTask?: () => void;
 }
@@ -30,7 +30,53 @@ export function PrepSection({
 }: PrepSectionProps) {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
-  const { shown, showAllCount } = peekRows(prepTasks, expanded);
+  const [completionOverrides, setCompletionOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(new Map());
+  useEffect(() => {
+    setCompletionOverrides((current) => {
+      const next = new Map(current);
+      for (const child of prepTasks) {
+        const projected = current.get(child.activityId);
+        if (projected === (child.status === 'completed')) next.delete(child.activityId);
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, [prepTasks]);
+  const projectedTasks = useMemo(
+    () =>
+      prepTasks.map((child) => {
+        const completed = completionOverrides.get(child.activityId);
+        if (completed === undefined) return child;
+        return {
+          ...child,
+          status: completed ? ('completed' as const) : ('scheduled' as const),
+        };
+      }),
+    [completionOverrides, prepTasks],
+  );
+  const shown = expanded
+    ? projectedTasks
+    : projectedTasks.filter((child) => child.status !== 'completed').slice(0, 3);
+  const showAllCount =
+    !expanded && shown.length < projectedTasks.length ? projectedTasks.length : undefined;
+  const toggle = useCallback(
+    async (child: ActivityChild, completed: boolean) => {
+      if (onToggleChild === undefined) return;
+      setCompletionOverrides((current) =>
+        new Map(current).set(child.activityId, completed),
+      );
+      const accepted = await onToggleChild(child, completed);
+      if (!accepted) {
+        setCompletionOverrides((current) => {
+          const next = new Map(current);
+          next.delete(child.activityId);
+          return next;
+        });
+      }
+    },
+    [onToggleChild],
+  );
 
   return (
     <SectionFrame
@@ -56,7 +102,7 @@ export function PrepSection({
             {...(onToggleChild === undefined
               ? {}
               : {
-                  onChange: (next: boolean) => onToggleChild(child, next),
+                  onChange: (next: boolean) => void toggle(child, next),
                 })}
           />
           <Touchable

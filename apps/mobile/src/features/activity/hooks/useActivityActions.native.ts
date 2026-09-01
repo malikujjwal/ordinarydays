@@ -1,7 +1,7 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
-import type { Activity, ActivityOutcome } from '@od/shared/types';
+import type { Activity, ActivityChild, ActivityOutcome } from '@od/shared/types';
 import { type ActivityScope, scopeToWire } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useRef, useState } from 'react';
@@ -24,6 +24,7 @@ export interface ActivityActions {
     scope: ActivityScope,
     onProjected?: (resolved: boolean) => void,
   ) => void;
+  setChildCompletion: (child: ActivityChild, completed: boolean) => Promise<boolean>;
   isBusy: boolean;
   isCompleting: boolean;
   isUndoing: boolean;
@@ -209,6 +210,30 @@ export function useActivityActions(activityId: string): ActivityActions {
         setUndoing(false);
         if (resultOk(result)) onProjected?.(false);
       });
+    },
+    setChildCompletion: async (child, completed) => {
+      if (child.isRecurring) {
+        setError('Open the task to choose which repeating occurrence to complete.');
+        return false;
+      }
+      const detail = await state.activities.read({
+        kind: 'activity',
+        activityId: child.activityId,
+      });
+      if (detail === undefined) return false;
+      const restoredStatus =
+        detail.activity.schedule?.date === undefined ? 'saved' : 'scheduled';
+      const result = await accepted(() =>
+        state.coordinator.complete(
+          child.activityId,
+          randomUUID(),
+          completed ? { outcome: 'done' } : {},
+          completed,
+          restoredStatus,
+          projectionClock(),
+        ),
+      );
+      return result !== undefined && resultOk(result);
     },
     isBusy: busy || completing || undoing,
     isCompleting: completing,

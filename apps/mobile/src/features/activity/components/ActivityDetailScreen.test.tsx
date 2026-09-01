@@ -4,6 +4,7 @@ import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
@@ -253,6 +254,32 @@ describe('reading', () => {
     expect(screen.getByTestId('detail-loading')).toBeDefined();
     expect(screen.queryByLabelText('Title')).toBeNull();
     expect(screen.queryByTestId('detail-complete')).toBeNull();
+  });
+
+  it('opens the stored address in platform Maps', async () => {
+    const opened = vi.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('when-where-location'));
+
+    expect(opened).toHaveBeenCalledWith(
+      'https://www.google.com/maps/search/?api=1&query=237%20St%20James%20Place',
+    );
+  });
+
+  it('names caller-owned reminders explicitly on a shared plan', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ visibility: 'shared' }), [
+        reminder('rem_01J0000000000000000000000C', -15),
+      ]),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByText('Your reminders')).toBeDefined();
   });
 
   it('issues exactly one GET for the screen', async () => {
@@ -2740,11 +2767,18 @@ describe('the Plan detail anatomy (P3-37)', () => {
     schemaVersion: 1 as const,
   });
 
-  function mountAnatomy(extras: Partial<ActivityDetail>, activity = plan()) {
-    stubFetch({
-      status: 200,
-      body: detailBody(activity, [], undefined, undefined, undefined, extras),
-    });
+  function mountAnatomy(
+    extras: Partial<ActivityDetail>,
+    activity = plan(),
+    writes: Array<{ status: number; body: unknown }> = [],
+  ) {
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(activity, [], undefined, undefined, undefined, extras),
+      },
+      ...writes,
+    );
     const onOpenList = vi.fn();
     const onOpenChild = vi.fn();
     const queryClient = new QueryClient({
@@ -2796,14 +2830,75 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.getByText('2 days ago')).toBeDefined();
   });
 
-  it('renders a 1–3 row section in full with no Show all', async () => {
+  it('previews incomplete Prep rows and reveals completed rows through Show all', async () => {
     mountAnatomy({ children: [child(1), child(2, 'completed'), child(3)] });
     await screen.findByTestId('section-prep');
     expect(screen.getByText('1 of 3')).toBeDefined();
-    for (const title of ['Prep 1', 'Prep 2', 'Prep 3']) {
-      expect(screen.getByText(title)).toBeDefined();
-    }
-    expect(screen.queryByTestId('prep-show-all')).toBeNull();
+    expect(screen.getByText('Prep 1')).toBeDefined();
+    expect(screen.getByText('Prep 3')).toBeDefined();
+    expect(screen.queryByText('Prep 2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('prep-show-all'));
+    expect(screen.getByText('Prep 2')).toBeDefined();
+  });
+
+  it('completes and uncompletes a Prep task from its checkbox', async () => {
+    const prep = child(1);
+    const completed = task({
+      activityId: prep.activityId,
+      parentActivityId: ID,
+      title: prep.title,
+      status: 'completed',
+      outcome: 'done',
+    });
+    const restored = task({
+      activityId: prep.activityId,
+      parentActivityId: ID,
+      title: prep.title,
+      status: 'scheduled',
+    });
+    mountAnatomy({ children: [prep] }, plan(), [
+      {
+        status: 200,
+        body: {
+          data: { activity: completed, outcome: 'done' },
+          meta: { requestId: 'req_child_completion' },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          data: { activity: restored },
+          meta: { requestId: 'req_child_uncompletion' },
+        },
+      },
+    ]);
+    await screen.findByTestId('section-prep');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Prep 1, not completed' }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toMatchObject({
+      url: expect.stringMatching(
+        new RegExp(`/v1/activities/${prep.activityId}/complete$`),
+      ),
+      method: 'POST',
+      body: { outcome: 'done' },
+    });
+    // Completed Prep rows leave the default incomplete-only preview.
+    expect(screen.queryByText('Prep 1')).toBeNull();
+    fireEvent.click(screen.getByTestId('prep-show-all'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Prep 1, completed' }));
+
+    await waitFor(() => expect(sent).toHaveLength(3));
+    expect(sent[2]).toMatchObject({
+      url: expect.stringMatching(
+        new RegExp(`/v1/activities/${prep.activityId}/uncomplete$`),
+      ),
+      method: 'POST',
+      body: {},
+    });
+    expect(screen.getByRole('checkbox', { name: 'Prep 1, not completed' })).toBeDefined();
   });
 
   it('peeks a 4+ section at three rows and expands through Show all n', async () => {

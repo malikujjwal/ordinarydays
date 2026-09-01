@@ -1,7 +1,12 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
 import { ApiError } from '@od/shared/client';
 import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/schemas';
-import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
+import type {
+  Activity,
+  ActivityChild,
+  ActivityDetail,
+  ActivityOutcome,
+} from '@od/shared/types';
 import { type ActivityScope, scopeToWire, targetsWholeSeries } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
@@ -72,6 +77,8 @@ export interface ActivityActions {
     scope: ActivityScope,
     onProjected?: (resolved: boolean) => void,
   ) => void;
+  /** Complete or uncomplete one non-recurring Prep task from its parent's section. */
+  setChildCompletion: (child: ActivityChild, completed: boolean) => Promise<boolean>;
   isBusy: boolean;
   /** The two halves stay separate so an optimistic Complete never disables its own Undo. */
   isCompleting: boolean;
@@ -170,13 +177,26 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
   });
 
+  const childCompleteMutation = useMutation<
+    ActivityCompletionResult,
+    Error,
+    CompleteActivityVariables
+  >({ mutationKey: activityMutationKeys.complete });
+  const childUncompleteMutation = useMutation<
+    ActivityCompletionResult,
+    Error,
+    UncompleteActivityVariables
+  >({ mutationKey: activityMutationKeys.uncomplete });
+
   const failure =
     duplicateMutation.error ??
     deleteMutation.error ??
     completeMutation.error ??
     skipMutation.error ??
     snoozeMutation.error ??
-    uncompleteMutation.error;
+    uncompleteMutation.error ??
+    childCompleteMutation.error ??
+    childUncompleteMutation.error;
 
   return {
     duplicate: async () => {
@@ -400,13 +420,45 @@ export function useActivityActions(activityId: string): ActivityActions {
           onProjected?.(true);
         });
     },
+    setChildCompletion: async (child, completed) => {
+      if (child.isRecurring) return false;
+      try {
+        const result = completed
+          ? await childCompleteMutation.mutateAsync({
+              activityId: child.activityId,
+              input: { outcome: 'done' },
+              idempotencyKey: randomUUID(),
+            })
+          : await childUncompleteMutation.mutateAsync({
+              activityId: child.activityId,
+              input: {},
+              idempotencyKey: randomUUID(),
+            });
+        queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) => {
+          if (previous?.children === undefined) return previous;
+          return {
+            ...previous,
+            children: previous.children.map((entry) =>
+              entry.activityId === child.activityId
+                ? { ...entry, status: result.activity.status }
+                : entry,
+            ),
+          };
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     isBusy:
       duplicateMutation.isPending ||
       deleteMutation.isPending ||
       completeMutation.isPending ||
       skipMutation.isPending ||
       snoozeMutation.isPending ||
-      uncompleteMutation.isPending,
+      uncompleteMutation.isPending ||
+      childCompleteMutation.isPending ||
+      childUncompleteMutation.isPending,
     isCompleting: completeMutation.isPending,
     isUndoing: uncompleteMutation.isPending,
     errorMessage:
@@ -418,6 +470,8 @@ export function useActivityActions(activityId: string): ActivityActions {
       skipMutation.reset();
       snoozeMutation.reset();
       uncompleteMutation.reset();
+      childCompleteMutation.reset();
+      childUncompleteMutation.reset();
     },
   };
 }

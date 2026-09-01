@@ -4,6 +4,7 @@ import type { PatchActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type {
   Activity,
+  ActivityChild,
   ActivityDetailTarget,
   ActivityOutcome,
   PlanType,
@@ -74,6 +75,7 @@ import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
 import { useClock } from '@/hooks/useClock';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { cancelPendingCreate, usePendingCreate } from '@/hooks/usePendingIntents';
+import { openInMaps } from '@/lib/openInMaps';
 import {
   completionVerb,
   isNegativeOutcome,
@@ -557,6 +559,7 @@ export function ActivityDetailScreen({
           detail={detail}
           today={today}
           onOpenChild={onOpenChild ?? onOpenActivity}
+          onToggleChild={actions.setChildCompletion}
           {...(onOpenList === undefined ? {} : { onOpenList })}
           {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
           {...(onAddList === undefined ? {} : { onAddList })}
@@ -916,6 +919,8 @@ interface LoadedProps {
   today: WallDate;
   /** Opens a prep child's own detail (P3-37); the child is an ordinary Activity. */
   onOpenChild: (activityId: string) => void;
+  /** Complete or uncomplete one Prep task through the platform action owner. */
+  onToggleChild: (child: ActivityChild, completed: boolean) => Promise<boolean>;
   /** Opens one of this Plan's Lists (P3-37, P3-39). Absent leaves the rows plain. */
   onOpenList?: (listId: string) => void;
   /** `+ Add prep task` (P3-38); absent leaves the chip and the affordance out. */
@@ -993,6 +998,7 @@ function Loaded({
   detail,
   today,
   onOpenChild,
+  onToggleChild,
   onOpenList,
   onAddPrepTask,
   onAddList,
@@ -1180,7 +1186,11 @@ function Loaded({
                 })}
           today={today}
           onPressDate={pending ? undefined : onOpenReschedule}
-          onPressAddress={undefined}
+          onPressAddress={
+            activity.location === undefined
+              ? undefined
+              : () => void openInMaps(activity.location)
+          }
         />
 
         {/**
@@ -1370,7 +1380,11 @@ function Loaded({
             return (
               <SettingRow
                 key={section.key}
-                label="Reminder"
+                label={
+                  activity.objectKind === 'plan' && activity.visibility === 'shared'
+                    ? 'Your reminders'
+                    : 'Reminder'
+                }
                 value={
                   /**
                    * A reminder on a pending activity states its **true** armed state (§5.4).
@@ -1487,6 +1501,7 @@ function Loaded({
         <PrepSection
           prepTasks={children}
           onOpenChild={onOpenChild}
+          {...(pending ? {} : { onToggleChild })}
           {...(onAddPrepTask === undefined || pending ? {} : { onAddPrepTask })}
         />
       ) : null}
