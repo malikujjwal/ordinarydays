@@ -26,6 +26,7 @@ import {
   Text,
   useTheme,
 } from '@od/ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -69,7 +70,6 @@ import {
 import {
   addToPlanChips,
   relativeUpdateTime,
-  updatesSectionVisible,
 } from '@/features/activity/model/planSections';
 import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
@@ -83,6 +83,7 @@ import {
 } from '@/lib/passedPlanResolution';
 import type { PendingActivity } from '@/lib/pendingActivity';
 import { planKindLabel } from '@/lib/planKinds';
+import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 
 /**
  * The Activity detail screen (P1-26).
@@ -1023,6 +1024,8 @@ function Loaded({
   onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
+  /** The viewer's zone, for stamping update instants onto the viewer's own calendar days. */
+  const timezone = resolveViewerTimezone(useQueryClient());
   /**
    * The reconciled §2.1 rule (P3-37): sections exist only once they hold something, so the
    * section list is a function of the loaded content. A pending or offline read carries no
@@ -1050,18 +1053,9 @@ function Loaded({
   const chips = addToPlanChips({
     children,
     sourceLists,
-    updatesVisible: updatesSectionVisible(activity.visibility, updateCount),
-    /**
-     * The Update chip is structurally unreachable under §2.2: whenever the section is
-     * visible it carries its own `+ Write an update`, and when it is hidden (private, no
-     * entries) the deliberate consequence is no entry point at all. The mock draws an
-     * Update chip on a private plan — recorded as a divergence rather than followed,
-     * because P3-40's spec states the §2.2 consequence outright.
-     */
     wired: {
       prepTask: onAddPrepTask !== undefined,
       list: onAddList !== undefined,
-      update: false,
     },
   });
 
@@ -1488,7 +1482,7 @@ function Loaded({
         <UpdatesSection
           updates={feed.updates}
           pending={feed.pending}
-          relativeTime={(createdAt) => relativeUpdateTime(createdAt, today)}
+          relativeTime={(createdAt) => relativeUpdateTime(createdAt, today, timezone)}
           {...(pending
             ? {}
             : { onPost: feed.post, onDelete: (u) => void feed.remove(u) })}

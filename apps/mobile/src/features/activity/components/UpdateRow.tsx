@@ -1,7 +1,7 @@
 import type { ActivityUpdate } from '@od/shared/types';
 import { Text, Touchable, useTheme } from '@od/ui';
-import { View } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
 
 /**
  * One Updates entry on **native** (P3-40).
@@ -22,44 +22,28 @@ export interface UpdateRowProps {
 const ACTION_WIDTH = 88;
 
 function Body({ update, relativeTime, onDelete }: UpdateRowProps) {
-  const theme = useTheme();
   return (
-    <View
-      // The swipe's non-gesture path: assistive tech reaches Delete as a custom action.
+    <UpdateRowBody
+      body={update.body}
+      trailing={relativeTime}
+      muted={update.kind === 'system'}
+      testID={`update-${update.updateId}`}
       {...(onDelete === undefined
         ? {}
         : {
-            accessibilityActions: [{ name: 'delete', label: 'Delete update' }],
-            onAccessibilityAction: ({
-              nativeEvent,
-            }: {
-              nativeEvent: { actionName: string };
-            }) => {
-              if (nativeEvent.actionName === 'delete') onDelete();
+            // The swipe's non-gesture path: assistive tech reaches Delete as a custom action.
+            containerProps: {
+              accessibilityActions: [{ name: 'delete', label: 'Delete update' }],
+              onAccessibilityAction: ({
+                nativeEvent,
+              }: {
+                nativeEvent: { actionName: string };
+              }) => {
+                if (nativeEvent.actionName === 'delete') onDelete();
+              },
             },
           })}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'baseline',
-        justifyContent: 'space-between',
-        gap: theme.space[3],
-        paddingVertical: theme.space[1],
-      }}
-      testID={`update-${update.updateId}`}
-    >
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text
-          variant="body"
-          color={update.kind === 'system' ? 'textSecondary' : 'textPrimary'}
-          numberOfLines={2}
-        >
-          {update.body}
-        </Text>
-      </View>
-      <Text variant="footnote" color="textMuted">
-        {relativeTime}
-      </Text>
-    </View>
+    />
   );
 }
 

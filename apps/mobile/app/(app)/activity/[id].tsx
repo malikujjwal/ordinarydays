@@ -1,11 +1,9 @@
 import type { ActivityDetailTarget } from '@od/shared/types';
-import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
-import { activityKey } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -26,7 +24,6 @@ export default function ActivityDetailRoute() {
   }>();
   const router = useRouter();
   const openPrepTask = useComposeDraft((s) => s.openPrepTask);
-  const queryClient = useQueryClient();
   // `Add list` (P3-39): the sheet is composed here because features may not import each
   // other — the route is the point where the activity feature meets the lists feature.
   const [listSource, setListSource] = useState<{
@@ -70,15 +67,12 @@ export default function ActivityDetailRoute() {
         }}
         onAddList={(planTitle) => setListSource({ activityId, planTitle })}
       />
+      {/* The parent detail's refresh rides the process-wide MutationCache seam
+          (`refreshActivityDetails` on the sourced `['list','create']`), not this route. */}
       <NewListSheet
         open={listSource !== undefined}
         {...(listSource === undefined ? {} : { source: listSource })}
         onClose={() => setListSource(undefined)}
-        // The LISTS section is projected from the `SOURCE_LIST#` row the create wrote; the
-        // detail read is strongly consistent, so refetching immediately shows the new list.
-        onCreated={() => {
-          void queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
-        }}
       />
     </>
   );

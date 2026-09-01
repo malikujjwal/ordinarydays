@@ -104,10 +104,14 @@ function fromRow(row: SqliteRow): ListItemRow {
   /*
    * The pair degrades to absence rather than failing the row: a list has to open even when a
    * stale viewer projection cannot be read, and the line's own eligibility rules already
-   * treat absence as "no line".
+   * treat absence as "no line". The `undefined` guard is the hot path — most rows carry no
+   * pair, and validating `undefined` just to fail allocates two ZodErrors per row read.
    */
-  const link = listItemActivityLink.safeParse(json(row, 'viewer_link_json'));
-  const plan = listItemPlanState.safeParse(json(row, 'viewer_plan_json'));
+  const linkJson = json(row, 'viewer_link_json');
+  const planJson = json(row, 'viewer_plan_json');
+  if (linkJson === undefined || planJson === undefined) return item;
+  const link = listItemActivityLink.safeParse(linkJson);
+  const plan = listItemPlanState.safeParse(planJson);
   if (!link.success || !plan.success) return item;
   return {
     ...item,
@@ -158,8 +162,16 @@ function assertBelongsToList(items: readonly ListItemRow[], listId: string): voi
  * would clear a line the server still holds. On a fresh insert the row's own optional pair is
  * written (a page install's rows carry it); on conflict the stored pair stands until
  * {@link ListItemsRepository.setViewerPair} carries authoritative page or settlement truth.
+ *
+ * `pairAuthority` is the page-merge exception: a page entry carries the caller's **current**
+ * pair, absence included, so its conflict arm installs that truth in the same statement — one
+ * write per item instead of an upsert-then-update pair on the sync hot path.
  */
-async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promise<void> {
+async function writeItemRow(
+  database: SqliteExecutor,
+  item: ListItemRow,
+  pairAuthority = false,
+): Promise<void> {
   await database.run(
     `INSERT INTO list_items (
       item_id, list_id, rank, title, note, state, features_json,
@@ -170,7 +182,11 @@ async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promis
       note=excluded.note, state=excluded.state,
       features_json=excluded.features_json,
       source_activity_id=excluded.source_activity_id,
-      source_label=excluded.source_label;`,
+      source_label=excluded.source_label${
+        pairAuthority
+          ? ', viewer_link_json=excluded.viewer_link_json, viewer_plan_json=excluded.viewer_plan_json'
+          : ''
+      };`,
     [
       item.itemId,
       item.listId,
@@ -181,8 +197,10 @@ async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promis
       item.features === undefined ? null : JSON.stringify(item.features),
       item.sourceActivityId ?? null,
       item.sourceLabel ?? null,
-      item.viewerLink === undefined ? null : JSON.stringify(item.viewerLink),
-      item.viewerPlan === undefined ? null : JSON.stringify(item.viewerPlan),
+      // Pointer and state travel together or not at all (§3): a half-pair stores as absence.
+      ...(item.viewerLink === undefined || item.viewerPlan === undefined
+        ? [null, null]
+        : [JSON.stringify(item.viewerLink), JSON.stringify(item.viewerPlan)]),
     ],
   );
 }
@@ -411,19 +429,11 @@ export class ListItemsRepository {
     assertBelongsToList(items, listId);
     for (const item of items) {
       if (!protectedItemIds.has(item.itemId)) {
-        await writeItemRow(transaction.database, item);
         /*
          * A page's entries carry the caller's **current** pair, absence included, so a merge
-         * over an existing row must also install that truth — the upsert above deliberately
-         * preserves it (P3-35).
+         * over an existing row installs that truth in the same upsert (P3-35).
          */
-        await writeViewerPair(
-          transaction.database,
-          item.itemId,
-          item.viewerLink === undefined || item.viewerPlan === undefined
-            ? undefined
-            : { viewerLink: item.viewerLink, viewerPlan: item.viewerPlan },
-        );
+        await writeItemRow(transaction.database, item, true);
       }
     }
     await this.writePageState(transaction.database, listId, page);

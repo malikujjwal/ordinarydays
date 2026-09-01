@@ -111,14 +111,15 @@ test('global Add creates a List and contextual Add creates its List item', async
   await expectNoSeriousA11yViolations(page, '/lists/:id (empty)');
 
   await page.getByRole('button', { name: 'Add item' }).click();
+  // The shipped Lists UI (P3-33, founder-accepted divergence): an inline add row whose
+  // accessible name fixes the destination — no chooser, no separate composer screen.
   await expect(testId(page, 'list-contextual-add')).toBeVisible();
   await expect(testId(page, 'list-detail')).toBeAttached();
   await expect(testId(page, 'list-destination-chooser')).toHaveCount(0);
-  const field = page.getByLabel('Title');
+  const field = page.getByLabel(`Add item to ${groceries}`);
   await expect(field).toBeVisible();
   await field.fill(title);
-  await page.getByLabel('Note').fill('Buy two');
-  await page.getByRole('button', { name: `Add to ${groceries}` }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
 
   // The words land in the fixed contextual destination.
   await expect(page.getByText(title)).toBeVisible();

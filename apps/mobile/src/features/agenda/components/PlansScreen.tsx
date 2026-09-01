@@ -80,7 +80,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
   const timezone = resolveViewerTimezone(queryClient);
   const today = toWallDate(tick.instant, timezone);
   const currentMinute = toWallTime(tick.instant, timezone);
-  const plans = usePlans(timezone);
+  const plans = usePlans(timezone, today);
   const actions = useAgendaActivityActions({ today, currentMinute, timezone });
   /**
    * Upcoming is where the tab lands: it answers "what is next", the question the tab is
@@ -97,14 +97,31 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
         ? []
         : upcomingSectionsFromStore(
             plans.store,
-            plans.upcomingWindow.from,
+            /**
+             * Clamped to the caller's ticking `today`, not the window the server answered
+             * with: `from` is frozen at fetch time, so a tab left mounted across midnight
+             * would otherwise keep yesterday in Upcoming while Past (which filters on
+             * `today`) claimed the same day.
+             */
+            plans.upcomingWindow.from >= today ? plans.upcomingWindow.from : today,
             plans.upcomingWindow.through,
           ),
-    [plans.store, plans.upcomingWindow],
+    [plans.store, plans.upcomingWindow, today],
   );
+  /** Projected only while its stage shows — Past can hold months of paged history. */
   const pastSections = useMemo(
-    () => pastSectionsFromStore(plans.store, today),
+    () => (stage === 'past' ? pastSectionsFromStore(plans.store, today) : undefined),
+    [stage, plans.store, today],
+  );
+  /** Whether any past content exists, cheap enough to know without projecting the stage. */
+  const hasPastRows = useMemo(
+    () => [...plans.store.byDate].some(([date, rows]) => date < today && rows.length > 0),
     [plans.store, today],
+  );
+  /** A stable section identity — the screen re-renders every ticker minute. */
+  const needsDateSections = useMemo(
+    () => [{ data: [...plans.needsDate] }],
+    [plans.needsDate],
   );
 
   const upcomingEmpty =
@@ -113,7 +130,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
     plans.status === 'success' &&
     plans.needsDate.length === 0 &&
     upcomingEmpty &&
-    pastSections.length === 0 &&
+    !hasPastRows &&
     plans.pastCursor === undefined;
 
   /**
@@ -127,16 +144,22 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
     plans.status === 'success' &&
     upcomingSections.length === 0 &&
     plans.upcomingWindow?.nextFrom != null &&
-    !plans.isLoadingMoreUpcoming;
+    !plans.isLoadingMoreUpcoming &&
+    // A failed window request must not re-arm the advance, or a 500ing API turns this
+    // effect into an unbounded retry loop; the failure banner's refresh is the retry.
+    plans.message === undefined;
   const { loadMoreUpcoming } = plans;
   useEffect(() => {
     if (shouldAdvance) loadMoreUpcoming();
   }, [shouldAdvance, loadMoreUpcoming]);
 
-  const toggleComplete = (item: AgendaItem, checked: boolean) => {
-    plans.applyCompletion(item, checked);
-    actions.toggleComplete(item, checked);
-  };
+  /**
+   * The Plans store's own projection now rides the mutation cache (`usePlans` subscribes to
+   * complete/uncomplete lifecycles), so this passes straight through — which is also what
+   * makes rollback and Undo reach the row, and what keeps a guard-refused tick from
+   * projecting anything.
+   */
+  const toggleComplete = actions.toggleComplete;
 
   const refresh = (
     <RefreshControl refreshing={plans.isRefreshing} onRefresh={plans.refetch} />
@@ -208,7 +231,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
       return (
         <SectionList<NeedsDateRowData>
           testID="plans-needs-date-list"
-          sections={[{ data: [...plans.needsDate] }]}
+          sections={needsDateSections}
           keyExtractor={(item) => item.activityId}
           refreshControl={refresh}
           renderItem={({ item }) => (
@@ -263,7 +286,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
       );
     }
 
-    if (pastSections.length === 0) {
+    if (pastSections === undefined || pastSections.length === 0) {
       return (
         <View testID="plans-past-empty">
           <EmptyState
@@ -332,6 +355,40 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
             }}
             testID="plans-stage-switcher"
           />
+          {/**
+           * A refresh or pagination failure after a successful load (§5.3): the stages keep
+           * showing what they hold, and the failure is said out loud instead of a spinner
+           * that ends in silence. Cleared by the next successful load.
+           */}
+          {plans.message === undefined ? null : (
+            <View
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
+              testID="plans-stale-error"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: theme.space[3],
+              }}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text variant="footnote" color="danger">
+                  {plans.message}
+                </Text>
+              </View>
+              <Touchable
+                accessibilityRole="button"
+                accessibilityLabel="Try again"
+                onPress={plans.refetch}
+                testID="plans-stale-retry"
+              >
+                <Text variant="footnoteStrong" color="textAction">
+                  Try again
+                </Text>
+              </Touchable>
+            </View>
+          )}
           <View style={{ flex: 1 }}>{stageBody()}</View>
         </View>
       )}

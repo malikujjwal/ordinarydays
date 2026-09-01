@@ -59,8 +59,13 @@ export interface ItemSheetProps {
    * Opens the `Plan this item` flow (P3-34): the unselected Plan-kind chooser, then the
    * required audience step, then the form. The action closes this sheet first — the flow is a
    * modal route, and a sheet left open underneath would receive the Back gesture.
+   *
+   * It hands up the sheet's **current** title and note: `close()` flushes the debounced
+   * saves asynchronously, so the caller's own `item` may still hold the pre-edit values for
+   * a render — and the bridge must copy what the user is looking at, not what the store last
+   * settled.
    */
-  onPlanItem?: () => void;
+  onPlanItem?: (draft: { title: string; note?: string }) => void;
   testID?: string;
 }
 
@@ -696,7 +701,12 @@ export function ItemSheet({
             opens
             onPress={() => {
               close();
-              onPlanItem();
+              const draftTitle = title.trim();
+              const draftNote = note.trim();
+              onPlanItem({
+                title: draftTitle === '' ? item.title : draftTitle,
+                ...(draftNote === '' ? {} : { note: draftNote }),
+              });
             }}
             testID="item-sheet-plan"
           />

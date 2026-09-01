@@ -110,7 +110,9 @@ test('Watch is an explicit choice, the audience is a required tap, and S2 E5 is 
   await expect(page.getByRole('textbox', { name: 'Movie or show' })).toHaveValue(
     `Severance ${stamp}`,
   );
-  const episode = page.getByRole('textbox', { name: 'Episode' });
+  // `exact` — `name` matches by substring by default, and the Watch form also carries an
+  // `Episode title` field.
+  const episode = page.getByRole('textbox', { name: 'Episode', exact: true });
   await expect(episode).toHaveValue('5');
   await episode.fill('6');
 

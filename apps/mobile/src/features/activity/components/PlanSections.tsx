@@ -18,6 +18,7 @@ import {
 import { useState } from 'react';
 import { View } from 'react-native';
 import { UpdateRow } from '@/features/activity/components/UpdateRow';
+import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
 import type { PendingUpdate } from '@/features/activity/hooks/useActivityUpdates';
 import {
   peekRows,
@@ -77,6 +78,37 @@ function SectionFrame({
   );
 }
 
+/** One left-aligned action-text row — the section affordances share a single tap target. */
+function ActionRow({
+  label,
+  accessibilityLabel,
+  onPress,
+  testID,
+  disabled = false,
+}: {
+  label: string;
+  accessibilityLabel: string;
+  onPress: () => void;
+  testID?: string;
+  disabled?: boolean;
+}) {
+  const theme = useTheme();
+  return (
+    <Touchable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      disabled={disabled}
+      style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
+      {...(testID === undefined ? {} : { testID })}
+    >
+      <Text variant="body" color="textAction">
+        {label}
+      </Text>
+    </Touchable>
+  );
+}
+
 function ShowAllRow({
   count,
   onPress,
@@ -86,17 +118,13 @@ function ShowAllRow({
   onPress: () => void;
   testID?: string;
 }) {
-  const theme = useTheme();
   return (
-    <Touchable
-      accessibilityRole="button"
+    <ActionRow
+      label={`Show all ${count}`}
       accessibilityLabel={`Show all ${count}`}
       onPress={onPress}
-      style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
       {...(testID === undefined ? {} : { testID })}
-    >
-      <Text variant="subhead" color="textAction">{`Show all ${count}`}</Text>
-    </Touchable>
+    />
   );
 }
 
@@ -172,17 +200,12 @@ export function PrepSection({
         />
       )}
       {onAddPrepTask === undefined ? null : (
-        <Touchable
-          accessibilityRole="button"
+        <ActionRow
+          label="+ Add prep task"
           accessibilityLabel="Add prep task"
           onPress={onAddPrepTask}
-          style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
           testID="prep-add"
-        >
-          <Text variant="body" color="textAction">
-            + Add prep task
-          </Text>
-        </Touchable>
+        />
       )}
     </SectionFrame>
   );
@@ -235,17 +258,12 @@ export function ListsSection({ sourceLists, onOpenList, onAddList }: ListsSectio
         />
       )}
       {onAddList === undefined ? null : (
-        <Touchable
-          accessibilityRole="button"
+        <ActionRow
+          label="+ Add list"
           accessibilityLabel="Add list"
           onPress={onAddList}
-          style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
           testID="lists-add"
-        >
-          <Text variant="body" color="textAction">
-            + Add list
-          </Text>
-        </Touchable>
+        />
       )}
     </SectionFrame>
   );
@@ -360,26 +378,13 @@ export function UpdatesSection({
         </View>
       )}
       {pending.map((entry) => (
-        <View
+        <UpdateRowBody
           key={entry.localId}
-          style={{
-            flexDirection: 'row',
-            alignItems: 'baseline',
-            justifyContent: 'space-between',
-            gap: theme.space[3],
-            paddingVertical: theme.space[1],
-          }}
+          body={entry.body}
+          trailing="Just now"
+          muted={false}
           testID={`update-pending-${entry.localId}`}
-        >
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="body" color="textPrimary" numberOfLines={2}>
-              {entry.body}
-            </Text>
-          </View>
-          <Text variant="footnote" color="textMuted">
-            Just now
-          </Text>
-        </View>
+        />
       ))}
       {shown.map((update) => (
         <UpdateRow
@@ -399,18 +404,13 @@ export function UpdatesSection({
         />
       )}
       {expanded && hasOlder && onLoadOlder !== undefined ? (
-        <Touchable
-          accessibilityRole="button"
+        <ActionRow
+          label={isLoadingOlder ? 'Loading…' : 'Show earlier updates'}
           accessibilityLabel="Show earlier updates"
           onPress={onLoadOlder}
           disabled={isLoadingOlder}
-          style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
           testID="updates-load-older"
-        >
-          <Text variant="subhead" color="textAction">
-            {isLoadingOlder ? 'Loading…' : 'Show earlier updates'}
-          </Text>
-        </Touchable>
+        />
       ) : null}
       {onPost === undefined ? null : composing ? (
         <View style={{ gap: theme.space[3] }} testID="update-composer">
@@ -446,40 +446,30 @@ export function UpdatesSection({
           </View>
         </View>
       ) : (
-        <Touchable
-          accessibilityRole="button"
+        <ActionRow
+          label="+ Write an update"
           accessibilityLabel="Write an update"
           onPress={() => setComposing(true)}
-          style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
           testID="updates-add"
-        >
-          <Text variant="body" color="textAction">
-            + Write an update
-          </Text>
-        </Touchable>
+        />
       )}
     </SectionFrame>
   );
 }
 
 export interface AddToPlanRowProps {
-  chips: { prepTask: boolean; list: boolean; update: boolean };
+  chips: { prepTask: boolean; list: boolean };
   onAddPrepTask?: () => void;
   onAddList?: () => void;
-  onWriteUpdate?: () => void;
 }
 
 /**
  * The one `Add to this plan` row of named chips (§2.1 amended): how an empty section is
  * discovered without an empty heading. `People · coming later` renders as its own row above,
- * not here — the pre-build treatment is unchanged.
+ * not here — the pre-build treatment is unchanged. Updates has no chip by design: its
+ * visible section always carries its own composer (see {@link AddToPlanChips}).
  */
-export function AddToPlanRow({
-  chips,
-  onAddPrepTask,
-  onAddList,
-  onWriteUpdate,
-}: AddToPlanRowProps) {
+export function AddToPlanRow({ chips, onAddPrepTask, onAddList }: AddToPlanRowProps) {
   const theme = useTheme();
   const entries = [
     chips.prepTask && onAddPrepTask !== undefined
@@ -487,9 +477,6 @@ export function AddToPlanRow({
       : undefined,
     chips.list && onAddList !== undefined
       ? { label: 'List', onPress: onAddList }
-      : undefined,
-    chips.update && onWriteUpdate !== undefined
-      ? { label: 'Update', onPress: onWriteUpdate }
       : undefined,
   ].filter(
     (entry): entry is { label: string; onPress: () => void } => entry !== undefined,

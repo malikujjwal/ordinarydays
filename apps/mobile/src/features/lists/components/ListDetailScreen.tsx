@@ -290,12 +290,20 @@ export function ListDetailScreen({
           {...(onPlanItem === undefined
             ? {}
             : {
-                onPlanItem: () =>
+                // The sheet's current title/note override the stored row: its debounced
+                // saves flush asynchronously, and the bridge copies what the user sees.
+                onPlanItem: (draft) => {
+                  const { note: _stale, ...base } = openItem;
                   onPlanItem({
                     listId,
                     featureConfig: list.featureConfig,
-                    item: openItem,
-                  }),
+                    item: {
+                      ...base,
+                      title: draft.title,
+                      ...(draft.note === undefined ? {} : { note: draft.note }),
+                    },
+                  });
+                },
               })}
         />
       )}

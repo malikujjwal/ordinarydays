@@ -2,6 +2,7 @@ import type { ActivityUpdate } from '@od/shared/types';
 import { Text, Touchable, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { UpdateRowBody } from '@/features/activity/components/UpdateRowBody';
 
 /**
  * One Updates entry on **web** (P3-40).
@@ -30,45 +31,41 @@ export function UpdateRow({ update, relativeTime, onDelete }: UpdateRowProps) {
     <View
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'baseline',
-        justifyContent: 'space-between',
-        gap: theme.space[3],
-        paddingVertical: theme.space[1],
-      }}
-      testID={`update-${update.updateId}`}
     >
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text
-          variant="body"
-          color={update.kind === 'system' ? 'textSecondary' : 'textPrimary'}
-          numberOfLines={2}
-        >
-          {update.body}
-        </Text>
-      </View>
-      {deletable ? (
-        <Touchable
-          accessibilityRole="button"
-          accessibilityLabel="Delete update"
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          onPress={onDelete}
-          testID={`update-delete-${update.updateId}`}
-          style={{
-            paddingHorizontal: theme.space[2],
-            opacity: controlVisible ? 1 : 0,
-          }}
-        >
-          <Text variant="footnoteStrong" color="danger">
-            Delete
-          </Text>
-        </Touchable>
-      ) : null}
-      <Text variant="footnote" color="textMuted">
-        {relativeTime}
-      </Text>
+      <UpdateRowBody
+        body={update.body}
+        trailing={relativeTime}
+        muted={update.kind === 'system'}
+        testID={`update-${update.updateId}`}
+        {...(deletable
+          ? {
+              trailingControl: (
+                <Touchable
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete update"
+                  onFocus={() => setFocused(true)}
+                  onBlur={() => setFocused(false)}
+                  onPress={onDelete}
+                  testID={`update-delete-${update.updateId}`}
+                  style={{
+                    paddingHorizontal: theme.space[2],
+                    opacity: controlVisible ? 1 : 0,
+                    /**
+                     * Invisible means un-tappable (CLAUDE.md rule 6: a row tap never
+                     * mutates). Keyboard access survives — focusing the control is what
+                     * reveals it, and a revealed control accepts the pointer again.
+                     */
+                    pointerEvents: controlVisible ? 'auto' : 'none',
+                  }}
+                >
+                  <Text variant="footnoteStrong" color="danger">
+                    Delete
+                  </Text>
+                </Touchable>
+              ),
+            }
+          : {})}
+      />
     </View>
   );
 }

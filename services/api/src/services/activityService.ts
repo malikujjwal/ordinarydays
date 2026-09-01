@@ -14,6 +14,7 @@ import type {
   PatchActivityInput,
 } from '@od/shared/schemas';
 import {
+  activityChild as activityChildSchema,
   occurrence as occurrenceSchema,
   recurrence as recurrenceSchema,
   reminderInputsForSchedule,
@@ -1899,25 +1900,6 @@ export async function getActivityDetail(
    * Plan converted to a Task returns the retained, read-only discussion history that the
    * conversion is not allowed to erase or strand.
    */
-  const feed = await listActivityUpdates(target.activityId);
-
-  /**
-   * The caller's bounded pending-upload drain, **before** the attachments are projected
-   * (§2.3, access pattern 4, P3-22).
-   *
-   * Opening a plan is the moment a confirmation interrupted between the object store and the
-   * database is most likely to be noticed, and this is what finishes it: a verified copy
-   * becomes the linked row the same read then returns, so the image appears rather than
-   * silently not existing. It is bounded at twenty rows, which is what the cap buys.
-   *
-   * It runs for the **caller**, not for the activity's owner: pending records are keyed by
-   * uploader, and a participant opening somebody else's plan has no business repairing their
-   * uploads — nor could it, since the records are not in a partition it can read.
-   */
-  await drainPendingUploads(userId, Date.parse(now));
-
-  const attachments = await listAttachments(target.activityId);
-
   /**
    * The PREP collection, from the pointers the partition read already holds (P3-37,
    * pattern 16), and the LISTS section's id-only `SOURCE_LIST#` projections resolved
@@ -1927,7 +1909,24 @@ export async function getActivityDetail(
    */
   const children = projectChildren(partition);
   const sourceListIds = sourceListIdsOf(partition);
-  const summaries = await batchGetSourceListSummaries(sourceListIds);
+
+  /**
+   * Three independent reads, one round trip's worth of waiting. Given the partition, the
+   * feed page, the List summaries and the attachment chain need nothing from each other, so
+   * they run concurrently on the app's most-opened endpoint. The **only** ordering that
+   * matters is inside the third arm: the caller's bounded pending-upload drain must land
+   * before the attachments are projected (§2.3, access pattern 4, P3-22) — opening a plan is
+   * when an interrupted confirmation is noticed, and the drain is what turns a verified copy
+   * into the linked row this same read then returns. The drain runs for the **caller**, not
+   * the owner: pending records are keyed by uploader.
+   */
+  const [feed, summaries, attachments] = await Promise.all([
+    listActivityUpdates(target.activityId),
+    batchGetSourceListSummaries(sourceListIds),
+    drainPendingUploads(userId, Date.parse(now)).then(() =>
+      listAttachments(target.activityId),
+    ),
+  ]);
   const sourceLists = sourceListIds
     .map((listId) => summaries.get(listId))
     .filter((summary): summary is SourceListSummary => summary !== undefined);
@@ -1971,22 +1970,20 @@ export function sourceListIdsOf(partition: readonly StoredItem[]): string[] {
     .map((row) => String(row.listId));
 }
 
-/** One `SUB#` pointer row → the wire child; a malformed pointer degrades to absence. */
+/**
+ * One `SUB#` pointer row → the wire child; a malformed pointer degrades to absence. The
+ * shared `activityChild` schema is the shape's one owner ("never redefine a shape"): a new
+ * status added there is accepted here on the same commit, not silently dropped by a stale
+ * hand-written chain.
+ */
 function prepPointerToChild(row: StoredItem): ActivityChild | undefined {
-  const activityId = row.childActivityId;
-  const title = row.title;
-  const status = row.status;
-  if (typeof activityId !== 'string' || typeof title !== 'string') return undefined;
-  if (
-    status !== 'saved' &&
-    status !== 'scheduled' &&
-    status !== 'completed' &&
-    status !== 'skipped' &&
-    status !== 'cancelled'
-  ) {
-    return undefined;
-  }
-  return { activityId, title, status, isRecurring: row.isRecurring === true };
+  const parsed = activityChildSchema.safeParse({
+    activityId: row.childActivityId,
+    title: row.title,
+    status: row.status,
+    isRecurring: row.isRecurring === true,
+  });
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
