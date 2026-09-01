@@ -27,6 +27,14 @@ export const listMutationKeys = {
   itemPatch: ['list', 'item-patch'],
   itemDelete: ['list', 'item-delete'],
   itemUndo: ['list', 'item-undo'],
+  /**
+   * The `Plan this item` bridge (P3-34, §P3-13). A `list` key because the route is
+   * list-scoped and the intent must order behind the item's own creation in the list's lane —
+   * but its **entity is the minted Activity**, and settlement installs an Activity, not a
+   * list row. The item itself stays byte-identical, which is why this key is deliberately
+   * absent from `listItemProjectionMutationKeys`.
+   */
+  itemSchedule: ['list', 'item-schedule'],
 } as const;
 
 export type ListMutationName = keyof typeof listMutationKeys;

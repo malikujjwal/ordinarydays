@@ -1,7 +1,9 @@
+import type { List } from '@od/shared/types';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useAddListItem } from '@/hooks/useAddListItem';
+import type { ListItemRow as ListItemRowData } from '@/lib/sqlite/listItemsRepository';
 import { useListBulkActions } from '../hooks/useListBulkActions';
 import { useListDetail } from '../hooks/useListDetail';
 import { useListItemActions } from '../hooks/useListItemActions';
@@ -80,6 +82,19 @@ export interface ListDetailScreenProps {
    * provenance row plain text, which is what it is on the row itself in v1.
    */
   onOpenActivity?: (activityId: string) => void;
+  /**
+   * Opens the `Plan this item` flow for one row (P3-34).
+   *
+   * The screen hands over the copy source — the list's feature configuration plus the item —
+   * and nothing else; the route composes it into the compose store's bridge entry. Typed
+   * structurally rather than with the compose feature's own type so this feature does not
+   * import that one (`client-layer-rules`).
+   */
+  onPlanItem?: (source: {
+    readonly listId: string;
+    readonly featureConfig: List['featureConfig'];
+    readonly item: ListItemRowData;
+  }) => void;
 }
 
 interface PendingBulkPreview {
@@ -91,6 +106,7 @@ export function ListDetailScreen({
   listId,
   onBack,
   onOpenActivity,
+  onPlanItem,
 }: ListDetailScreenProps) {
   const view = useListDetail(listId);
   const add = useAddListItem();
@@ -263,6 +279,16 @@ export function ListDetailScreen({
           onChanged={view.refresh}
           onRemoved={view.refetch}
           {...(onOpenActivity === undefined ? {} : { onOpenSource: onOpenActivity })}
+          {...(onPlanItem === undefined
+            ? {}
+            : {
+                onPlanItem: () =>
+                  onPlanItem({
+                    listId,
+                    featureConfig: list.featureConfig,
+                    item: openItem,
+                  }),
+              })}
         />
       )}
 

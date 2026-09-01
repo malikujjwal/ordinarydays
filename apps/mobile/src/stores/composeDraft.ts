@@ -4,6 +4,7 @@ import type { WallDate } from '@od/shared/time';
 import type { PlanType, Recurrence } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
+import { type BridgeSource, bridgePrefill } from '@/features/compose/model/bridge';
 import {
   type DraftDetails,
   type DraftLocation,
@@ -36,12 +37,18 @@ import { nextCanonicalId } from '@/lib/canonicalIds';
  */
 
 /**
- * Which screen of the modal is showing. `object` is always where it opens.
+ * Which screen of the modal is showing. `object` is always where it opens — except the
+ * `Plan this item` bridge (P3-34), which enters at `planKind` because its object is already
+ * explicitly a Plan, and which inserts the required `audience` step between the kind choice
+ * and the form.
  *
  * List creation is routed directly to the List catalogue and List-item creation is contextual,
  * so neither has a step in the Activity draft.
  */
-export type ComposeStep = 'object' | 'planKind' | 'form';
+export type ComposeStep = 'object' | 'planKind' | 'audience' | 'form';
+
+/** The only audience this phase accepts; Phase 6 widens the union, not the rule. */
+export type DraftAudience = { mode: 'just_me' };
 
 /** Profile-backed values that belong to a newly chosen Event draft. */
 export interface EventDraftDefaults {
@@ -79,6 +86,21 @@ export interface ComposeDraftState {
   idempotencyKey: string | undefined;
   /** Permanent identity minted with the durable create and sent unchanged to the server. */
   activityId: string | undefined;
+  /**
+   * The `Plan this item` source, or `undefined` for the ordinary global flow (P3-34).
+   *
+   * A copy source only: it pre-fills visible fields after the explicit kind tap and routes the
+   * save to the bridge endpoint. Nothing reads it to choose a kind, an audience, or a
+   * destination.
+   */
+  bridge: BridgeSource | undefined;
+  /**
+   * The explicitly tapped audience, or `undefined` while step two is unanswered.
+   *
+   * It has no initial value and no default: `just_me` exists in this store only after the
+   * visible tap (§P3-34).
+   */
+  audience: DraftAudience | undefined;
 
   /** `activities.md` §4's Date / Time / End time, for every type that has them. */
   schedule: DraftSchedule;
@@ -90,8 +112,12 @@ export interface ComposeDraftState {
 
   open: () => void;
   openTodayTask: (date: WallDate) => void;
+  /** The `Plan this item` entry: an explicit Plan, so it opens on the kind step (P3-34). */
+  openPlanForItem: (bridge: BridgeSource) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
+  /** The one place `audience` is set, and only by the visible `Just me` tap. */
+  chooseAudience: (audience: DraftAudience) => void;
   back: () => void;
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
@@ -123,6 +149,8 @@ const EMPTY = {
   attachmentUri: undefined,
   idempotencyKey: undefined,
   activityId: undefined,
+  bridge: undefined,
+  audience: undefined,
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
@@ -132,8 +160,10 @@ const EMPTY = {
   ComposeDraftState,
   | 'open'
   | 'openTodayTask'
+  | 'openPlanForItem'
   | 'chooseObject'
   | 'choosePlanKind'
+  | 'chooseAudience'
   | 'back'
   | 'setTitle'
   | 'setNotes'
@@ -209,6 +239,14 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     }),
 
   /**
+   * `Plan this item` (P3-34): the item's action is itself the explicit Plan choice, so the
+   * modal opens on the kind step. Nothing is selected there, and nothing from the source —
+   * title, creation preset, settings, features — participates in the choice. The draft starts
+   * empty; fields fill only after the explicit kind tap, via {@link bridgePrefill}.
+   */
+  openPlanForItem: (bridge) => set({ ...EMPTY, step: 'planKind', bridge }),
+
+  /**
    * The one place `target` can become a Task.
    *
    * `plan` deliberately does **not** set a target: it advances to the second required chooser
@@ -244,7 +282,35 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    * than lurking in the store.
    */
   choosePlanKind: (type, eventDefaults) => {
-    const { target, title, details } = get();
+    const { target, title, details, bridge } = get();
+
+    if (bridge !== undefined) {
+      /*
+       * Bridge mode: the explicit kind tap runs the one-time copy (§6.1) and advances to the
+       * required audience step, not the form. The copy is per kind choice — returning to this
+       * step and picking another kind re-copies for that kind, so a Watch offer cannot leak
+       * into an Event form. A title or note the user already edited survives, because those
+       * are theirs now, not the item's.
+       */
+      const prefill = bridgePrefill(bridge, type);
+      const { title: currentTitle, notes: currentNotes } = get();
+      set(
+        edited({
+          step: 'audience',
+          target: { objectKind: 'plan', type },
+          audience: undefined,
+          title: currentTitle.trim() === '' ? prefill.title : currentTitle,
+          notes: currentNotes.trim() === '' ? prefill.notes : currentNotes,
+          details: withEventDefaults(
+            type,
+            { ...EMPTY_DETAILS, ...prefill.details },
+            eventDefaults,
+          ),
+          location: prefill.location,
+        }),
+      );
+      return;
+    }
     const previousType = target?.objectKind === 'plan' ? target.type : 'task';
 
     if (previousType === type) {
@@ -286,19 +352,42 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   },
 
   /**
+   * The audience step's only writer. `just_me` is the whole union in this phase, and it
+   * reaches the store only through the visible tap — there is no default and no code path
+   * from the bridge source or the kind choice to here (§P3-34).
+   */
+  chooseAudience: (audience) => set({ step: 'form', audience }),
+
+  /**
    * Back never writes and never clears compatible fields.
    *
    * From the form it returns to whichever chooser produced the target — the Plan-kind step
    * for a plan, the object step for a task — and **unfixes the target**, because a form the
    * user has stepped back out of no longer has an answered destination.
+   *
+   * The bridge flow adds two rules: from its form, Back returns to the audience step and
+   * clears the answered audience (a step the user has stepped back to shows nothing
+   * selected); the kind stays fixed, because only the kind step itself may change it. From
+   * the audience step, Back returns to the kind step and unfixes both. From the kind step
+   * there is nowhere back to go — the bridge entered there — so it is a no-op and the screen
+   * hides the control.
    */
   back: () => {
-    const { step, target } = get();
+    const { step, target, bridge } = get();
     if (step === 'planKind') {
+      if (bridge !== undefined) return;
       set({ step: 'object', target: undefined });
       return;
     }
+    if (step === 'audience') {
+      set({ step: 'planKind', target: undefined, audience: undefined });
+      return;
+    }
     if (step === 'form') {
+      if (bridge !== undefined) {
+        set({ step: 'audience', audience: undefined });
+        return;
+      }
       // Back to the chooser that produced this target, and the target is dropped: returning
       // to a picker with the previous destination still fixed would be a pre-selection.
       set({

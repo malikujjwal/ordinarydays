@@ -14,6 +14,7 @@ import {
   patchListForReplay,
   patchListItem,
   scheduleActivity,
+  scheduleListItem,
   skipActivity,
   snoozeActivity,
   uncompleteActivity,
@@ -38,9 +39,11 @@ import {
   type ReminderInput,
   reminderInput,
   type ScheduleActivityInput,
+  type ScheduleListItemInput,
   type SkipActivityInput,
   type SnoozeActivityInput,
   scheduleActivityInput,
+  scheduleListItemInput,
   skipActivityInput,
   snoozeActivityInput,
   type UncompleteActivityInput,
@@ -138,6 +141,14 @@ export interface ListPushTransport {
     idempotencyKey: string,
     signal: AbortSignal,
   ): Promise<unknown>;
+  /** The `Plan this item` bridge (P3-34): one replay-protected Activity-creating POST. */
+  scheduleItem(
+    listId: string,
+    itemId: string,
+    input: ScheduleListItemInput,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<unknown>;
   /** No `Idempotency-Key`: the route is not replay-protected, per §5.11.5 (P3-29). */
   patchItem(
     listId: string,
@@ -230,6 +241,8 @@ export const sharedListPushTransport: ListPushTransport = {
     createList(apiClient, input, idempotencyKey, signal),
   createItem: (listId, input, idempotencyKey, signal) =>
     createListItem(apiClient, listId, input, idempotencyKey, signal),
+  scheduleItem: (listId, itemId, input, idempotencyKey, signal) =>
+    scheduleListItem(apiClient, listId, itemId, input, idempotencyKey, signal),
   patchItem: (listId, itemId, input, signal) =>
     patchListItem(apiClient, listId, itemId, input, signal),
   removeItem: (listId, itemId, idempotencyKey, signal) =>
@@ -415,6 +428,26 @@ export class ActivityPushAdapter {
       return this.listTransport.createItem(
         listId,
         parsePersisted(createListItemInput, field(value, 'input')),
+        requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+        signal,
+      );
+    }
+    if (name === listMutationKeys.itemSchedule[1]) {
+      /*
+       * The bridge's entity is the **minted Activity** (P3-34): that id is the identity a
+       * replay must not re-mint, and it is what the guards protect from canonical pulls while
+       * the intent is unresolved. The list and item ids live in the payload.
+       */
+      const activityId = requiredString(field(value, 'activityId'), 'activityId');
+      if (activityId !== intent.entityId) {
+        throw new DurableActivityIntentError(
+          'Durable bridge intent entity identity does not match its payload.',
+        );
+      }
+      return this.listTransport.scheduleItem(
+        listId,
+        requiredString(field(value, 'itemId'), 'itemId'),
+        parsePersisted(scheduleListItemInput, field(value, 'input')),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
         signal,
       );

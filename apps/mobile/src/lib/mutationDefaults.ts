@@ -174,6 +174,11 @@ export function refreshActivityDetails(
 export function changesActivityLists(mutationKey: unknown): boolean {
   if (!Array.isArray(mutationKey)) return false;
   const [scope, name] = mutationKey as readonly unknown[];
+  // The bridge is a `list` key that creates an Activity (P3-34): the new plan lands in the
+  // activity lists and the agenda exactly as a create does. `projectActivityWrite` no-ops on
+  // the key — its response shape is the bridge's, not an Activity envelope — so this buys the
+  // stale-marking only, which the next natural refetch reconciles.
+  if (scope === 'list' && name === 'item-schedule') return true;
   return scope === 'activity' && name !== 'reminder-create' && name !== 'reminder-delete';
 }
 

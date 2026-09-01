@@ -8,6 +8,7 @@ import type { ListItemState, ListSubItem, ProgressValue } from '@od/shared/types
 import {
   Button,
   Check,
+  Diamond,
   Field,
   IconButton,
   interactionTiming,
@@ -54,6 +55,12 @@ export interface ItemSheetProps {
   onChanged: () => void;
   onRemoved: () => void;
   onOpenSource?: (activityId: string) => void;
+  /**
+   * Opens the `Plan this item` flow (P3-34): the unselected Plan-kind chooser, then the
+   * required audience step, then the form. The action closes this sheet first — the flow is a
+   * modal route, and a sheet left open underneath would receive the Back gesture.
+   */
+  onPlanItem?: () => void;
   testID?: string;
 }
 
@@ -154,6 +161,7 @@ export function ItemSheet({
   onChanged,
   onRemoved,
   onOpenSource,
+  onPlanItem,
   testID = 'item-sheet',
 }: ItemSheetProps) {
   const theme = useTheme();
@@ -684,6 +692,22 @@ export function ItemSheet({
           )}
 
           {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}
+
+          {onPlanItem === undefined ? null : (
+            <SettingRow
+              label="Plan this item"
+              icon={Diamond}
+              iconTone="neutral"
+              density="compact"
+              separated
+              opens
+              onPress={() => {
+                close();
+                onPlanItem();
+              }}
+              testID="item-sheet-plan"
+            />
+          )}
 
           <SettingRow
             label="Delete item"

@@ -3,6 +3,7 @@ import {
   type CreateActivityInput,
   type CreateListItemInput,
   createRecurrence,
+  type ScheduleListItemInput,
 } from '@od/shared/schemas';
 import type { Recurrence } from '@od/shared/types';
 import { format, parseISO } from 'date-fns';
@@ -235,6 +236,46 @@ export function toCreateActivityInput(
   }
 
   return undefined;
+}
+
+/**
+ * Builds the `Plan this item` bridge request from the same draft the form collected (P3-34).
+ *
+ * A projection of {@link toCreateActivityInput}: identical field rules — trimmed title,
+ * schedule ⊃ time ⊃ end time, labelled location, dated reminders — expressed in the
+ * bridge contract's shape. `creationTarget` and `audience` are **parameters**, not defaults:
+ * both were explicit taps, and this function cannot be called without them
+ * (`CLAUDE.md` rule 2).
+ *
+ * `mintReminderId` is injected because this offline-capable route identifies reminders by
+ * client-minted `rem_` ids (§P3-13); the caller owns id generation so a transport retry
+ * reuses the ids already persisted, never fresh ones.
+ */
+export function toScheduleListItemInput(
+  target: Extract<CreationTarget, { objectKind: 'plan' }>,
+  fields: DraftFields,
+  timezone: string,
+  activityId: string,
+  audience: { mode: 'just_me' },
+  mintReminderId: () => string,
+): ScheduleListItemInput | undefined {
+  const created = toCreateActivityInput(target, fields, timezone);
+  if (created === undefined || created.objectKind !== 'plan') return undefined;
+  const { objectKind, type, reminders, activityId: _ignored, ...common } = created;
+  return {
+    ...common,
+    activityId,
+    creationTarget: { objectKind, type },
+    audience,
+    ...(reminders === undefined
+      ? {}
+      : {
+          reminders: reminders.map((reminder) => ({
+            reminderId: reminder.reminderId ?? mintReminderId(),
+            offsetMinutes: reminder.offsetMinutes,
+          })),
+        }),
+  };
 }
 
 /**

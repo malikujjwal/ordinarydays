@@ -3,6 +3,7 @@ import type {
   CreateActivityInput,
   PatchActivityInput,
   ScheduleActivityInput,
+  ScheduleListItemInput,
 } from '@od/shared/schemas';
 import {
   activity as activitySchema,
@@ -46,6 +47,23 @@ export interface ProjectionClock {
 export interface ActivityCreateVariables {
   readonly input: CreateActivityInput;
   readonly idempotencyKey: string;
+}
+
+/**
+ * One durable `Plan this item` bridge action (P3-34, §P3-13).
+ *
+ * `activityId` and every reminder's `reminderId` are minted before this reaches SQLite and are
+ * reused by every transport retry — a fresh id on a retry is how one confirmed plan becomes
+ * two. The intent rides the **list's ordering lane** so it settles after the item's own
+ * offline creation, but its entity is the Activity, which is what the canonical-pull guards
+ * must protect while it is unresolved.
+ */
+export interface ListItemScheduleVariables {
+  readonly listId: string;
+  readonly itemId: string;
+  readonly activityId: string;
+  readonly idempotencyKey: string;
+  readonly input: ScheduleListItemInput;
 }
 
 export interface ActivityPatchVariables {
@@ -312,6 +330,74 @@ export class ActivityTransactionService {
         channel: 'push',
       };
     });
+    await this.activities.putLocal(transaction, activity, reminders);
+    const current = await this.agenda.readMaterializedWindow(transaction.database);
+    const projected = applyCreate(current, {
+      activity,
+      ...clock,
+      undatedDestinationDate: clock.today,
+    });
+    await this.agenda.replaceLocalActivityRows(transaction, activityId, projected);
+    transaction.changed('outbox');
+    return appended;
+  }
+
+  /**
+   * The `Plan this item` bridge, locally durable (P3-34).
+   *
+   * The same body as {@link create} — append one intent, store the pending Activity and its
+   * caller reminders under their permanent ids, project the agenda — under the bridge's own
+   * `['list', 'item-schedule']` key and the list's ordering lane, so replay drains after the
+   * item's own offline creation. The ListItem row is deliberately untouched: the item is
+   * byte-identical through the whole flow (§6.1), and the caller's `viewerLink` is server
+   * truth that arrives with settlement (P3-35 renders it).
+   */
+  async scheduleListItem(
+    transaction: TransactionContext,
+    ownerUserId: string,
+    variables: ListItemScheduleVariables,
+    clock: ProjectionClock,
+    mintedAt: string = systemClock.now(),
+  ): Promise<TransactionalIntentResult> {
+    const { activityId, listId, itemId, input } = variables;
+    if (input.title === undefined) {
+      throw new Error('A bridge draft always carries its title.');
+    }
+    const appended = await this.outbox.append(transaction.database, {
+      intentId: variables.idempotencyKey,
+      mutationKey: ['list', 'item-schedule'],
+      variables,
+      entityId: activityId,
+      orderingKey: `list:${listId}`,
+    });
+    if (appended.kind === 'existing') return appended;
+    const projectionInput: CreateActivityInput = {
+      activityId,
+      objectKind: 'plan',
+      type: input.creationTarget.type,
+      title: input.title,
+      ...(input.notes === undefined ? {} : { notes: input.notes }),
+      ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
+      ...(input.recurrence === undefined ? {} : { recurrence: input.recurrence }),
+      ...(input.location === undefined ? {} : { location: input.location }),
+      ...(input.details === undefined ? {} : { details: input.details }),
+      ...(input.sourceUrl === undefined ? {} : { sourceUrl: input.sourceUrl }),
+    };
+    const pending = pendingActivityFromInput(projectionInput, activityId, mintedAt);
+    const { pending: _pending, ...pendingFields } = pending;
+    const activity = activitySchema.parse({
+      ...pendingFields,
+      ownerId: ownerUserId,
+      listId,
+      listItemId: itemId,
+    }) as Activity;
+    const reminders: Reminder[] = (input.reminders ?? []).map((reminder) => ({
+      reminderId: reminder.reminderId,
+      activityId,
+      userId: ownerUserId,
+      offsetMinutes: reminder.offsetMinutes,
+      channel: 'push',
+    }));
     await this.activities.putLocal(transaction, activity, reminders);
     const current = await this.agenda.readMaterializedWindow(transaction.database);
     const projected = applyCreate(current, {
