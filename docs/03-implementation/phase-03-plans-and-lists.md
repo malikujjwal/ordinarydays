@@ -2871,25 +2871,18 @@ months out, reaches the sentinel, and renders that plan after exactly one furthe
 > since Prep and Updates both already have their own pagination endpoints.
 
 **Approach.** One screen and one `GET /v1/activities/:id`. That one HTTP response is composed
-from bounded storage reads, not an unbounded whole-partition Query. Its normal direct-grant
-path has exactly three dependency waves: (1) strongly consistent exact-key reads of
-`ACT#<activityId>` / `META` and `USER#<callerId>` / `IDX#<activityId>` begin together; (2)
-only after authorization succeeds, strongly consistent prefix Queries fetch the first
-documented page of each section and P3-22 drains the caller's at-most-20 pending uploads;
-(3) attachments and one logical strong detail-hydration operation begin together. A parent
-grant adds the documented parent META/exact-caller proof before wave 2 and no unauthorized
-collection read is speculative. Updates are newest-first with `Limit: 50` and a cursor;
-attachments are capped at 20; children use P3-18's complete model-capped `Limit: 50` page;
-caller reminders, participants and `SOURCE_LIST#` ids use their model caps. Hydration contains
-the caller grant and current META for each of at most 100 related Lists plus canonical META
-for at most 50 additive legacy child pointers: at most 250 keys, chunked at DynamoDB's
-100-key limit into three physical `BatchGetItem` commands started concurrently in wave 3.
-Later pages use their section endpoints. This measured endpoint is an explicit exception to
-the generic three-physical-command target: 12 commands at direct activity-only maximum, 13
-with an occurrence target, plus one or two exact Gets for parent inheritance. Additional
-completed-occurrence 1 MB pages, `UnprocessedKeys` retries, and non-empty drain work retain
-their documented bounded continuations. The invariant is one HTTP request, three normal
-direct-grant latency waves, model caps, and no N+1 or whole-partition read. The ten sections in
+from bounded storage reads, not an unbounded whole-partition Query. Authorization comes first:
+strongly consistent exact-key reads of `ACT#<activityId>` / `META` and
+`USER#<callerId>` / `IDX#<activityId>`, and no collection read starts until they succeed (a
+parent grant adds the documented parent META/exact-caller proof). Then the bounded, strongly
+consistent section reads run in parallel: Updates newest-first with `Limit: 50` and a cursor;
+attachments capped at 20, read after P3-22 drains the caller's at-most-20 pending uploads;
+children as P3-18's model-capped `Limit: 50` page; caller reminders, participants and
+`SOURCE_LIST#` ids under their model caps. The `SOURCE_LIST#` ids (and any legacy child
+pointers) are hydrated by one logical `BatchGetItem` chunked at DynamoDB's 100-key limit —
+never one read per List. Later pages use their section endpoints. The invariants are one HTTP
+request, model caps, and no N+1 or whole-partition read; the exact number of DynamoDB commands
+is a test bound, not a contract. The ten sections in
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2.1, in fixed order,
 with the visibility rules in §2.2.
 
@@ -2921,14 +2914,14 @@ changes its scheduling state, not its identity
 section that fills this gap for participants arrives in Phase 6 (P6-51).
 
 **Tests.** Render tests for each visibility rule. A network assertion that opening the screen
-issues exactly one HTTP request. Route tests hold both wave-1 Gets, prove no section read has
-started, then release authorization and prove the bounded section/drain wave starts before
-attachments or hydration; releasing wave 2 starts both wave-3 arms. The measured-maximum
-fixture uses 100 source Lists, 50 legacy children and a two-page occurrence count and asserts
-two wave-1 Gets, eight bounded Queries, and three parallel physical hydration batches sized
-50/100/100—not one read per List and never `queryAll` over the Activity partition. DynamoDB
-Local repeats empty, maximum, malformed/missing, exact-caller, cap/order and legacy-pointer
-cases against real strong reads. A render test over an
+issues exactly one HTTP request. A route test holds both authority Gets and proves no section
+read or hydration has started, then releases them and proves the response completes with one
+hydration batch. A model-maximum fixture (100 source Lists, 50 legacy children, a two-page
+occurrence count) proves the reads stay bounded: at most eight prefix Queries and at most
+three hydration batches of at most 100 keys covering all 250 — never one read per List and
+never `queryAll` over the Activity partition. DynamoDB Local repeats empty, maximum,
+malformed/missing, exact-caller, cap/order and legacy-pointer cases against real strong
+reads. A render test over an
 undated plan asserts the same applicable section set as a dated one, with `Not scheduled` and
 `Schedule` in the when/where block and no copy calling it incomplete. A pre-build render test
 asserts People is non-interactive `Coming later` while Expenses and Updates are absent.
@@ -3020,14 +3013,15 @@ newest first, with `+ Write an update` at the foot.
   refetches for reconciliation, but an older eventually consistent GSI1 projection may not
   overwrite a newer locally known `lastActivityAt`; monotonic merge wins until the index
   catches up.
-- A locally acknowledged post or delete is an overlay, not permanent canonical evidence. A
-  later detail head starts a reconciliation generation; only after that strong cursor chain
-  reaches exhaustion may an acknowledged post omitted by every page be retired. Seeing a
-  post clears its marker immediately; seeing a delete target retains the local delete mask.
-  A write acknowledged after reconciliation began belongs to the next generation and cannot
-  be discarded by the older chain. Native persists the generation bit in SQLite; web keeps
-  it in the Activity updates cache. Mutation hooks consume the registered shared mutation
-  recipes so web and native cannot silently diverge on acknowledgement behavior.
+- A write's own response is shown until the next authoritative detail read contains it, and
+  that strong read is the whole reconciliation. Web: a successful post or delete invalidates
+  the detail query and keeps the response row (or delete mask) only until an embedded head
+  accounts for it. Native: the acknowledgement is installed in the same SQLite transaction
+  as the outbox settlement; a detail response that was already in flight when a write
+  settled does not replace the local feed, and the next read converges. There are no overlay
+  tables or generation counters. The `activity_update_acknowledgements` table and the
+  `generation` column created by migrations 23–25 stay in the contiguous migration plan but
+  are unused.
 
 **Tests.** Render: newest first from an unsorted fixture; the §2.2 visibility matrix
 (private + 0 entries hidden, private + n shown, shared + 0 shown); a system entry has no

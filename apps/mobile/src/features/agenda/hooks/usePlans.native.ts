@@ -1,15 +1,13 @@
-import { MAX_AGENDA_DAYS } from '@od/shared/constants';
 import { addWallDays } from '@od/shared/recurrence';
 import type { WallDate } from '@od/shared/time';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { describeApiFailure } from '@/lib/apiFailure';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import type { NativePlansProjection } from '@/lib/sqlite/plansRepository';
+import { describePlansFailure, PLANS_WINDOW_DAYS } from '../model/plansFeed';
 import type { PlansView } from './usePlans';
 
 export type { NeedsDateRowData } from '../model/plansApply';
 
-const WINDOW_DAYS = MAX_AGENDA_DAYS;
 const EMPTY_STORE = { byDate: new Map(), covered: [] } as const;
 
 /** Native Plans reads only the account-scoped SQLite projection installed by sync. */
@@ -72,8 +70,7 @@ export function usePlans(
         setUpcomingStalled(false);
       })
       .catch((error: unknown) => {
-        if (!cancelled && isCurrent())
-          setFailure(describeApiFailure(error, "Couldn't load this."));
+        if (!cancelled && isCurrent()) setFailure(describePlansFailure(error));
       })
       .finally(() => {
         if (!cancelled && isCurrent()) {
@@ -98,7 +95,7 @@ export function usePlans(
         }
       })
       .catch((error: unknown) => {
-        if (isCurrent()) setFailure(describeApiFailure(error, "Couldn't load this."));
+        if (isCurrent()) setFailure(describePlansFailure(error));
       })
       .finally(() => {
         if (isCurrent()) setRefreshing(false);
@@ -112,7 +109,7 @@ export function usePlans(
       mode: 'upcoming_window' as const,
       tz: timezone,
       upcomingFrom: from,
-      upcomingTo: addWallDays(from, WINDOW_DAYS - 1) as WallDate,
+      upcomingTo: addWallDays(from, PLANS_WINDOW_DAYS - 1) as WallDate,
     };
     setLoadingUpcoming(true);
     void pullPlans
@@ -126,7 +123,7 @@ export function usePlans(
       })
       .catch((error: unknown) => {
         if (isCurrent()) {
-          setFailure(describeApiFailure(error, "Couldn't load this."));
+          setFailure(describePlansFailure(error));
           setUpcomingStalled(true);
         }
       })
@@ -154,7 +151,7 @@ export function usePlans(
         if (isCurrent()) setFailure(undefined);
       })
       .catch((error: unknown) => {
-        if (isCurrent()) setFailure(describeApiFailure(error, "Couldn't load this."));
+        if (isCurrent()) setFailure(describePlansFailure(error));
       })
       .finally(() => {
         if (isCurrent()) setLoadingPast(false);

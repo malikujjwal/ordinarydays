@@ -2443,3 +2443,25 @@ optional-data mismatch. Store arbitrary fields — loses typing, stable PATCH pa
 Sub-items. Infer an integration from labels — renaming user-visible words would silently change
 domain behavior. Resolve presets at read time — lets a release mutate existing Lists without a
 user action.
+
+## ADR-059 — Native SQLite projections are frozen at migration 25 until device-verified
+
+**Status:** Accepted · **Date:** 2026-09-01 · **Amends ADR-057**
+
+**Context.** The P3-33…P3-40 review loop added native SQLite projections for the Plans tab,
+Prep and source-List sections and the Updates feed (migrations 18–25) without a device to run
+them on. The first device session found two defects in that code within minutes: an edited
+already-applied migration, and an unserialized read transaction on the writer connection.
+Meanwhile the web builds of the same screens had been exercised for days.
+
+**Decision.** The native projection surface stays exactly as migration 25 leaves it. No new
+native projection, migration or reconciliation mechanism is added for Phase 3 screens until
+the Plans tab, plan detail and Updates have been used on a phone through the normal flows and
+the log-trace review at the Phase 3 checkpoint has run. Defects found on the device are fixed
+in place. Migrations that have been committed are never edited; a correction is a new
+migration. The unused overlay tables from migrations 23–25 are left in the plan (contiguity
+rule) and dropped in a later migration once no development database depends on them.
+
+**Consequences.** Native screens may lag web by one reconciliation until the checkpoint;
+that is accepted over untested storage code. The ADR-057 boundary (all native writes through
+the durable intent log; HTTP only in the serialized sync owner) is unchanged.

@@ -316,12 +316,6 @@ export class ActivityRepository {
              AND operation.operation = 'delete'
              AND operation.target_update_id = activity_updates.update_id
          )
-         AND NOT EXISTS (
-           SELECT 1 FROM activity_update_acknowledgements acknowledgement
-           WHERE acknowledgement.activity_id = activity_updates.activity_id
-             AND acknowledgement.operation = 'delete'
-             AND acknowledgement.target_update_id = activity_updates.update_id
-         )
        ORDER BY created_at DESC, update_id DESC;`,
       [activityId],
     );
@@ -333,24 +327,6 @@ export class ActivityRepository {
     return {
       updates: rows.map(activityUpdateFromRow),
       ...(cursor === undefined ? {} : { cursor }),
-    };
-  }
-
-  /** The cursor and strong-head generation must be captured as one SQLite row. */
-  async readUpdateFeedPosition(
-    activityId: string,
-  ): Promise<
-    { readonly cursor: string | undefined; readonly generation: number } | undefined
-  > {
-    const state = await this.reader.first(
-      `SELECT next_cursor, generation FROM activity_update_feed_state
-       WHERE activity_id = ?;`,
-      [activityId],
-    );
-    if (state === undefined) return undefined;
-    return {
-      cursor: text(state, 'next_cursor'),
-      generation: number(state, 'generation') ?? 0,
     };
   }
 
@@ -424,7 +400,7 @@ export class ActivityRepository {
     result: PostActivityUpdateResult,
   ): Promise<void> {
     const operation = await transaction.database.first(
-      `SELECT activity_id, created_at FROM activity_update_operations
+      `SELECT activity_id FROM activity_update_operations
        WHERE intent_id = ? AND operation = 'post';`,
       [intentId],
     );
@@ -432,18 +408,6 @@ export class ActivityRepository {
       throw new Error('Update acknowledgement crossed its durable Activity boundary.');
     }
     await this.installConfirmedUpdate(transaction, result);
-    await transaction.database.run(
-      `INSERT OR REPLACE INTO activity_update_acknowledgements
-         (intent_id, activity_id, operation, target_update_id, created_at,
-          reconcile_after_exhaustion)
-       VALUES (?, ?, 'post', ?, ?, 0);`,
-      [
-        intentId,
-        result.update.activityId,
-        result.update.updateId,
-        number(operation ?? {}, 'created_at') ?? 0,
-      ],
-    );
     await transaction.database.run(
       'DELETE FROM activity_update_operations WHERE intent_id = ?;',
       [intentId],
@@ -458,7 +422,7 @@ export class ActivityRepository {
     updateId: string,
   ): Promise<void> {
     const operation = await transaction.database.first(
-      `SELECT activity_id, target_update_id, created_at FROM activity_update_operations
+      `SELECT activity_id, target_update_id FROM activity_update_operations
        WHERE intent_id = ? AND operation = 'delete';`,
       [intentId],
     );
@@ -469,13 +433,6 @@ export class ActivityRepository {
       throw new Error('Delete acknowledgement crossed its durable update boundary.');
     }
     await this.deleteConfirmedUpdate(transaction, activityId, updateId);
-    await transaction.database.run(
-      `INSERT OR REPLACE INTO activity_update_acknowledgements
-         (intent_id, activity_id, operation, target_update_id, created_at,
-          reconcile_after_exhaustion)
-       VALUES (?, ?, 'delete', ?, ?, 0);`,
-      [intentId, activityId, updateId, number(operation ?? {}, 'created_at') ?? 0],
-    );
     await transaction.database.run(
       'DELETE FROM activity_update_operations WHERE intent_id = ?;',
       [intentId],
@@ -614,23 +571,22 @@ export class ActivityRepository {
     };
   }
 
-  /** Adds an older canonical page without replacing entries already confirmed locally. */
+  /**
+   * Appends one older canonical page. The page is installed only while the feed still sits at
+   * the cursor that requested it; a head that arrived in between restarted the chain and the
+   * caller simply reads the current feed.
+   */
   async installUpdatePage(
     transaction: TransactionContext,
     activityId: string,
-    expected: { readonly cursor: string; readonly generation: number },
+    expectedCursor: string,
     page: ActivityUpdatePage,
   ): Promise<boolean> {
     const current = await transaction.database.first(
-      `SELECT next_cursor, generation FROM activity_update_feed_state
-       WHERE activity_id = ?;`,
+      'SELECT next_cursor FROM activity_update_feed_state WHERE activity_id = ?;',
       [activityId],
     );
-    if (
-      current === undefined ||
-      text(current, 'next_cursor') !== expected.cursor ||
-      (number(current, 'generation') ?? 0) !== expected.generation
-    ) {
+    if (current === undefined || text(current, 'next_cursor') !== expectedCursor) {
       return false;
     }
     for (const update of page.updates) {
@@ -638,20 +594,8 @@ export class ActivityRepository {
         throw new Error('Activity update page crossed activity boundary.');
       }
       await this.putUpdate(transaction.database, update);
-      await transaction.database.run(
-        `DELETE FROM activity_update_acknowledgements
-         WHERE activity_id = ? AND operation = 'post' AND target_update_id = ?;`,
-        [activityId, update.updateId],
-      );
-      await transaction.database.run(
-        `UPDATE activity_update_acknowledgements
-         SET reconcile_after_exhaustion = 0
-         WHERE activity_id = ? AND operation = 'delete' AND target_update_id = ?;`,
-        [activityId, update.updateId],
-      );
     }
     await this.putUpdateCursor(transaction.database, activityId, page.cursor);
-    await this.finishUpdateReconciliation(transaction.database, activityId, page.cursor);
     transaction.changed(this.updatesScope(activityId));
     return true;
   }
@@ -693,9 +637,17 @@ export class ActivityRepository {
     transaction.changed(this.updatesScope(activityId));
   }
 
+  /**
+   * `updatesVersion` is the Updates subscription version the caller read before its network
+   * request. If a local write settled while that response was in flight, the response's feed
+   * page predates the write and is not installed; the rest of the detail is, and the next
+   * detail read converges the feed. A settled write is canonical the moment it lands, and only
+   * a stale in-flight page could contradict it, so no overlay bookkeeping is needed.
+   */
   async putCanonical(
     transaction: TransactionContext,
     detail: ActivityDetail,
+    options: { readonly updatesVersion?: number } = {},
   ): Promise<boolean> {
     const guards = await readCanonicalOutboxGuards(transaction.database);
     if (guards.deletedActivityIds.has(detail.activity.activityId)) return false;
@@ -718,6 +670,9 @@ export class ActivityRepository {
     return this.installCanonicalDetail(transaction, detail, {
       preserveLocalReminders: true,
       guards,
+      installUpdates:
+        options.updatesVersion === undefined ||
+        options.updatesVersion === this.updatesVersion(detail.activity.activityId),
     });
   }
 
@@ -790,6 +745,8 @@ export class ActivityRepository {
     options: {
       readonly preserveLocalReminders: boolean;
       readonly guards?: Awaited<ReturnType<typeof readCanonicalOutboxGuards>>;
+      /** False when a local write settled after this detail was fetched (see putCanonical). */
+      readonly installUpdates?: boolean;
     },
   ): Promise<boolean> {
     const existing = await transaction.database.first(
@@ -848,47 +805,18 @@ export class ActivityRepository {
         );
       }
     }
-    if (detail.updates !== undefined) {
-      // A strong embedded head starts a new canonical cursor chain. Keep only this device's
-      // acknowledged posts as overlays until the server head itself contains them.
+    if (detail.updates !== undefined && options.installUpdates !== false) {
+      // The embedded head is the authoritative first page: it replaces every locally held
+      // canonical row and restarts the continuation chain. Pending posts and delete masks live
+      // in activity_update_operations and are untouched.
       await transaction.database.run(
-        `UPDATE activity_update_acknowledgements
-         SET reconcile_after_exhaustion = 1
-         WHERE activity_id = ?;`,
-        [detail.activity.activityId],
-      );
-      await transaction.database.run(
-        `DELETE FROM activity_updates
-         WHERE activity_id = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM activity_update_acknowledgements acknowledgement
-             WHERE acknowledgement.activity_id = activity_updates.activity_id
-               AND acknowledgement.operation = 'post'
-               AND acknowledgement.target_update_id = activity_updates.update_id
-           );`,
+        'DELETE FROM activity_updates WHERE activity_id = ?;',
         [detail.activity.activityId],
       );
       for (const update of detail.updates) {
         await this.putUpdate(transaction.database, update);
-        await transaction.database.run(
-          `DELETE FROM activity_update_acknowledgements
-           WHERE activity_id = ? AND operation = 'post' AND target_update_id = ?;`,
-          [detail.activity.activityId, update.updateId],
-        );
-        await transaction.database.run(
-          `UPDATE activity_update_acknowledgements
-           SET reconcile_after_exhaustion = 0
-           WHERE activity_id = ? AND operation = 'delete' AND target_update_id = ?;`,
-          [detail.activity.activityId, update.updateId],
-        );
       }
       await this.putUpdateCursor(
-        transaction.database,
-        detail.activity.activityId,
-        detail.updatesCursor,
-        true,
-      );
-      await this.finishUpdateReconciliation(
         transaction.database,
         detail.activity.activityId,
         detail.updatesCursor,
@@ -953,10 +881,6 @@ export class ActivityRepository {
       [activityId],
     );
     await transaction.database.run(
-      'DELETE FROM activity_update_acknowledgements WHERE activity_id = ?;',
-      [activityId],
-    );
-    await transaction.database.run(
       'DELETE FROM activity_children WHERE parent_activity_id = ?;',
       [activityId],
     );
@@ -1017,41 +941,12 @@ export class ActivityRepository {
     database: SqliteExecutor,
     activityId: string,
     cursor: string | undefined,
-    advanceGeneration = false,
   ): Promise<void> {
     await database.run(
-      `INSERT INTO activity_update_feed_state (activity_id, next_cursor, generation)
-       VALUES (?, ?, ?)
-       ON CONFLICT(activity_id) DO UPDATE SET
-         next_cursor=excluded.next_cursor,
-         generation=activity_update_feed_state.generation + excluded.generation;`,
-      [activityId, cursor ?? null, advanceGeneration ? 1 : 0],
-    );
-  }
-
-  /** Retires only overlays that predate a strong feed chain and stayed absent through its tail. */
-  private async finishUpdateReconciliation(
-    database: SqliteExecutor,
-    activityId: string,
-    cursor: string | undefined,
-  ): Promise<void> {
-    if (cursor !== undefined) return;
-    await database.run(
-      `DELETE FROM activity_updates
-       WHERE activity_id = ?
-         AND EXISTS (
-           SELECT 1 FROM activity_update_acknowledgements acknowledgement
-           WHERE acknowledgement.activity_id = activity_updates.activity_id
-             AND acknowledgement.operation = 'post'
-             AND acknowledgement.target_update_id = activity_updates.update_id
-             AND acknowledgement.reconcile_after_exhaustion = 1
-         );`,
-      [activityId],
-    );
-    await database.run(
-      `DELETE FROM activity_update_acknowledgements
-       WHERE activity_id = ? AND reconcile_after_exhaustion = 1;`,
-      [activityId],
+      `INSERT INTO activity_update_feed_state (activity_id, next_cursor)
+       VALUES (?, ?)
+       ON CONFLICT(activity_id) DO UPDATE SET next_cursor=excluded.next_cursor;`,
+      [activityId, cursor ?? null],
     );
   }
 

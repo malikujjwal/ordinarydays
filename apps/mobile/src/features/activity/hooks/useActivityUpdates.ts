@@ -4,309 +4,109 @@ import type {
   DeletedActivityUpdate,
   PostActivityUpdateResult,
 } from '@od/shared/types';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
-import { describeApiFailure } from '@/lib/apiFailure';
 import type {
   ActivityUpdateDeleteVariables,
   ActivityUpdatePostVariables,
 } from '@/lib/mutationDefaults';
 import { activityUpdateMutationKeys } from '@/lib/mutationKeys';
 import { raisePlanActivityFloor } from '@/lib/planActivityFloors';
-import { activityUpdatesKey } from './keys';
+import { activityKey } from '@/lib/queryKeys';
+import {
+  type ActivityUpdatesFailure,
+  type ActivityUpdatesView,
+  dedupe,
+  describeUpdatesFailure,
+  EMPTY_UPDATES,
+  newestFirst,
+  type PendingUpdate,
+} from '../model/updatesFeed';
+
+export type {
+  ActivityUpdatesFailure,
+  ActivityUpdatesFailureAction,
+  ActivityUpdatesView,
+  PendingUpdate,
+} from '../model/updatesFeed';
 
 /**
- * The plan's Updates feed (P3-40, `plans-and-lists.md` §2.1 row 9).
+ * The plan's Updates feed (P3-40, `plans-and-lists.md` §2.1 row 9) — web adapter.
  *
- * Seeded from the page the detail response **embeds** — opening a plan issues no second
- * request (P3-37's one-request rule) — and continued through `GET .../updates?cursor=` only
- * when the user reveals more. This is the web adapter: the native sibling installs the feed,
- * cursor, and authoritative Plans timestamp in SQLite before presenting confirmation.
- *
- * ## The optimistic post, and what makes it safe
- *
- * `post` renders the entry at the head immediately under a local id, then replaces it with
- * the stored row from the response. The response's `lastActivityAt` is raised into
- * {@link usePlanActivityFloor} so the Plans tab moves the row at once and a stale
- * eventually-consistent refetch cannot move it back. A rejected post removes the local entry
- * and surfaces the failure — nothing pretends to have been recorded.
+ * Seeded from the page the detail response **embeds** (opening a plan issues no second
+ * request, P3-37) and continued through `GET .../updates?cursor=` only when the user reveals
+ * more. Local writes are simple: a post shows a pending row, then the response row, and
+ * invalidates the detail query; the strong detail read that follows is the reconciliation.
+ * The response row and any delete mask are kept only until an embedded head contains them,
+ * so an older in-flight detail response cannot hide a post or resurrect a delete, and nothing
+ * needs to remember more than that.
  */
-
-/** A not-yet-acknowledged entry, rendered at the head under a local identity. */
-export interface PendingUpdate {
-  readonly localId: string;
-  readonly body: string;
-}
-
-export type ActivityUpdatesFailureAction = 'load' | 'post' | 'delete';
-
-export interface ActivityUpdatesFailure {
-  readonly action: ActivityUpdatesFailureAction;
-  readonly message: string;
-  readonly requestId?: string;
-}
-
-export interface ActivityUpdatesView {
-  readonly updates: readonly ActivityUpdate[];
-  readonly pending: readonly PendingUpdate[];
-  /** `undefined` once the feed's ordinary pagination is exhausted. */
-  readonly cursor: string | undefined;
-  readonly isLoadingMore: boolean;
-  readonly isPosting: boolean;
-  readonly loadMore: () => void;
-  readonly post: (body: string) => Promise<boolean>;
-  readonly remove: (update: ActivityUpdate) => Promise<boolean>;
-  readonly errorMessage: string | undefined;
-  readonly errorRequestId: string | undefined;
-  readonly errorAction: ActivityUpdatesFailureAction | undefined;
-  /** Replays failed paging/deletion; post retry is owned by the draft-preserving composer. */
-  readonly retryFailure: () => Promise<boolean>;
-  readonly dismissError: () => void;
-}
-
-function describeFailure(
-  error: unknown,
-  action: ActivityUpdatesFailureAction,
-): ActivityUpdatesFailure {
-  const fallback =
-    action === 'load'
-      ? "Couldn't load older updates."
-      : action === 'post'
-        ? "Couldn't post this update."
-        : "Couldn't delete this update.";
-  return { action, ...describeApiFailure(error, fallback) };
-}
-
-/** Newest first; the id tiebreak keeps two same-instant entries in one stable order. */
-function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
-  return [...entries].sort((a, b) =>
-    a.createdAt === b.createdAt
-      ? b.updateId.localeCompare(a.updateId)
-      : b.createdAt.localeCompare(a.createdAt),
-  );
-}
-
-function dedupe(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
-  const seen = new Set<string>();
-  return entries.filter((entry) => {
-    if (seen.has(entry.updateId)) return false;
-    seen.add(entry.updateId);
-    return true;
-  });
-}
-
-interface ActivityUpdatesCache {
-  /** The latest first page embedded by Activity detail. */
-  readonly head: readonly ActivityUpdate[];
-  /** Pages explicitly fetched through the continuation cursor. */
-  readonly older: readonly ActivityUpdate[];
-  /** Web writes acknowledged before an eventually-consistent detail read contains them. */
-  readonly acknowledged: readonly ActivityUpdate[];
-  /** Acknowledged deletes that an older detail projection must not resurrect. */
-  readonly deletedUpdateIds: readonly string[];
-  /** Pre-refresh local posts that a complete strong cursor chain may prove absent. */
-  readonly reconcilingAcknowledgedIds?: readonly string[];
-  /** Pre-refresh delete masks whose target has not appeared in the current strong chain. */
-  readonly reconcilingDeletedUpdateIds?: readonly string[];
-  /** Cursor that arrived with `head`, used to detect a newer embedded projection. */
-  readonly headCursor: string | undefined;
-  /** Value identity prevents render-created arrays from impersonating a fresh server head. */
-  readonly headIdentity?: string;
-  readonly cursor: string | undefined;
-}
-
-function headIdentity(embedded: {
-  updates: readonly ActivityUpdate[];
-  cursor: string | undefined;
-  revision?: number;
-}): string {
-  return JSON.stringify([
-    embedded.revision ?? null,
-    embedded.cursor ?? null,
-    embedded.updates.map((entry) => [
-      entry.updateId,
-      entry.kind,
-      entry.authorUserId ?? null,
-      entry.body,
-      entry.createdAt,
-      entry.schemaVersion,
-    ]),
-  ]);
-}
-
-function initialCache(embedded: {
-  updates: readonly ActivityUpdate[];
-  cursor: string | undefined;
-  revision?: number;
-}): ActivityUpdatesCache {
-  return {
-    head: embedded.updates,
-    older: [],
-    acknowledged: [],
-    deletedUpdateIds: [],
-    reconcilingAcknowledgedIds: [],
-    reconcilingDeletedUpdateIds: [],
-    headCursor: embedded.cursor,
-    headIdentity: headIdentity(embedded),
-    cursor: embedded.cursor,
-  };
-}
-
-/**
- * A successful Activity-detail read is authoritative for the embedded head page. Local writes
- * remain overlays until that head contains their acknowledgement, so an older read cannot undo
- * a post/delete that this client already saw succeed.
- */
-function reconcileEmbedded(
-  current: ActivityUpdatesCache,
-  embedded: {
-    updates: readonly ActivityUpdate[];
-    cursor: string | undefined;
-    revision?: number;
-  },
-): ActivityUpdatesCache {
-  const nextHeadIdentity = headIdentity(embedded);
-  const currentHeadIdentity =
-    current.headIdentity ??
-    headIdentity({ updates: current.head, cursor: current.headCursor });
-  if (currentHeadIdentity === nextHeadIdentity) {
-    return current;
-  }
-  const embeddedIds = new Set(embedded.updates.map((entry) => entry.updateId));
-  let acknowledged = current.acknowledged.filter(
-    (entry) => !embeddedIds.has(entry.updateId),
-  );
-  let deletedUpdateIds = current.deletedUpdateIds;
-  let reconcilingAcknowledgedIds = acknowledged.map((entry) => entry.updateId);
-  let reconcilingDeletedUpdateIds = deletedUpdateIds.filter((id) => !embeddedIds.has(id));
-  if (embedded.cursor === undefined) {
-    const absentPosts = new Set(reconcilingAcknowledgedIds);
-    const absentDeletes = new Set(reconcilingDeletedUpdateIds);
-    acknowledged = acknowledged.filter((entry) => !absentPosts.has(entry.updateId));
-    deletedUpdateIds = deletedUpdateIds.filter((id) => !absentDeletes.has(id));
-    reconcilingAcknowledgedIds = [];
-    reconcilingDeletedUpdateIds = [];
-  }
-  return {
-    ...current,
-    head: embedded.updates,
-    older: [],
-    acknowledged,
-    deletedUpdateIds,
-    reconcilingAcknowledgedIds,
-    reconcilingDeletedUpdateIds,
-    headCursor: embedded.cursor,
-    headIdentity: nextHeadIdentity,
-    cursor: embedded.cursor,
-  };
-}
-
-function materialize(cache: ActivityUpdatesCache): ActivityUpdate[] {
-  const deleted = new Set(cache.deletedUpdateIds);
-  return newestFirst(
-    dedupe([...cache.acknowledged, ...cache.head, ...cache.older]).filter(
-      (entry) => !deleted.has(entry.updateId),
-    ),
-  );
-}
-
-type PostVariables = ActivityUpdatePostVariables;
-
-interface ContinuationRequest {
-  readonly cursor: string;
-  readonly headIdentity: string;
-}
-
 export function useActivityUpdates(
   activityId: string,
   embedded: {
-    updates: readonly ActivityUpdate[];
+    updates: readonly ActivityUpdate[] | undefined;
     cursor: string | undefined;
-    revision?: number;
   },
 ): ActivityUpdatesView {
-  const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
-  const [failure, setFailure] = useState<ActivityUpdatesFailure>();
-  const [failedPost, setFailedPost] = useState<PostVariables>();
-  const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
-  const [failedContinuation, setFailedContinuation] = useState<ContinuationRequest>();
+  const head = embedded.updates ?? EMPTY_UPDATES;
   const queryClient = useQueryClient();
-  const queryKey = useMemo(() => activityUpdatesKey(activityId), [activityId]);
-  const cached = useQuery({
-    queryKey,
-    queryFn: () => Promise.resolve(initialCache(embedded)),
-    initialData: initialCache(embedded),
-    enabled: false,
-    staleTime: Number.POSITIVE_INFINITY,
-  }).data;
-  const feed = reconcileEmbedded(cached, embedded);
+  /** Rows this client posted, until an embedded head includes them. */
+  const [posted, setPosted] = useState<readonly ActivityUpdate[]>([]);
+  /** Ids this client deleted, until an embedded head no longer includes them. */
+  const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
+  const [older, setOlder] = useState<readonly ActivityUpdate[]>([]);
+  const [cursor, setCursor] = useState(embedded.cursor);
+  const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [failure, setFailure] = useState<ActivityUpdatesFailure>();
+  const [failedPost, setFailedPost] = useState<ActivityUpdatePostVariables>();
+  const [failedDelete, setFailedDelete] = useState<ActivityUpdate>();
+  const [failedCursor, setFailedCursor] = useState<string>();
 
-  useEffect(() => {
-    if (feed !== cached) {
-      queryClient.setQueryData<ActivityUpdatesCache>(queryKey, (current) =>
-        current === cached ? feed : current,
-      );
-    }
-  }, [cached, feed, queryClient, queryKey]);
+  /**
+   * Adjust-on-prop-change, as state so a discarded render re-runs it. A different activity
+   * under the same mounted screen resets everything; a new embedded head (a refetch) resets
+   * only the continuation and retires the local rows and masks it now accounts for. The
+   * head is compared by identity: the query cache's structural sharing keeps the same array
+   * across equal refetches, so identity changes exactly when the server page did.
+   */
+  const [seed, setSeed] = useState({ activityId, head, cursor: embedded.cursor });
+  if (seed.activityId !== activityId) {
+    setSeed({ activityId, head, cursor: embedded.cursor });
+    setPosted([]);
+    setDeleted(new Set());
+    setOlder([]);
+    setCursor(embedded.cursor);
+    setPending([]);
+    setLoadingMore(false);
+    setFailure(undefined);
+    setFailedPost(undefined);
+    setFailedDelete(undefined);
+    setFailedCursor(undefined);
+  } else if (seed.head !== head || seed.cursor !== embedded.cursor) {
+    setSeed({ activityId, head, cursor: embedded.cursor });
+    const ids = new Set(head.map((entry) => entry.updateId));
+    setPosted((current) => current.filter((entry) => !ids.has(entry.updateId)));
+    setDeleted((current) => new Set([...current].filter((id) => ids.has(id))));
+    setOlder([]);
+    setCursor(embedded.cursor);
+  }
+  /** Guards async callbacks: a response that started under a previous activity is dropped. */
+  const liveActivity = useRef(activityId);
+  liveActivity.current = activityId;
 
-  const loadMoreMutation = useMutation({
-    mutationFn: (request: ContinuationRequest) =>
-      getActivityUpdates(apiClient, activityId, request.cursor),
-    onSuccess: (page, request) => {
-      queryClient.setQueryData<ActivityUpdatesCache>(
-        queryKey,
-        (current = initialCache(embedded)) => {
-          const baseline = reconcileEmbedded(current, embedded);
-          if (
-            baseline.headIdentity !== request.headIdentity ||
-            baseline.cursor !== request.cursor
-          ) {
-            return baseline;
-          }
-          const pageIds = new Set(page.updates.map((entry) => entry.updateId));
-          let acknowledged = baseline.acknowledged.filter(
-            (entry) => !pageIds.has(entry.updateId),
-          );
-          let deletedUpdateIds = baseline.deletedUpdateIds;
-          let reconcilingAcknowledgedIds = (
-            baseline.reconcilingAcknowledgedIds ?? []
-          ).filter((id) => !pageIds.has(id));
-          let reconcilingDeletedUpdateIds = (
-            baseline.reconcilingDeletedUpdateIds ?? []
-          ).filter((id) => !pageIds.has(id));
-          if (page.cursor === undefined) {
-            const absentPosts = new Set(reconcilingAcknowledgedIds);
-            const absentDeletes = new Set(reconcilingDeletedUpdateIds);
-            acknowledged = acknowledged.filter(
-              (entry) => !absentPosts.has(entry.updateId),
-            );
-            deletedUpdateIds = deletedUpdateIds.filter((id) => !absentDeletes.has(id));
-            reconcilingAcknowledgedIds = [];
-            reconcilingDeletedUpdateIds = [];
-          }
-          return {
-            ...baseline,
-            older: dedupe([...baseline.older, ...page.updates]),
-            acknowledged,
-            deletedUpdateIds,
-            reconcilingAcknowledgedIds,
-            reconcilingDeletedUpdateIds,
-            cursor: page.cursor,
-          };
-        },
-      );
-      setFailedContinuation(undefined);
-      setFailure(undefined);
-    },
-    onError: (caught, request) => {
-      setFailedContinuation(request);
-      setFailure(describeFailure(caught, 'load'));
-    },
-  });
+  const refreshDetail = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: activityKey(activityId) }),
+    [activityId, queryClient],
+  );
 
-  const postMutation = useMutation<PostActivityUpdateResult, unknown, PostVariables>({
+  const postMutation = useMutation<
+    PostActivityUpdateResult,
+    unknown,
+    ActivityUpdatePostVariables
+  >({
     mutationKey: activityUpdateMutationKeys.post,
     onMutate: (variables) => {
       setPending((current) => [
@@ -314,23 +114,21 @@ export function useActivityUpdates(
         ...current,
       ]);
     },
-    onSuccess: (result) => {
-      raisePlanActivityFloor(queryClient, activityId, result.lastActivityAt);
-      queryClient.setQueryData<ActivityUpdatesCache>(
-        queryKey,
-        (current = initialCache(embedded)) => ({
-          ...current,
-          acknowledged: dedupe([result.update, ...current.acknowledged]),
-        }),
-      );
+    onSuccess: (result, variables) => {
+      // The floor is per-activity truth, so it is raised even if the screen moved on.
+      raisePlanActivityFloor(queryClient, variables.activityId, result.lastActivityAt);
+      if (liveActivity.current !== variables.activityId) return;
+      setPosted((current) => dedupe([result.update, ...current]));
       setFailedPost(undefined);
       setFailure(undefined);
+      void refreshDetail();
     },
     onError: (caught, variables) => {
+      if (liveActivity.current !== variables.activityId) return;
       setFailedPost(variables);
-      setFailure(describeFailure(caught, 'post'));
+      setFailure(describeUpdatesFailure(caught, 'post'));
     },
-    onSettled: (_data, _caught, variables) => {
+    onSettled: (_result, _caught, variables) => {
       setPending((current) =>
         current.filter((entry) => entry.localId !== variables.localId),
       );
@@ -340,59 +138,69 @@ export function useActivityUpdates(
   const deleteMutation = useMutation<
     DeletedActivityUpdate,
     unknown,
-    ActivityUpdateDeleteVariables,
-    ActivityUpdatesCache | undefined
+    ActivityUpdateDeleteVariables & { readonly update: ActivityUpdate }
   >({
     mutationKey: activityUpdateMutationKeys.delete,
-    onMutate: (variables: ActivityUpdateDeleteVariables) => {
-      const update = feed.head
-        .concat(feed.older, feed.acknowledged)
-        .find((entry) => entry.updateId === variables.updateId);
-      const snapshot = queryClient.getQueryData<ActivityUpdatesCache>(queryKey);
-      if (update === undefined) return snapshot;
-      queryClient.setQueryData<ActivityUpdatesCache>(
-        queryKey,
-        (current = initialCache(embedded)) => ({
-          ...current,
-          deletedUpdateIds: [...new Set([...current.deletedUpdateIds, update.updateId])],
-        }),
-      );
-      return snapshot;
+    onMutate: (variables) => {
+      setDeleted((current) => new Set(current).add(variables.updateId));
     },
-    onSuccess: () => {
+    onSuccess: (_deleted, variables) => {
+      if (liveActivity.current !== variables.activityId) return;
       setFailedDelete(undefined);
       setFailure(undefined);
+      void refreshDetail();
     },
-    onError: (caught, variables, snapshot) => {
-      if (snapshot !== undefined) queryClient.setQueryData(queryKey, snapshot);
-      const update = feed.head
-        .concat(feed.older, feed.acknowledged)
-        .find((entry) => entry.updateId === variables.updateId);
-      setFailedDelete(update);
-      setFailure(describeFailure(caught, 'delete'));
+    onError: (caught, variables) => {
+      if (liveActivity.current !== variables.activityId) return;
+      setDeleted((current) => {
+        const next = new Set(current);
+        next.delete(variables.updateId);
+        return next;
+      });
+      setFailedDelete(variables.update);
+      setFailure(describeUpdatesFailure(caught, 'delete'));
     },
   });
 
+  const loadPage = useCallback(
+    async (requestedCursor: string): Promise<boolean> => {
+      const requested = activityId;
+      setLoadingMore(true);
+      try {
+        const page = await getActivityUpdates(apiClient, activityId, requestedCursor);
+        if (liveActivity.current !== requested) return false;
+        setOlder((current) => dedupe([...current, ...page.updates]));
+        setCursor(page.cursor);
+        setFailedCursor(undefined);
+        setFailure(undefined);
+        return true;
+      } catch (caught) {
+        if (liveActivity.current === requested) {
+          setFailedCursor(requestedCursor);
+          setFailure(describeUpdatesFailure(caught, 'load'));
+        }
+        return false;
+      } finally {
+        if (liveActivity.current === requested) setLoadingMore(false);
+      }
+    },
+    [activityId],
+  );
+
   const loadMore = useCallback(() => {
-    if (feed.cursor === undefined || loadMoreMutation.isPending) return;
-    loadMoreMutation.mutate({
-      cursor: feed.cursor,
-      headIdentity:
-        feed.headIdentity ??
-        headIdentity({ updates: feed.head, cursor: feed.headCursor }),
-    });
-  }, [feed.cursor, feed.head, feed.headCursor, feed.headIdentity, loadMoreMutation]);
+    if (cursor === undefined || loadingMore) return;
+    void loadPage(cursor);
+  }, [cursor, loadPage, loadingMore]);
 
   const post = useCallback(
     async (body: string): Promise<boolean> => {
       const trimmed = body.trim();
       if (trimmed === '' || postMutation.isPending) return false;
-      const localId = randomUUID();
       try {
         await postMutation.mutateAsync({
           activityId,
           body: trimmed,
-          localId,
+          localId: randomUUID(),
           idempotencyKey: randomUUID(),
         });
         return true;
@@ -409,7 +217,11 @@ export function useActivityUpdates(
       // for a caller that bypassed the row.
       if (update.kind !== 'user') return false;
       try {
-        await deleteMutation.mutateAsync({ activityId, updateId: update.updateId });
+        await deleteMutation.mutateAsync({
+          activityId,
+          updateId: update.updateId,
+          update,
+        });
         return true;
       } catch {
         return false;
@@ -420,41 +232,42 @@ export function useActivityUpdates(
 
   const retryFailure = useCallback(async (): Promise<boolean> => {
     try {
-      if (failure?.action === 'load' && failedContinuation !== undefined) {
-        await loadMoreMutation.mutateAsync(failedContinuation);
-        return true;
+      if (failure?.action === 'load' && failedCursor !== undefined) {
+        return loadPage(failedCursor);
       }
       if (failure?.action === 'post' && failedPost !== undefined) {
+        // The same idempotency key, so a retry after a lost response cannot post twice.
         await postMutation.mutateAsync(failedPost);
         return true;
       }
       if (failure?.action === 'delete' && failedDelete !== undefined) {
-        await deleteMutation.mutateAsync({
-          activityId,
-          updateId: failedDelete.updateId,
-        });
-        return true;
+        return remove(failedDelete);
       }
       return false;
     } catch {
       return false;
     }
   }, [
-    activityId,
-    deleteMutation,
-    failedContinuation,
+    failedCursor,
     failedDelete,
     failedPost,
     failure?.action,
-    loadMoreMutation,
+    loadPage,
     postMutation,
+    remove,
   ]);
 
+  const dismissError = useCallback(() => setFailure(undefined), []);
+
   return {
-    updates: materialize(feed),
+    updates: newestFirst(
+      dedupe([...posted, ...head, ...older]).filter(
+        (entry) => !deleted.has(entry.updateId),
+      ),
+    ),
     pending,
-    cursor: feed.cursor,
-    isLoadingMore: loadMoreMutation.isPending,
+    cursor,
+    isLoadingMore: loadingMore,
     isPosting: postMutation.isPending,
     loadMore,
     post,
@@ -463,6 +276,6 @@ export function useActivityUpdates(
     errorRequestId: failure?.requestId,
     errorAction: failure?.action,
     retryFailure,
-    dismissError: () => setFailure(undefined),
+    dismissError,
   };
 }

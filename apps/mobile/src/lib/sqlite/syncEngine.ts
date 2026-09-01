@@ -425,6 +425,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
      * lets it run before the next coverage pull. Repository guards prevent its response from
      * overwriting unresolved local work for this Activity.
      */
+    const updatesVersion = this.activities.updatesVersion(target.activityId);
     let detail: ActivityDetail;
     try {
       detail = await this.serialNetwork((signal) => this.pull.activity(target, signal));
@@ -437,7 +438,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       throw error;
     }
     const accepted = await this.transactions.run((transaction) =>
-      this.activities.putCanonical(transaction, detail),
+      this.activities.putCanonical(transaction, detail, { updatesVersion }),
     );
     if (!accepted) {
       throw new CanonicalActivityInstallDeferredError(target.activityId);
@@ -452,19 +453,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const pullUpdates = this.pull.activityUpdates;
     if (pullUpdates === undefined)
       throw new Error('Native Updates transport is not ready.');
-    const position = await this.activities.readUpdateFeedPosition(activityId);
-    if (position?.cursor === undefined) return this.activities.readUpdates(activityId);
-    const { cursor, generation } = position;
+    const current = await this.activities.readUpdates(activityId);
+    const cursor = current.cursor;
+    if (cursor === undefined) return current;
     const page = await this.serialNetwork((signal) =>
       pullUpdates(activityId, cursor, signal),
     );
     await this.transactions.run((transaction) =>
-      this.activities.installUpdatePage(
-        transaction,
-        activityId,
-        { cursor, generation },
-        page,
-      ),
+      this.activities.installUpdatePage(transaction, activityId, cursor, page),
     );
     return this.activities.readUpdates(activityId);
   }
