@@ -18,7 +18,10 @@ import {
   applyPlansCreate,
   applyPlansRemove,
   createdActivityFrom,
+  type NeedsDateRowData,
 } from '../model/plansApply';
+
+export type { NeedsDateRowData } from '../model/plansApply';
 
 /**
  * The three-stage Plans read (P3-36): one `GET /v1/plans?mode=initial` renders the screen,
@@ -48,12 +51,6 @@ const WINDOW_DAYS = 62;
  * shape crosses into this one, and carries the boundary annotation §1.2 reserves for a
  * schema-validated response.
  */
-export type NeedsDateRowData = AgendaItem & {
-  readonly lastActivityAt: string;
-  readonly suggestionCount: number;
-  readonly rsvpSummary: NeedsDateItem['rsvpSummary'];
-};
-
 /** The §1.2 boundary: `getPlans` has already schema-validated these rows. */
 const installNeedsDate = (rows: readonly NeedsDateItem[]) =>
   rows as readonly NeedsDateRowData[];

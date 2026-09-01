@@ -1,8 +1,15 @@
 import type { PlansDateStore } from '@od/shared/client';
 import { describeRecurrence } from '@od/shared/recurrence';
+import type { NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
 import type { Activity, AgendaItem } from '@od/shared/types';
-import type { NeedsDateRowData } from '../hooks/usePlans';
+
+/** The schema-validated needs-a-date row shape consumed by the Plans hook and projections. */
+export type NeedsDateRowData = AgendaItem & {
+  readonly lastActivityAt: string;
+  readonly suggestionCount: number;
+  readonly rsvpSummary: NeedsDateItem['rsvpSummary'];
+};
 
 /**
  * Places a newly-created Activity into the Plans tab's local state (P3-36's regression,
