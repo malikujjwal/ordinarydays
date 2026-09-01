@@ -1,7 +1,22 @@
+import type { WallDate } from '@od/shared/time';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { usePlanActivityFloor } from '@/stores/planActivityFloor';
 import { type NeedsDateRowData, usePlans } from './usePlans';
+
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <QueryClientProvider
+    client={
+      new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      })
+    }
+  >
+    {children}
+  </QueryClientProvider>
+);
 
 /**
  * The §P3-40 monotonic merge in the needs-a-date stage: the authoritative `lastActivityAt` a
@@ -71,7 +86,12 @@ afterEach(() => {
 });
 
 it('moves a row up when the floor rises and holds it against a stale refetch', async () => {
-  const { result } = renderHook(() => usePlans('America/New_York'));
+  const { result } = renderHook(
+    () => usePlans('America/New_York', '2026-08-06' as WallDate),
+    {
+      wrapper,
+    },
+  );
   await waitFor(() => expect(result.current.status).toBe('success'));
   expect(result.current.needsDate.map((row) => row.activityId)).toEqual([B, A]);
 
@@ -93,7 +113,12 @@ it('moves a row up when the floor rises and holds it against a stale refetch', a
 
 it('lets a genuinely newer server value win over an older floor', async () => {
   usePlanActivityFloor.getState().raise(B, '2026-08-01T00:00:00.000Z');
-  const { result } = renderHook(() => usePlans('America/New_York'));
+  const { result } = renderHook(
+    () => usePlans('America/New_York', '2026-08-06' as WallDate),
+    {
+      wrapper,
+    },
+  );
   await waitFor(() => expect(result.current.status).toBe('success'));
 
   const rowB = result.current.needsDate.find((row) => row.activityId === B);

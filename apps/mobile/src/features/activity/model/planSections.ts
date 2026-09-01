@@ -1,3 +1,4 @@
+import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import type { ActivityChild, SourceListSummary } from '@od/shared/types';
 
 /**
@@ -36,11 +37,17 @@ export function sourceListLine(summary: SourceListSummary): string {
   return summary.doneCount > 0 ? `${items} · ${summary.doneCount} checked` : items;
 }
 
-/** Which named chips the `Add to this plan` row offers: the empty sections with an entry. */
+/**
+ * Which named chips the `Add to this plan` row offers: the empty sections with an entry.
+ *
+ * There is deliberately **no** Update chip: whenever §2.2 lets the Updates section show, it
+ * carries its own `+ Write an update`, and when it hides (private, no entries) the absence
+ * of an entry point is the recorded consequence — so an Update chip has no reachable state.
+ * The mock draws one on a private plan; recorded as a divergence rather than followed.
+ */
 export interface AddToPlanChips {
   readonly prepTask: boolean;
   readonly list: boolean;
-  readonly update: boolean;
 }
 
 /**
@@ -51,22 +58,28 @@ export interface AddToPlanChips {
 export function addToPlanChips(input: {
   readonly children: readonly ActivityChild[];
   readonly sourceLists: readonly SourceListSummary[];
-  readonly updatesVisible: boolean;
-  readonly wired: { prepTask: boolean; list: boolean; update: boolean };
+  readonly wired: { prepTask: boolean; list: boolean };
 }): AddToPlanChips {
   return {
     prepTask: input.wired.prepTask && input.children.length === 0,
     list: input.wired.list && input.sourceLists.length === 0,
-    update: input.wired.update && input.updatesVisible,
   };
 }
 
 /**
  * `today` / `yesterday` / `3 days ago` — the update row's relative stamp, computed from the
  * injected `today` so the component never reads a clock (`coding-standards.md` §4.3).
+ *
+ * `createdAt` is a UTC instant; the day it belongs to is the **viewer's** wall day, so the
+ * instant is converted through the viewer's zone before any date arithmetic. Slicing the
+ * instant's own calendar date stamped a Sydney morning post "yesterday".
  */
-export function relativeUpdateTime(createdAt: string, today: string): string {
-  const createdDate = createdAt.slice(0, 10);
+export function relativeUpdateTime(
+  createdAt: string,
+  today: string,
+  timezone: TimeZone,
+): string {
+  const createdDate = toWallDate(createdAt as Instant, timezone);
   if (createdDate >= today) return 'today';
   const created = Date.parse(`${createdDate}T00:00:00Z`);
   const now = Date.parse(`${today}T00:00:00Z`);

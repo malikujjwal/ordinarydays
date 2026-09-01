@@ -1,5 +1,6 @@
 import { differenceInWallDays } from '@od/shared/recurrence';
 import type { ListItemPlanState } from '@od/shared/types';
+import { formatWallTime, type WallTime } from '@od/ui';
 import { format, parseISO } from 'date-fns';
 
 /**
@@ -39,14 +40,12 @@ function compactTime(time: string): string {
   return minutes === '00' ? `${display} ${suffix}` : `${display}:${minutes} ${suffix}`;
 }
 
-/** The full spoken time, `7:00 PM`, for the accessibility label (§6.2's grammar). */
-function spokenTime(time: string): string {
-  const [hours = '0', minutes = '00'] = time.split(':');
-  const hour = Number.parseInt(hours, 10);
-  const suffix = hour < 12 ? 'AM' : 'PM';
-  const display = hour % 12 === 0 ? 12 : hour % 12;
-  return `${display}:${minutes} ${suffix}`;
-}
+/**
+ * The full spoken time, `7:00 PM`, for the accessibility label (§6.2's grammar) — the shared
+ * 12-hour formatter, so the announced time can never diverge from what the rest of the app
+ * renders. Only {@link compactTime}'s on-the-hour `7 PM` shortening is this module's own.
+ */
+const spokenTime = (time: string): string => formatWallTime(time as WallTime);
 
 function verbFor(viewerPlan: ListItemPlanState): string | undefined {
   if (viewerPlan.status === 'scheduled') {

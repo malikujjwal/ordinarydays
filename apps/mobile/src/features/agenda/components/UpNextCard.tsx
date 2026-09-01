@@ -191,6 +191,10 @@ export function UpNextCardWithState({
            */}
           <View
             accessible
+            // `group` so the label is legal on web: a bare div may not carry `aria-label`
+            // (axe `aria-prohibited-attr`, serious), and the role keeps this one element
+            // announcing `2:30 PM` once rather than its two drawn lines.
+            role="group"
             accessibilityLabel={formattedTime}
             pointerEvents="none"
             testID="up-next-time-rail"

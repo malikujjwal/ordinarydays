@@ -26,9 +26,10 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
     ).toHaveAccessibleName('Daily');
 
     await page.goto('/plans');
-    const todayCard = page.locator(
-      `[data-testid="plans-card-${series.activityId}:${today}"]`,
-    );
+    // The P3-36 anatomy: one card per day (`plans-day-<date>`) holding canonical AgendaRows.
+    const todayCard = page
+      .locator(`[data-testid="plans-day-${today}"]`)
+      .locator(`[data-testid="agenda-row-${series.activityId}"]`);
     await expect(todayCard).toBeVisible();
     await expect(
       todayCard.getByRole('checkbox', { name: `${title}, not completed` }),
@@ -52,9 +53,9 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
     await expect(page.locator('[data-testid="detail-undo"]')).toBeVisible();
 
     await page.goto('/plans');
-    const futureCard = page.locator(
-      `[data-testid="plans-card-${series.activityId}:${tomorrow}"]`,
-    );
+    const futureCard = page
+      .locator(`[data-testid="plans-day-${tomorrow}"]`)
+      .locator(`[data-testid="agenda-row-${series.activityId}"]`);
     await expect(futureCard).toBeVisible();
     await expect(
       futureCard.getByRole('checkbox', { name: `${title}, not completed` }),

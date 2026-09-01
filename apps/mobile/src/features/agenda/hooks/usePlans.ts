@@ -7,9 +7,13 @@ import {
 import { addWallDays } from '@od/shared/recurrence';
 import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
+import { describeApiFailure } from '@/lib/apiFailure';
+import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
 import { usePlanActivityFloor } from '@/stores/planActivityFloor';
+import { applyPlansCreate, createdActivityFrom } from '../model/plansApply';
 import type { RsvpSummaryGroups } from '../model/rsvpSummary';
 
 /**
@@ -57,36 +61,26 @@ export interface PlansView {
   readonly loadMoreUpcoming: () => void;
   readonly loadMorePast: () => void;
   readonly refetch: () => void;
-  /**
-   * Projects a row's completion toggle onto the local store, so the checkbox the user just
-   * tapped reflects immediately. Deliberately **not** followed by a refetch: the write lands
-   * in an eventually consistent GSI, and a refetch issued milliseconds later usually answers
-   * with pre-write data (the `refreshActivityLists` lesson). The next natural refresh
-   * reconciles.
-   */
-  readonly applyCompletion: (
-    item: Pick<AgendaItem, 'activityId' | 'occurrenceDate'>,
-    checked: boolean,
-  ) => void;
   readonly message?: string;
   readonly requestId?: string;
 }
 
-function describe(error: unknown): { message: string; requestId?: string } {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    typeof (error as { status: unknown }).status === 'number'
-  ) {
-    const api = error as { status: number; message: string; requestId?: string };
-    return {
-      message: api.status >= 500 ? 'Something went wrong.' : api.message,
-      ...(api.requestId === undefined ? {} : { requestId: api.requestId }),
-    };
-  }
-  return { message: "Couldn't load this." };
-}
+const describe = (error: unknown) => describeApiFailure(error, "Couldn't load this.");
+
+/**
+ * The mutation keys whose success creates an Activity this tab must project: ordinary
+ * creates, duplicates, and the `Plan this item` bridge — a `list`-scoped key that creates a
+ * Plan (`changesActivityLists` admits it for the same reason). Compared against the exported
+ * constants, never literals: `mutationKeys.ts` owns these wire tags.
+ */
+const CREATE_KEYS: readonly (readonly string[])[] = [
+  activityMutationKeys.create,
+  activityMutationKeys.duplicate,
+  listMutationKeys.itemSchedule,
+];
+
+const keyMatches = (key: readonly unknown[], candidate: readonly string[]) =>
+  key.length === candidate.length && candidate.every((part, i) => key[i] === part);
 
 interface PlansState {
   readonly status: 'pending' | 'success' | 'error';
@@ -94,7 +88,8 @@ interface PlansState {
   readonly store: PlansDateStore;
   readonly upcomingWindow: UpcomingWindowState | undefined;
   readonly pastCursor: string | undefined;
-  readonly failure?: { message: string; requestId?: string };
+  /** Cleared by any later successful load, so a banner never outlives its cause. */
+  readonly failure: { message: string; requestId?: string } | undefined;
 }
 
 const EMPTY: PlansState = {
@@ -103,9 +98,10 @@ const EMPTY: PlansState = {
   store: emptyPlansStore,
   upcomingWindow: undefined,
   pastCursor: undefined,
+  failure: undefined,
 };
 
-export function usePlans(timezone: string): PlansView {
+export function usePlans(timezone: string, today: WallDate): PlansView {
   const [state, setState] = useState<PlansState>(EMPTY);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
@@ -138,6 +134,7 @@ export function usePlans(timezone: string): PlansView {
           nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
         },
         pastCursor: data.pastPage.nextCursor,
+        failure: undefined,
       });
     } catch (error) {
       if (!mounted.current || generation.current !== attempt) return;
@@ -161,6 +158,99 @@ export function usePlans(timezone: string): PlansView {
     });
   }, [initial]);
 
+  /**
+   * Creates land here by **projection of the 201 response**, not by refetch — `/v1/plans`'
+   * dated stages read GSI1, and a refetch fired milliseconds after the write usually answers
+   * with pre-write data (the P2-46 lesson the agenda cache already encodes). Compose closes
+   * itself on save, so this listens on the process-wide mutation cache the way the agenda's
+   * projection does, rather than on any component that is about to unmount.
+   */
+  const queryClient = useQueryClient();
+  /** The caller's injected clock (§4.3), read through a ref so midnight is not a resubscribe. */
+  const todayRef = useRef(today);
+  todayRef.current = today;
+  /**
+   * Patches one row's completion status in place. `changed` short-circuits so an event for a
+   * row this tab does not hold (or a date it has not loaded) leaves every identity stable.
+   */
+  const patchCompletion = useCallback(
+    (activityId: string, occurrenceDate: string | undefined, checked: boolean) => {
+      setState((current) => {
+        const byDate = new Map(current.store.byDate);
+        let changed = false;
+        for (const [date, rows] of byDate) {
+          const next = rows.map((row) => {
+            if (row.activityId !== activityId || row.occurrenceDate !== occurrenceDate) {
+              return row;
+            }
+            changed = true;
+            const status: AgendaItem['status'] =
+              row.occurrenceDate === undefined
+                ? checked
+                  ? 'completed'
+                  : 'scheduled'
+                : checked
+                  ? 'completed_occurrence'
+                  : 'scheduled';
+            return { ...row, status };
+          });
+          if (next.some((row, index) => row !== rows[index])) byDate.set(date, next);
+        }
+        if (!changed) return current;
+        return { ...current, store: { ...current.store, byDate } };
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return queryClient.getMutationCache().subscribe((event) => {
+      if (event.type !== 'updated') return;
+      const key = event.mutation.options.mutationKey;
+      if (!Array.isArray(key)) return;
+
+      // Creates: project the 201's authoritative Activity into the stages.
+      if (
+        event.action.type === 'success' &&
+        CREATE_KEYS.some((candidate) => keyMatches(key, candidate))
+      ) {
+        const activity = createdActivityFrom(event.action.data);
+        if (activity === undefined) return;
+        setState((current) => {
+          if (current.status !== 'success') return current;
+          const projected = applyPlansCreate(current, activity, todayRef.current);
+          return projected === undefined ? current : { ...current, ...projected };
+        });
+        return;
+      }
+
+      /**
+       * Completions: the same seam projects the toggle and, crucially, **reverts** it. The
+       * agenda action's own rollback rewrites only TanStack caches, so this store listens to
+       * the mutation lifecycle instead: `pending` projects (guarded rows never reach a
+       * mutation, so a refused tick projects nothing), `error` restores, and a successful
+       * `uncomplete` — the toast's Undo — is itself the un-projection.
+       */
+      const isComplete = keyMatches(key, activityMutationKeys.complete);
+      const isUncomplete = keyMatches(key, activityMutationKeys.uncomplete);
+      if (!isComplete && !isUncomplete) return;
+      const variables = event.mutation.state.variables as
+        | { activityId?: unknown; input?: { occurrenceDate?: unknown } }
+        | undefined;
+      const activityId = variables?.activityId;
+      if (typeof activityId !== 'string') return;
+      const occurrenceDate =
+        typeof variables?.input?.occurrenceDate === 'string'
+          ? variables.input.occurrenceDate
+          : undefined;
+      if (event.action.type === 'pending') {
+        patchCompletion(activityId, occurrenceDate, isComplete);
+      } else if (event.action.type === 'error') {
+        patchCompletion(activityId, occurrenceDate, !isComplete);
+      }
+    });
+  }, [queryClient, patchCompletion]);
+
   const loadMoreUpcoming = useCallback(() => {
     const window = state.upcomingWindow;
     if (window === undefined || window.nextFrom === null || loadingUpcoming) return;
@@ -183,6 +273,7 @@ export function usePlans(timezone: string): PlansView {
             through: data.upcomingWindow.through as WallDate,
             nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
           },
+          failure: undefined,
         }));
       })
       .catch((error: unknown) => {
@@ -210,6 +301,7 @@ export function usePlans(timezone: string): PlansView {
                 ...current,
                 store: mergePlansResponse(current.store, data),
                 pastCursor: data.pastPage.nextCursor,
+                failure: undefined,
               },
         );
       })
@@ -221,39 +313,6 @@ export function usePlans(timezone: string): PlansView {
         if (mounted.current) setLoadingPast(false);
       });
   }, [state.pastCursor, loadingPast, timezone]);
-
-  const applyCompletion = useCallback(
-    (item: Pick<AgendaItem, 'activityId' | 'occurrenceDate'>, checked: boolean) => {
-      setState((current) => {
-        const byDate = new Map(current.store.byDate);
-        let changed = false;
-        for (const [date, rows] of byDate) {
-          const next = rows.map((row) => {
-            if (
-              row.activityId !== item.activityId ||
-              row.occurrenceDate !== item.occurrenceDate
-            ) {
-              return row;
-            }
-            changed = true;
-            const status: AgendaItem['status'] =
-              row.occurrenceDate === undefined
-                ? checked
-                  ? 'completed'
-                  : 'scheduled'
-                : checked
-                  ? 'completed_occurrence'
-                  : 'scheduled';
-            return { ...row, status };
-          });
-          if (next.some((row, index) => row !== rows[index])) byDate.set(date, next);
-        }
-        if (!changed) return current;
-        return { ...current, store: { ...current.store, byDate } };
-      });
-    },
-    [],
-  );
 
   /**
    * The §P3-40 monotonic merge: `#P` sorts on `lastActivityAt` and is read back through an
@@ -292,7 +351,6 @@ export function usePlans(timezone: string): PlansView {
     loadMoreUpcoming,
     loadMorePast,
     refetch,
-    applyCompletion,
     ...(state.failure === undefined
       ? {}
       : {

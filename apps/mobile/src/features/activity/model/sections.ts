@@ -1,4 +1,5 @@
 import type { Activity } from '@od/shared/types';
+import { updatesSectionVisible } from '@/features/activity/model/planSections';
 import type { PendingActivity } from '@/lib/pendingActivity';
 
 type DisplayActivity = Activity | PendingActivity;
@@ -124,7 +125,8 @@ export function sectionsFor(
         ]
       : []),
     ...(content.attachmentCount > 0 ? [{ key: 'attachments' }] : []),
-    ...(content.updateCount > 0 || activity.visibility !== 'private'
+    // §2.2's one owner of the rule: hidden while private with no entries (P3-40).
+    ...(updatesSectionVisible(activity.visibility, content.updateCount)
       ? [{ key: 'updates' }]
       : []),
   ];

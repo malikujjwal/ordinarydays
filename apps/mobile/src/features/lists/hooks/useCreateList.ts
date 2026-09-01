@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
+import { listMutationKeys } from '@/lib/mutationKeys';
 import { LISTS_KEY } from './keys';
 
 /**
@@ -63,6 +64,9 @@ export function useCreateList(): CreateListResult {
   const [error, setError] = useState<unknown>();
 
   const mutation = useMutation({
+    // The persisted wire tag: the process-wide MutationCache seam reads it to refresh the
+    // source Plan's detail on a sourced create (P3-39) — see `refreshActivityDetails`.
+    mutationKey: listMutationKeys.create,
     mutationFn: ({
       templateKey,
       title,

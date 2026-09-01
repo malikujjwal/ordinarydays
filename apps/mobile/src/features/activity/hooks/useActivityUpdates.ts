@@ -7,6 +7,7 @@ import type { ActivityUpdate } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
+import { describeApiFailure } from '@/lib/apiFailure';
 import { usePlanActivityFloor } from '@/stores/planActivityFloor';
 
 /**
@@ -47,18 +48,8 @@ export interface ActivityUpdatesView {
   readonly dismissError: () => void;
 }
 
-function describeFailure(error: unknown): string {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    typeof (error as { status: unknown }).status === 'number'
-  ) {
-    const api = error as { status: number; message: string };
-    return api.status >= 500 ? 'Something went wrong.' : api.message;
-  }
-  return "Couldn't save this.";
-}
+const describeFailure = (error: unknown) =>
+  describeApiFailure(error, "Couldn't save this.").message;
 
 /** Newest first; the id tiebreak keeps two same-instant entries in one stable order. */
 function newestFirst(entries: readonly ActivityUpdate[]): ActivityUpdate[] {
@@ -94,10 +85,27 @@ export function useActivityUpdates(
   const [pending, setPending] = useState<readonly PendingUpdate[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(embedded.cursor);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string>();
   const raiseFloor = usePlanActivityFloor((state) => state.raise);
 
+  /**
+   * A **different activity** under the same mounted screen (a `router.replace` between plans
+   * reuses the component) resets every piece of feed state — one plan's local posts, deletes
+   * and paged-in history must never bleed into another's feed. The same ref guards every
+   * async callback below: a response that started under a previous activity is dropped, not
+   * merged, so an in-flight page or post from plan A cannot land in plan B.
+   */
+  const liveActivity = useRef(activityId);
+  if (liveActivity.current !== activityId) {
+    liveActivity.current = activityId;
+    setPosted([]);
+    setDeleted(new Set());
+    setPending([]);
+    setError(undefined);
+    setOlder([]);
+    setCursor(embedded.cursor);
+    setLoadingMore(false);
+  }
   /** A refetched detail carries a fresh first page; older pages hang off its cursor. */
   const seededCursor = useRef(embedded.cursor);
   if (seededCursor.current !== embedded.cursor) {
@@ -118,23 +126,31 @@ export function useActivityUpdates(
 
   const loadMore = useCallback(() => {
     if (cursor === undefined || loadingMore) return;
+    const requested = activityId;
     setLoadingMore(true);
     getActivityUpdates(apiClient, activityId, cursor)
       .then((page) => {
+        if (liveActivity.current !== requested) return;
         setOlder((current) => [...current, ...page.updates]);
         setCursor(page.cursor);
+        setError(undefined);
       })
-      .catch((caught: unknown) => setError(describeFailure(caught)))
-      .finally(() => setLoadingMore(false));
+      .catch((caught: unknown) => {
+        if (liveActivity.current !== requested) return;
+        setError(describeFailure(caught));
+      })
+      .finally(() => {
+        if (liveActivity.current === requested) setLoadingMore(false);
+      });
   }, [activityId, cursor, loadingMore]);
 
   const post = useCallback(
     async (body: string): Promise<boolean> => {
       const trimmed = body.trim();
-      if (trimmed === '' || posting) return false;
+      if (trimmed === '' || pending.length > 0) return false;
+      const requested = activityId;
       const localId = randomUUID();
       setPending((current) => [{ localId, body: trimmed }, ...current]);
-      setPosting(true);
       try {
         const result = await postActivityUpdate(
           apiClient,
@@ -142,18 +158,22 @@ export function useActivityUpdates(
           trimmed,
           randomUUID(),
         );
+        // The floor is per-activity truth, so it is raised even if the screen moved on.
+        raiseFloor(requested, result.lastActivityAt);
+        if (liveActivity.current !== requested) return true;
         setPosted((current) => [result.update, ...current]);
-        raiseFloor(activityId, result.lastActivityAt);
+        setError(undefined);
         return true;
       } catch (caught) {
-        setError(describeFailure(caught));
+        if (liveActivity.current === requested) setError(describeFailure(caught));
         return false;
       } finally {
-        setPending((current) => current.filter((entry) => entry.localId !== localId));
-        setPosting(false);
+        if (liveActivity.current === requested) {
+          setPending((current) => current.filter((entry) => entry.localId !== localId));
+        }
       }
     },
-    [activityId, posting, raiseFloor],
+    [activityId, pending.length, raiseFloor],
   );
 
   const remove = useCallback(
@@ -161,11 +181,14 @@ export function useActivityUpdates(
       // The affordance never exists on a system entry; this guard makes the rule hold even
       // for a caller that bypassed the row.
       if (update.kind !== 'user') return false;
+      const requested = activityId;
       setDeleted((current) => new Set(current).add(update.updateId));
       try {
         await deleteActivityUpdate(apiClient, activityId, update.updateId);
+        if (liveActivity.current === requested) setError(undefined);
         return true;
       } catch (caught) {
+        if (liveActivity.current !== requested) return false;
         setDeleted((current) => {
           const next = new Set(current);
           next.delete(update.updateId);
@@ -183,7 +206,8 @@ export function useActivityUpdates(
     pending,
     cursor,
     isLoadingMore: loadingMore,
-    isPosting: posting,
+    /** One optimistic entry at a time, so the pending row *is* the posting state. */
+    isPosting: pending.length > 0,
     loadMore,
     post,
     remove,

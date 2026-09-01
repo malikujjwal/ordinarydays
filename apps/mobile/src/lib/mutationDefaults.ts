@@ -142,18 +142,28 @@ export function refreshActivityDetails(
   if (!Array.isArray(mutationKey)) return false;
   const [scope, name] = mutationKey as readonly unknown[];
   /**
-   * A create refreshes nothing about itself — the id is new — but a **prep-task** create
-   * (P3-38) changes its parent's detail: the PREP section is projected from the `SUB#`
-   * pointer the same transaction wrote, and the plan screen is still mounted behind the
-   * compose modal. The detail read is a strongly consistent partition read, so an immediate
-   * refetch cannot lose the race the agenda's `refetchType: 'none'` exists for.
+   * A create refreshes nothing about itself — the id is new — but a create that names a
+   * **relationship** changes another entity's detail while its screen is still mounted
+   * behind the modal: a prep-task create (P3-38, `input.parentActivityId`) puts a `SUB#`
+   * pointer in its parent's partition, and a sourced List create (P3-39,
+   * `sourceActivityId`) puts a `SOURCE_LIST#` projection in its Plan's. Both details are
+   * strongly consistent partition reads, so an immediate refetch cannot lose the race the
+   * agenda's `refetchType: 'none'` exists for. One rule, one seam — P3-41's attachment
+   * confirm belongs here too, not in a route.
    */
-  if (scope === 'activity' && name === 'create') {
-    const parentActivityId = (
-      variables as { input?: { parentActivityId?: unknown } } | undefined
-    )?.input?.parentActivityId;
-    if (typeof parentActivityId === 'string') {
-      void client.invalidateQueries({ queryKey: activityKey(parentActivityId) });
+  const isCreate = (scope === 'activity' || scope === 'list') && name === 'create';
+  if (isCreate) {
+    const fields = variables as
+      | { sourceActivityId?: unknown; input?: { parentActivityId?: unknown } }
+      | undefined;
+    const related =
+      typeof fields?.input?.parentActivityId === 'string'
+        ? fields.input.parentActivityId
+        : typeof fields?.sourceActivityId === 'string'
+          ? fields.sourceActivityId
+          : undefined;
+    if (related !== undefined) {
+      void client.invalidateQueries({ queryKey: activityKey(related) });
       return true;
     }
     return false;
