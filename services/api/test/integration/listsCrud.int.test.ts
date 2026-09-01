@@ -295,6 +295,23 @@ describe('aggregate repair on read', () => {
 });
 
 describe('a list created from a Plan', () => {
+  /** §P3-39's hard rule from the API side: creating a trip does not silently produce lists. */
+  it('creating an event Plan writes zero lists', async () => {
+    const application = app();
+    const before = (await (await get(application, '/v1/lists')).json()).data.length;
+
+    const res = await post(application, '/v1/activities', {
+      objectKind: 'plan',
+      type: 'event',
+      title: 'New York Trip',
+      details: { kind: 'event' },
+    });
+    expect(res.status).toBe(201);
+
+    const after = (await (await get(application, '/v1/lists')).json()).data.length;
+    expect(after).toBe(before);
+  });
+
   it('stores sourceActivityId with slot null and writes the id-only projection', async () => {
     const plan = await createPlanVia(app());
     const created = await createListVia(app(), {
@@ -316,6 +333,31 @@ describe('a list created from a Plan', () => {
     });
     expect(projection).not.toHaveProperty('title');
     expect(projection).not.toHaveProperty('itemCount');
+  });
+
+  /** §P3-39's exact write: the Checklist's resolved configuration, and no `behaviour`. */
+  it('a confirmed Checklist copies the resolved config with slot null and no behaviour', async () => {
+    const application = app();
+    const plan = await createPlanVia(application);
+    const template = LIST_TEMPLATES.find((seed) => seed.templateKey === 'checklist');
+    if (template === undefined) throw new Error('Missing checklist template');
+
+    const created = await createListVia(application, {
+      title: 'Packing · New York Trip',
+      templateKey: 'checklist',
+      sourceActivityId: plan.activityId,
+    });
+
+    expect(created.itemStateMode).toEqual(template.itemStateMode);
+    expect(created.featureConfig).toEqual(template.featureConfig);
+    expect(created.slot).toBeNull();
+    expect(created.sourceActivityId).toBe(plan.activityId);
+
+    const stored = await rawItem(`LIST#${created.listId}`, 'META');
+    expect(stored).not.toHaveProperty('behaviour');
+    expect(
+      await rawItem(`ACT#${plan.activityId}`, `SOURCE_LIST#${created.listId}`),
+    ).toBeDefined();
   });
 
   it('deleting the list removes the projection and leaves the Plan intact', async () => {

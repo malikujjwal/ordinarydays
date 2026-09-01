@@ -31,7 +31,7 @@ export function useCreateList(): CreateListResult {
   const [error, setError] = useState<string>();
 
   return {
-    create: async (templateKey, title) => {
+    create: async (templateKey, title, options) => {
       const lists = state.lists;
       if (lists === undefined) {
         setError('Native Lists state is not ready.');
@@ -58,7 +58,16 @@ export function useCreateList(): CreateListResult {
                 listId,
                 intentId,
                 idempotencyKey: intentId,
-                input: { listId, title, templateKey },
+                // A source Plan rides the durable input; `pendingListFromInput` reads it to
+                // force the optimistic row's slot to `null` exactly as the server will.
+                input: {
+                  listId,
+                  title,
+                  templateKey,
+                  ...(options?.sourceActivityId === undefined
+                    ? {}
+                    : { sourceActivityId: options.sourceActivityId }),
+                },
                 seed,
               },
             ),
