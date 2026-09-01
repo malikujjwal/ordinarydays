@@ -275,7 +275,7 @@ describe('useActivityUpdates (web)', () => {
     expect(result.current.cursor).toBe('cur_2');
   });
 
-  it('retries a failed page against the live cursor after a refetch restarted the chain', async () => {
+  it('settles a page failure on refetch and pages on from the live cursor', async () => {
     clients.get
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({ updates: [update(1)], cursor: undefined });
@@ -286,13 +286,16 @@ describe('useActivityUpdates (web)', () => {
     act(() => result.current.loadMore());
     await waitFor(() => expect(result.current.errorAction).toBe('load'));
 
+    // The strong refetch restarts the chain: the old failure has nothing left to retry.
     rerender({ updates: [update(4), update(3)], cursor: 'cur_2' });
-    await expect(act(() => result.current.retryFailure())).resolves.toBe(true);
+    expect(result.current.errorAction).toBeUndefined();
+    await expect(act(() => result.current.retryFailure())).resolves.toBe(false);
 
-    expect(clients.get).toHaveBeenLastCalledWith(expect.anything(), ACTIVITY, 'cur_2');
+    act(() => result.current.loadMore());
     await waitFor(() =>
       expect(bodies(result.current.updates)).toEqual(['Note 4', 'Note 3', 'Note 1']),
     );
+    expect(clients.get).toHaveBeenLastCalledWith(expect.anything(), ACTIVITY, 'cur_2');
   });
 
   it('drops a page whose chain changed by cursor alone', async () => {
@@ -312,6 +315,23 @@ describe('useActivityUpdates (web)', () => {
 
     expect(bodies(result.current.updates)).toEqual(['Note 3']);
     expect(result.current.cursor).toBe('cur_2');
+  });
+
+  it('clears a page failure when a refetch replaces the chain', async () => {
+    clients.get.mockRejectedValueOnce(new Error('offline'));
+    const { result, rerender } = render(queryClient(), {
+      updates: [update(3)],
+      cursor: 'cur_1',
+    });
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.errorAction).toBe('load'));
+
+    // The strong refetch exhausts the feed: there is nothing left for Retry to do.
+    rerender({ updates: [update(3), update(1)], cursor: undefined });
+
+    expect(result.current.errorAction).toBeUndefined();
+    expect(result.current.cursor).toBeUndefined();
+    expect(bodies(result.current.updates)).toEqual(['Note 3', 'Note 1']);
   });
 
   it('treats an absent embedded page as one stable empty head', () => {

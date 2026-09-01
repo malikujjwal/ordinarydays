@@ -90,6 +90,9 @@ export function useActivityUpdates(
     setDeleted((current) => new Set([...current].filter((id) => ids.has(id))));
     setOlder([]);
     setCursor(embedded.cursor);
+    // A page failure belonged to the old chain; its Retry would now target this one (or,
+    // with the feed exhausted, nothing), so the new head settles it.
+    setFailure((current) => (current?.action === 'load' ? undefined : current));
   }
   /** Guards async callbacks: a response that started under a previous activity is dropped. */
   const liveActivity = useRef(activityId);
