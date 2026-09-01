@@ -89,16 +89,12 @@ export function Card({
     hero ? { backgroundColor: theme.colors.upNextSurface } : null,
     hero && theme.scheme === 'light' ? ({ boxShadow: upNextShadow } as object) : null,
     /**
-     * **A left edge, not a rim** — corrected 2026-08-17 against `design-system.md` §7.1, which
-     * specifies a tinted fill and 3 pt accentDeep left border, and which the
-     * founder's frames draw the same way.
-     *
-     * It was built as a 1 px `accentBorder` box on all four sides. Outlined like that the card
-     * read as a container competing with the rows beneath it rather than as the one hero
-     * surface; the left edge marks it without boxing it. `accentDeep` is a graphic here, not
-     * text, and it is the same token §7.1 names.
+     * **No edge at all** — founder frame, 2026-08-31. The hero surface carried a 3 pt
+     * `accentDeep` left border from 2026-08-17 (itself a correction of a four-sided rim);
+     * the planner frame removes it — the card's tinted fill and its internal ruling mark
+     * it now, and an accent edge beside the new margin rail read as a third vertical line.
+     * §7.1's anatomy records the same.
      */
-    hero ? { borderLeftWidth: 3, borderLeftColor: theme.colors.accentDeep } : null,
   ];
 
   if (onPress === undefined) {

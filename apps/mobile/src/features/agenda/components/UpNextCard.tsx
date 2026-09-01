@@ -1,6 +1,6 @@
 import type { AgendaItem } from '@od/shared/types';
 import { Button, Card, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import {
   type CompletionCommitState,
   useCompletionCommitState,
@@ -17,7 +17,6 @@ import {
   pendingCreateAllowsOpen,
   useAgendaRowIntentState,
 } from '@/hooks/usePendingIntents';
-import { SwipeableRowWithState } from './SwipeableRow';
 
 export interface UpNextCardProps {
   selection: UpNextSelection;
@@ -49,20 +48,22 @@ const CARD_ACTIONS = new Set(['complete', 'snooze']);
  * again on the founder's 2026-08-31 frame):
  *
  * ```
- *  2:30 │ UP NEXT · IN 2H 15M               time rail: heading + caption meridiem · rule
- *   PM  │  ◇  Dentist appointment           type marker · bodyStrong
- *       │     Jefferson Dental Center       subhead — the place alone; the rail owns the time
- *       │     Complete   Snooze             footnoteStrong text actions
- *  upNextSurface fill · 3 pt accentDeep left border
+ *  2:30 ║ UP NEXT · IN 2H 15M               time rail: heading + caption meridiem · double rule
+ *   PM  ║ Dentist appointment               bodyStrong — no marker, no checkbox
+ *       ║ ───────────────────────           1 px border rules under each band
+ *       ║ Jefferson Dental Center           subhead — the metadata band, ruled below
+ *       ║ ───────────────────────
+ *       ║ Complete   Snooze                 footnoteStrong text actions
+ *  upNextSurface fill · no left edge
  * ```
  *
- * The 2026-08-31 frame moves the time out of the subtitle line into a left rail with a
- * hairline rule beside it — the timeline's own rail grammar, promoted into the card. Every
- * element is the same as before; only the arrangement changed. The rail is one accessible
- * element carrying the full formatted time, so a screen reader hears `2:30 PM` once rather
- * than two fragments.
- *
- * Its body is still the canonical `AgendaRow` — one row implementation, per P2-21.
+ * The 2026-08-31 planner frame: the time in a margin rail beside a **double** hairline —
+ * a planner page's ruling — with the title and metadata as ruled bands and the card's
+ * accent left edge removed. The marker column and the checkbox left with the embedded
+ * `AgendaRow`: the card's two text actions already carry complete and snooze, so the row's
+ * swipe surface and checkbox duplicated them. This is the one surface that departs from
+ * P2-21's one-row rule, on the founder's frame; the backdrop announces the card to
+ * assistive technology since no row carries the name any more.
  *
  * **The actions stay in the accessibility tree.** Hiding them because the row already exposes
  * each as a rotor action is axe's `aria-hidden-focus` (focusable controls inside an
@@ -90,12 +91,10 @@ export function UpNextCard({ selection, ...props }: UpNextCardProps) {
   );
 }
 
-/** Card presentation sharing one keyed intent/completion snapshot with its dense row. */
+/** Card presentation sharing one keyed intent/completion snapshot with the timeline row. */
 export function UpNextCardWithState({
   selection,
   onOpen,
-  onOpenReschedule,
-  onToggleComplete,
   onAction,
   intentState,
   completion,
@@ -110,6 +109,23 @@ export function UpNextCardWithState({
   const formattedTime = formatWallTime(selection.time);
   // `2:30 PM` splits into the rail's two lines; a 24-hour locale simply has no second line.
   const [railTime, ...railMeridiem] = formattedTime.split(' ');
+  /*
+   * The metadata band, in `AgendaRow`'s own grammar: the projected subtitle, then the
+   * snooze remap or the `↻`-prefixed recurrence description, `·`-joined. Same derivation
+   * as the row so the card and the timeline never describe one item two ways.
+   */
+  const recurrenceMeta =
+    selection.item.isSnoozed &&
+    selection.item.originalTime !== undefined &&
+    selection.item.time !== undefined
+      ? `${formatWallTime(selection.item.originalTime)} → ${formatWallTime(selection.item.time)}`
+      : selection.item.isRecurring && selection.item.recurrenceDescription !== undefined
+        ? `↻ ${selection.item.recurrenceDescription}`
+        : undefined;
+  const metaParts = [selection.item.subtitle, recurrenceMeta].filter(
+    (part): part is string => part !== undefined,
+  );
+  const metaLine = metaParts.length === 0 ? undefined : metaParts.join(' · ');
 
   return (
     <View testID="today-up-next">
@@ -132,17 +148,16 @@ export function UpNextCardWithState({
         testID="up-next-card"
       >
         {/**
-         * The card's own backdrop. `AgendaRow`'s covers the row band only, and the card adds an
-         * eyebrow, its padding and an actions strip **outside** that band — which is the region
-         * the founder marked as dead. Same shape as the row's: behind everything, so the
-         * checkbox and the two actions still win their own taps, and invisible to assistive
-         * technology because the row body above already carries the name, role and actions.
+         * The card's own backdrop, and — since the 2026-08-31 planner frame — the card's one
+         * accessible opener. The frame removed the embedded row that used to carry the name,
+         * role and rotor actions, so the backdrop now announces the card as a whole; the two
+         * quick actions keep their own focusable buttons above it.
          */}
         <Touchable
-          aria-hidden
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          focusable={false}
+          accessibilityRole="button"
+          accessibilityLabel={[`${selection.item.title}. ${formattedTime}`, metaLine]
+            .filter((part) => part !== undefined)
+            .join('. ')}
           disabled={openInert}
           onPress={() => onOpen(selection.item)}
           testID="up-next-backdrop"
@@ -183,17 +198,24 @@ export function UpNextCardWithState({
               </Text>
             )}
           </View>
-          {/* Decorative rule between the rail and the content, per the 2026-08-31 frame. */}
+          {/**
+           * The planner margin: two hairlines, close together, per the 2026-08-31 frame.
+           * One element with two hairline borders rather than two filled views — filled
+           * 1 pt lines snap to different physical pixels at 2× and 3×, which made the left
+           * line render heavier than the right (founder report, same day).
+           */}
           <View
             aria-hidden
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
             pointerEvents="none"
             style={{
-              width: 1,
+              width: 3,
               alignSelf: 'stretch',
-              backgroundColor: theme.colors.border,
               marginHorizontal: theme.space[4],
+              borderLeftWidth: StyleSheet.hairlineWidth,
+              borderRightWidth: StyleSheet.hairlineWidth,
+              borderColor: theme.colors.border,
             }}
           />
 
@@ -214,20 +236,59 @@ export function UpNextCardWithState({
               {`Up next · ${selection.relativeTime}`}
             </Text>
 
-            <View pointerEvents="box-none" style={{ marginTop: theme.space[5] }}>
-              <SwipeableRowWithState
-                item={selection.item}
-                subtitleColor="textPrimary"
-                divider={false}
-                dense
-                intentState={intentState}
-                completion={completion}
-                onOpen={onOpen}
-                {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
-                {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
-                {...(onAction === undefined ? {} : { onAction })}
-              />
+            {/**
+             * The planner page (founder, 2026-08-31): title and metadata as ruled bands —
+             * a hairline under each — with no marker column and no checkbox. The embedded
+             * `AgendaRow` left with them: its swipe surface duplicated the two text
+             * actions below, and the completion checkbox is exactly what the frame
+             * removes. Completing still happens through the `complete` action button.
+             */}
+            <View pointerEvents="none" style={{ marginTop: theme.space[4] }}>
+              <Text
+                variant="bodyStrong"
+                color="textPrimary"
+                numberOfLines={2}
+                testID="up-next-title"
+              >
+                {selection.item.title}
+              </Text>
             </View>
+            {/*
+             * Border, not fill: the margin pair renders as hairline borders, and a filled
+             * hairline blends where a border snaps, which read as two different colours
+             * (founder report, 2026-08-31). One renderer for every rule on the card.
+             */}
+            <View
+              aria-hidden
+              pointerEvents="none"
+              style={{
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderColor: theme.colors.border,
+                marginTop: theme.space[3],
+              }}
+            />
+            {metaLine === undefined ? null : (
+              <>
+                <View pointerEvents="none" style={{ marginVertical: theme.space[2] }}>
+                  <Text
+                    variant="subhead"
+                    color="textPrimary"
+                    numberOfLines={1}
+                    testID="up-next-meta"
+                  >
+                    {metaLine}
+                  </Text>
+                </View>
+                <View
+                  aria-hidden
+                  pointerEvents="none"
+                  style={{
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderColor: theme.colors.border,
+                  }}
+                />
+              </>
+            )}
 
             {intentState.recurrenceEdit.inert ? (
               <View

@@ -806,26 +806,30 @@ the `base` width ease, and at `0 of n` it renders empty, not hidden.
 
 ```
  ┌────────────────────────────────────────────────────┐  radius.xl · e3 (mulberry shadow)
- │ 2:30 │ UP NEXT · IN 2H 15M                         │  time rail · caption, textAction
- │  PM  │  ◇  Dentist appointment                     │  type marker · bodyStrong, textDisplay
- │      │     Jefferson Dental Center                 │  subhead, textSecondary — place alone
- │      │     Directions   Snooze                     │  footnoteStrong text actions, textAction
+ │ 2:30 ║ UP NEXT · IN 2H 15M                         │  time rail · double rule · caption, textAction
+ │  PM  ║ Dentist appointment                         │  bodyStrong — no marker, no checkbox
+ │      ║ ─────────────────────────                   │  1 px border rule under each band
+ │      ║ Jefferson Dental Center                     │  subhead — the metadata band
+ │      ║ ─────────────────────────                   │
+ │      ║ Directions   Snooze                         │  footnoteStrong text actions, textAction
  └────────────────────────────────────────────────────┘
-   accentSurface fill · 3 pt accentDeep left border
+   accentSurface fill · no left edge
 ```
 
 One card, always the next timed thing, per `today-and-tasks.md` §2.1. Its actions are the
 row's own quick actions as text buttons — no icons, no chrome.
 
-> **Restructured — 2026-08-31 (founder frame).** The time moved off the subtitle line into a
-> left rail with a hairline rule beside it — the timeline's own rail grammar (below),
-> promoted into the card. Every element is unchanged; only the arrangement moved: the rail's
-> numerals are `heading` in `textAction` with the meridiem beneath them in `caption`
-> `textSecondary`, the rule is the 1 px `border` token and is decorative (hidden from
-> assistive technology), and the subtitle line carries the place alone. The rail is one
-> accessible element carrying the full formatted time, so a screen reader hears `2:30 PM`
-> once. The diagram above is this frame; the previous anatomy folded the time onto the
-> subtitle line.
+> **Restructured — 2026-08-31 (founder frame, the planner page).** The time moved off the
+> subtitle line into a margin rail — `heading` numerals in `textAction`, the meridiem
+> beneath in `caption` `textSecondary` — beside a **double** hairline, a planner page's
+> ruling. The title and the metadata render as ruled bands, each with a 1 px `border` rule
+> beneath it; the marker column and the completion checkbox are gone from this card (the
+> `complete` text action is the completion path here), and the 3 pt `accentDeep` left edge
+> is removed — beside the margin ruling it read as a third vertical line. All rules are
+> decorative and hidden from assistive technology; the rail is one accessible element
+> carrying the full formatted time, and the card's backdrop announces title, time and
+> metadata as one button since no embedded row carries them any more. This is the one
+> surface that departs from P2-21's one-row rule, on this frame.
 
 > **Annotation correction — 2026-08-13 (P2-51).** This diagram said the eyebrow was
 > `accentDeep` and the actions `accent`. Both were wrong against §5.1's own contract: `accent`

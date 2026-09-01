@@ -236,10 +236,9 @@ describe('TodayScreen', () => {
     expect(screen.getByTestId('up-next-eyebrow').style.color).toBe(
       cssColor(colors.light.textAction),
     );
-    expect(
-      within(screen.getByTestId('up-next-card')).getByTestId('agenda-row-subtitle').style
-        .color,
-    ).toBe(cssColor(colors.light.textPrimary));
+    const meta = within(screen.getByTestId('up-next-card')).getByTestId('up-next-meta');
+    expect(meta.textContent).toBe('Morning routine');
+    expect(meta.style.color).toBe(cssColor(colors.light.textPrimary));
   });
 
   it('renders non-empty sections in fixed order and omits an empty section', async () => {
@@ -783,10 +782,14 @@ describe('TodayScreen', () => {
       client,
     );
 
+    /*
+     * One checkbox, in the schedule row alone: the planner-frame card (2026-08-31) carries
+     * no checkbox — its `Complete` text action is the completion path there.
+     */
     await waitFor(() =>
       expect(
         screen.getAllByRole('checkbox', { name: 'First task, not completed' }),
-      ).toHaveLength(2),
+      ).toHaveLength(1),
     );
     fireEvent.click(
       screen.getAllByRole('checkbox', {
@@ -1332,10 +1335,10 @@ describe('TodayScreen timeline furniture', () => {
     expect(labels).toEqual(['Complete', 'Snooze']);
 
     /**
-     * The same labels the row announces as its accessibility actions. Compared against the row
-     * rather than against a literal, so a change to one that misses the other fails here.
+     * The backdrop carries the card's accessible name since the planner frame removed the
+     * embedded row; the two actions stay separately focusable beside it.
      */
-    const body = card.getByTestId('agenda-row-body');
+    const body = card.getByTestId('up-next-backdrop');
     expect(body.getAttribute('aria-label')).toContain('Groceries');
     expect(actions.getAttribute('aria-hidden')).toBeNull();
   });
@@ -1380,10 +1383,6 @@ describe('TodayScreen timeline furniture', () => {
     );
 
     fireEvent.click(screen.getByTestId('up-next-backdrop'));
-    expect(onOpen).toHaveBeenCalledExactlyOnceWith(timed);
-    onOpen.mockClear();
-    fireEvent.click(screen.getByTestId('agenda-row-body'));
-
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(timed);
     expect(onAction).not.toHaveBeenCalled();
     expect(screen.queryByTestId('up-next-quick-actions')).toBeNull();
