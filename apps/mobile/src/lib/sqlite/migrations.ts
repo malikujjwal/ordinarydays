@@ -1151,6 +1151,38 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         ALTER TABLE list_items ADD COLUMN viewer_plan_json TEXT;
       `),
   },
+  {
+    version: 18,
+    name: 'activity-updates-projection',
+    /**
+     * The native Plan-detail feed is visible domain state after P3-40, so confirmed entries
+     * and the embedded page cursor survive process death instead of living in hook memory.
+     * `last_activity_at` remains on `activities`; the repository updates it in the same
+     * transaction as a confirmed entry, which is the monotonic Plans ordering fence.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE activity_updates (
+          update_id TEXT PRIMARY KEY NOT NULL,
+          activity_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('user', 'system')),
+          author_user_id TEXT,
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          CHECK (
+            (kind = 'user' AND author_user_id IS NOT NULL) OR
+            (kind = 'system' AND author_user_id IS NULL)
+          )
+        );
+        CREATE INDEX activity_updates_feed
+          ON activity_updates (activity_id, created_at DESC, update_id DESC);
+        CREATE TABLE activity_update_feed_state (
+          activity_id TEXT PRIMARY KEY NOT NULL,
+          next_cursor TEXT
+        );
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

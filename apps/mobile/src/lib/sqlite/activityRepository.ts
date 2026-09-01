@@ -1,12 +1,18 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
-import { activity as activitySchema } from '@od/shared/schemas';
+import {
+  activity as activitySchema,
+  activityUpdate as activityUpdateSchema,
+} from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetail,
   ActivityDetailTarget,
+  ActivityUpdate,
+  ActivityUpdatePage,
   Occurrence,
   OccurrenceDetailProjection,
+  PostActivityUpdateResult,
   Reminder,
 } from '@od/shared/types';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
@@ -130,6 +136,20 @@ function occurrenceFromAgendaRow(row: SqliteRow): OccurrenceDetailProjection {
   };
 }
 
+function activityUpdateFromRow(row: SqliteRow): ActivityUpdate {
+  return activityUpdateSchema.parse({
+    updateId: text(row, 'update_id'),
+    activityId: text(row, 'activity_id'),
+    kind: text(row, 'kind'),
+    ...(text(row, 'author_user_id') === undefined
+      ? {}
+      : { authorUserId: text(row, 'author_user_id') }),
+    body: text(row, 'body'),
+    createdAt: text(row, 'created_at'),
+    schemaVersion: number(row, 'schema_version'),
+  });
+}
+
 function activityValues(
   activity: Activity,
   detail: ActivityDetail | undefined,
@@ -218,6 +238,36 @@ export class ActivityRepository {
     return this.subscriptions.version(this.scope(activityId));
   }
 
+  updatesScope(activityId: string): string {
+    return `activity-updates:${activityId}`;
+  }
+
+  subscribeUpdates(activityId: string, listener: () => void): () => void {
+    return this.subscriptions.subscribe(this.updatesScope(activityId), listener);
+  }
+
+  updatesVersion(activityId: string): number {
+    return this.subscriptions.version(this.updatesScope(activityId));
+  }
+
+  async readUpdates(activityId: string): Promise<ActivityUpdatePage> {
+    const rows = await this.reader.all(
+      `SELECT * FROM activity_updates
+       WHERE activity_id = ?
+       ORDER BY created_at DESC, update_id DESC;`,
+      [activityId],
+    );
+    const state = await this.reader.first(
+      'SELECT next_cursor FROM activity_update_feed_state WHERE activity_id = ?;',
+      [activityId],
+    );
+    const cursor = state === undefined ? undefined : text(state, 'next_cursor');
+    return {
+      updates: rows.map(activityUpdateFromRow),
+      ...(cursor === undefined ? {} : { cursor }),
+    };
+  }
+
   /** Whether a server-authored authorisation projection has ever been installed. */
   async hasInstalledCapabilities(activityId: string): Promise<boolean> {
     const row = await this.reader.first(
@@ -263,12 +313,20 @@ export class ActivityRepository {
       text(row, 'capabilities_json'),
     );
     const completedOccurrenceCount = number(row, 'completed_occurrence_count');
+    const feedState = await this.reader.first(
+      'SELECT next_cursor FROM activity_update_feed_state WHERE activity_id = ?;',
+      [target.activityId],
+    );
+    const feed =
+      feedState === undefined ? undefined : await this.readUpdates(target.activityId);
     if (target.kind === 'activity') {
       return {
         activity: activityFromRow(row),
         reminders,
         ...(storedCapabilities === undefined ? {} : { capabilities: storedCapabilities }),
         ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
+        ...(feed === undefined ? {} : { updates: feed.updates }),
+        ...(feed?.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
       };
     }
     const occurrenceRow = await this.reader.first(
@@ -321,7 +379,61 @@ export class ActivityRepository {
       ...(capabilities === undefined ? {} : { capabilities }),
       ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
       ...(occurrence === undefined ? {} : { occurrence }),
+      ...(feed === undefined ? {} : { updates: feed.updates }),
+      ...(feed?.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
     };
+  }
+
+  /** Adds an older canonical page without replacing entries already confirmed locally. */
+  async installUpdatePage(
+    transaction: TransactionContext,
+    activityId: string,
+    page: ActivityUpdatePage,
+  ): Promise<void> {
+    for (const update of page.updates) {
+      if (update.activityId !== activityId) {
+        throw new Error('Activity update page crossed activity boundary.');
+      }
+      await this.putUpdate(transaction.database, update);
+    }
+    await this.putUpdateCursor(transaction.database, activityId, page.cursor);
+    transaction.changed(this.updatesScope(activityId));
+  }
+
+  /**
+   * Installs the POST acknowledgement and raises the Plans ordering key atomically.
+   * An eventual detail/GSI response may later match this value but may never lower it.
+   */
+  async installConfirmedUpdate(
+    transaction: TransactionContext,
+    result: PostActivityUpdateResult,
+  ): Promise<void> {
+    const activityId = result.update.activityId;
+    await this.putUpdate(transaction.database, result.update);
+    const raised = await transaction.database.run(
+      `UPDATE activities
+       SET last_activity_at = CASE
+         WHEN last_activity_at >= ? THEN last_activity_at ELSE ? END
+       WHERE activity_id = ?;`,
+      [result.lastActivityAt, result.lastActivityAt, activityId],
+    );
+    if (raised.changes !== 1) {
+      throw new Error('Cannot install an update before its Activity projection.');
+    }
+    transaction.changed(this.scope(activityId));
+    transaction.changed(this.updatesScope(activityId));
+  }
+
+  async deleteConfirmedUpdate(
+    transaction: TransactionContext,
+    activityId: string,
+    updateId: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      'DELETE FROM activity_updates WHERE activity_id = ? AND update_id = ?;',
+      [activityId, updateId],
+    );
+    transaction.changed(this.updatesScope(activityId));
   }
 
   async putCanonical(
@@ -441,7 +553,12 @@ export class ActivityRepository {
          details_json=excluded.details_json, completed_at=excluded.completed_at,
          snoozed_until=excluded.snoozed_until, outcome=excluded.outcome,
          ics_sequence=excluded.ics_sequence, created_at=excluded.created_at,
-         last_activity_at=excluded.last_activity_at, updated_at=excluded.updated_at,
+         last_activity_at=CASE
+           WHEN activities.last_activity_at > excluded.last_activity_at
+             THEN activities.last_activity_at
+           ELSE excluded.last_activity_at
+         END,
+         updated_at=excluded.updated_at,
          schema_version=excluded.schema_version, capabilities_json=excluded.capabilities_json,
          completed_occurrence_count=excluded.completed_occurrence_count,
          canonical_version=excluded.canonical_version, local_state='canonical';`,
@@ -463,6 +580,17 @@ export class ActivityRepository {
           detail.occurrence,
         );
       }
+    }
+    if (detail.updates !== undefined) {
+      for (const update of detail.updates) {
+        await this.putUpdate(transaction.database, update);
+      }
+      await this.putUpdateCursor(
+        transaction.database,
+        detail.activity.activityId,
+        detail.updatesCursor,
+      );
+      transaction.changed(this.updatesScope(detail.activity.activityId));
     }
     transaction.changed(this.scope(detail.activity.activityId));
     transaction.changed('reminders');
@@ -508,6 +636,14 @@ export class ActivityRepository {
       'DELETE FROM activity_occurrences WHERE activity_id = ?;',
       [activityId],
     );
+    await transaction.database.run(
+      'DELETE FROM activity_updates WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_update_feed_state WHERE activity_id = ?;',
+      [activityId],
+    );
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
       activityId,
     ]);
@@ -523,9 +659,47 @@ export class ActivityRepository {
     ]);
     await this.recordTombstone(transaction.database, activityId, systemClock.now());
     transaction.changed(this.scope(activityId));
+    transaction.changed(this.updatesScope(activityId));
     transaction.changed('agenda');
     transaction.changed('anytime');
     transaction.changed('reminders');
+  }
+
+  private async putUpdate(
+    database: SqliteExecutor,
+    update: ActivityUpdate,
+  ): Promise<void> {
+    await database.run(
+      `INSERT INTO activity_updates
+         (update_id, activity_id, kind, author_user_id, body, created_at, schema_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(update_id) DO UPDATE SET
+         activity_id=excluded.activity_id, kind=excluded.kind,
+         author_user_id=excluded.author_user_id, body=excluded.body,
+         created_at=excluded.created_at, schema_version=excluded.schema_version;`,
+      [
+        update.updateId,
+        update.activityId,
+        update.kind,
+        update.authorUserId ?? null,
+        update.body,
+        update.createdAt,
+        update.schemaVersion,
+      ],
+    );
+  }
+
+  private async putUpdateCursor(
+    database: SqliteExecutor,
+    activityId: string,
+    cursor: string | undefined,
+  ): Promise<void> {
+    await database.run(
+      `INSERT INTO activity_update_feed_state (activity_id, next_cursor)
+       VALUES (?, ?)
+       ON CONFLICT(activity_id) DO UPDATE SET next_cursor=excluded.next_cursor;`,
+      [activityId, cursor ?? null],
+    );
   }
 
   /** Removes only the durable occurrence projection proven absent by a strong detail 404. */
