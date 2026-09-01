@@ -126,6 +126,12 @@ export interface ActivityDetailScreenProps {
    * Defaults to `onOpenActivity` when the route offers nothing better.
    */
   onOpenChild?: (activityId: string) => void;
+  /**
+   * `+ Add prep task` (P3-38): opens the Task form with this plan fixed as the parent. The
+   * exact contextual action — the chip when PREP is empty, the section's own affordance once
+   * it holds rows. Absent leaves both out.
+   */
+  onAddPrepTask?: () => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
@@ -145,6 +151,7 @@ export function ActivityDetailScreen({
   onOpenActivity,
   onOpenList,
   onOpenChild,
+  onAddPrepTask,
   resolutionOccurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
@@ -543,6 +550,7 @@ export function ActivityDetailScreen({
           today={today}
           onOpenChild={onOpenChild ?? onOpenActivity}
           {...(onOpenList === undefined ? {} : { onOpenList })}
+          {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
           onOpenReschedule={() => setRescheduleOpen(true)}
           onOpenRepeat={() => setRepeatOpen(true)}
           onOpenReminders={() => setRemindersOpen(true)}
@@ -901,6 +909,8 @@ interface LoadedProps {
   onOpenChild: (activityId: string) => void;
   /** Opens one of this Plan's Lists (P3-37, P3-39). Absent leaves the rows plain. */
   onOpenList?: (listId: string) => void;
+  /** `+ Add prep task` (P3-38); absent leaves the chip and the affordance out. */
+  onAddPrepTask?: () => void;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
   onOpenReminders: () => void;
@@ -973,6 +983,7 @@ function Loaded({
   today,
   onOpenChild,
   onOpenList,
+  onAddPrepTask,
   onOpenReschedule,
   onOpenRepeat,
   onOpenReminders,
@@ -1019,8 +1030,8 @@ function Loaded({
     children,
     sourceLists,
     updatesVisible: updatesSectionVisible(activity.visibility, updates.length),
-    // P3-38, P3-39 and P3-40 wire these flows; until each lands its chip stays absent.
-    wired: { prepTask: false, list: false, update: false },
+    // P3-39 and P3-40 wire the remaining flows; until each lands its chip stays absent.
+    wired: { prepTask: onAddPrepTask !== undefined, list: false, update: false },
   });
 
   return (
@@ -1424,7 +1435,11 @@ function Loaded({
        * `Add to this plan` chip row that keeps the empty capabilities discoverable.
        */}
       {sections.some((section) => section.key === 'prep') ? (
-        <PrepSection prepTasks={children} onOpenChild={onOpenChild} />
+        <PrepSection
+          prepTasks={children}
+          onOpenChild={onOpenChild}
+          {...(onAddPrepTask === undefined || pending ? {} : { onAddPrepTask })}
+        />
       ) : null}
       {sections.some((section) => section.key === 'lists') && onOpenList !== undefined ? (
         <ListsSection sourceLists={sourceLists} onOpenList={onOpenList} />
@@ -1438,7 +1453,12 @@ function Loaded({
           relativeTime={(createdAt) => relativeUpdateTime(createdAt, today)}
         />
       ) : null}
-      {activity.objectKind === 'plan' && !pending ? <AddToPlanRow chips={chips} /> : null}
+      {activity.objectKind === 'plan' && !pending ? (
+        <AddToPlanRow
+          chips={chips}
+          {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
+        />
+      ) : null}
     </View>
   );
 }

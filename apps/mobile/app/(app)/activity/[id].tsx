@@ -2,6 +2,7 @@ import type { ActivityDetailTarget } from '@od/shared/types';
 import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
+import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
  * `/activity/:id` (P1-26).
@@ -20,6 +21,7 @@ export default function ActivityDetailRoute() {
     occurrenceDate?: string;
   }>();
   const router = useRouter();
+  const openPrepTask = useComposeDraft((s) => s.openPrepTask);
   const activityId = id ?? '';
   const target: ActivityDetailTarget =
     occurrenceDate === undefined
@@ -48,6 +50,12 @@ export default function ActivityDetailRoute() {
       // goes and comes **back** from, so `push`, unlike the duplicate's replace above.
       onOpenList={(listId) => router.push(`/lists/${listId}` as Href)}
       onOpenChild={(childId) => router.push(`/activity/${childId}` as Href)}
+      // `+ Add prep task` (P3-38): the parent fixes the relationship; the modal opens on the
+      // Task form directly, never the global chooser.
+      onAddPrepTask={() => {
+        openPrepTask(activityId);
+        router.push('/compose');
+      }}
     />
   );
 }

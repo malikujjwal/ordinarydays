@@ -101,6 +101,12 @@ export interface ComposeDraftState {
    * visible tap (§P3-34).
    */
   audience: DraftAudience | undefined;
+  /**
+   * The parent Plan a prep task belongs to (P3-38). Set only by the plan's own
+   * `+ Add prep task` action — the parent fixes the relationship exactly as a List fixes an
+   * item's destination, and no words can supply it.
+   */
+  parentActivityId: string | undefined;
 
   /** `activities.md` §4's Date / Time / End time, for every type that has them. */
   schedule: DraftSchedule;
@@ -114,6 +120,8 @@ export interface ComposeDraftState {
   openTodayTask: (date: WallDate) => void;
   /** The `Plan this item` entry: an explicit Plan, so it opens on the kind step (P3-34). */
   openPlanForItem: (bridge: BridgeSource) => void;
+  /** `+ Add prep task` (P3-38): explicitly a Task, parent fixed, straight to the form. */
+  openPrepTask: (parentActivityId: string) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
   /** The one place `audience` is set, and only by the visible `Just me` tap. */
@@ -151,6 +159,7 @@ const EMPTY = {
   activityId: undefined,
   bridge: undefined,
   audience: undefined,
+  parentActivityId: undefined,
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
@@ -161,6 +170,7 @@ const EMPTY = {
   | 'open'
   | 'openTodayTask'
   | 'openPlanForItem'
+  | 'openPrepTask'
   | 'chooseObject'
   | 'choosePlanKind'
   | 'chooseAudience'
@@ -245,6 +255,20 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    * empty; fields fill only after the explicit kind tap, via {@link bridgePrefill}.
    */
   openPlanForItem: (bridge) => set({ ...EMPTY, step: 'planKind', bridge }),
+
+  /**
+   * `+ Add prep task` (P3-38): the plan's labelled action is itself the explicit Task
+   * choice, so the modal opens on the Task form with the parent fixed. The relationship
+   * comes from where the user tapped, never from the words they type next — the same rule
+   * as Today's `openTodayTask` and a List's contextual composer.
+   */
+  openPrepTask: (parentActivityId) =>
+    set({
+      ...EMPTY,
+      step: 'form',
+      target: { objectKind: 'task', type: 'task' },
+      parentActivityId,
+    }),
 
   /**
    * The one place `target` can become a Task.
@@ -389,10 +413,13 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
         return;
       }
       // Back to the chooser that produced this target, and the target is dropped: returning
-      // to a picker with the previous destination still fixed would be a pre-selection.
+      // to a picker with the previous destination still fixed would be a pre-selection. The
+      // prep parent (P3-38) is dropped with it — the relationship came from the plan's
+      // labelled action, and no path through the global chooser may carry it silently.
       set({
         step: target?.objectKind === 'plan' ? 'planKind' : 'object',
         target: undefined,
+        parentActivityId: undefined,
       });
     }
   },

@@ -136,6 +136,11 @@ export interface DraftFields extends CommonDraftFields {
   reminderOffset: number | undefined;
   recurrence?: Recurrence;
   details: DraftDetails;
+  /**
+   * The parent Plan fixed by `+ Add prep task` (P3-38). Only a Task may carry one, and only
+   * that labelled contextual action supplies it — never a word in the title.
+   */
+  parentActivityId?: string;
 }
 
 /**
@@ -217,6 +222,10 @@ export function toCreateActivityInput(
       ...common,
       objectKind: 'task',
       type: 'task',
+      // The prep relationship (P3-38): present only when the plan's own action fixed it.
+      ...(fields.parentActivityId === undefined
+        ? {}
+        : { parentActivityId: fields.parentActivityId }),
       details: toActivityDetails('task', fields.details, title),
     };
   }

@@ -522,6 +522,38 @@ describe('successToast — dated rows', () => {
   });
 });
 
+/** The prep relationship (P3-38): carried by the Task arm only, and only from the field. */
+describe('toCreateActivityInput — parentActivityId', () => {
+  const fields: DraftFields = {
+    title: 'Book hotel',
+    notes: '',
+    schedule: EMPTY_SCHEDULE,
+    location: EMPTY_LOCATION,
+    reminderOffset: undefined,
+    details: EMPTY_DETAILS,
+    parentActivityId: 'act_01J0000000000000000000000P',
+  };
+
+  it('carries the fixed parent on a Task and passes the shared schema', () => {
+    const input = toCreateActivityInput(
+      { objectKind: 'task', type: 'task' },
+      fields,
+      'UTC',
+    );
+    expect(input?.parentActivityId).toBe('act_01J0000000000000000000000P');
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  it('never carries a parent on a Plan, whatever the draft holds', () => {
+    const input = toCreateActivityInput(
+      { objectKind: 'plan', type: 'custom' },
+      fields,
+      'UTC',
+    );
+    expect(input).not.toHaveProperty('parentActivityId');
+  });
+});
+
 /**
  * The bridge request (P3-34, §P3-13).
  *
