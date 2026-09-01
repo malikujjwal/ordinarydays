@@ -5,6 +5,7 @@ import {
   type PlansDateStore,
 } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
+import type { NeedsDateItem } from '@od/shared/schemas';
 import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import { useQueryClient } from '@tanstack/react-query';
@@ -14,7 +15,6 @@ import { describeApiFailure } from '@/lib/apiFailure';
 import { activityMutationKeys, listMutationKeys } from '@/lib/mutationKeys';
 import { usePlanActivityFloor } from '@/stores/planActivityFloor';
 import { applyPlansCreate, createdActivityFrom } from '../model/plansApply';
-import type { RsvpSummaryGroups } from '../model/rsvpSummary';
 
 /**
  * The three-stage Plans read (P3-36): one `GET /v1/plans?mode=initial` renders the screen,
@@ -35,12 +35,24 @@ import type { RsvpSummaryGroups } from '../model/rsvpSummary';
 /** One bounded window request spans at most 62 inclusive dates (`MAX_AGENDA_DAYS`). */
 const WINDOW_DAYS = 62;
 
-/** The needs-a-date row: an ordinary `AgendaItem` plus the stage's three extra fields. */
+/**
+ * The needs-a-date row: an ordinary `AgendaItem` plus the stage's three extra fields.
+ *
+ * Structurally this is the wire schema's `NeedsDateItem`; it is restated over the domain
+ * `AgendaItem` because Zod infers optionals as `?: T | undefined` while the domain types are
+ * `exactOptionalPropertyTypes`-strict. {@link installNeedsDate} is the one place the wire
+ * shape crosses into this one, and carries the boundary annotation §1.2 reserves for a
+ * schema-validated response.
+ */
 export type NeedsDateRowData = AgendaItem & {
   readonly lastActivityAt: string;
   readonly suggestionCount: number;
-  readonly rsvpSummary: RsvpSummaryGroups;
+  readonly rsvpSummary: NeedsDateItem['rsvpSummary'];
 };
+
+/** The §1.2 boundary: `getPlans` has already schema-validated these rows. */
+const installNeedsDate = (rows: readonly NeedsDateItem[]) =>
+  rows as readonly NeedsDateRowData[];
 
 export interface UpcomingWindowState {
   readonly from: WallDate;
@@ -124,7 +136,7 @@ export function usePlans(timezone: string, today: WallDate): PlansView {
       if (!mounted.current || generation.current !== attempt) return;
       setState({
         status: 'success',
-        needsDate: data.needsDate as unknown as readonly NeedsDateRowData[],
+        needsDate: installNeedsDate(data.needsDate),
         // From empty, not from the previous store: the initial arm is the whole screen, and
         // rebuilding is what lets a deleted plan disappear from a date the arm covers.
         store: mergePlansResponse(emptyPlansStore, data),

@@ -73,11 +73,14 @@ describe('a Task renders no placeholder for what it lacks', () => {
 
 describe('a Plan renders settings always and sections only once they hold content', () => {
   /** The 2026-08-25 amendment: a bare plan has no empty section headings, only settings. */
-  it('renders only settings and the People discovery row on a bare plan', () => {
+  it('renders settings and the two discovery rows on a bare plan', () => {
+    // Attachments keeps the §2.2 pre-build discovery row while its P3-41 flow is unbuilt:
+    // with no chip to offer, an empty plan must still signal it can hold photos.
     expect(sectionsFor(activity({})).map((s) => s.key)).toEqual([
       'whenWhere',
       'notes',
       'people',
+      'attachments-coming-later',
     ]);
   });
 
@@ -104,12 +107,26 @@ describe('a Plan renders settings always and sections only once they hold conten
    * `People` teaches the Plan's shape without a disabled Add or a working chevron. It is
    * the one unbuilt capability left with a `Coming later` row.
    */
-  it('marks People as coming later, and nothing else', () => {
+  it('marks People and empty Attachments as coming later, and nothing else', () => {
     const sections = sectionsFor(activity({}));
     expect(sections).toContainEqual(
       expect.objectContaining({ key: 'people', state: 'coming-later' }),
     );
-    expect(sections.filter((s) => s.state === 'coming-later')).toHaveLength(1);
+    expect(sections).toContainEqual(
+      expect.objectContaining({ key: 'attachments-coming-later', state: 'coming-later' }),
+    );
+    expect(sections.filter((s) => s.state === 'coming-later')).toHaveLength(2);
+  });
+
+  it('replaces the Attachments discovery row with the real section once content exists', () => {
+    const populated = sectionsFor(activity({}), {
+      childCount: 0,
+      sourceListCount: 0,
+      attachmentCount: 1,
+      updateCount: 0,
+    }).map((s) => s.key);
+    expect(populated).toContain('attachments');
+    expect(populated).not.toContain('attachments-coming-later');
   });
 
   it('previews Ingredients only on a Meal plan', () => {

@@ -165,7 +165,7 @@ NEEDS A DATE
 | Title | The activity title, two lines before truncating. |
 | Trailing label | The Plan-kind label, de-emphasised. No date chip — there is no date. |
 | Second line | The RSVP summary, in plain language, always rendered. |
-| Third line | `1 date suggested` / `n dates suggested`, de-emphasised. Rendered only when the count is ≥ 1, and never as a badge or a count on the stage heading (§1.3.2). The count is `suggestionCount` on the `needsDate` item, alongside `rsvpSummary`, so the row costs no second request — [`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans). |
+| Third line | **Amended by P3-36 (recorded 2026-09-01):** the date slot always reads `No date yet`, with the suggestion count appended as `— 1 suggestion` / `— n suggestions` when the count is ≥ 1 — the wording `design-system.md` §7.3 specifies and the founder's screen board draws. This row previously specified a count-only line rendered solely at count ≥ 1; the two canonical docs disagreed and the conflict is resolved toward §7.3 + the board, which encode the later decision. Unchanged: the count is content, never a badge or a count on the stage heading (§1.3.2), and it is `suggestionCount` on the `needsDate` item, alongside `rsvpSummary`, so the row costs no second request — [`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans). |
 | Tap | Opens plan detail (U1). Nothing on the row mutates anything, including the third line. |
 
 The RSVP summary is built from `rsvpSummary` on the response and follows these rules:

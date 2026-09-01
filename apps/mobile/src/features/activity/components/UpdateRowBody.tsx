@@ -1,3 +1,4 @@
+import type { ActivityUpdate } from '@od/shared/types';
 import { Text, useTheme } from '@od/ui';
 import type { ComponentProps, ReactNode } from 'react';
 import { View } from 'react-native';
@@ -8,6 +9,17 @@ import { View } from 'react-native';
  * render through the same component — a geometry tweak here cannot make the row jump the
  * moment a post settles or a platform differ from its sibling.
  */
+/**
+ * The platform forks' shared contract (§8.6: identical public surface). Defined beside the
+ * shared body so `UpdateRow.tsx` and `UpdateRow.web.tsx` cannot drift apart.
+ */
+export interface UpdateRowProps {
+  update: ActivityUpdate;
+  relativeTime: string;
+  /** Absent on a system entry by construction — the caller never passes it for one. */
+  onDelete?: () => void;
+}
+
 export interface UpdateRowBodyProps {
   body: string;
   /** `2 days ago`, or `Just now` for an optimistic entry. */

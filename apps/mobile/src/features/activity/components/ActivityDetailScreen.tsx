@@ -33,21 +33,19 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { PendingNotice } from '@/components/PendingNotice';
 import { SnoozeSheet } from '@/components/SnoozeSheet';
+import { AddToPlanRow } from '@/features/activity/components/AddToPlanRow';
+import { AttachmentsSection } from '@/features/activity/components/AttachmentsSection';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
+import { ListsSection } from '@/features/activity/components/ListsSection';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
-import {
-  AddToPlanRow,
-  AttachmentsSection,
-  ListsSection,
-  PrepSection,
-  UpdatesSection,
-} from '@/features/activity/components/PlanSections';
+import { PrepSection } from '@/features/activity/components/PrepSection';
 import {
   ReminderSheet,
   reminderSummary,
 } from '@/features/activity/components/ReminderSheet';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
+import { UpdatesSection } from '@/features/activity/components/UpdatesSection';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
 import {

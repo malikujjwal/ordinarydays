@@ -11,6 +11,7 @@ import {
   Touchable,
   useTheme,
 } from '@od/ui';
+import { memo } from 'react';
 import { View } from 'react-native';
 import { planKindLabel } from '@/lib/planKinds';
 import type { NeedsDateRowData } from '../hooks/usePlans';
@@ -54,7 +55,12 @@ function planKindOf(type: NeedsDateRowData['type']): PlanType {
   return type === 'meal' || type === 'watch' || type === 'event' ? type : 'custom';
 }
 
-export function NeedsDateCard({ item, onOpen, testID }: NeedsDateCardProps) {
+/** Memoised: a `SectionList` row under an always-on minute ticker (§8.3's first row). */
+export const NeedsDateCard = memo(function NeedsDateCard({
+  item,
+  onOpen,
+  testID,
+}: NeedsDateCardProps) {
   const theme = useTheme();
   const kind = planKindOf(item.type);
   const summary = rsvpSummaryLine(item.rsvpSummary);
@@ -100,4 +106,4 @@ export function NeedsDateCard({ item, onOpen, testID }: NeedsDateCardProps) {
       </Touchable>
     </Card>
   );
-}
+});
