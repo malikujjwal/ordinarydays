@@ -20,6 +20,7 @@ import {
 } from '@od/shared/schemas';
 import type {
   Activity,
+  ActivityChild,
   ActivityDetail,
   ActivityDetails,
   ActivityDetailTarget,
@@ -35,6 +36,7 @@ import type {
   Recurrence,
   RecurrenceSegment,
   Reminder,
+  SourceListSummary,
 } from '@od/shared/types';
 import { formatInTimeZone } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
@@ -68,6 +70,7 @@ import {
   toStoredAttachment,
 } from '../repositories/attachmentRepository.js';
 import {
+  batchGetSourceListSummaries,
   clearSourceActivity,
   findViewerLinksTo,
 } from '../repositories/listRepository.js';
@@ -1915,6 +1918,20 @@ export async function getActivityDetail(
 
   const attachments = await listAttachments(target.activityId);
 
+  /**
+   * The PREP collection, from the pointers the partition read already holds (P3-37,
+   * pattern 16), and the LISTS section's id-only `SOURCE_LIST#` projections resolved
+   * through **one** bounded `BatchGetItem` restored to stored order — never one read per
+   * List. A List deleted since the projection was written simply drops out; P3-50's clear
+   * owns the projection's lifecycle, not this read.
+   */
+  const children = projectChildren(partition);
+  const sourceListIds = sourceListIdsOf(partition);
+  const summaries = await batchGetSourceListSummaries(sourceListIds);
+  const sourceLists = sourceListIds
+    .map((listId) => summaries.get(listId))
+    .filter((summary): summary is SourceListSummary => summary !== undefined);
+
   return {
     ...projectDetail(partition, userId, target, {
       complete: mayAct,
@@ -1924,7 +1941,52 @@ export async function getActivityDetail(
     updates: feed.updates,
     ...(feed.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
     attachments,
+    children,
+    sourceLists,
   };
+}
+
+/**
+ * The wire PREP collection from a partition's `SUB#` pointers (P3-37): sorted by the
+ * pointer's own `rank` — the ordering P3-49 depends on — tie-broken by child id, capped at
+ * the model bound, with no per-child lookup.
+ */
+export function projectChildren(partition: readonly StoredItem[]): ActivityChild[] {
+  return partition
+    .filter((row) => row.entity === 'ChildPointer')
+    .sort((left, right) => {
+      const byRank = String(left.rank ?? '').localeCompare(String(right.rank ?? ''));
+      if (byRank !== 0) return byRank;
+      return String(left.childActivityId).localeCompare(String(right.childActivityId));
+    })
+    .map((row) => prepPointerToChild(row))
+    .filter((child): child is ActivityChild => child !== undefined)
+    .slice(0, MAX_PREP_TASKS_PER_PLAN);
+}
+
+/** The `SOURCE_LIST#` ids in stored order (P3-37): which Lists this Plan explicitly made. */
+export function sourceListIdsOf(partition: readonly StoredItem[]): string[] {
+  return partition
+    .filter((row) => row.entity === 'SourceList' && typeof row.listId === 'string')
+    .map((row) => String(row.listId));
+}
+
+/** One `SUB#` pointer row → the wire child; a malformed pointer degrades to absence. */
+function prepPointerToChild(row: StoredItem): ActivityChild | undefined {
+  const activityId = row.childActivityId;
+  const title = row.title;
+  const status = row.status;
+  if (typeof activityId !== 'string' || typeof title !== 'string') return undefined;
+  if (
+    status !== 'saved' &&
+    status !== 'scheduled' &&
+    status !== 'completed' &&
+    status !== 'skipped' &&
+    status !== 'cancelled'
+  ) {
+    return undefined;
+  }
+  return { activityId, title, status, isRecurring: row.isRecurring === true };
 }
 
 /**

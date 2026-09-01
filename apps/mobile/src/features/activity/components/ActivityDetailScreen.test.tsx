@@ -85,6 +85,7 @@ const detailBody = (
   },
   occurrence?: ActivityDetail['occurrence'],
   completedOccurrenceCount?: number,
+  extras: Partial<ActivityDetail> = {},
 ) => ({
   data: {
     activity,
@@ -92,6 +93,7 @@ const detailBody = (
     reminders,
     ...(occurrence === undefined ? {} : { occurrence }),
     ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
+    ...extras,
   },
   meta: { requestId: 'req_test' },
 });
@@ -451,17 +453,24 @@ describe('the sections', () => {
    * dead affordance promising something the app cannot do. The four return when the phase that
    * builds them returns them, as real §2 collapsed rows with content behind them.
    */
-  it('renders future Plan capabilities as noninteractive Coming later rows', async () => {
+  /**
+   * P3-37's amendment narrowed the pre-build rows: sections that now exist as real content
+   * (Prep, Lists, Attachments) render only once populated, so `People` is the one unbuilt
+   * capability left with a `Coming later` row on an event plan.
+   */
+  it('renders the unbuilt People capability as a noninteractive Coming later row', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
-    for (const heading of ['People', 'Preparation', 'Related lists', 'Attachments']) {
-      expect(screen.getByText(heading)).toBeDefined();
-    }
-    expect(screen.getAllByText('Coming later')).toHaveLength(4);
+    expect(screen.getByText('People')).toBeDefined();
+    expect(screen.getAllByText('Coming later')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /People/ })).toBeNull();
     expect(screen.queryByText(/coming soon/i)).toBeNull();
+    // The empty content sections have no headings at all now, not disabled ones.
+    expect(screen.queryByText('Preparation')).toBeNull();
+    expect(screen.queryByText('Related lists')).toBeNull();
+    expect(screen.queryByText('Attachments')).toBeNull();
   });
 
   /**
@@ -2693,5 +2702,148 @@ describe('removing the time', () => {
     await waitFor(() =>
       expect(screen.getByTestId('when-where-date').textContent).not.toContain('8:25 AM'),
     );
+  });
+});
+
+/**
+ * The reconciled Plan-detail anatomy (P3-37, `plans-and-lists.md` §2.1–§2.2 amended
+ * 2026-08-25): settings always render; sections exist only once they hold something;
+ * 1–3 rows render in full and 4+ peek at three with `Show all n`.
+ */
+describe('the Plan detail anatomy (P3-37)', () => {
+  const child = (index: number, status: Activity['status'] = 'scheduled') => ({
+    activityId: `act_01J0000000000000000000P3${37 + index}`,
+    title: `Prep ${index}`,
+    status,
+    isRecurring: false,
+  });
+
+  const sourceList = (index: number) => ({
+    listId: `lst_01J0000000000000000000P3${37 + index}`,
+    title: `List ${index}`,
+    icon: 'list',
+    itemCount: 8,
+    doneCount: index % 2 === 0 ? 3 : 0,
+  });
+
+  const update = (index: number) => ({
+    updateId: `upd_01J0000000000000000000P3${37 + index}`,
+    activityId: ID,
+    kind: 'system' as const,
+    body: `Update ${index}`,
+    createdAt: '2026-08-10T10:00:00.000Z',
+    schemaVersion: 1 as const,
+  });
+
+  function mountAnatomy(extras: Partial<ActivityDetail>, activity = plan()) {
+    stubFetch({
+      status: 200,
+      body: detailBody(activity, [], undefined, undefined, undefined, extras),
+    });
+    const onOpenList = vi.fn();
+    const onOpenChild = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    registerActivityMutationDefaults(queryClient);
+    render(
+      <SafeAreaProvider>
+        <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+          <ThemeProvider scheme="light">
+            <QueryClientProvider client={queryClient}>
+              <ActivityDetailScreen
+                target={{ kind: 'activity', activityId: ID }}
+                today={TODAY}
+                onBack={() => {}}
+                onOpenActivity={() => {}}
+                onOpenList={onOpenList}
+                onOpenChild={onOpenChild}
+              />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
+      </SafeAreaProvider>,
+    );
+    return { onOpenList, onOpenChild };
+  }
+
+  it('renders no empty section headings — settings and People only on a bare plan', async () => {
+    mountAnatomy({});
+    await screen.findByTestId('detail-content');
+    expect(screen.getByTestId('section-notes')).toBeDefined();
+    expect(screen.getByTestId('section-reminders')).toBeDefined();
+    expect(screen.getByTestId('detail-edit-recurrence')).toBeDefined();
+    // People keeps its pre-build treatment: visible, subordinate, no chevron behaviour.
+    expect(screen.getByTestId('section-people')).toBeDefined();
+    expect(screen.getByText('Coming later')).toBeDefined();
+    expect(screen.queryByTestId('section-prep')).toBeNull();
+    expect(screen.queryByTestId('section-lists')).toBeNull();
+    expect(screen.queryByTestId('section-attachments')).toBeNull();
+    expect(screen.queryByTestId('section-updates')).toBeNull();
+  });
+
+  it('hides Updates on a private plan with no entries and shows it once one exists', async () => {
+    mountAnatomy({ updates: [update(1)] });
+    const section = await screen.findByTestId('section-updates');
+    expect(section).toBeDefined();
+    expect(screen.getByText('Update 1')).toBeDefined();
+    expect(screen.getByText('2 days ago')).toBeDefined();
+  });
+
+  it('renders a 1–3 row section in full with no Show all', async () => {
+    mountAnatomy({ children: [child(1), child(2, 'completed'), child(3)] });
+    await screen.findByTestId('section-prep');
+    expect(screen.getByText('1 of 3')).toBeDefined();
+    for (const title of ['Prep 1', 'Prep 2', 'Prep 3']) {
+      expect(screen.getByText(title)).toBeDefined();
+    }
+    expect(screen.queryByTestId('prep-show-all')).toBeNull();
+  });
+
+  it('peeks a 4+ section at three rows and expands through Show all n', async () => {
+    mountAnatomy({ children: [child(1), child(2), child(3), child(4), child(5)] });
+    await screen.findByTestId('section-prep');
+    expect(screen.getByText('Prep 3')).toBeDefined();
+    expect(screen.queryByText('Prep 4')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('prep-show-all'));
+    expect(screen.getByText('Prep 4')).toBeDefined();
+    expect(screen.getByText('Prep 5')).toBeDefined();
+  });
+
+  it('opens a prep child through the row body and a List through its row', async () => {
+    const { onOpenChild, onOpenList } = mountAnatomy({
+      children: [child(1)],
+      sourceLists: [sourceList(1), sourceList(2)],
+    });
+    await screen.findByTestId('section-prep');
+    fireEvent.click(screen.getByRole('button', { name: 'Prep 1' }));
+    expect(onOpenChild).toHaveBeenCalledWith(child(1).activityId);
+
+    expect(screen.getByText('8 items · 3 checked')).toBeDefined();
+    expect(screen.getByText('8 items')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'List 1, 8 items' }));
+    expect(onOpenList).toHaveBeenCalledWith(sourceList(1).listId);
+  });
+
+  it('renders the same applicable section set for an undated plan, uncalled incomplete', async () => {
+    mountAnatomy(
+      { children: [child(1)], sourceLists: [sourceList(2)] },
+      plan({ status: 'saved', schedule: undefined }),
+    );
+    await screen.findByTestId('section-prep');
+    expect(screen.getByTestId('section-lists')).toBeDefined();
+    expect(screen.getByText('Not scheduled')).toBeDefined();
+    // No reminder or repeat row without a date — nothing to count back from.
+    expect(screen.queryByTestId('section-reminders')).toBeNull();
+    expect(screen.queryByText(/unfinished|incomplete/i)).toBeNull();
+  });
+
+  it('renders a task with no plan sections and no chip row', async () => {
+    mountAnatomy({ children: [child(1)] }, task());
+    await screen.findByTestId('detail-content');
+    expect(screen.queryByTestId('section-prep')).toBeNull();
+    expect(screen.queryByTestId('add-to-plan')).toBeNull();
+    expect(screen.queryByTestId('section-people')).toBeNull();
   });
 });

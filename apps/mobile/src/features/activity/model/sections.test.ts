@@ -71,30 +71,46 @@ describe('a Task renders no placeholder for what it lacks', () => {
   );
 });
 
-describe('a Plan previews its later capabilities without dead controls', () => {
-  it('renders the §2.1 sections in their fixed order', () => {
+describe('a Plan renders settings always and sections only once they hold content', () => {
+  /** The 2026-08-25 amendment: a bare plan has no empty section headings, only settings. */
+  it('renders only settings and the People discovery row on a bare plan', () => {
     expect(sectionsFor(activity({})).map((s) => s.key)).toEqual([
+      'whenWhere',
+      'notes',
+      'people',
+    ]);
+  });
+
+  it('adds each content section exactly when its collection is populated', () => {
+    const populated = sectionsFor(activity({}), {
+      childCount: 2,
+      sourceListCount: 1,
+      attachmentCount: 4,
+      updateCount: 1,
+    }).map((s) => s.key);
+    expect(populated).toEqual([
       'whenWhere',
       'notes',
       'people',
       'prep',
       'lists',
       'attachments',
+      'updates',
     ]);
   });
 
   /**
-   * Founder clarification 2026-08-13: these rows teach the Plan's shape without exposing a
-   * disabled Add action or pretending that the future capability is usable.
+   * Founder clarification 2026-08-13, explicitly retained by the 2026-08-25 amendment:
+   * `People` teaches the Plan's shape without a disabled Add or a working chevron. It is
+   * the one unbuilt capability left with a `Coming later` row.
    */
-  it.each(['people', 'prep', 'lists', 'attachments'])(
-    'marks %s as coming later',
-    (key) => {
-      expect(sectionsFor(activity({}))).toContainEqual(
-        expect.objectContaining({ key, state: 'coming-later' }),
-      );
-    },
-  );
+  it('marks People as coming later, and nothing else', () => {
+    const sections = sectionsFor(activity({}));
+    expect(sections).toContainEqual(
+      expect.objectContaining({ key: 'people', state: 'coming-later' }),
+    );
+    expect(sections.filter((s) => s.state === 'coming-later')).toHaveLength(1);
+  });
 
   it('previews Ingredients only on a Meal plan', () => {
     expect(

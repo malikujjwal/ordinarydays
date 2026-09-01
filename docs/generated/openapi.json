@@ -3043,6 +3043,19 @@
             "items": {
               "$ref": "#/components/schemas/Attachment"
             }
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityChild"
+            },
+            "maxItems": 50
+          },
+          "sourceLists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceListSummary"
+            }
           }
         },
         "required": [
@@ -3147,6 +3160,74 @@
           "createdAt",
           "schemaVersion"
         ]
+      },
+      "ActivityChild": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled",
+              "completed",
+              "skipped",
+              "cancelled"
+            ]
+          },
+          "isRecurring": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "activityId",
+          "title",
+          "status",
+          "isRecurring"
+        ],
+        "additionalProperties": false
+      },
+      "SourceListSummary": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "icon": {
+            "type": "string",
+            "minLength": 1
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "doneCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "listId",
+          "title",
+          "icon",
+          "itemCount",
+          "doneCount"
+        ],
+        "additionalProperties": false
       },
       "PatchActivityInput": {
         "type": "object",

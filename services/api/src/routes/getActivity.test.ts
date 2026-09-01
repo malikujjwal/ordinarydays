@@ -159,15 +159,18 @@ describe('reading an activity you own', () => {
 
     /**
      * The whole point of the envelope: each collection is **added** as its phase lands, so a
-     * client written against Phase 1 keeps working. `updates` is P3-19's addition and
-     * `attachments` is P3-22's.
+     * client written against Phase 1 keeps working. `updates` is P3-19's addition,
+     * `attachments` is P3-22's, and `children` and `sourceLists` are P3-37's — the two
+     * remaining collections the one-request rule composes from the partition read.
      */
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
       'attachments',
       'capabilities',
+      'children',
       'completedOccurrenceCount',
       'reminders',
+      'sourceLists',
       'updates',
     ]);
   });

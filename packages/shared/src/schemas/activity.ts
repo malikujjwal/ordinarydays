@@ -5,6 +5,7 @@ import {
   MAX_INGREDIENTS,
   MAX_NOTES_LEN,
   MAX_PARTICIPANTS,
+  MAX_PREP_TASKS_PER_PLAN,
   MAX_REMINDERS_PER_USER_PER_ACTIVITY,
   MAX_TITLE_LEN,
 } from '../constants.js';
@@ -475,6 +476,36 @@ export const occurrenceDetailProjection = z.strictObject({
   completedAt: z.iso.datetime().optional(),
 });
 
+/**
+ * One prep task as its parent's `SUB#` pointer projects it (P3-18, P3-37). The child
+ * Activity stays the source of truth; this is what the PREP section renders from the one
+ * detail read, with no per-child lookup.
+ */
+export const activityChild = z
+  .strictObject({
+    activityId: ulidId('act'),
+    title,
+    status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
+    isRecurring: z.boolean(),
+  })
+  .meta({ id: 'ActivityChild' });
+
+/**
+ * One List this Plan explicitly created (P3-37, P3-39): the `SOURCE_LIST#` ids resolved to
+ * the row the LISTS section renders — title plus the drillable counts, nothing a list-detail
+ * read would not also show. Deliberately not the full `List`: the section is navigation, and
+ * shipping configuration here would make the detail response a second list contract.
+ */
+export const sourceListSummary = z
+  .strictObject({
+    listId: ulidId('lst'),
+    title,
+    icon: z.string().min(1),
+    itemCount: z.number().int().nonnegative(),
+    doneCount: z.number().int().nonnegative(),
+  })
+  .meta({ id: 'SourceListSummary' });
+
 export const activityDetail = z
   .object({
     activity,
@@ -498,6 +529,13 @@ export const activityDetail = z
      * `MAX_ATTACHMENTS_PER_ACTIVITY`. Bounded by the model, so there is no cursor beside it.
      */
     attachments: z.array(attachment).optional(),
+    /**
+     * The complete prep collection (P3-37): the model cap makes one bounded page the whole
+     * collection, so there is no cursor and `n of m done` needs no second read.
+     */
+    children: z.array(activityChild).max(MAX_PREP_TASKS_PER_PLAN).optional(),
+    /** Every List this Plan explicitly created, in stored order (P3-37, P3-39). */
+    sourceLists: z.array(sourceListSummary).optional(),
   })
   .meta({ id: 'ActivityDetail' });
 

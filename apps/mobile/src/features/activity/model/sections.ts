@@ -49,34 +49,39 @@ export interface DetailSection {
   state?: 'coming-later';
 }
 
-const COMING_LATER: DetailSection[] = [
-  {
-    key: 'people',
-    label: 'People',
-    summary: 'Sharing and participants',
-    state: 'coming-later',
-  },
-  {
-    key: 'prep',
-    label: 'Preparation',
-    summary: 'Tasks that help make this happen',
-    state: 'coming-later',
-  },
-  {
-    key: 'lists',
-    label: 'Related lists',
-    summary: 'Lists connected to this plan',
-    state: 'coming-later',
-  },
-];
+/**
+ * What the plan currently holds, for the sections that exist only once they hold something
+ * (P3-37, §2.1 amended 2026-08-25). Counts, not collections: this module decides *which*
+ * sections render; `planSections.ts` decides how much of each.
+ */
+export interface PlanSectionContent {
+  readonly childCount: number;
+  readonly sourceListCount: number;
+  readonly attachmentCount: number;
+  readonly updateCount: number;
+}
+
+const EMPTY_CONTENT: PlanSectionContent = {
+  childCount: 0,
+  sourceListCount: 0,
+  attachmentCount: 0,
+  updateCount: 0,
+};
 
 /**
  * The sections for one activity, in render order.
  *
  * Notes-first order is the founder's 2026-08-13 refinement to the canonical detail anatomy.
- * The remaining Plan capabilities keep `plans-and-lists.md` §2.1's relative order.
+ * The 2026-08-25 amendment reshaped the Plan half: **settings always render; sections do not
+ * exist until they hold something** — no empty PREP heading, no chevron to a blank screen.
+ * Empty capabilities are discoverable through the `Add to this plan` chip row the screen
+ * renders after these. `People` keeps its pre-build `Coming later` row (that treatment is
+ * explicitly unchanged by the amendment), as does Meal's Ingredients until P3-43 wires it.
  */
-export function sectionsFor(activity: DisplayActivity): DetailSection[] {
+export function sectionsFor(
+  activity: DisplayActivity,
+  content: PlanSectionContent = EMPTY_CONTENT,
+): DetailSection[] {
   /**
    * `repeat` and `reminders` are **setting rows** and sit together, in the frames' order:
    * the two things about *when* this happens, stated by value, each opening its own sheet.
@@ -100,7 +105,14 @@ export function sectionsFor(activity: DisplayActivity): DetailSection[] {
     { key: 'whenWhere' },
     { key: 'notes', label: 'Notes' },
     ...schedule,
-    ...COMING_LATER,
+    {
+      key: 'people',
+      label: 'People',
+      summary: 'Sharing and participants',
+      state: 'coming-later',
+    },
+    ...(content.childCount > 0 ? [{ key: 'prep' }] : []),
+    ...(content.sourceListCount > 0 ? [{ key: 'lists' }] : []),
     ...(activity.type === 'meal'
       ? [
           {
@@ -111,12 +123,10 @@ export function sectionsFor(activity: DisplayActivity): DetailSection[] {
           },
         ]
       : []),
-    {
-      key: 'attachments',
-      label: 'Attachments',
-      summary: 'Photos and files',
-      state: 'coming-later',
-    },
+    ...(content.attachmentCount > 0 ? [{ key: 'attachments' }] : []),
+    ...(content.updateCount > 0 || activity.visibility !== 'private'
+      ? [{ key: 'updates' }]
+      : []),
   ];
 }
 
