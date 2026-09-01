@@ -129,6 +129,11 @@ describe('native Activity/Agenda architecture boundaries', () => {
          writer takes an explicit transaction, and the `503` recovery decisions are the sync
          engine's. */
       'lib/sqlite/listItemsRepository.ts',
+      /* P3-36, on the Lists terms: it serves the Plans tab, its one writer (`install`) takes
+         an explicit transaction, and it makes no write decision from a snapshot. Reading
+         through the serialized reader is what stops two overlapping UI reads from nesting
+         BEGIN on the writer connection. */
+      'lib/sqlite/plansRepository.ts',
       'lib/sqlite/outboxPresentationStore.ts',
     ]);
     const callers = productionSources()
