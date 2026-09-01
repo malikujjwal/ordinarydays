@@ -6,6 +6,7 @@ import {
 import { systemClock } from '@od/shared/time';
 import type {
   Activity,
+  ActivityChild,
   ActivityDetail,
   ActivityDetailTarget,
   ActivityUpdate,
@@ -14,6 +15,7 @@ import type {
   OccurrenceDetailProjection,
   PostActivityUpdateResult,
   Reminder,
+  SourceListSummary,
 } from '@od/shared/types';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import { projectionFromCanonicalOccurrence } from '@/lib/sqlite/occurrenceMaterialization';
@@ -319,6 +321,7 @@ export class ActivityRepository {
     );
     const feed =
       feedState === undefined ? undefined : await this.readUpdates(target.activityId);
+    const bounded = await this.readBoundedDetail(target.activityId, this.reader);
     if (target.kind === 'activity') {
       return {
         activity: activityFromRow(row),
@@ -327,6 +330,7 @@ export class ActivityRepository {
         ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
         ...(feed === undefined ? {} : { updates: feed.updates }),
         ...(feed?.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
+        ...bounded,
       };
     }
     const occurrenceRow = await this.reader.first(
@@ -381,6 +385,7 @@ export class ActivityRepository {
       ...(occurrence === undefined ? {} : { occurrence }),
       ...(feed === undefined ? {} : { updates: feed.updates }),
       ...(feed?.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
+      ...bounded,
     };
   }
 
@@ -501,6 +506,16 @@ export class ActivityRepository {
       ...(usableEnrichment?.occurrence === undefined
         ? {}
         : { occurrence: usableEnrichment.occurrence }),
+      ...(usableEnrichment?.children === undefined
+        ? current?.children === undefined
+          ? {}
+          : { children: current.children }
+        : { children: usableEnrichment.children }),
+      ...(usableEnrichment?.sourceLists === undefined
+        ? current?.sourceLists === undefined
+          ? {}
+          : { sourceLists: current.sourceLists }
+        : { sourceLists: usableEnrichment.sourceLists }),
     };
     return this.installCanonicalDetail(transaction, detail, {
       preserveLocalReminders: options.preserveLocalReminders ?? false,
@@ -592,6 +607,7 @@ export class ActivityRepository {
       );
       transaction.changed(this.updatesScope(detail.activity.activityId));
     }
+    await this.replaceBoundedDetail(transaction.database, detail);
     transaction.changed(this.scope(detail.activity.activityId));
     transaction.changed('reminders');
     return true;
@@ -642,6 +658,18 @@ export class ActivityRepository {
     );
     await transaction.database.run(
       'DELETE FROM activity_update_feed_state WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_children WHERE parent_activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_source_lists WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_detail_projection_state WHERE activity_id = ?;',
       [activityId],
     );
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
@@ -957,12 +985,126 @@ export class ActivityRepository {
       text(row, 'capabilities_json'),
     );
     const completedOccurrenceCount = number(row, 'completed_occurrence_count');
+    const bounded = await this.readBoundedDetail(activityId, database);
     return {
       activity: activityFromRow(row),
       reminders,
       ...(capabilities === undefined ? {} : { capabilities }),
       ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
+      ...bounded,
     };
+  }
+
+  private async readBoundedDetail(
+    activityId: string,
+    database: SqliteReader,
+  ): Promise<Pick<ActivityDetail, 'children' | 'sourceLists'>> {
+    const state = await database.first(
+      `SELECT children_installed, source_lists_installed
+       FROM activity_detail_projection_state WHERE activity_id = ?;`,
+      [activityId],
+    );
+    if (state === undefined) return {};
+    const children: ActivityChild[] =
+      number(state, 'children_installed') === 1
+        ? (
+            await database.all(
+              `SELECT * FROM activity_children
+               WHERE parent_activity_id = ? ORDER BY ordinal;`,
+              [activityId],
+            )
+          ).map((row) => ({
+            activityId: text(row, 'child_activity_id') ?? '',
+            title: text(row, 'title') ?? '',
+            status: (text(row, 'status') ?? 'saved') as ActivityChild['status'],
+            isRecurring: number(row, 'is_recurring') === 1,
+          }))
+        : [];
+    const sourceLists: SourceListSummary[] =
+      number(state, 'source_lists_installed') === 1
+        ? (
+            await database.all(
+              `SELECT * FROM activity_source_lists
+               WHERE activity_id = ? ORDER BY ordinal;`,
+              [activityId],
+            )
+          ).map((row) => ({
+            listId: text(row, 'list_id') ?? '',
+            title: text(row, 'title') ?? '',
+            icon: text(row, 'icon') ?? '',
+            itemCount: number(row, 'item_count') ?? 0,
+            doneCount: number(row, 'done_count') ?? 0,
+          }))
+        : [];
+    return {
+      ...(number(state, 'children_installed') === 1 ? { children } : {}),
+      ...(number(state, 'source_lists_installed') === 1 ? { sourceLists } : {}),
+    };
+  }
+
+  private async replaceBoundedDetail(
+    database: SqliteExecutor,
+    detail: ActivityDetail,
+  ): Promise<void> {
+    const activityId = detail.activity.activityId;
+    if (detail.children !== undefined) {
+      await database.run('DELETE FROM activity_children WHERE parent_activity_id = ?;', [
+        activityId,
+      ]);
+      for (const [ordinal, child] of detail.children.entries()) {
+        await database.run(
+          `INSERT INTO activity_children
+             (parent_activity_id, child_activity_id, ordinal, title, status, is_recurring)
+           VALUES (?, ?, ?, ?, ?, ?);`,
+          [
+            activityId,
+            child.activityId,
+            ordinal,
+            child.title,
+            child.status,
+            child.isRecurring ? 1 : 0,
+          ],
+        );
+      }
+    }
+    if (detail.sourceLists !== undefined) {
+      await database.run('DELETE FROM activity_source_lists WHERE activity_id = ?;', [
+        activityId,
+      ]);
+      for (const [ordinal, source] of detail.sourceLists.entries()) {
+        await database.run(
+          `INSERT INTO activity_source_lists
+             (activity_id, list_id, ordinal, title, icon, item_count, done_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?);`,
+          [
+            activityId,
+            source.listId,
+            ordinal,
+            source.title,
+            source.icon,
+            source.itemCount,
+            source.doneCount,
+          ],
+        );
+      }
+    }
+    if (detail.children !== undefined || detail.sourceLists !== undefined) {
+      await database.run(
+        `INSERT INTO activity_detail_projection_state
+           (activity_id, children_installed, source_lists_installed)
+         VALUES (?, ?, ?)
+         ON CONFLICT(activity_id) DO UPDATE SET
+           children_installed=CASE WHEN ? = 1 THEN 1 ELSE children_installed END,
+           source_lists_installed=CASE WHEN ? = 1 THEN 1 ELSE source_lists_installed END;`,
+        [
+          activityId,
+          detail.children === undefined ? 0 : 1,
+          detail.sourceLists === undefined ? 0 : 1,
+          detail.children === undefined ? 0 : 1,
+          detail.sourceLists === undefined ? 0 : 1,
+        ],
+      );
+    }
   }
 
   private async readReminders(

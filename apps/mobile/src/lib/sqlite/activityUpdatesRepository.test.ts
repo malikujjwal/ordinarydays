@@ -33,6 +33,7 @@ function detail(
   lastActivityAt: string,
   updates: readonly ActivityUpdate[],
   updatesCursor?: string,
+  extras: Partial<ActivityDetail> = {},
 ): ActivityDetail {
   return {
     activity: {
@@ -56,6 +57,7 @@ function detail(
     reminders: [],
     updates: [...updates],
     ...(updatesCursor === undefined ? {} : { updatesCursor }),
+    ...extras,
   };
 }
 
@@ -151,5 +153,44 @@ describe('native Activity updates projection', () => {
     );
     expect((await activities.readUpdates(ACTIVITY)).updates).toEqual([confirmed, first]);
     expect((await activities.readUpdates(ACTIVITY)).cursor).toBeUndefined();
+  });
+
+  it('persists bounded Prep and source-List projections across an offline restart', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const children = [
+      {
+        activityId: 'act_01J0000000000000000000000B',
+        title: 'Pack a bag',
+        status: 'scheduled' as const,
+        isRecurring: false,
+      },
+    ];
+    const sourceLists = [
+      {
+        listId: 'lst_01J0000000000000000000000A',
+        title: 'Weekend groceries',
+        icon: 'cart',
+        itemCount: 8,
+        doneCount: 3,
+      },
+    ];
+    await transactions.run((transaction) =>
+      activities.putCanonical(
+        transaction,
+        detail('2026-08-19T11:00:00.000Z', [], undefined, {
+          children,
+          sourceLists,
+        }),
+      ),
+    );
+
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('updates.sqlite');
+    subscriptions = new RepositorySubscriptions();
+    activities = new ActivityRepository(database, subscriptions);
+
+    await expect(
+      activities.read({ kind: 'activity', activityId: ACTIVITY }),
+    ).resolves.toMatchObject({ children, sourceLists });
   });
 });

@@ -1183,6 +1183,49 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         );
       `),
   },
+  {
+    version: 19,
+    name: 'activity-bounded-detail-projections',
+    /**
+     * Prep and source-List sections are complete bounded projections embedded in detail.
+     * Their installed/empty distinction is retained explicitly so relaunch does not turn a
+     * known-empty section back into an unknown older-cache shape.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE activity_detail_projection_state (
+          activity_id TEXT PRIMARY KEY NOT NULL,
+          children_installed INTEGER NOT NULL DEFAULT 0
+            CHECK (children_installed IN (0, 1)),
+          source_lists_installed INTEGER NOT NULL DEFAULT 0
+            CHECK (source_lists_installed IN (0, 1))
+        );
+        CREATE TABLE activity_children (
+          parent_activity_id TEXT NOT NULL,
+          child_activity_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL
+            CHECK (status IN ('saved', 'scheduled', 'completed', 'skipped', 'cancelled')),
+          is_recurring INTEGER NOT NULL CHECK (is_recurring IN (0, 1)),
+          PRIMARY KEY (parent_activity_id, child_activity_id)
+        );
+        CREATE UNIQUE INDEX activity_children_order
+          ON activity_children (parent_activity_id, ordinal);
+        CREATE TABLE activity_source_lists (
+          activity_id TEXT NOT NULL,
+          list_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          icon TEXT NOT NULL,
+          item_count INTEGER NOT NULL CHECK (item_count >= 0),
+          done_count INTEGER NOT NULL CHECK (done_count >= 0),
+          PRIMARY KEY (activity_id, list_id)
+        );
+        CREATE UNIQUE INDEX activity_source_lists_order
+          ON activity_source_lists (activity_id, ordinal);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {
