@@ -2661,8 +2661,8 @@ List-specific.
    compatible intersection is copied once. Follow-up tests prove no automatic List write, no
    generic-text parsing, explicit confirmation/Undo and independence after copy.
 6. Existing List Playwright journeys are rewritten rather than deleted. Visual assertions cover
-   the coloured 2-up index, Blank-first global `Add list` creation, contextual inline
-   Title/Note creation, `Start with one item`, the
+   the coloured 2-up index, Blank-first global `Add list` creation, the contextual
+   `Add item to <list name>` rapid-entry row and `Done adding`, `Start with one item`, the
    compact overview/no-title-gap rhythm,
    visible reorder grips, in-measure add row, top-aligned Item-details Note,
    exact settings hierarchy, generic stages, Watch, Meals/Sub-items, empty feature and populated

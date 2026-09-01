@@ -8,6 +8,13 @@ function productDoc(name: string): string {
   );
 }
 
+function implementationDoc(name: string): string {
+  return readFileSync(
+    new URL(`../../../../docs/03-implementation/${name}`, import.meta.url),
+    'utf8',
+  );
+}
+
 describe('P3-33 canonical product language', () => {
   it('keeps global routing and the one configurable List model in the overview', () => {
     const overview = productDoc('overview.md');
@@ -41,5 +48,12 @@ describe('P3-33 canonical product language', () => {
         'Title and optional multiline Note end with `Add to <list name>`',
       );
     }
+  });
+
+  it('keeps the Phase 3 verification contract on the same rapid-entry interaction', () => {
+    const phase = implementationDoc('phase-03-plans-and-lists.md');
+    expect(phase).toContain('`Add item to <list name>`');
+    expect(phase).toContain('`Done adding`');
+    expect(phase).not.toContain('contextual inline\n   Title/Note creation');
   });
 });
