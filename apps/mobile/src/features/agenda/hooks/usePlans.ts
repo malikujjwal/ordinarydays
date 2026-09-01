@@ -7,8 +7,9 @@ import {
 import { addWallDays } from '@od/shared/recurrence';
 import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
+import { usePlanActivityFloor } from '@/stores/planActivityFloor';
 import type { RsvpSummaryGroups } from '../model/rsvpSummary';
 
 /**
@@ -254,9 +255,34 @@ export function usePlans(timezone: string): PlansView {
     [],
   );
 
+  /**
+   * The §P3-40 monotonic merge: `#P` sorts on `lastActivityAt` and is read back through an
+   * eventually consistent GSI, so a refetch right after posting an update can answer with a
+   * projection older than the write. Each row's value is clamped to the newest authoritative
+   * one the client has seen (the floor the POST response raised) and the stage re-sorted, so
+   * a stale page cannot move a just-touched row back down. A converged page simply matches.
+   *
+   * When no floor changes anything, the stage is **exactly the server's order, untouched** —
+   * §1.3.2's prohibition on client-side reordering, which P3-36 pins in a test. The sort runs
+   * only while the client holds an authoritative value newer than the projection, because
+   * that is the one moment the server's order is provably behind the order it defines.
+   */
+  const floors = usePlanActivityFloor((s) => s.floors);
+  const needsDate = useMemo(() => {
+    let changed = false;
+    const clamped = state.needsDate.map((row) => {
+      const floor = floors[row.activityId];
+      if (floor === undefined || floor <= row.lastActivityAt) return row;
+      changed = true;
+      return { ...row, lastActivityAt: floor };
+    });
+    if (!changed) return state.needsDate;
+    return clamped.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  }, [state.needsDate, floors]);
+
   return {
     status: state.status,
-    needsDate: state.needsDate,
+    needsDate,
     store: state.store,
     upcomingWindow: state.upcomingWindow,
     pastCursor: state.pastCursor,
