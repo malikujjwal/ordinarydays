@@ -102,6 +102,10 @@ const ALLOWED = new Set(
     'apps/mobile/src/features/activity/components/RescheduleSheet.tsx',
     'apps/mobile/src/features/activity/hooks/useActivityActions.ts',
     'apps/mobile/src/features/agenda/hooks/useAgendaActivityActions.ts',
+    // Plans projection (P3-36 post-batch hardening): keys the local occurrence override
+    // by the wire date it read off the agenda row, and stores it in SQLite by the same name.
+    'apps/mobile/src/features/agenda/model/plansApply.ts',
+    'apps/mobile/src/lib/sqlite/plansRepository.ts',
   ].map((path) => path.split('/').join(sep)),
 );
 
