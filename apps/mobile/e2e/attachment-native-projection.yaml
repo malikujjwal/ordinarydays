@@ -40,6 +40,13 @@ onFlowComplete:
 - assertVisible:
     id: section-attachments
 - assertVisible: Photo 1 of 1
+- tapOn: Photo 1 of 1
+- assertVisible:
+    id: attachment-viewer
+- tapOn:
+    id: attachment-viewer-close
+- assertNotVisible:
+    id: attachment-viewer
 - longPressOn:
     text: Photo 1 of 1
 - assertVisible:
