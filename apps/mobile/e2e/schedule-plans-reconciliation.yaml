@@ -1,0 +1,39 @@
+appId: app.ordinarydays.ios.local
+name: P3 native schedule reconciles Plans
+jsEngine: graaljs
+tags: [p3, ios, release, reconciliation]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: schedule-plans-reconciliation
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- tapOn: Plans
+- assertVisible:
+    id: ${'plans-date-' + output.today}
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: ${'agenda-row-' + output.activityId}
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: when-where-date
+- assertVisible:
+    id: reschedule-sheet
+- tapOn: Set a time
+- tapOn: Done
+- assertNotVisible:
+    id: reschedule-sheet
+- tapOn:
+    id: detail-back
+- assertVisible:
+    id: ${'plans-date-' + output.today}
+- assertVisible: ${output.planTitle}
+- assertVisible: 9:00 AM, change time
