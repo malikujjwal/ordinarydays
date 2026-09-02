@@ -42,6 +42,9 @@ onFlowComplete:
     id: detail-back
 - tapOn: Plans
 - assertVisible:
+    id: ${'plans-card-' + output.activityId + ':' + output.today}
+- assertVisible: ${output.snoozeTimeLabel + ', change time'}
+- assertVisible:
     id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
 - assertVisible: ${output.title}
 - assertVisible: ${output.originalTimeLabel + ', change time'}
