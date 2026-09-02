@@ -80,6 +80,9 @@ export function ToastHost() {
     return null;
   }
 
+  const followUp = current.kind === 'undo' ? current.followUp : undefined;
+  const dismissible = current.kind === 'message' && current.dismissible === true;
+
   return (
     <View
       testID="toast-host"
@@ -94,7 +97,11 @@ export function ToastHost() {
       }}
     >
       <Toast
-        message={current.message}
+        message={followUp?.message ?? current.message}
+        {...(followUp === undefined ? {} : { actions: followUp.actions })}
+        {...(followUp === undefined && !dismissible
+          ? {}
+          : { onDismissPress: () => dismiss(current.id) })}
         {...(current.kind !== 'message' || current.requestId === undefined
           ? {}
           : { requestId: current.requestId })}

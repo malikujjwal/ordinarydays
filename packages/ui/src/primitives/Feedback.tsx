@@ -172,11 +172,24 @@ export function EmptyState({ heading, body, action, testID }: EmptyStateProps) {
   );
 }
 
+export interface ToastAction {
+  label: string;
+  onPress: () => void;
+  testID?: string;
+}
+
 export interface ToastProps {
   message: string;
   /** API correlation id, when the failure crossed the server boundary. */
   requestId?: string;
   action?: { label: string; onPress: () => void };
+  /**
+   * A follow-up's own choices (`interaction-contract.md` §1a.2), rendered before `action`.
+   * Each is an explicit tap that names what it does; none is pre-selected.
+   */
+  actions?: readonly ToastAction[];
+  /** The visible `✕` §1a.2 requires on a follow-up: dismissing is free and complete. */
+  onDismissPress?: () => void;
   tone?: 'neutral' | 'error';
   /** The two product-owned toast windows. Producers clamp shorter server deadlines. */
   duration?: 6000 | 10000;
@@ -195,12 +208,18 @@ export function Toast({
   message,
   requestId,
   action,
+  actions = [],
+  onDismissPress,
   tone = 'neutral',
   duration = 6000,
   onDismiss,
   testID,
 }: ToastProps) {
   const theme = useTheme();
+  const buttons: readonly ToastAction[] = [
+    ...actions,
+    ...(action === undefined ? [] : [{ ...action, testID: 'toast-action' }]),
+  ];
 
   useEffect(() => {
     if (onDismiss === undefined) return;
@@ -216,6 +235,8 @@ export function Toast({
       style={[
         {
           flexDirection: 'row',
+          // A follow-up's choices may need a second line; the message keeps the first.
+          flexWrap: actions.length > 0 ? 'wrap' : 'nowrap',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: theme.space[4],
@@ -242,13 +263,17 @@ export function Toast({
           </Text>
         )}
       </View>
-      {action === undefined ? null : (
+      {buttons.map((button, index) => (
         <Touchable
+          key={button.testID ?? `${index}-${button.label}`}
           accessibilityRole="button"
-          accessibilityLabel={action.label}
-          onPress={action.onPress}
-          testID="toast-action"
-          style={{ paddingHorizontal: theme.space[2] }}
+          accessibilityLabel={button.label}
+          onPress={button.onPress}
+          testID={button.testID ?? `toast-follow-up-${index}`}
+          style={{
+            paddingHorizontal: theme.space[2],
+            minHeight: theme.layout.hitTarget,
+          }}
         >
           {/**
            * `textAction`, not `accent`. §5.1: `accent` is a fill and icon colour — 3.7:1 on dark
@@ -256,7 +281,23 @@ export function Toast({
            * be able to read. Caught by §17's sweep, 2026-08-13.
            */}
           <Text variant="footnoteStrong" color="textAction">
-            {action.label}
+            {button.label}
+          </Text>
+        </Touchable>
+      ))}
+      {onDismissPress === undefined ? null : (
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss"
+          onPress={onDismissPress}
+          testID="toast-dismiss"
+          style={{
+            paddingHorizontal: theme.space[2],
+            minHeight: theme.layout.hitTarget,
+          }}
+        >
+          <Text variant="footnoteStrong" color="textSecondary">
+            ✕
           </Text>
         </Touchable>
       )}

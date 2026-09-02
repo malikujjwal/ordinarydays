@@ -55,12 +55,14 @@ vi.mock('../../repositories/activityRepository.js', () => ({
   listParticipants: mocks.listParticipants,
   patchActivity: mocks.patchActivity,
   putActivityMeta: mocks.putActivityMeta,
+  listStoredPrepTaskPointers: vi.fn(async () => []),
   StaleViewerLinkError: StaleLink,
 }));
 
 vi.mock('../../repositories/listRepository.js', () => ({
   findViewerLinksTo: mocks.findViewerLinksTo,
   readWatchFollowUpSource: mocks.readWatchFollowUpSource,
+  readLinkedItemSource: vi.fn(),
   ListReadFenceError: ReadFence,
 }));
 
@@ -218,6 +220,7 @@ describe('what the follow-up says', () => {
       listId: LIST,
       listTitle: 'Movies and shows',
       itemId: ITEM,
+      itemTitle: 'Severance',
       current: { state: 'open' },
       target: { state: 'done' },
     });
@@ -233,6 +236,7 @@ describe('what the follow-up says', () => {
       listId: LIST,
       listTitle: 'Movies and shows',
       itemId: ITEM,
+      itemTitle: 'Severance',
       mediaKind: 'show',
       current: { season: 2, episode: 4 },
       target: { season: 2, episode: 5 },
@@ -249,6 +253,7 @@ describe('what the follow-up says', () => {
       listId: LIST,
       listTitle: 'Movies and shows',
       itemId: ITEM,
+      itemTitle: 'Severance',
       mediaKind: 'movie',
       current: { season: 2, episode: 4 },
       target: { season: 2, episode: 5 },
@@ -284,6 +289,7 @@ describe('what the follow-up says', () => {
       listId: LIST,
       listTitle: 'Movies and shows',
       itemId: ITEM,
+      itemTitle: 'Severance',
       current: {},
       target: { season: 1, episode: 5 },
     });
@@ -358,9 +364,13 @@ describe('what offers nothing, and does not go looking', () => {
     expect(mocks.readWatchFollowUpSource).not.toHaveBeenCalled();
   };
 
+  /**
+   * P3-44 gives Events and Meals their own §5.3 rows, so those kinds may look at their
+   * linked item; a kind outside the catalogue still never does.
+   */
   it('a Plan of another kind', async () => {
     const result = await complete(
-      session({ type: 'event', details: { kind: 'event' } } as never),
+      session({ type: 'custom', details: { kind: 'custom' } } as never),
     );
 
     expect(result.followUp).toBeUndefined();

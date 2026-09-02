@@ -1,6 +1,5 @@
 import { MAX_INGREDIENTS, MAX_NOTES_LEN } from '@od/shared/constants';
 import {
-  Checkbox,
   Close as CloseIcon,
   DatePicker,
   DisclosureRow,

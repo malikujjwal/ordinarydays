@@ -54,6 +54,10 @@ export default function ActivityDetailRoute() {
     <>
       <ActivityDetailScreen
         target={target}
+        followUp={{
+          openActivity: (id) => router.push(`/activity/${id}`),
+          openCompose: () => router.push('/compose'),
+        }}
         today={format(new Date(), 'yyyy-MM-dd')}
         onBack={() => router.back()}
         {...(resolvePassed === '1'

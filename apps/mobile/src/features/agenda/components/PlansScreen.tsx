@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
 import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import { TabScreen } from '@/components/TabScreen';
+import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
@@ -47,6 +48,8 @@ import { NeedsDateCard } from './NeedsDateCard';
 export interface PlansScreenProps {
   /** Preserve occurrence scope when a generated recurring row opens detail. */
   onOpen: (item: AgendaItem) => void;
+  /** Where a completion follow-up's navigation rows go (P3-44). */
+  followUp?: FollowUpNavigation;
   /** The global Add action. Plans never pre-selects an object kind. */
   onAdd: () => void;
 }
@@ -72,7 +75,7 @@ interface SelectedAgendaItem {
   date: WallDate;
 }
 
-export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
+export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const tick = useMinuteTicker();
@@ -81,7 +84,12 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
   const today = toWallDate(tick.instant, timezone);
   const currentMinute = toWallTime(tick.instant, timezone);
   const plans = usePlans(timezone, today, currentMinute);
-  const actions = useAgendaActivityActions({ today, currentMinute, timezone });
+  const actions = useAgendaActivityActions({
+    today,
+    currentMinute,
+    timezone,
+    ...(followUp === undefined ? {} : { followUp }),
+  });
   /**
    * Upcoming is where the tab lands: it answers "what is next", the question the tab is
    * opened for, while the switcher keeps the other two stages one tap away (decision

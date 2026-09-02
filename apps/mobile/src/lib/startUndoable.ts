@@ -23,17 +23,28 @@ export interface UndoableAction {
   message: string;
   failureMessage: string;
   compensationFailureMessage?: string;
+  /**
+   * Runs once the original request is acknowledged, with its response and the id of the Undo
+   * toast still describing it — the hook a completion follow-up (`activities.md` §5.3) uses
+   * to attach itself to that toast. Never runs for a refused or undone action.
+   */
+  onAcknowledged?: (result: unknown, toastId: number) => void;
 }
 
 /** Presentation-only binding from one observable durable action to the standard Undo toast. */
 export function startUndoable(action: UndoableAction): void {
+  let result: unknown;
   void coordinateDurableAction({
     intent: action.originalIntent,
     apply: action.apply,
     revert: action.revert,
     rollback: action.rollbackFailure ?? action.revert,
     restorePosition: action.restorePosition,
-    dispatch: action.request,
+    dispatch: () =>
+      action.request().then((value) => {
+        result = value;
+        return value;
+      }),
     inverse: { intent: action.inverseIntent, dispatch: action.compensate },
   }).then((durable) => {
     const fail = (message: string, retry: () => void) => {
@@ -59,8 +70,11 @@ export function startUndoable(action: UndoableAction): void {
       },
     });
     void durable.attempt.then((outcome) => {
-      if (outcome.status !== 'refused' && outcome.status !== 'needs_attention') return;
-      fail(action.failureMessage, () => startUndoable(action));
+      if (outcome.status === 'refused' || outcome.status === 'needs_attention') {
+        fail(action.failureMessage, () => startUndoable(action));
+        return;
+      }
+      if (outcome.status === 'acknowledged') action.onAcknowledged?.(result, toastId);
     });
   });
 }

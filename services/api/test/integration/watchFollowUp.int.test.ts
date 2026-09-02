@@ -161,6 +161,7 @@ describe('structured episode Progress', () => {
       listId: list.listId,
       listTitle: LIST_TITLE,
       itemId: item.itemId,
+      itemTitle: 'Severance',
       mediaKind: 'show',
       current: { season: 2, episode: 4 },
       target: { season: 2, episode: 5 },
@@ -236,6 +237,7 @@ describe('the exposed-state fallback', () => {
       listId: list.listId,
       listTitle: LIST_TITLE,
       itemId: item.itemId,
+      itemTitle: 'Severance',
       current: { state: 'open' },
       target: { state: 'done' },
     });

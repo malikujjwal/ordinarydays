@@ -38,6 +38,7 @@ import { dayCount, dayCountLabel } from '@/features/agenda/model/dayCount';
 import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/partition';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
+import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { AgendaSection, agendaItemKey } from './AgendaSection';
 import { NowDivider } from './NowDivider';
@@ -54,6 +55,8 @@ export interface TodayScreenProps {
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onAgendaAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
   onResolvePassed?: (item: AgendaItem, outcome: ActivityOutcome) => void;
+  /** Where a completion follow-up's navigation rows go (P3-44). */
+  followUp?: FollowUpNavigation;
 }
 
 type CompletionSource = 'schedule' | 'anytime';
@@ -116,6 +119,7 @@ function errorDetails(error: unknown): { message: string; requestId?: string } {
 /** Today is a disposable projection: one agenda response, four locally derived sections. */
 export function TodayScreen({
   onAdd,
+  followUp,
   onAddTask,
   onOpenAnytime,
   onOpenAgendaItem,
@@ -168,6 +172,7 @@ export function TodayScreen({
     today,
     currentMinute,
     timezone: agenda.timezone,
+    ...(followUp === undefined ? {} : { followUp }),
     ...(agenda.data === undefined ? {} : { agendaData: agenda.data as AgendaData }),
     getScrollOffset: () => scrollOffset.current,
     restoreScrollOffset: (offset) => {

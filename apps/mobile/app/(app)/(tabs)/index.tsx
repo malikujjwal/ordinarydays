@@ -9,6 +9,10 @@ export default function TodayTab() {
   const openTodayTask = useComposeDraft((state) => state.openTodayTask);
   return (
     <TodayScreen
+      followUp={{
+        openActivity: (activityId) => router.push(`/activity/${activityId}`),
+        openCompose: () => router.push('/compose'),
+      }}
       onAdd={() => {
         openDraft();
         router.push('/compose');

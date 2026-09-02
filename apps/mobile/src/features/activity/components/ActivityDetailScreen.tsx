@@ -81,6 +81,7 @@ import {
 import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
 import { useClock } from '@/hooks/useClock';
+import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { cancelPendingCreate, usePendingCreate } from '@/hooks/usePendingIntents';
 import { openInMaps } from '@/lib/openInMaps';
@@ -130,6 +131,8 @@ export interface ActivityDetailScreenProps {
   onBack: () => void;
   /** Where a duplicate lands: its own detail screen (P1-27, `activities.md` §7.1). */
   onOpenActivity: (activityId: string) => void;
+  /** Where a completion follow-up's navigation rows go (P3-44). */
+  followUp?: FollowUpNavigation;
   /** Opens one of this Plan's own Lists from its LISTS section (P3-37, P3-39). */
   onOpenList?: (listId: string) => void;
   /**
@@ -177,6 +180,7 @@ export function ActivityDetailScreen({
   target,
   today,
   onBack,
+  followUp,
   onOpenActivity,
   onOpenList,
   onOpenChild,
@@ -191,7 +195,10 @@ export function ActivityDetailScreen({
   const theme = useTheme();
   const activityId = target.activityId;
   const detail = useActivityDetail(target);
-  const actions = useActivityActions(activityId);
+  const actions = useActivityActions(
+    activityId,
+    followUp === undefined ? {} : { followUp },
+  );
   /**
    * Derived from pending-intent presentation, never from a field on the Activity (P2-50).
    * Native reads the account SQLite outbox presentation store. Pending-ness is

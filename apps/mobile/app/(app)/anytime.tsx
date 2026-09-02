@@ -6,6 +6,10 @@ export default function AnytimeRoute() {
   const router = useRouter();
   return (
     <AnytimeScreen
+      followUp={{
+        openActivity: (activityId) => router.push(`/activity/${activityId}`),
+        openCompose: () => router.push('/compose'),
+      }}
       onBack={() => router.back()}
       onOpenAgendaItem={({ activityId }) => router.push(`/activity/${activityId}`)}
     />
