@@ -30,6 +30,7 @@ import { View } from 'react-native';
 export interface ListHeaderMenuProps {
   open: boolean;
   onClose: () => void;
+  onClosed?: () => void;
   list: List;
   /** Checked items right now. The count the button states, and the reason it is offered. */
   checkedCount: number;
@@ -58,6 +59,7 @@ export function supportsCheckedActions(list: List): boolean {
 export function ListHeaderMenu({
   open,
   onClose,
+  onClosed,
   list,
   checkedCount,
   onClearDone,
@@ -69,7 +71,13 @@ export function ListHeaderMenu({
   const checkable = supportsCheckedActions(list);
 
   return (
-    <Sheet open={open} onClose={onClose} title="More" testID="list-header-menu">
+    <Sheet
+      open={open}
+      onClose={onClose}
+      {...(onClosed === undefined ? {} : { onClosed })}
+      title="More"
+      testID="list-header-menu"
+    >
       <View>
         <SettingRow
           label="List settings"

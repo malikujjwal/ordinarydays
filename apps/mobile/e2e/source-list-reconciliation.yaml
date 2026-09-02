@@ -39,3 +39,14 @@ onFlowComplete:
 - assertVisible:
     id: section-lists
 - assertVisible: ${output.listTitle}
+- tapOn: ${output.listTitle}
+- assertVisible:
+    id: list-detail
+- tapOn:
+    id: list-detail-menu
+- assertVisible:
+    id: list-header-menu
+- tapOn:
+    id: list-settings-open
+- assertVisible:
+    id: list-settings
