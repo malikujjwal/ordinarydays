@@ -234,6 +234,72 @@ describe('which streams each mode starts', () => {
 });
 
 describe('needs a date', () => {
+  it('keeps missing, participant, populated Upcoming and paged Past edges bounded', async () => {
+    const participantId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1P1';
+    const missingId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1M1';
+    const pastId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1S1';
+    const upcoming = plan({
+      activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1U1',
+      status: 'scheduled',
+      schedule: { date: '2026-09-02', time: '09:00', timezone: TZ },
+    });
+    const participantRow = {
+      ...indexRow(participantId),
+      participantAvatars: 'stale-shape',
+    } as unknown as StoredItem;
+    const { dependencies, calls } = deps({
+      listBucket: vi.fn(async (_u: string, bucket: string, options = {}) => {
+        calls.push({ bucket, options: options as Record<string, unknown> });
+        if (bucket === 'P') {
+          return { items: [indexRow(missingId), participantRow] };
+        }
+        if (bucket === 'S' && options.ascending === false) {
+          return { items: [indexRow(pastId)], nextCursor: 'older-stored-row' };
+        }
+        return { items: [] };
+      }) as unknown as PlansDependencies['listBucket'],
+      batchActivities: vi.fn(async (ids: readonly string[]) =>
+        ids.flatMap((activityId) => {
+          if (activityId === participantId) {
+            return [plan({ activityId, ownerId: 'usr_plan_owner' })];
+          }
+          if (activityId === pastId) {
+            return [
+              plan({
+                activityId,
+                status: 'scheduled',
+                schedule: { date: '2026-08-31', time: '09:00', timezone: TZ },
+              }),
+            ];
+          }
+          return [];
+        }),
+      ) as PlansDependencies['batchActivities'],
+      assemble: vi.fn(async () => ({
+        days: [
+          {
+            date: '2026-09-02',
+            schedule: [recurringCandidate(upcoming, '2026-09-02', 'scheduled')],
+            anytime: [],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+        projectionVersions: [],
+      })) as unknown as PlansDependencies['assemble'],
+    });
+
+    const data = await getPlans(USER, { mode: 'initial', tz: TZ }, NOW, dependencies);
+
+    if (data.mode !== 'initial') throw new Error('expected the initial arm');
+    expect(data.needsDate).toEqual([
+      expect.objectContaining({ activityId: participantId, participantAvatars: [] }),
+    ]);
+    expect(data.upcoming[0]).toMatchObject({ date: '2026-09-02' });
+    expect(data.past[0]).toMatchObject({ date: '2026-08-31' });
+    expect(data.pastPage.nextCursor).toEqual(expect.any(String));
+  });
+
   it('performs no participant or suggestion read', async () => {
     const rows = [indexRow('act_01J8XKQ2M4N5P6R7S8T9V0W1X2')];
     const { dependencies, calls } = deps({
@@ -416,6 +482,36 @@ describe('cursors are scoped to the request that issued them', () => {
         dependencies,
       ),
     ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('accepts a legacy past_window cursor for its original bounds without resuming #S', async () => {
+    const cursor = Buffer.from(
+      JSON.stringify({
+        mode: 'past_window',
+        bounds: { from: '2026-08-01', before: '2026-09-01' },
+        key: 'legacy-row',
+        userId: USER,
+      }),
+    ).toString('base64url');
+    const { dependencies, calls } = deps();
+
+    const data = await getPlans(
+      USER,
+      {
+        mode: 'past_window',
+        tz: TZ,
+        pastFrom: '2026-08-01',
+        pastBefore: '2026-09-01',
+        cursor,
+      },
+      NOW,
+      dependencies,
+    );
+
+    if (data.mode !== 'past_window') throw new Error('expected the past_window arm');
+    expect(data.pastCoverage.complete).toBe(true);
+    expect(calls).toEqual([]);
+    expect(dependencies.assemble).toHaveBeenCalledOnce();
   });
 
   it('refuses another user’s cursor', async () => {
