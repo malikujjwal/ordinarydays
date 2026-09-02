@@ -35,13 +35,21 @@ async function deleteList(request: APIRequestContext, listId: string): Promise<v
   });
 }
 
-async function listItems(request: APIRequestContext, listId: string) {
+type ItemSummary = { title: string; sourceLabel?: string };
+
+/** The item page carries `{ item, viewerLink?, viewerPlan? }` rows; only the item matters here. */
+async function listItems(
+  request: APIRequestContext,
+  listId: string,
+): Promise<ItemSummary[]> {
   const response = await request.get(`${API}/v1/lists/${listId}/items`, {
     headers: e2eHeaders(),
   });
   expect(response.ok()).toBe(true);
-  return ((await response.json()) as { data: { title: string; sourceLabel?: string }[] })
-    .data;
+  const rows = (
+    (await response.json()) as { data: (ItemSummary | { item: ItemSummary })[] }
+  ).data;
+  return rows.map((row) => ('item' in row ? row.item : row));
 }
 
 async function listIds(request: APIRequestContext): Promise<string[]> {
@@ -130,9 +138,11 @@ test('two lists, no default: asked once with Remember checked, then never asked 
   const costco = await createList(request, 'Costco', 'groceries');
 
   await openMealForm(page, 'Chicken tacos', ['Chicken']);
+  // The `ask` case reads `Choose a list` (§5.8's question is due); `none` reads
+  // `Choose or create a list`.
   await expect(
     testId(page, 'compose-ingredient-destination-destination-name'),
-  ).toHaveText('Choose or create a list');
+  ).toHaveText('Choose a list');
   await testId(page, 'compose-ingredient-destination-destination').click();
   await expect(
     page.getByRole('heading', { name: 'Which list should ingredients go to?' }),
