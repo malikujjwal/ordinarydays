@@ -291,3 +291,86 @@ it('projects a negative passed-plan outcome as skipped, not completed', async ()
     expect(row?.status).toBe('skipped');
   });
 });
+
+/**
+ * P3-48: a dense 42-day Past grid may come back partial. The window's own cursor is followed
+ * under the same bounds until coverage is complete, and only then is the grid covered.
+ */
+it('drains a dense Past grid to completion before any date may read as loaded-and-empty', async () => {
+  const { client, wrapper } = harness();
+  const calls: string[] = [];
+  const pastWindow = (
+    coveredFrom: string,
+    coveredThrough: string,
+    nextCursor?: string,
+  ) => ({
+    data: {
+      mode: 'past_window',
+      past: [],
+      pastCoverage: {
+        requestedFrom: '2026-06-29',
+        requestedThrough: '2026-08-05',
+        coveredFrom,
+        coveredThrough,
+        complete: nextCursor === undefined,
+        ...(nextCursor === undefined ? {} : { nextCursor }),
+      },
+      warnings: [],
+    },
+    meta: { requestId: 'req_past_window' },
+  });
+  const bodies = [
+    {
+      data: {
+        mode: 'initial',
+        needsDate: [],
+        upcoming: [],
+        upcomingWindow: { from: '2026-08-06', through: '2026-10-06', nextFrom: null },
+        past: [],
+        pastPage: {},
+        warnings: [],
+      },
+      meta: { requestId: 'req_initial' },
+    },
+    pastWindow('2026-07-20', '2026-08-05', 'cur_1'),
+    pastWindow('2026-06-29', '2026-08-05'),
+  ];
+  vi.stubGlobal('fetch', (url: string) => {
+    calls.push(url);
+    const body = url.includes('mode=past_window')
+      ? url.includes('cursor=')
+        ? bodies[2]
+        : bodies[1]
+      : bodies[0];
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  });
+  client.setQueryData(['me'], { timezone: 'UTC' });
+  const { result } = renderHook(
+    () => usePlans('UTC', '2026-08-06' as WallDate, '10:00'),
+    { wrapper },
+  );
+  await waitFor(() => expect(result.current.status).toBe('success'));
+
+  const range = { from: '2026-06-29' as WallDate, through: '2026-08-05' as WallDate };
+  await act(async () => {
+    await result.current.loadRange('past', range, new AbortController().signal);
+  });
+
+  const windowCalls = calls.filter((url) => url.includes('mode=past_window'));
+  expect(windowCalls).toHaveLength(2);
+  expect(windowCalls[0]).toContain('pastFrom=2026-06-29');
+  expect(windowCalls[0]).toContain('pastBefore=2026-08-06');
+  expect(windowCalls[0]).not.toContain('cursor=');
+  expect(windowCalls[1]).toContain('cursor=cur_1');
+  await waitFor(() =>
+    expect(result.current.store.covered).toEqual([
+      { from: '2026-06-29', through: '2026-10-06' },
+    ]),
+  );
+});

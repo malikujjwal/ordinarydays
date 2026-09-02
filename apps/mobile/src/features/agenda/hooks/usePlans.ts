@@ -20,6 +20,7 @@ import {
   type NeedsDateRowData,
 } from '../model/plansApply';
 import { describePlansFailure, PLANS_WINDOW_DAYS } from '../model/plansFeed';
+import { fetchStageRange } from '../model/plansRangeFetch';
 import { plansProjectionKey } from './keys';
 
 export type { NeedsDateRowData } from '../model/plansApply';
@@ -71,6 +72,18 @@ export interface PlansView {
   readonly isRefreshing: boolean;
   readonly loadMoreUpcoming: () => void;
   readonly loadMorePast: () => void;
+  /**
+   * The calendar navigator's window fetch (P3-48): loads whatever part of `range` the store
+   * has not exhausted, clipped by the caller to the stage. Upcoming also fills the gap between
+   * the rendered window and the range so the list's gap lines never claim an unloaded date;
+   * Past follows the bounded window's cursor until coverage is complete. Never a second
+   * pagination model — ordinary scrolling keeps its own arms above.
+   */
+  readonly loadRange: (
+    stage: 'upcoming' | 'past',
+    range: { from: WallDate; through: WallDate },
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly refetch: () => void;
   /**
    * Synchronous completion projection for the tap handler — the cross-platform channel
@@ -524,6 +537,54 @@ export function usePlans(
       });
   }, [state.pastCursor, loadingPast, timezone, setState]);
 
+  const loadRange = useCallback(
+    async (
+      stage: 'upcoming' | 'past',
+      range: { from: WallDate; through: WallDate },
+      signal: AbortSignal,
+    ) => {
+      const current = stateRef.current;
+      await fetchStageRange({
+        stage,
+        range,
+        tz: timezone,
+        store: current.store,
+        upcomingThrough: current.upcomingWindow?.through,
+        signal,
+        pull: (request) => getPlans(apiClient, request, signal),
+        onResponse: (data) => {
+          setState((previous) => {
+            const store = mergePlansResponse(previous.store, data);
+            if (data.mode !== 'upcoming_window') {
+              return { ...previous, store, failure: undefined };
+            }
+            const window = previous.upcomingWindow;
+            const responseThrough = data.upcomingWindow.through as WallDate;
+            const nextFrom = data.upcomingWindow.nextFrom as WallDate | null;
+            return {
+              ...previous,
+              store,
+              // Monotonic, like `loadMoreUpcoming`: the rendered window only ever grows, and
+              // the sentinel follows the furthest window because it names the row after it.
+              upcomingWindow:
+                window === undefined
+                  ? {
+                      from: data.upcomingWindow.from as WallDate,
+                      through: responseThrough,
+                      nextFrom,
+                    }
+                  : window.through > responseThrough
+                    ? window
+                    : { from: window.from, through: responseThrough, nextFrom },
+              failure: undefined,
+            };
+          });
+        },
+      });
+    },
+    [setState, timezone],
+  );
+
   /**
    * The §P3-40 monotonic merge: `#P` sorts on `lastActivityAt` and is read back through an
    * eventually consistent GSI, so a refetch right after posting an update can answer with a
@@ -564,6 +625,7 @@ export function usePlans(
     isRefreshing: query.isRefetching,
     loadMoreUpcoming,
     loadMorePast,
+    loadRange,
     refetch,
     projectCompletion,
     upcomingStalled: state.upcomingStalled,

@@ -13,7 +13,7 @@ import {
   useTheme,
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, SectionList, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
@@ -24,9 +24,15 @@ import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import { type NeedsDateRowData, usePlans } from '../hooks/usePlans';
-import { pastSectionsFromStore, upcomingSectionsFromStore } from '../model/plansStages';
+import {
+  type PastDay,
+  type PastMonthSection,
+  pastSectionsFromStore,
+  upcomingSectionsFromStore,
+} from '../model/plansStages';
 import type { UpcomingListItem, UpcomingMonthSection } from '../model/plansWindow';
 import { AgendaRow } from './AgendaRow';
+import { CalendarNavigator } from './CalendarNavigator';
 import { NeedsDateCard } from './NeedsDateCard';
 
 /**
@@ -70,6 +76,45 @@ interface SelectedGap {
   pickedDate: WallDate | null;
 }
 
+/**
+ * A virtualized list cannot measure an offscreen date. When it says so, scroll to its own
+ * estimate of the offset — a little further on each failure, so a short estimate still
+ * walks the target into the mounted window — and land exactly once it is measurable.
+ */
+const LANDING_ATTEMPTS = 40;
+function onScrollToIndexFailed<Item, Section>(
+  list: SectionList<Item, Section> | null,
+  info: { index: number; averageItemLength: number },
+  attempt: number,
+  retry: () => void,
+): void {
+  if (attempt >= LANDING_ATTEMPTS) return;
+  list?.getScrollResponder()?.scrollTo({
+    y: info.averageItemLength * info.index + attempt * info.averageItemLength * 4,
+    animated: false,
+  });
+  setTimeout(retry, 60);
+}
+
+/** A landing is best effort: a list that cannot measure yet simply stays where it is. */
+function scrollTo<Item, Section>(
+  list: SectionList<Item, Section> | null,
+  sectionIndex: number,
+  itemIndex: number,
+): void {
+  try {
+    list?.scrollToLocation({
+      sectionIndex,
+      itemIndex,
+      animated: true,
+      viewPosition: 0,
+      viewOffset: 0,
+    });
+  } catch {
+    // A list that has not laid out yet cannot scroll; the next landing will succeed.
+  }
+}
+
 interface SelectedAgendaItem {
   item: AgendaItem;
   date: WallDate;
@@ -98,6 +143,17 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const [stage, setStage] = useState<Stage>('upcoming');
   const [selectedGap, setSelectedGap] = useState<SelectedGap>();
   const [reschedule, setReschedule] = useState<SelectedAgendaItem>();
+  /**
+   * The calendar's day tap (P3-48): land the list on that date, within the stage. Held as
+   * state so the landing can wait for the sections that a just-fetched window produces; a
+   * date with no card lands on the nearest card in the stage's own direction.
+   */
+  const [landing, setLanding] = useState<WallDate>();
+  const upcomingList = useRef<SectionList<UpcomingListItem, UpcomingMonthSection>>(null);
+  const pastList = useRef<SectionList<PastDay, PastMonthSection>>(null);
+  /** The last landing, retried while the list's own offset estimate walks the target in. */
+  const pendingScroll = useRef<() => void>(() => {});
+  const landingAttempts = useRef(0);
 
   const upcomingSections = useMemo(
     () =>
@@ -176,6 +232,33 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   useEffect(() => {
     if (shouldAdvance) loadMoreUpcoming();
   }, [shouldAdvance, loadMoreUpcoming]);
+
+  useEffect(() => {
+    if (landing === undefined) return;
+    if (stage === 'upcoming') {
+      for (const [sectionIndex, section] of upcomingSections.entries()) {
+        const itemIndex = section.data.findIndex(
+          (item) => item.kind === 'date' && item.date >= landing,
+        );
+        if (itemIndex === -1) continue;
+        pendingScroll.current = () =>
+          scrollTo(upcomingList.current, sectionIndex, itemIndex);
+        pendingScroll.current();
+        setLanding(undefined);
+        return;
+      }
+    } else if (stage === 'past' && pastSections !== undefined) {
+      for (const [sectionIndex, section] of pastSections.entries()) {
+        const itemIndex = section.data.findIndex((day) => day.date <= landing);
+        if (itemIndex === -1) continue;
+        pendingScroll.current = () => scrollTo(pastList.current, sectionIndex, itemIndex);
+        landingAttempts.current = 0;
+        pendingScroll.current();
+        setLanding(undefined);
+        return;
+      }
+    }
+  }, [landing, stage, upcomingSections, pastSections]);
 
   /**
    * The tap projects **synchronously and on both platforms** — native has no MutationCache
@@ -317,6 +400,15 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
       }
       return (
         <SectionList<UpcomingListItem, UpcomingMonthSection>
+          ref={upcomingList}
+          onScrollToIndexFailed={(info) =>
+            onScrollToIndexFailed(
+              upcomingList.current,
+              info,
+              landingAttempts.current++,
+              () => pendingScroll.current(),
+            )
+          }
           testID="plans-list"
           sections={upcomingSections}
           keyExtractor={(item) =>
@@ -353,7 +445,13 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
       );
     }
     return (
-      <SectionList
+      <SectionList<PastDay, PastMonthSection>
+        ref={pastList}
+        onScrollToIndexFailed={(info) =>
+          onScrollToIndexFailed(pastList.current, info, landingAttempts.current++, () =>
+            pendingScroll.current(),
+          )
+        }
         testID="plans-past-list"
         sections={pastSections}
         keyExtractor={(day) => `past:${day.date}`}
@@ -445,6 +543,15 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
                 </Text>
               </Touchable>
             </View>
+          )}
+          {stage === 'needsDate' ? null : (
+            <CalendarNavigator
+              stage={stage}
+              today={today}
+              projection={plans.store}
+              loadRange={plans.loadRange}
+              onSelectDate={setLanding}
+            />
           )}
           <View style={{ flex: 1 }}>{stageBody()}</View>
         </View>

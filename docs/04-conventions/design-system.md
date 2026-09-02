@@ -1103,8 +1103,28 @@ may move below the title before any label truncates; the grip retains its 44 pt 
 > 44 pt and exposes button semantics even though its visual treatment is subdued. Month
 > headers use the existing `SectionHeader` treatment and stick to the scroll edge until the
 > next month replaces them. The precise interior-only rendering and no-write tap behavior
-> are canonical in `plans-and-lists.md` §1.3. The week-strip and date-scrubber concepts are
-> still deferred as open-decisions item #52.
+> are canonical in `plans-and-lists.md` §1.3. The week-strip and date-scrubber concepts were
+> superseded by the calendar navigator below (open-decisions item #52, resolved 2026-08-25).
+
+> **P3-48 — the calendar navigator (`plans-and-lists.md` §1.3.4), built 2026-09-02.** Above
+> the day cards on Upcoming and Past only, never on Needs a date. Collapsed: a `caption` /
+> `textSecondary` line (`Next 7 days` · `Previous 7 days`) with a `textAction` chevron, then
+> seven `DayCell`s in a row (3 pt gaps, `radius.sm`, weekday letter in `caption` /
+> `textMuted`, numeral in `footnote` / `textSecondary`; today's numeral `footnoteStrong` /
+> `textAction` inside a 1.5 pt `accentBorder` ring). Expanded: `‹ August 2026 ▾ ›` — arrows
+> as accent `IconButton`s, the clamped one `disabled`; the title opens the month/year sheet —
+> a Monday-first weekday header and five or six rows of the same cell, tighter. Encoding:
+> Upcoming draws an 8 pt-wide `accent` load bar at 6 / 10 / 14 pt for one / two / three-plus
+> plans, a 2 pt `border` hairline for a covered empty date, and a 3.5 pt `textMuted` dot when
+> a task is present; Past draws a 4.5 pt `accent` presence dot only — never a bar, and
+> nothing at all for a date no exhausted response has covered. Three cell states: live
+> (full), spill (opacity 0.62 — subordinate, still a button), inert (opacity 0.32, not a
+> button). While a cold month loads the shell and header stay and uncovered Upcoming cells
+> show a `surfaceSunken` placeholder pill; a failed load keeps the shell and adds a
+> `footnote` line with `Try again`. The month/year sheet lays the twelve months in a
+> three-column grid of `surfaceSunken` tiles, the reachable ones in `textPrimary`, the
+> out-of-stage ones `textDisabled` on a transparent tile, the current one on `accentSurface`
+> with an `accentBorder` edge.
 
 ```
  ┌───────────────────────────────────────────────────────┐  radius.lg · e2
