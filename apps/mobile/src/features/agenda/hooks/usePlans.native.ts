@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import type { NativePlansProjection } from '@/lib/sqlite/plansRepository';
 import { describePlansFailure, PLANS_WINDOW_DAYS } from '../model/plansFeed';
+import { fetchStageRange } from '../model/plansRangeFetch';
 import type { PlansView } from './usePlans';
 
 export type { NeedsDateRowData } from '../model/plansApply';
@@ -166,6 +167,35 @@ export function usePlans(
     timezone,
   ]);
 
+  /**
+   * The navigator's window fetch through the serialized sync pull (P3-48). The engine owns
+   * the network and its own deadline, so the caller's `signal` cannot cancel a pull already
+   * in flight; it only stops this loop from issuing the next one — recorded, device-matrix
+   * gate. Coverage lands in the repository projection the list reads, so the calendar and
+   * the list still derive from one state.
+   */
+  const loadRange = useCallback(
+    async (
+      stage: 'upcoming' | 'past',
+      range: { from: WallDate; through: WallDate },
+      signal: AbortSignal,
+    ) => {
+      await fetchStageRange({
+        stage,
+        range,
+        tz: timezone,
+        store: projection?.store ?? EMPTY_STORE,
+        upcomingThrough: projection?.upcomingWindow.through,
+        signal,
+        pull: (request) => pullPlans.call(state.sync, request),
+        onResponse: async () => {
+          await readCommitted();
+        },
+      });
+    },
+    [projection, pullPlans, readCommitted, state.sync, timezone],
+  );
+
   return {
     status:
       projection !== undefined
@@ -182,6 +212,7 @@ export function usePlans(
     isRefreshing: refreshing,
     loadMoreUpcoming,
     loadMorePast,
+    loadRange,
     refetch,
     // Native completion already changes Agenda rows in the durable action transaction. The
     // repository joins those rows and publishes after commit; a second hook-local projection

@@ -67,6 +67,7 @@ describe('native Activity/Agenda architecture boundaries', () => {
 
   it('keeps AsyncStorage outside native Activity/Agenda authority', () => {
     const allowed = new Set([
+      'features/agenda/hooks/useCalendarNavigator.ts',
       'features/agenda/hooks/useShowSkippedPreference.ts',
       'features/reminders/projectionStore.ts',
       'lib/legacyIntentLog.ts',
