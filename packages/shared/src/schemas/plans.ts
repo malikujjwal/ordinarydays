@@ -12,8 +12,9 @@ import { ianaTimezone, isoDate } from './common.js';
  * stage paid for all three. `mode` now selects one arm on the way in and one on the way out,
  * and the two are the same decision: a continuation that reads only past `#S` must not be
  * able to *answer* with `upcoming: []`, because a client merging that response would erase a
- * stage it never asked about. **Inactive stage keys are absent, not empty** — the amendment of
- * 2026-08-25 is as much about the response as the query.
+ * stage it never asked about. The open Past continuation reads only `#S`; a bounded Past
+ * window delegates `#S` and `#R` to shared agenda assembly. **Inactive stage keys are absent,
+ * not empty** — the amendment of 2026-08-25 is as much about the response as the query.
  */
 
 /** Days between two `YYYY-MM-DD` wall dates, as whole UTC days. Never a local clock. */
@@ -171,10 +172,12 @@ export const pastPage = z
 
 /**
  * What a bounded past window actually **exhausted**, which is not the same as what returned
- * rows.
+ * rows. Current servers assemble the full bounded `#S` + `#R` range and answer `complete:
+ * true`; the cursor remains in the wire schema so clients can drain a partial response from
+ * an older server during a mixed-version rollout.
  *
  * The calendar may only render a date as loaded-and-empty once the interval containing it is
- * complete. A dense 42-day grid can therefore answer `complete: false` with rows in it; the
+ * complete. A partial legacy response can therefore carry rows and `complete: false`; the
  * client repeats the same bounds with `nextCursor` until it is told the grid is done.
  */
 export const pastCoverage = z

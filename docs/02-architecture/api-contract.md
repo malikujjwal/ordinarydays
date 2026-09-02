@@ -347,14 +347,14 @@ arrays, so a continuation response cannot overwrite a different stage in the cli
 | --- | --- | --- |
 | `initial` | `#P`, future `#S`, past `#S`, `#R` | `needsDate`, `upcoming`, `upcomingWindow`, `past`, `pastPage`, `warnings` |
 | `upcoming_window` | future `#S`, `#R` | `upcoming`, `upcomingWindow`, `warnings` |
-| `past_window` | bounded past `#S` | `past`, `pastCoverage`, `warnings` |
+| `past_window` | bounded past `#S`, `#R` through shared agenda assembly | `past`, `pastCoverage`, `warnings` |
 | `past_cursor` | past `#S` | `past`, `pastPage`, `warnings` |
 
 | Stage | Source | Order |
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P` | `lastActivityAt` descending — the plan being discussed floats up, not the oldest |
 | `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, queried with the access-pattern-1 two-day overlap, timezone-converted and filtered to the exact requested viewer window, merged with expansion of `U#<u>#R` | viewer-local date ascending |
-| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today; `past_window` additionally filters to the exact `[pastFrom, pastBefore)` viewer-local range | viewer-local date descending |
+| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today; authoritative `past_window` ranges merge that `#S` slice with historical occurrences expanded from `U#<u>#R` inside the exact `[pastFrom, pastBefore)` viewer-local range | viewer-local date descending |
 
 `mode=initial` uses today through 61 days later for its inclusive 62-day Upcoming window.
 `mode=upcoming_window` requires both Upcoming bounds, and the inclusive window may not exceed
@@ -370,16 +370,22 @@ every bounded recurring row to the shared expansion path. Convert effective
 timed rows from their projected stored `timezone` into the request timezone, then filter to
 the exact viewer-local stage/window. The future stream continues until it has a converted
 one-off candidate after `through` or is exhausted; `nextFrom` uses that converted date, never
-the raw key date. The opaque Past cursor remains backed by a raw DynamoDB continuation key, but the server
-refills across boundary candidates removed by viewer-local filtering. Recurrence math finds
+the raw key date. The opaque open-history Past cursor remains backed by a raw DynamoDB
+continuation key, but the server refills across boundary candidates removed by viewer-local
+filtering. It discovers stored one-offs; the calendar's bounded `past_window` is authoritative
+for visible history because it also assembles virtual recurring occurrences and their
+overrides. Recurrence math finds
 each bounded series' first later occurrence, so no empty date gap is scanned to calculate
 `nextFrom`. The shared agenda expansion path expands recurring rows only inside the exact
-response window. Its
+Upcoming or Past response window. Its
 successful-response warnings, including `series_limit_exceeded` and duplicate-occurrence
 diagnostics, are returned in `warnings`. No request assumes an unbounded future response.
 
-`mode=past_window` requires both `pastFrom` and exclusive `pastBefore`; its optional cursor
-must have been issued for the same mode and bounds. The response carries:
+`mode=past_window` requires both `pastFrom` and exclusive `pastBefore`. Shared assembly pages
+the bounded `#S` slice to exhaustion, expands bounded `#R` occurrences, applies occurrence
+overrides and returns the full range in one response. The optional request cursor is accepted
+only for compatibility with an earlier partial-window response and must have been issued for
+the same mode and bounds; no new bounded response emits one. The response carries:
 
 ```ts
 pastCoverage: {
@@ -392,10 +398,11 @@ pastCoverage: {
 }
 ```
 
-Coverage describes the viewer-local date interval actually exhausted by the bounded query,
-not merely dates that returned rows. A dense 42-day grid may therefore return `complete:
-false`; the client repeats `past_window` with the same bounds and `nextCursor` until the grid
-is complete. Only then may the calendar interpret an unmarked date as loaded-and-empty.
+Coverage describes the viewer-local date interval exhausted by the bounded assembly, not
+merely dates that returned rows. A successful current response covers the full requested
+range with `complete: true`; only then may the calendar interpret an unmarked date as
+loaded-and-empty. Clients still understand a partial legacy response and may repeat it under
+the same bounds and cursor during a mixed-version rollout.
 `past_cursor` is the ordinary older-history continuation and accepts only a cursor issued by
 `initial` or `past_cursor`. Supplying fields from another mode is `validation_failed` rather
 than silently launching unrelated streams.

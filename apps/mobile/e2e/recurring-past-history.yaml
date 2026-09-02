@@ -1,0 +1,25 @@
+appId: app.ordinarydays.ios.local
+name: P3 recurring occurrences remain visible in Past
+jsEngine: graaljs
+tags: [p3, plans, recurrence, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: recurring-past-history
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- tapOn: Plans
+- tapOn: Past
+- assertVisible:
+    id: ${'plans-date-' + output.yesterday}
+- assertVisible:
+    id: ${'plans-date-' + output.completedDate}
+- assertVisible: ${output.title + ', not completed'}
+- assertVisible: ${output.title + ', completed'}
