@@ -1,5 +1,6 @@
 import {
   ApiError,
+  continuePastWindow,
   NetworkError,
   type PlansData,
   type PlansRequest,
@@ -253,6 +254,11 @@ interface CanonicalOccurrenceResponse {
   readonly projection?: OccurrenceDetailProjection;
 }
 
+interface PrefetchedPlansResponse {
+  readonly timezone: string;
+  readonly data: PlansData;
+}
+
 function occurrenceDateFromIntent(intent: OutboxIntent): string | undefined {
   if (!OCCURRENCE_MUTATIONS.has(intent.mutationKey[1] ?? '')) return undefined;
   const input = field(intent.variables, 'input');
@@ -479,6 +485,103 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       plans.install(transaction, request.tz, data),
     );
     return data;
+  }
+
+  private async prefetchSchedulePlans(
+    intent: OutboxIntent,
+    response: unknown,
+    activity: Activity | undefined,
+  ): Promise<readonly PrefetchedPlansResponse[]> {
+    const plans = this.plans;
+    const pullPlans = this.pull.plans;
+    if (
+      intent.mutationKey[0] !== 'activity' ||
+      intent.mutationKey[1] !== 'schedule' ||
+      activity === undefined ||
+      plans === undefined ||
+      pullPlans === undefined
+    ) {
+      return [];
+    }
+    const occurrenceDate = occurrenceDateFromIntent(intent);
+    const parsed = scheduleActivityResult.safeParse(response);
+    const occurrence =
+      parsed.success && parsed.data.activity.activityId === activity.activityId
+        ? (parsed.data.occurrence as OccurrenceDetailProjection | undefined)
+        : undefined;
+    let requests: readonly PlansRequest[];
+    try {
+      requests = await plans.scheduleReconciliationRequests(
+        activity,
+        occurrenceDate,
+        occurrence,
+      );
+    } catch (error) {
+      if (__DEV__) {
+        console.info('native_schedule_plans_context_failed', {
+          activityId: activity.activityId,
+          message: message(error),
+        });
+      }
+      return [];
+    }
+    const received: PrefetchedPlansResponse[] = [];
+    for (const request of requests) {
+      let current: PlansRequest | undefined = request;
+      while (current !== undefined) {
+        const requestToPull: PlansRequest = current;
+        try {
+          const data: PlansData = await this.serialNetwork<PlansData>((signal) =>
+            pullPlans(requestToPull, signal),
+          );
+          if (data.mode !== requestToPull.mode) {
+            throw new Error('Native Plans response did not match its requested stage.');
+          }
+          received.push({ timezone: requestToPull.tz, data });
+          current =
+            requestToPull.mode === 'past_window' && data.mode === 'past_window'
+              ? continuePastWindow(requestToPull, data)
+              : undefined;
+        } catch (error) {
+          /* The schedule is already accepted; reconciliation cannot make it dispatch twice. */
+          if (__DEV__) {
+            console.info('native_schedule_plans_pull_failed', {
+              activityId: activity.activityId,
+              mode: requestToPull.mode,
+              timezone: requestToPull.tz,
+              message: message(error),
+            });
+          }
+          current = undefined;
+        }
+      }
+    }
+    return received;
+  }
+
+  private async installSchedulePlans(
+    intent: OutboxIntent,
+    responses: readonly PrefetchedPlansResponse[],
+  ): Promise<void> {
+    const plans = this.plans;
+    if (plans === undefined) return;
+    for (const response of responses) {
+      try {
+        await this.transactions.run((transaction) =>
+          plans.install(transaction, response.timezone, response.data),
+        );
+      } catch (error) {
+        /* Installation is also reconciliation: never revive an acknowledged outbox write. */
+        if (__DEV__) {
+          console.warn('native_schedule_plans_install_failed', {
+            activityId: intent.entityId,
+            timezone: response.timezone,
+            mode: response.data.mode,
+            message: message(error),
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -1231,6 +1334,11 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         return 'continue';
       }
       const pushedActivity = activityFromResponse(response);
+      const schedulePlans = await this.prefetchSchedulePlans(
+        intent,
+        response,
+        pushedActivity,
+      );
       let createdDetail: ActivityDetail | undefined;
       let prepParentDetail: ActivityDetail | undefined;
       if (
@@ -1455,6 +1563,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
         transaction.changed('outbox');
       });
+      await this.installSchedulePlans(intent, schedulePlans);
       if (__DEV__) {
         console.info('native_outbox_intent_settled', {
           intentId: intent.intentId,

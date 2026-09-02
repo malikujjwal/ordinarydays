@@ -2,7 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiError, NetworkError } from '@od/shared/client';
-import { type CreateActivityInput, instant } from '@od/shared/schemas';
+import { addWallDays } from '@od/shared/recurrence';
+import {
+  type CreateActivityInput,
+  instant,
+  parseWallDate,
+  plansData,
+} from '@od/shared/schemas';
 import type { Activity, ActivityDetail, ActivityUpdate, List } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +27,7 @@ import { ListsRepository } from './listsRepository';
 import { ListTransactionService } from './listTransactions';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { OutboxRepository } from './outbox';
+import { PlansRepository } from './plansRepository';
 import { recoverAbandonedOutbox } from './sessionRecovery';
 import { RepositorySubscriptions } from './subscriptions';
 import {
@@ -203,6 +210,7 @@ describe('serialized native convergence guard', () => {
       readonly push?: ActivityPushTransport;
       readonly pull?: ActivityPullAdapter;
       readonly targeted?: TargetedAgendaTransport;
+      readonly plans?: PlansRepository;
     } = {},
   ): SerializedNativeSyncEngine {
     return new SerializedNativeSyncEngine(
@@ -214,6 +222,10 @@ describe('serialized native convergence guard', () => {
       overrides.pull ?? pullAdapter(),
       overrides.targeted ?? targetedTransport(),
       anytime,
+      undefined,
+      undefined,
+      undefined,
+      overrides.plans,
     );
   }
 
@@ -776,6 +788,159 @@ describe('serialized native convergence guard', () => {
     expect(anytimePage).toHaveBeenCalledTimes(2);
     expect(first).toEqual(second);
     expect(first.map((item) => item.title)).toEqual(['First page', 'Second page']);
+  });
+
+  it('reconciles the old and new Plans windows after a schedule acknowledgement', async () => {
+    if (database === undefined) throw new Error('missing schedule Plans database');
+    const oldDate = parseWallDate('2026-09-01');
+    const newDate = parseWallDate('2026-09-05');
+    const before = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (before === undefined) throw new Error('missing schedule Plans Activity');
+    const scheduledBefore: Activity = {
+      ...before.activity,
+      objectKind: 'task',
+      type: 'task',
+      status: 'scheduled',
+      title: 'Move this task',
+      details: { kind: 'task' },
+      schedule: { date: oldDate, time: '09:00', timezone: 'UTC' },
+      updatedAt: '2026-09-02T08:00:00.000Z',
+      lastActivityAt: '2026-09-02T08:00:00.000Z',
+    };
+    await transactions.run((transaction) =>
+      activities.installAcknowledgedActivity(transaction, scheduledBefore),
+    );
+    const oldItem = {
+      activityId: ACTIVITY,
+      type: 'task' as const,
+      title: scheduledBefore.title,
+      status: 'scheduled' as const,
+      time: '09:00',
+      isRecurring: false,
+      isSnoozed: false,
+      hasCheckbox: true,
+      capabilities: { complete: true, skip: true, snooze: true },
+      participantAvatars: [],
+      participantCount: 0,
+      isPast: true,
+    };
+    const plans = new PlansRepository(database, subscriptions);
+    await transactions.run((transaction) =>
+      plans.install(
+        transaction,
+        'UTC',
+        plansData.parse({
+          mode: 'initial',
+          needsDate: [],
+          upcoming: [],
+          upcomingWindow: {
+            from: '2026-09-02',
+            through: '2026-11-02',
+            nextFrom: null,
+          },
+          past: [{ date: oldDate, items: [oldItem] }],
+          pastPage: {},
+          warnings: [],
+        }),
+      ),
+    );
+    await transactions.run((transaction) =>
+      service.schedule(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'move-task-between-days',
+          input: { date: newDate, time: '18:00', timezone: 'UTC' },
+        },
+        { today: '2026-09-02', currentMinute: '08:00' },
+      ),
+    );
+    const scheduledAfter: Activity = {
+      ...scheduledBefore,
+      schedule: { date: newDate, time: '18:00', timezone: 'UTC' },
+      updatedAt: '2026-09-02T09:00:00.000Z',
+      lastActivityAt: '2026-09-02T09:00:00.000Z',
+    };
+    const plansPull = vi.fn<NonNullable<ActivityPullAdapter['plans']>>(
+      async (request) => {
+        if (request.mode === 'past_window') {
+          const from = request.continuation?.pastFrom ?? request.pastFrom ?? oldDate;
+          const before =
+            request.continuation?.pastBefore ?? request.pastBefore ?? '2026-09-02';
+          return plansData.parse({
+            mode: 'past_window',
+            past: [],
+            pastCoverage: {
+              requestedFrom: from,
+              requestedThrough: parseWallDate(addWallDays(before, -1)),
+              coveredFrom: from,
+              coveredThrough: parseWallDate(addWallDays(before, -1)),
+              complete: true,
+            },
+            warnings: [],
+          });
+        }
+        if (request.mode !== 'upcoming_window') {
+          throw new Error(`unexpected Plans reconciliation mode ${request.mode}`);
+        }
+        return plansData.parse({
+          mode: 'upcoming_window',
+          upcoming: [
+            {
+              date: newDate,
+              items: [{ ...oldItem, time: '18:00' }],
+            },
+          ],
+          upcomingWindow: {
+            from: request.upcomingFrom,
+            through: request.upcomingTo,
+            nextFrom: null,
+          },
+          warnings: [],
+        });
+      },
+    );
+    const plansPublished = vi.fn();
+    const unsubscribe = subscriptions.subscribe('plans', plansPublished);
+    const sync = syncEngine({
+      plans,
+      push: {
+        ...pushTransport(),
+        schedule: async () => ({ activity: scheduledAfter }),
+      },
+      pull: { ...pullAdapter(), plans: plansPull },
+    });
+
+    await sync.syncNow();
+    sync.stop();
+    unsubscribe();
+
+    expect(plansPull).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'past_window',
+        tz: 'UTC',
+        pastFrom: oldDate,
+        pastBefore: '2026-09-02',
+      }),
+      expect.anything(),
+    );
+    expect(plansPull).toHaveBeenCalledWith(
+      {
+        mode: 'upcoming_window',
+        tz: 'UTC',
+        upcomingFrom: newDate,
+        upcomingTo: newDate,
+      },
+      expect.anything(),
+    );
+    const projection = await plans.read('UTC');
+    expect(projection?.store.byDate.get(oldDate)).toBeUndefined();
+    expect(projection?.store.byDate.get(newDate)?.[0]).toMatchObject({
+      activityId: ACTIVITY,
+      time: '18:00',
+    });
+    expect(plansPublished).toHaveBeenCalled();
+    expect(await outbox.all()).toEqual([]);
   });
 
   it('keeps a task scheduled from Anytime visible when the first Plans GSI read is stale', async () => {

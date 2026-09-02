@@ -3,10 +3,19 @@ import {
   mergePlansResponse,
   type PlansData,
   type PlansDateStore,
+  type PlansRequest,
 } from '@od/shared/client';
-import { agendaItem, needsDateItem } from '@od/shared/schemas';
-import type { WallDate } from '@od/shared/time';
-import type { AgendaItem } from '@od/shared/types';
+import { MAX_AGENDA_DAYS } from '@od/shared/constants';
+import { addWallDays, toUtcInstant } from '@od/shared/recurrence';
+import {
+  agendaItem,
+  instant,
+  needsDateItem,
+  parseWallDate,
+  timeZone,
+} from '@od/shared/schemas';
+import { toWallDate, type WallDate } from '@od/shared/time';
+import type { Activity, AgendaItem, OccurrenceDetailProjection } from '@od/shared/types';
 import type { NeedsDateRowData } from '@/features/agenda/model/plansApply';
 import { type SqliteDatabase, type SqliteReader, textColumn } from './database';
 import type { RevisionedProjectionReader } from './projectionReader';
@@ -47,6 +56,48 @@ function readNeedsDate(value: string | undefined): NeedsDateRowData {
 function readAgendaItem(value: string | undefined): AgendaItem {
   const parsed = agendaItem.parse(parsedJson(value, 'dated row'));
   return parsed as AgendaItem;
+}
+
+function viewerDateFor(
+  activity: Activity,
+  viewerTimezone: string,
+  occurrence?: OccurrenceDetailProjection,
+): WallDate | undefined {
+  const date = occurrence?.date ?? activity.schedule?.date;
+  if (date === undefined) return undefined;
+  const time = occurrence?.time ?? activity.schedule?.time;
+  if (time === undefined) return parseWallDate(date);
+  const sourceTimezone = activity.schedule?.timezone;
+  if (sourceTimezone === undefined) return parseWallDate(date);
+  return toWallDate(
+    instant.parse(toUtcInstant(date, time, sourceTimezone)),
+    timeZone.parse(viewerTimezone),
+  );
+}
+
+/** Consecutive bounded windows, avoiding a huge fetch when the two affected dates are far apart. */
+function dateWindows(dates: readonly WallDate[]): Array<{
+  readonly from: WallDate;
+  readonly through: WallDate;
+}> {
+  const sorted = [...new Set(dates)].sort();
+  const windows: Array<{ from: WallDate; through: WallDate }> = [];
+  let current: { from: WallDate; through: WallDate; days: number } | undefined;
+  for (const date of sorted) {
+    const consecutive = current !== undefined && addWallDays(current.through, 1) === date;
+    if (current !== undefined && consecutive && current.days < MAX_AGENDA_DAYS) {
+      current = { ...current, through: date, days: current.days + 1 };
+      continue;
+    }
+    if (current !== undefined) {
+      windows.push({ from: current.from, through: current.through });
+    }
+    current = { from: date, through: date, days: 1 };
+  }
+  if (current !== undefined) {
+    windows.push({ from: current.from, through: current.through });
+  }
+  return windows;
 }
 
 /**
@@ -206,6 +257,102 @@ export class PlansRepository {
       );
     }
     transaction.changed(PLANS_SCOPE);
+  }
+
+  /**
+   * The authoritative Plans reads required after a schedule acknowledgement.
+   *
+   * Old viewer-local dates come from the installed projection rather than from the Activity's
+   * source timezone. The canonical result is converted into each installed viewer timezone.
+   * That pair is what prevents a move from leaving the old bucket behind or omitting the new
+   * one. A whole-series schedule change widens one day around its installed run because a time
+   * or timezone edit can shift every recurrence across a viewer-local midnight.
+   */
+  async scheduleReconciliationRequests(
+    activity: Activity,
+    occurrenceDate?: string,
+    occurrence?: OccurrenceDetailProjection,
+  ): Promise<readonly PlansRequest[]> {
+    const read = async (reader: SqliteReader): Promise<PlansRequest[]> => {
+      const states = await reader.all(
+        `SELECT timezone, upcoming_from FROM native_plans_state ORDER BY timezone;`,
+      );
+      if (states.length === 0) return [];
+      const dateRows = await reader.all(
+        `SELECT timezone, date, occurrence_date FROM native_plans_date_rows
+         WHERE activity_id = ? ORDER BY timezone, date;`,
+        [activity.activityId],
+      );
+      const needsRows = await reader.all(
+        `SELECT timezone FROM native_plans_needs_date WHERE activity_id = ?;`,
+        [activity.activityId],
+      );
+      const needsTimezones = new Set(
+        needsRows
+          .map((row) => textColumn(row, 'timezone'))
+          .filter((value): value is string => value !== undefined),
+      );
+      const requests: PlansRequest[] = [];
+      for (const state of states) {
+        const timezone = textColumn(state, 'timezone');
+        const upcomingFrom = textColumn(state, 'upcoming_from') as WallDate | undefined;
+        if (timezone === undefined || upcomingFrom === undefined) {
+          throw new Error('Native Plans reconciliation state is incomplete.');
+        }
+        const affected = dateRows
+          .filter(
+            (row) =>
+              textColumn(row, 'timezone') === timezone &&
+              (occurrenceDate === undefined ||
+                textColumn(row, 'occurrence_date') === occurrenceDate),
+          )
+          .map((row) => textColumn(row, 'date'))
+          .filter((value): value is string => value !== undefined)
+          .map(parseWallDate);
+        const resultingDate =
+          occurrenceDate !== undefined && occurrence === undefined
+            ? undefined
+            : viewerDateFor(activity, timezone, occurrence);
+        if (resultingDate !== undefined) affected.push(resultingDate);
+        if (
+          activity.recurrence !== undefined &&
+          occurrenceDate === undefined &&
+          affected.length > 0
+        ) {
+          affected.sort();
+          affected.push(
+            parseWallDate(addWallDays(affected[0] as WallDate, -1)),
+            parseWallDate(addWallDays(affected[affected.length - 1] as WallDate, 1)),
+          );
+        }
+        if (needsTimezones.has(timezone) || activity.schedule === undefined) {
+          requests.push({ mode: 'initial', tz: timezone });
+        }
+        const past = affected.filter((date) => date < upcomingFrom);
+        const upcoming = affected.filter((date) => date >= upcomingFrom);
+        for (const window of dateWindows(past)) {
+          requests.push({
+            mode: 'past_window',
+            tz: timezone,
+            pastFrom: window.from,
+            pastBefore: parseWallDate(addWallDays(window.through, 1)),
+          });
+        }
+        for (const window of dateWindows(upcoming)) {
+          requests.push({
+            mode: 'upcoming_window',
+            tz: timezone,
+            upcomingFrom: window.from,
+            upcomingTo: window.through,
+          });
+        }
+      }
+      return requests;
+    };
+    if (this.projections === undefined) {
+      return this.database.readTransaction(read);
+    }
+    return (await this.projections.snapshot(read)).data;
   }
 
   private async readFrom(
