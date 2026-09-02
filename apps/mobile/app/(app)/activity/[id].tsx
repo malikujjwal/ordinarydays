@@ -10,6 +10,7 @@ import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useViewer } from '@/hooks/useViewer';
 import { followUpNavigation } from '@/lib/followUpNavigation';
 import { activityKey } from '@/lib/queryKeys';
+import { getActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -100,14 +101,27 @@ export default function ActivityDetailRoute() {
         {...(listSource === undefined ? {} : { source: listSource })}
         onClose={() => setListSource(undefined)}
       />
-      {/* Each confirmed photo refetches the detail so ATTACHMENTS shows the linked row; on
-          native the SQLite/hybrid detail reflects it on the next pull (the P3-39 caveat). */}
+      {/* Each confirmed photo reconciles through the detail owner for this platform. */}
       <AttachmentPickerSheet
         open={attachmentSheetOpen}
         activityId={activityId}
         onClose={() => setAttachmentSheetOpen(false)}
-        onConfirmed={() => {
-          void queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
+        onConfirmed={(attachment) => {
+          const native = getActiveNativeState();
+          if (native === undefined) {
+            void queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
+            return;
+          }
+          void native.sync
+            .pullActivity({ kind: 'activity', activityId: attachment.activityId })
+            .catch((error: unknown) => {
+              if (__DEV__) {
+                console.info('native_attachment_reconciliation_failed', {
+                  activityId: attachment.activityId,
+                  message: error instanceof Error ? error.message : String(error),
+                });
+              }
+            });
         }}
       />
     </>

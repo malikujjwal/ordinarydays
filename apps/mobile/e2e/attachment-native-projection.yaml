@@ -1,0 +1,52 @@
+appId: app.ordinarydays.ios.local
+name: P3 native attachment projection survives relaunch
+jsEngine: graaljs
+tags: [p3, ios, release, reconciliation, attachments]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: attachment-native-projection
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- addMedia:
+    - ../../../e2e/visual-specs/snapshots/lists-contract.spec.ts/create-compact-light.png
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: ${'agenda-row-' + output.activityId}
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: add-to-plan-photo
+- assertVisible:
+    id: attachment-sheet
+- tapOn:
+    id: attachment-picker-photos
+# The native PHPicker has no stable identifier for the first imported asset.
+- tapOn:
+    point: 17%,22%
+- tapOn: "Add.*"
+- assertVisible: Added
+- tapOn:
+    id: attachment-sheet-done
+- assertVisible:
+    id: section-attachments
+- assertVisible: Photo 1 of 1
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: ${'agenda-row-' + output.activityId}
+- assertVisible:
+    id: section-attachments
+- assertVisible: Photo 1 of 1

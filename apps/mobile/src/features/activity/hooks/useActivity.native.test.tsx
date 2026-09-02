@@ -73,8 +73,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => (installed ? canonical : committed),
-        hasInstalledCapabilities: async () => installed,
-        capabilityHydrationState: async () => (installed ? 'installed' : 'missing'),
+        hasInstalledDetail: async () => installed,
+        detailHydrationState: async () => (installed ? 'installed' : 'missing'),
       },
       outbox: {
         forEntity: async () => [
@@ -104,8 +104,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => committed,
-        hasInstalledCapabilities: async () => false,
-        capabilityHydrationState: async () => 'deferred',
+        hasInstalledDetail: async () => false,
+        detailHydrationState: async () => 'deferred',
       },
       outbox: {
         forEntity: async () => [
@@ -133,8 +133,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => canonical,
-        hasInstalledCapabilities: async () => true,
-        capabilityHydrationState: async () => 'installed',
+        hasInstalledDetail: async () => true,
+        detailHydrationState: async () => 'installed',
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },
@@ -145,6 +145,56 @@ describe('native useActivityDetail', () => {
 
     await waitFor(() => expect(mounted.result.current.status).toBe('success'));
     expect(pullActivity).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  it('hydrates and exposes attachments when an existing Plan predates their projection', async () => {
+    const attachment = {
+      attachmentId: 'att_01J0000000000000000000000A',
+      activityId: ACTIVITY,
+      key: 'u/usr_01J0000000000000000000000A/photo.jpg',
+      contentType: 'image/jpeg' as const,
+      byteSize: 1024,
+      createdAt: NOW,
+      schemaVersion: 1 as const,
+    };
+    const cachedPlan: ActivityDetail = {
+      ...canonical,
+      activity: {
+        ...canonical.activity,
+        objectKind: 'plan',
+        type: 'custom',
+        details: { kind: 'custom' },
+      },
+    };
+    const hydratedPlan: ActivityDetail = {
+      ...cachedPlan,
+      attachments: [attachment],
+    };
+    let installed = false;
+    const pullActivity = vi.fn(async () => {
+      installed = true;
+      return hydratedPlan;
+    });
+    nativeState.current = {
+      activities: {
+        subscribe: () => () => undefined,
+        version: () => 0,
+        read: async () => (installed ? hydratedPlan : cachedPlan),
+        hasInstalledDetail: async () => installed,
+        detailHydrationState: async () => (installed ? 'installed' : 'missing'),
+      },
+      outbox: { forEntity: async () => [] },
+      sync: { pullActivity },
+      coordinator: {},
+    };
+
+    const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
+
+    await waitFor(() =>
+      expect(mounted.result.current.detail?.attachments).toEqual([attachment]),
+    );
+    expect(pullActivity).toHaveBeenCalledTimes(1);
     mounted.unmount();
   });
 
@@ -199,8 +249,8 @@ describe('native useActivityDetail', () => {
           subscribe: () => () => undefined,
           version: () => 0,
           read: async () => detail,
-          hasInstalledCapabilities: async () => true,
-          capabilityHydrationState: async () => 'installed',
+          hasInstalledDetail: async () => true,
+          detailHydrationState: async () => 'installed',
         },
         outbox: { forEntity: async () => [] },
         sync: { pullActivity },
@@ -233,8 +283,8 @@ describe('native useActivityDetail', () => {
         },
         version: () => version,
         read: async () => (hydrationState === 'installed' ? canonical : committed),
-        hasInstalledCapabilities: async () => hydrationState === 'installed',
-        capabilityHydrationState: async () => hydrationState,
+        hasInstalledDetail: async () => hydrationState === 'installed',
+        detailHydrationState: async () => hydrationState,
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },
@@ -267,8 +317,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => committed,
-        hasInstalledCapabilities: async () => false,
-        capabilityHydrationState: async () => 'missing',
+        hasInstalledDetail: async () => false,
+        detailHydrationState: async () => 'missing',
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },
@@ -291,8 +341,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => canonical,
-        hasInstalledCapabilities: async () => true,
-        capabilityHydrationState: async () => 'installed',
+        hasInstalledDetail: async () => true,
+        detailHydrationState: async () => 'installed',
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity: vi.fn(async () => canonical) },
@@ -321,8 +371,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => canonical,
-        hasInstalledCapabilities: async () => true,
-        capabilityHydrationState: async () => 'installed',
+        hasInstalledDetail: async () => true,
+        detailHydrationState: async () => 'installed',
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity: vi.fn(async () => canonical) },
@@ -364,8 +414,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => (installed ? canonical : committed),
-        hasInstalledCapabilities: async () => installed,
-        capabilityHydrationState: async () => (installed ? 'installed' : 'missing'),
+        hasInstalledDetail: async () => installed,
+        detailHydrationState: async () => (installed ? 'installed' : 'missing'),
       },
       outbox: { forEntity: async () => [] },
       sync: {
@@ -425,8 +475,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => (installed ? canonical : committed),
-        hasInstalledCapabilities: async () => installed,
-        capabilityHydrationState: async () => (installed ? 'installed' : 'missing'),
+        hasInstalledDetail: async () => installed,
+        detailHydrationState: async () => (installed ? 'installed' : 'missing'),
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },
@@ -460,8 +510,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => committed,
-        hasInstalledCapabilities: async () => false,
-        capabilityHydrationState: async () => 'missing',
+        hasInstalledDetail: async () => false,
+        detailHydrationState: async () => 'missing',
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },
@@ -500,8 +550,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => (installed ? canonical : committed),
-        hasInstalledCapabilities: async () => installed,
-        capabilityHydrationState: async () => (installed ? 'installed' : 'missing'),
+        hasInstalledDetail: async () => installed,
+        detailHydrationState: async () => (installed ? 'installed' : 'missing'),
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },
@@ -546,8 +596,8 @@ describe('native useActivityDetail', () => {
           readCount += 1;
           return readCount === 1 ? committed : newer;
         },
-        hasInstalledCapabilities: async () => readCount > 1,
-        capabilityHydrationState: async () => (readCount > 1 ? 'installed' : 'missing'),
+        hasInstalledDetail: async () => readCount > 1,
+        detailHydrationState: async () => (readCount > 1 ? 'installed' : 'missing'),
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity: () => olderPull },
@@ -586,8 +636,8 @@ describe('native useActivityDetail', () => {
         subscribe: () => () => undefined,
         version: () => 0,
         read: async () => committed,
-        hasInstalledCapabilities: async () => false,
-        capabilityHydrationState: async () => 'missing',
+        hasInstalledDetail: async () => false,
+        detailHydrationState: async () => 'missing',
       },
       outbox: { forEntity: async () => [] },
       sync: { pullActivity },

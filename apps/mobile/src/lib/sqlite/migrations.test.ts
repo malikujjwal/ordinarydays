@@ -817,4 +817,34 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toEqual({ name: 'activity_children_by_child' });
   });
+
+  it('adds the bounded attachment projection without treating old details as installed', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 26));
+    await database.run(
+      `INSERT INTO activity_detail_projection_state
+         (activity_id, children_installed, source_lists_installed)
+       VALUES ('act_existing_detail', 1, 1);`,
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT children_installed, source_lists_installed, attachments_installed
+         FROM activity_detail_projection_state
+         WHERE activity_id = 'act_existing_detail';`,
+      ),
+    ).toEqual({
+      children_installed: 1,
+      source_lists_installed: 1,
+      attachments_installed: 0,
+    });
+    expect(
+      await database.first(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'index' AND name = 'activity_attachments_activity_order';`,
+      ),
+    ).toEqual({ name: 'activity_attachments_activity_order' });
+  });
 });

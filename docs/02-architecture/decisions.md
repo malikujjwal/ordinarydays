@@ -2467,3 +2467,12 @@ rule) and dropped in a later migration once no development database depends on t
 **Consequences.** Native screens may lag web by one reconciliation until the checkpoint;
 that is accepted over untested storage code. The ADR-057 boundary (all native writes through
 the durable intent log; HTTP only in the serialized sync owner) is unchanged.
+
+**Amendment (2026-09-02 — native attachment projection).** The checkpoint’s phone-use
+condition has now been met for Plans, Plan detail and Updates. Migration 27 is permitted to
+add only the bounded Activity attachment projection: permanent media keys and attachment
+metadata, its activity-and-ordinal index, and an installed/empty readiness bit. Canonical
+detail pulls remain the only installer, and upload confirmation reuses the existing serialized
+targeted-detail pull. This amendment does not reopen native projections generally and does not
+permit media URLs, image bytes, thumbnails, cache state, another upload queue or another
+reconciliation mechanism.

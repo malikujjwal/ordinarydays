@@ -116,6 +116,10 @@ if (FLOW === 'add-and-complete') {
   output.planTitle = `P3 native Plans schedule ${stamp}`;
   output.activityId = createPlan(output.planTitle, wall.date);
   output.activityIds.push(output.activityId);
+} else if (FLOW === 'attachment-native-projection') {
+  output.planTitle = `P3 native attachment ${stamp}`;
+  output.activityId = createPlan(output.planTitle, wall.date);
+  output.activityIds.push(output.activityId);
 } else if (FLOW === 'snooze-occurrence') {
   output.title = `P2-37 iOS snooze ${stamp}`;
   const originalWall = parts(new Date(now.getTime() + 5 * 60 * 1000));

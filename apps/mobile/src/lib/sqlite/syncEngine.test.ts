@@ -4763,6 +4763,7 @@ describe('serialized native convergence guard', () => {
         activity,
         reminders: [],
         capabilities: { complete: true, skip: true, snooze: true },
+        attachments: [],
       }),
     );
     await transactions.run((transaction) =>
@@ -4806,7 +4807,7 @@ describe('serialized native convergence guard', () => {
         [ACTIVITY],
       ),
     ).toMatchObject({ local_state: 'updating' });
-    expect(await activities.hasInstalledCapabilities(ACTIVITY)).toBe(true);
+    expect(await activities.hasInstalledDetail(ACTIVITY)).toBe(true);
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.capabilities,
     ).toEqual({ complete: true, skip: true, snooze: true });
