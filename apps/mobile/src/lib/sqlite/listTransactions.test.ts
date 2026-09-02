@@ -2,9 +2,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { instant } from '@od/shared/schemas';
-import type { List, ListItemView } from '@od/shared/types';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ActivityDetail, List, ListItemView } from '@od/shared/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
+import { ActivityRepository } from './activityRepository';
 import type { SqliteDatabase } from './database';
 import { ListItemsRepository } from './listItemsRepository';
 import { ListsRepository } from './listsRepository';
@@ -53,6 +54,41 @@ const ITEM: ListItemView = {
   },
 };
 
+const SOURCE_ACTIVITY = 'act_01J0000000000000000000000A';
+
+function sourceDetail(list: List): ActivityDetail {
+  return {
+    activity: {
+      activityId: SOURCE_ACTIVITY,
+      ownerId: LIST.ownerId,
+      objectKind: 'plan',
+      type: 'custom',
+      status: 'saved',
+      title: 'Durable plan',
+      participantCount: 0,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      details: { kind: 'custom' },
+      icsSequence: 0,
+      createdAt: LIST.updatedAt,
+      lastActivityAt: LIST.updatedAt,
+      updatedAt: LIST.updatedAt,
+      schemaVersion: 1,
+    },
+    reminders: [],
+    sourceLists: [
+      {
+        listId: list.listId,
+        title: list.title,
+        icon: list.icon,
+        itemCount: list.itemCount,
+        doneCount: list.doneCount,
+      },
+    ],
+  };
+}
+
 describe('native canonical List transactional outbox', () => {
   let directory = '';
   let database: SqliteDatabase | undefined;
@@ -72,10 +108,11 @@ describe('native canonical List transactional outbox', () => {
     const subscriptions = new RepositorySubscriptions();
     const transactions = new SerializedTransactionRunner(currentDatabase, subscriptions);
     const lists = new ListsRepository(currentDatabase, subscriptions);
+    const activities = new ActivityRepository(currentDatabase, subscriptions);
     const items = new ListItemsRepository(currentDatabase, subscriptions);
     const outbox = new OutboxRepository(currentDatabase);
     const service = new ListTransactionService(outbox, lists, items);
-    return { items, lists, outbox, service, transactions };
+    return { activities, items, lists, outbox, service, transactions };
   }
 
   async function install() {
@@ -140,6 +177,46 @@ describe('native canonical List transactional outbox', () => {
         doneCount: 0,
       }),
     );
+  });
+
+  it('publishes and reads a source Plan List count in the item-create transaction', async () => {
+    if (database === undefined) throw new Error('test database not open');
+    const { activities, lists, service, transactions } = harness(database);
+    const sourceList = {
+      ...LIST,
+      sourceActivityId: SOURCE_ACTIVITY,
+      itemCount: 0,
+    };
+    await transactions.run(async (transaction) => {
+      await activities.putCanonical(transaction, sourceDetail(sourceList));
+      await lists.replaceCanonical(transaction, [sourceList]);
+    });
+    const invalidated = vi.fn();
+    const stop = activities.subscribe(SOURCE_ACTIVITY, invalidated);
+
+    await transactions.run((transaction) =>
+      service.createItem(transaction, {
+        listId: sourceList.listId,
+        itemId: 'itm_01J000000000000000000000AB',
+        intentId: 'intent_source_item_create',
+        idempotencyKey: 'intent_source_item_create',
+        input: { itemId: 'itm_01J000000000000000000000AB', title: 'Passport' },
+        rank: 'z',
+      }),
+    );
+    stop();
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(
+      (await activities.read({ kind: 'activity', activityId: SOURCE_ACTIVITY }))
+        ?.sourceLists,
+    ).toEqual([
+      expect.objectContaining({
+        listId: sourceList.listId,
+        itemCount: 1,
+        doneCount: 0,
+      }),
+    ]);
   });
 
   it('rolls back both the projection and intent when the transaction fails', async () => {

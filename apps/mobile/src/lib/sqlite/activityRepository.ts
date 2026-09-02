@@ -38,6 +38,10 @@ export interface ActivityUpdatesProjection extends ActivityUpdatePage {
   readonly pending: readonly DurablePendingUpdate[];
 }
 
+export function activitySubscriptionScope(activityId: string): string {
+  return `activity:${activityId}`;
+}
+
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];
   return typeof value === 'string' ? value : undefined;
@@ -252,7 +256,7 @@ export class ActivityRepository {
   ) {}
 
   scope(activityId: string): string {
-    return `activity:${activityId}`;
+    return activitySubscriptionScope(activityId);
   }
 
   subscribe(activityId: string, listener: () => void): () => void {
@@ -1341,16 +1345,20 @@ export class ActivityRepository {
       number(state, 'source_lists_installed') === 1
         ? (
             await database.all(
-              `SELECT * FROM activity_source_lists
-               WHERE activity_id = ? ORDER BY ordinal;`,
+              `SELECT s.*,
+                      l.title AS live_title, l.icon AS live_icon,
+                      l.item_count AS live_item_count, l.done_count AS live_done_count
+               FROM activity_source_lists s
+               LEFT JOIN list_rows l ON l.list_id = s.list_id
+               WHERE s.activity_id = ? ORDER BY s.ordinal;`,
               [activityId],
             )
           ).map((row) => ({
             listId: text(row, 'list_id') ?? '',
-            title: text(row, 'title') ?? '',
-            icon: text(row, 'icon') ?? '',
-            itemCount: number(row, 'item_count') ?? 0,
-            doneCount: number(row, 'done_count') ?? 0,
+            title: text(row, 'live_title') ?? text(row, 'title') ?? '',
+            icon: text(row, 'live_icon') ?? text(row, 'icon') ?? '',
+            itemCount: number(row, 'live_item_count') ?? number(row, 'item_count') ?? 0,
+            doneCount: number(row, 'live_done_count') ?? number(row, 'done_count') ?? 0,
           }))
         : [];
     const attachments: Attachment[] =

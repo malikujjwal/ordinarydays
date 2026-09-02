@@ -1,5 +1,6 @@
 import { listView } from '@od/shared/schemas';
 import type { List, ListFeatureConfig } from '@od/shared/types';
+import { activitySubscriptionScope } from '@/lib/sqlite/activityRepository';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {
@@ -314,6 +315,15 @@ export class ListsRepository {
       await this.positionOf(transaction.database, listId),
     );
     transaction.changed(this.scope);
+    const sources = await transaction.database.all(
+      'SELECT activity_id FROM activity_source_lists WHERE list_id = ?;',
+      [listId],
+    );
+    for (const source of sources) {
+      const activityId = text(source, 'activity_id');
+      if (activityId !== undefined)
+        transaction.changed(activitySubscriptionScope(activityId));
+    }
   }
 
   async removeCanonical(transaction: TransactionContext, listId: string): Promise<void> {

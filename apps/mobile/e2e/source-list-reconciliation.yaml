@@ -42,6 +42,19 @@ onFlowComplete:
 - tapOn: ${output.listTitle}
 - assertVisible:
     id: list-detail
+- tapOn: Add item
+- tapOn:
+    id: list-contextual-add-title
+- inputText: Passport
+- tapOn:
+    id: list-contextual-add-commit
+- assertVisible: Passport
+- tapOn:
+    id: list-detail-back
+- assertVisible: 1 item
+- tapOn: ${output.listTitle}
+- assertVisible:
+    id: list-detail
 - tapOn:
     id: list-detail-menu
 - assertVisible:
