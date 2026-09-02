@@ -11,6 +11,7 @@ import {
 import { Image } from 'expo-image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Modal, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mediaUrlFor } from '@/lib/mediaUrl';
 
 /**
@@ -45,6 +46,7 @@ export function AttachmentViewer({
 }: AttachmentViewerProps) {
   const theme = useTheme();
   const motion = useMotion();
+  const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const total = attachments.length;
   const clamp = useCallback(
@@ -120,7 +122,7 @@ export function AttachmentViewer({
         <View
           style={{
             position: 'absolute',
-            top: theme.space[8],
+            top: insets.top + theme.space[2],
             left: theme.space[4],
             right: theme.space[4],
             flexDirection: 'row',
