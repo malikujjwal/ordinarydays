@@ -72,6 +72,7 @@ interface RawAgendaDays {
 const AGENDA_SCOPE = 'agenda';
 const AGENDA_INTERACTIVE_SCOPE = 'agenda:interactive';
 const AGENDA_LOCAL_DAY_SCOPE_PREFIX = 'agenda:local-day:';
+const PLANS_SCOPE = 'plans';
 
 function localDayScope(date: string): string {
   return `${AGENDA_LOCAL_DAY_SCOPE_PREFIX}${date}`;
@@ -744,6 +745,8 @@ export class AgendaRepository {
     );
     await this.updateMaterializedDayDerivations(transaction.database, data.days);
     transaction.changed(AGENDA_INTERACTIVE_SCOPE);
+    // Plans joins locally materialized dated rows, so its mounted projection changed too.
+    transaction.changed(PLANS_SCOPE);
   }
 
   /**
@@ -811,6 +814,7 @@ export class AgendaRepository {
     } else {
       for (const date of changedDates) transaction.changed(localDayScope(date));
     }
+    transaction.changed(PLANS_SCOPE);
   }
 
   /** Strongly replaces one Activity inside one materialized coverage, including zero rows. */

@@ -17,7 +17,13 @@ import {
 import { toWallDate, type WallDate } from '@od/shared/time';
 import type { Activity, AgendaItem, OccurrenceDetailProjection } from '@od/shared/types';
 import type { NeedsDateRowData } from '@/features/agenda/model/plansApply';
-import { type SqliteDatabase, type SqliteReader, textColumn } from './database';
+import {
+  numberColumn,
+  type SqliteDatabase,
+  type SqliteReader,
+  type SqliteRow,
+  textColumn,
+} from './database';
 import type { RevisionedProjectionReader } from './projectionReader';
 import type { RepositoryListener, RepositorySubscriptions } from './subscriptions';
 import type { TransactionContext } from './transaction';
@@ -36,6 +42,11 @@ export interface NativePlansProjection {
   readonly store: PlansDateStore;
   readonly upcomingWindow: NativePlansWindow;
   readonly pastCursor: string | undefined;
+}
+
+export interface NativePlansSnapshot {
+  readonly data: NativePlansProjection | undefined;
+  readonly commitRevision: number;
 }
 
 function parsedJson(value: string | undefined, label: string): unknown {
@@ -57,6 +68,68 @@ function readAgendaItem(value: string | undefined): AgendaItem {
   const parsed = agendaItem.parse(parsedJson(value, 'dated row'));
   return parsed as AgendaItem;
 }
+
+function jsonColumn<T>(row: SqliteRow, column: string, fallback: T): T {
+  const value = textColumn(row, column);
+  return value === undefined ? fallback : (JSON.parse(value) as T);
+}
+
+/** A local Agenda row has no wire JSON, so cross the same schema boundary field by field. */
+function readLocalAgendaItem(row: SqliteRow): AgendaItem {
+  return agendaItem.parse({
+    activityId: textColumn(row, 'activity_id'),
+    ...(textColumn(row, 'occurrence_date') === undefined
+      ? {}
+      : { occurrenceDate: textColumn(row, 'occurrence_date') }),
+    ...(textColumn(row, 'parent_activity_id') === undefined
+      ? {}
+      : { parentActivityId: textColumn(row, 'parent_activity_id') }),
+    type: textColumn(row, 'type'),
+    title: textColumn(row, 'title'),
+    status: textColumn(row, 'status'),
+    ...(textColumn(row, 'time') === undefined ? {} : { time: textColumn(row, 'time') }),
+    ...(textColumn(row, 'end_time') === undefined
+      ? {}
+      : { endTime: textColumn(row, 'end_time') }),
+    isRecurring: numberColumn(row, 'is_recurring') === 1,
+    ...(textColumn(row, 'recurrence_description') === undefined
+      ? {}
+      : { recurrenceDescription: textColumn(row, 'recurrence_description') }),
+    isSnoozed: numberColumn(row, 'is_snoozed') === 1,
+    ...(textColumn(row, 'original_time') === undefined
+      ? {}
+      : { originalTime: textColumn(row, 'original_time') }),
+    hasCheckbox: numberColumn(row, 'has_checkbox') === 1,
+    capabilities: jsonColumn(row, 'capabilities_json', {
+      complete: false,
+      skip: false,
+      snooze: false,
+    }),
+    participantAvatars: jsonColumn(row, 'participant_avatars_json', []),
+    participantCount: numberColumn(row, 'participant_count'),
+    ...(textColumn(row, 'location_label') === undefined
+      ? {}
+      : { locationLabel: textColumn(row, 'location_label') }),
+    ...(textColumn(row, 'subtitle') === undefined
+      ? {}
+      : { subtitle: textColumn(row, 'subtitle') }),
+    ...(textColumn(row, 'note_excerpt') === undefined
+      ? {}
+      : { noteExcerpt: textColumn(row, 'note_excerpt') }),
+    isPast: numberColumn(row, 'is_past') === 1,
+    ...(textColumn(row, 'overdue_from_date') === undefined
+      ? {}
+      : { overdueFromDate: textColumn(row, 'overdue_from_date') }),
+  }) as AgendaItem;
+}
+
+const LOCAL_AGENDA_READ_COLUMNS = `
+  a.viewer_date AS date, a.activity_id, a.occurrence_date, a.parent_activity_id,
+  a.type, a.title, a.status, a.time, a.end_time, a.is_recurring,
+  a.recurrence_description, a.is_snoozed, a.original_time, a.has_checkbox,
+  a.capabilities_json, a.participant_avatars_json, a.participant_count,
+  a.location_label, a.subtitle, a.note_excerpt, a.is_past, a.overdue_from_date
+`;
 
 function viewerDateFor(
   activity: Activity,
@@ -137,13 +210,21 @@ export class PlansRepository {
    * surface on the device as "cannot rollback - no transaction is active".
    */
   async read(timezone: string): Promise<NativePlansProjection | undefined> {
+    return (await this.readSnapshot(timezone)).data;
+  }
+
+  /** Supplies the commit fence completion locks need when this projection catches up. */
+  async readSnapshot(timezone: string): Promise<NativePlansSnapshot> {
     if (this.projections === undefined) {
-      return this.database.readTransaction((reader) => this.readFrom(reader, timezone));
+      return this.database.readTransaction(async (reader) => ({
+        data: await this.readFrom(reader, timezone),
+        commitRevision: 0,
+      }));
     }
     const snapshot = await this.projections.snapshot((reader) =>
       this.readFrom(reader, timezone),
     );
-    return snapshot.data;
+    return { data: snapshot.data, commitRevision: snapshot.commitRevision };
   }
 
   async install(
@@ -365,6 +446,11 @@ export class PlansRepository {
       [timezone],
     );
     if (state === undefined) return undefined;
+    const from = textColumn(state, 'upcoming_from') as WallDate | undefined;
+    const through = textColumn(state, 'upcoming_through') as WallDate | undefined;
+    if (from === undefined || through === undefined) {
+      throw new Error('Native Plans window is incomplete.');
+    }
 
     const needsRows = await reader.all(
       `SELECT p.ordinal, p.last_activity_at, p.item_json,
@@ -418,16 +504,35 @@ export class PlansRepository {
       rows.push(item.status === status ? item : { ...item, status });
       byDate.set(date, rows);
     }
+    const localRows = await reader.all(
+      `SELECT ${LOCAL_AGENDA_READ_COLUMNS}
+       FROM agenda_rows a
+       INNER JOIN activities activity ON activity.activity_id = a.activity_id
+       WHERE a.viewer_date BETWEEN ? AND ?
+         AND activity.schedule_date IS NOT NULL
+         AND a.overdue_from_date IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM native_plans_date_rows p
+           WHERE p.timezone = ?
+             AND p.date = a.viewer_date
+             AND p.activity_id = a.activity_id
+             AND p.occurrence_date IS a.occurrence_date
+         )
+       ORDER BY a.viewer_date, a.section, a.sort_order, a.activity_id;`,
+      [from, through, timezone],
+    );
+    for (const row of localRows) {
+      const date = textColumn(row, 'date') as WallDate | undefined;
+      if (date === undefined) throw new Error('Native Plans local row has no date.');
+      const rows = byDate.get(date) ?? [];
+      rows.push(readLocalAgendaItem(row));
+      byDate.set(date, rows);
+    }
     const coverageRows = await reader.all(
       `SELECT covered_from, covered_through FROM native_plans_coverage
        WHERE timezone = ? ORDER BY ordinal;`,
       [timezone],
     );
-    const from = textColumn(state, 'upcoming_from') as WallDate | undefined;
-    const through = textColumn(state, 'upcoming_through') as WallDate | undefined;
-    if (from === undefined || through === undefined) {
-      throw new Error('Native Plans window is incomplete.');
-    }
     return {
       needsDate,
       store: {

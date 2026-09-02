@@ -1,6 +1,8 @@
 import { addWallDays } from '@od/shared/recurrence';
 import type { WallDate } from '@od/shared/time';
+import type { AgendaItem } from '@od/shared/types';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { completionCommitGateFor } from '@/features/agenda/completionCommitGate';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import type { NativePlansProjection } from '@/lib/sqlite/plansRepository';
 import { describePlansFailure, PLANS_WINDOW_DAYS } from '../model/plansFeed';
@@ -23,6 +25,7 @@ export function usePlans(
   if (plans === undefined || pullPlans === undefined) {
     throw new Error('Native Plans state is not ready.');
   }
+  const completionGate = completionCommitGateFor(state.coordinator);
   const version = useSyncExternalStore(
     (listener) => plans.subscribe(listener),
     () => plans.version(),
@@ -46,10 +49,29 @@ export function usePlans(
     [state, timezone],
   );
   const readCommitted = useCallback(async () => {
-    const current = await plans.read(timezone);
-    if (isCurrent()) setProjection(current);
-    return current;
-  }, [isCurrent, plans, timezone]);
+    const snapshot = await plans.readSnapshot(timezone);
+    if (isCurrent()) {
+      const current = snapshot.data;
+      if (current !== undefined) {
+        completionGate.reconcile(
+          {
+            days: [...current.store.byDate].map(([date, items]) => ({
+              date,
+              // Schema validation already happened in the repository; this crosses from the
+              // wire-inferred optional shape to the exact-optional domain shape.
+              schedule: items.map((item) => item as AgendaItem),
+              anytime: [],
+              earlier: [],
+            })),
+            warnings: [],
+          },
+          snapshot.commitRevision,
+        );
+      }
+      setProjection(current);
+    }
+    return snapshot.data;
+  }, [completionGate, isCurrent, plans, timezone]);
 
   useEffect(() => {
     void version;
@@ -58,8 +80,7 @@ export function usePlans(
 
   useEffect(() => {
     let cancelled = false;
-    void plans
-      .read(timezone)
+    void readCommitted()
       .then(async (cached) => {
         if (cancelled || !isCurrent()) return;
         setProjection(cached);
@@ -82,7 +103,7 @@ export function usePlans(
     return () => {
       cancelled = true;
     };
-  }, [isCurrent, plans, pullPlans, readCommitted, state.sync, timezone]);
+  }, [isCurrent, pullPlans, readCommitted, state.sync, timezone]);
 
   const refetch = useCallback(() => {
     setRefreshing(true);

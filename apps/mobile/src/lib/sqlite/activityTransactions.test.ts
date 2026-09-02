@@ -1,7 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type CreateActivityInput, instant } from '@od/shared/schemas';
+import {
+  type CreateActivityInput,
+  instant,
+  parseWallDate,
+  plansData,
+} from '@od/shared/schemas';
 import type { ActivityDetail, Attachment } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { planFromCommittedRows } from '@/features/reminders/localSchedule.native';
@@ -16,6 +21,7 @@ import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { setActiveNativeState } from './nativeState';
 import { OutboxRepository } from './outbox';
 import type { OutboxPresentationStore } from './outboxPresentationStore';
+import { PlansRepository } from './plansRepository';
 import { RepositorySubscriptions } from './subscriptions';
 import type { NativeSyncEngine } from './syncEngine';
 import { SerializedTransactionRunner } from './transaction';
@@ -98,6 +104,50 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     setActiveNativeState(undefined);
     await database?.close();
     await rm(directory, { recursive: true, force: true });
+  });
+
+  it('makes a locally created dated Task visible to mounted Plans without a refetch', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const plans = new PlansRepository(database, subscriptions);
+    await transactions.run((transaction) =>
+      plans.install(
+        transaction,
+        'America/New_York',
+        plansData.parse({
+          mode: 'initial',
+          needsDate: [],
+          upcoming: [],
+          upcomingWindow: {
+            from: '2026-08-19',
+            through: '2026-10-19',
+            nextFrom: null,
+          },
+          past: [],
+          pastPage: {},
+          warnings: [],
+        }),
+      ),
+    );
+    const invalidated = vi.fn();
+    const stop = plans.subscribe(invalidated);
+    const {
+      recurrence: _recurrence,
+      reminders: _reminders,
+      ...oneOff
+    } = createInput(OTHER);
+
+    await coordinator.create(
+      { input: oneOff, idempotencyKey: 'plans-live-create' },
+      clock,
+    );
+    stop();
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(
+      (await plans.read('America/New_York'))?.store.byDate
+        .get(parseWallDate('2026-08-19'))
+        ?.map((item) => item.activityId),
+    ).toEqual([OTHER]);
   });
 
   it('arms an offline-created reminder exclusively from committed SQLite state', async () => {
