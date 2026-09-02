@@ -25,6 +25,12 @@ function addWallDay(date) {
   return next.toISOString().slice(0, 10);
 }
 
+function addWallDays(date, days) {
+  const fields = date.split('-').map(Number);
+  const next = new Date(Date.UTC(fields[0], fields[1] - 1, fields[2] + days));
+  return next.toISOString().slice(0, 10);
+}
+
 function timeLabel(time) {
   const fields = time.split(':').map(Number);
   const period = fields[0] >= 12 ? 'PM' : 'AM';
@@ -105,6 +111,23 @@ if (FLOW === 'add-and-complete') {
     segments: [{ freq: 'daily', effectiveFrom: wall.date }],
   });
   output.activityIds.push(output.activityId);
+} else if (FLOW === 'recurring-past-history') {
+  output.title = `P3 recurring Past ${stamp}`;
+  output.yesterday = addWallDays(wall.date, -1);
+  output.completedDate = addWallDays(wall.date, -2);
+  output.activityId = create(output.title, output.completedDate, '09:00', {
+    mode: 'fixed',
+    segments: [{ freq: 'daily', effectiveFrom: output.completedDate }],
+  });
+  output.activityIds.push(output.activityId);
+  const response = http.post(`${API}/v1/activities/${output.activityId}/complete`, {
+    headers: headers(true),
+    body: JSON.stringify({ occurrenceDate: output.completedDate }),
+  });
+  const envelope = JSON.parse(response.body);
+  if (!envelope.data) {
+    throw new Error(`Fixture occurrence completion failed: ${response.body}`);
+  }
 } else if (FLOW === 'up-next-ticker') {
   const nextMinute = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
   const nextWall = parts(nextMinute);

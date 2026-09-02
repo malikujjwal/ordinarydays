@@ -368,6 +368,52 @@ describe('the upcoming window', () => {
 });
 
 describe('past windows and cursors', () => {
+  it('includes completed and uncompleted historical occurrences from a recurring series', async () => {
+    const start = addDays(today(), -7);
+    const completedDate = addDays(today(), -4);
+    const series = await createPlan({
+      title: 'Daily practice',
+      schedule: { date: start, timezone: TZ, time: '09:00' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', interval: 1, effectiveFrom: start }],
+      },
+    });
+    const completed = await post(`/v1/activities/${series.activityId}/complete`, {
+      occurrenceDate: completedDate,
+    });
+    expect(completed.status).toBe(200);
+
+    const data = await dataOf(
+      await plans(
+        `mode=past_window&tz=${encodeURIComponent(TZ)}&pastFrom=${start}&pastBefore=${today()}`,
+      ),
+    );
+    const occurrences = data.past
+      .flatMap(
+        (day: {
+          date: string;
+          items: Array<{ activityId: string; occurrenceDate?: string; status: string }>;
+        }) => day.items.map((item) => ({ date: day.date, ...item })),
+      )
+      .filter((item: { activityId: string }) => item.activityId === series.activityId);
+
+    expect(occurrences).toContainEqual(
+      expect.objectContaining({
+        date: completedDate,
+        occurrenceDate: completedDate,
+        status: 'completed_occurrence',
+      }),
+    );
+    expect(occurrences).toContainEqual(
+      expect.objectContaining({
+        date: addDays(today(), -1),
+        occurrenceDate: addDays(today(), -1),
+        status: 'scheduled',
+      }),
+    );
+  });
+
   it('filters to the exact requested range and reports its coverage', async () => {
     const inside = await createPlan({
       title: 'Inside the grid',

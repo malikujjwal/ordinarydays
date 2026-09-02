@@ -132,6 +132,9 @@ a rolled-forward task on its own date in Plans.
 > goes. No archival window, sweep, or age limit ever removes anything from this stage — the
 > storage side keeps the full past range reachable
 > ([`../02-architecture/data-model.md`](../02-architecture/data-model.md)).
+> A recurring series contributes its historical occurrences under their dates, including
+> both completed occurrences and occurrences that passed unresolved; the series' current
+> status never substitutes for that occurrence history.
 
 #### 1.3.1 Row anatomy
 

@@ -1431,8 +1431,9 @@ change.
 > contract launched `#P`, future `#S`, past `#S` and `#R` on every request, so scrolling one
 > stage paid for all three. `mode` now selects one strict query/response arm: `initial`,
 > `upcoming_window`, `past_window` or `past_cursor`. Past calendar navigation supplies both
-> visible bounds, and dense windows continue under the same bounds until their returned
-> coverage is complete. Contract in `api-contract.md` §2.2a; P3-48 is the caller.
+> visible bounds; current bounded assembly returns their complete coverage, while clients may
+> still continue an older partial response under the same bounds during a mixed-version
+> rollout. Contract in `api-contract.md` §2.2a; P3-48 is the caller.
 
 > **Amended 2026-08-26 (founder) — close the shared Activity-authorisation consistency
 > gap alongside P3-20.** P3-19 made feed callers opt into strong reads, but the same stale
@@ -1455,31 +1456,34 @@ cannot replace another stage with an empty array.
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` — access pattern 2b | `lastActivityAt` descending |
 | `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, widening the requested viewer window by two stored-key days on each side before timezone conversion and exact filtering, plus the first converted later Activity date as the continuation hint | viewer-local date ascending |
-| `past` | the same dated-Activity bucket, starting above the viewer-local today boundary by the required two-day overlap, then timezone-converted and filtered to `< today`, `ScanIndexForward=false`, `?cursor=` | viewer-local date descending |
-| recurring input for `upcoming` | `GSI1` `gsi1pk = U#<u>#R` — access pattern 3 | Activity rows expanded only inside the requested Upcoming window |
+| `past` | the same dated-Activity bucket, starting above the viewer-local today boundary by the required two-day overlap, then timezone-converted and filtered to `< today`; bounded calendar windows also merge historical recurring occurrences while open older-history paging uses `ScanIndexForward=false`, `?cursor=` over stored rows | viewer-local date descending |
+| recurring input for bounded windows | `GSI1` `gsi1pk = U#<u>#R` — access pattern 3 | Activity rows expanded only inside the requested Upcoming or Past window |
 
 **Approach.**
 
 1. `mode=initial` starts four logical `Query` streams concurrently: `#P`, the
    timezone-widened future slice of `#S`, the cursor-paged and boundary-widened past slice of
    `#S`, and `#R`. `mode=upcoming_window` starts only future `#S` and `#R`;
-   `mode=past_window` and `mode=past_cursor` start only past `#S`. `needsDate` is capped as
+   `mode=past_window` delegates bounded past `#S` and `#R` to shared agenda assembly;
+   `mode=past_cursor` starts only past `#S`. `needsDate` is capped as
    below. The initial request defaults `upcomingFrom` to today and `upcomingTo` to 61 days later; explicit
    windows may contain at most `MAX_AGENDA_DAYS` (62) inclusive calendar dates. The response
    returns `{ from, through, nextFrom }`, where `nextFrom` is the earliest one-off or recurring
    date after `through`, or `null` when neither source has one. It may jump an empty gap but
    never skips a row. Scrolling requests the next 62-day window from that date. Ordinary
-   older `past` remains cursor-paginated through `past_cursor`. A calendar landing uses
-   `past_window` with required `pastFrom` and exclusive `pastBefore`; a cursor is scoped to
-   those same bounds and repeated until `pastCoverage` says the entire visible range is
-   complete. `#S` and `#R` are shared Activity
+   older stored-row `past` remains cursor-paginated through `past_cursor`. A calendar landing
+   uses `past_window` with required `pastFrom` and exclusive `pastBefore`; shared agenda
+   assembly exhausts its bounded `#S` and `#R` range and returns complete `pastCoverage`.
+   Clients retain support for a same-bounds cursor from an older partial response during a
+   mixed-version rollout. `#S` and `#R` are shared Activity
    buckets: scheduled and recurring Tasks live there too and remain visible in Plans. Follow
    access pattern 1: hydrate every widened Activity candidate,
    convert timed rows from their projected stored `timezone` into the request timezone, and
    only then filter into Upcoming or Past. The future stream stops only after it has a converted
    one-off Activity candidate after `through` (or is exhausted), and derives `nextFrom` from
-   that viewer-local date rather than a raw sort key. Past pagination carries the raw DynamoDB
-   cursor but refills across candidates filtered out at the today boundary.
+   that viewer-local date rather than a raw sort key. Open Past pagination carries the raw
+   DynamoDB cursor but refills across candidates filtered out at the today boundary; bounded
+   Past assembly supplies virtual occurrences and their overrides without materialising them.
    Recurrence math supplies the corresponding next date for each bounded `#R` row, so
    calculating `nextFrom` never scans an empty calendar gap.
 
@@ -1549,9 +1553,10 @@ appears in exactly one viewer-local stage/window, and `nextFrom` is its converte
 than its raw key date. A schema test permits `rsvpSummary.*.count` and
 `suggestionCount` but proves the response has no stage-level `count`, `total`, `unread` or
 `badge`. Repository spies prove `initial` starts the four bucket/range streams above,
-Upcoming continuation never reads Needs Date or Past, and either Past continuation never
-reads Needs Date, Upcoming or Recurrence. A dense 42-day `past_window` reports partial
-coverage and a cursor until the exact requested range is complete. Schema tests prove the
+Upcoming continuation never reads Needs Date or Past, bounded Past never reads Needs Date or
+Upcoming and routes recurrence through shared agenda assembly, and open Past pagination reads
+only stored `#S`. A 42-day `past_window` reports complete coverage after bounded assembly.
+Schema tests prove the
 response union omits inactive stage keys, so client replacement cannot erase them. The
 service pages streams according to their documented caps and performs no participant read, while
 `series_limit_exceeded` propagates from the shared expansion path. A far-future one-off after

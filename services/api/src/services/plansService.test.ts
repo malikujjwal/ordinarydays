@@ -3,6 +3,7 @@ import type { Activity } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoredItem } from '../repositories/migrate.js';
+import type { AgendaCandidate } from './agendaService.js';
 import type { PlansDependencies } from './plansService.js';
 import { getPlans } from './plansService.js';
 
@@ -10,9 +11,10 @@ import { getPlans } from './plansService.js';
  * Which streams each mode starts, and what the response is allowed to say (§P3-20).
  *
  * Driven through injected dependencies rather than a database, because the property under test
- * is the **query plan**: that scrolling Upcoming does not pay for Needs a date, that Past never
- * touches `#R`, and that `#N` is never read by anything. Those are facts about the calls made,
- * and a passing response body proves none of them.
+ * is the **query plan**: that scrolling Upcoming does not pay for Needs a date, that a bounded
+ * Past window delegates `#S` and `#R` to shared assembly, and that `#N` is never read by
+ * anything. Those are facts about the calls made, and a passing response body proves none of
+ * them.
  */
 
 const USER = 'usr_local_dev';
@@ -87,6 +89,28 @@ const bucketsIn = (calls: readonly Recorded[]) => [
   ...new Set(calls.map((c) => c.bucket)),
 ];
 
+function recurringCandidate(
+  activity: Activity,
+  occurrenceDate: string,
+  status: AgendaCandidate['status'],
+): AgendaCandidate {
+  return {
+    activity,
+    occurrenceDate,
+    status,
+    viewerDate: occurrenceDate,
+    ...(activity.schedule?.time === undefined ? {} : { time: activity.schedule.time }),
+    isSnoozed: false,
+    participantAvatars: [],
+    actionContext: {
+      activity,
+      callerId: USER,
+      callerRole: 'owner',
+      participatesInParent: false,
+    },
+  };
+}
+
 describe('actual DynamoDB round-trip budget', () => {
   it('pins initial mode to six repository Query commands', async () => {
     await getPlans(USER, { mode: 'initial', tz: TZ }, NOW);
@@ -154,23 +178,30 @@ describe('which streams each mode starts', () => {
     ).toBe(true);
   });
 
-  it.each([
-    [
-      'past_window',
+  it('routes a bounded Past window through shared recurrence assembly', async () => {
+    const { dependencies, calls } = deps();
+
+    await getPlans(
+      USER,
       {
-        mode: 'past_window' as const,
+        mode: 'past_window',
         tz: TZ,
         pastFrom: '2026-08-01',
         pastBefore: '2026-09-01',
       },
-    ],
-  ])('%s reads only the descending past slice', async (_mode, query) => {
-    const { dependencies, calls } = deps();
+      NOW,
+      dependencies,
+    );
 
-    await getPlans(USER, query, NOW, dependencies);
-
-    expect(bucketsIn(calls)).toEqual(['S']);
-    expect(calls.every((c) => c.options.ascending === false)).toBe(true);
+    expect(calls).toEqual([]);
+    expect(dependencies.assemble).toHaveBeenCalledOnce();
+    expect(vi.mocked(dependencies.assemble).mock.calls[0]?.[0]).toMatchObject({
+      from: '2026-08-01',
+      to: '2026-08-31',
+      includeAnytimeUnscheduled: false,
+      includeOverdue: false,
+      includeReminders: false,
+    });
   });
 
   /** The shared expansion path owns recurrence; this service must not call it for Upcoming. */
@@ -416,6 +447,68 @@ describe('cursors are scoped to the request that issued them', () => {
 });
 
 describe('past coverage is the interval exhausted', () => {
+  it('returns completed and uncompleted recurring occurrences in the requested Past window', async () => {
+    const series = plan({
+      status: 'scheduled',
+      schedule: { date: '2026-08-01', time: '09:00', timezone: TZ },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '09:00' }],
+      },
+    });
+    const { dependencies } = deps({
+      assemble: vi.fn(async () => ({
+        days: [
+          {
+            date: '2026-08-30',
+            schedule: [recurringCandidate(series, '2026-08-30', 'completed_occurrence')],
+            anytime: [],
+            earlier: [],
+          },
+          {
+            date: '2026-08-31',
+            schedule: [recurringCandidate(series, '2026-08-31', 'scheduled')],
+            anytime: [],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+        projectionVersions: [],
+      })) as unknown as PlansDependencies['assemble'],
+    });
+
+    const data = await getPlans(
+      USER,
+      { mode: 'past_window', tz: TZ, pastFrom: '2026-08-01', pastBefore: '2026-09-01' },
+      NOW,
+      dependencies,
+    );
+
+    if (data.mode !== 'past_window') throw new Error('expected the past_window arm');
+    expect(data.past).toEqual([
+      expect.objectContaining({
+        date: '2026-08-31',
+        items: [
+          expect.objectContaining({
+            activityId: series.activityId,
+            occurrenceDate: '2026-08-31',
+            status: 'scheduled',
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        date: '2026-08-30',
+        items: [
+          expect.objectContaining({
+            activityId: series.activityId,
+            occurrenceDate: '2026-08-30',
+            status: 'completed_occurrence',
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it('reports the full requested range when the scan drains it', async () => {
     const { dependencies } = deps();
 

@@ -37,11 +37,11 @@ import { assembleAgenda, oneOffCandidate, toViewerCandidate } from './agendaServ
  *
  * ## What this file refuses to do twice
  *
- * Upcoming goes through {@link assembleAgenda}, the same path Today uses, so recurrence
- * expansion, occurrence overrides, cross-day moves and the duplicate diagnostics all behave
- * identically on both screens and its warnings propagate untouched. Past cannot use it — the
- * contract gives Past `#S` alone, with no `#R` and no expansion — so it composes the same
- * exported conversion primitives rather than growing a second copy of access pattern 1.
+ * Bounded Upcoming and Past windows go through {@link assembleAgenda}, the same path Today
+ * uses, so recurrence expansion, occurrence overrides, cross-day moves and the duplicate
+ * diagnostics all behave identically on every dated screen and their warnings propagate
+ * untouched. The open older-history continuation remains a cursor over stored `#S` rows;
+ * visible Past ranges are authoritative only after their bounded `past_window` is assembled.
  *
  * ## What it never reads
  *
@@ -149,25 +149,22 @@ export async function getPlans(
 
     case 'past_window': {
       const requestedThrough = addWallDays(query.pastBefore, -1);
-      const resumed =
-        query.cursor === undefined
-          ? undefined
-          : decodePastCursor(query.cursor, userId, 'past_window', {
-              from: query.pastFrom,
-              before: query.pastBefore,
-            });
+      if (query.cursor !== undefined) {
+        // Accept only a legacy continuation issued for these exact bounds. Shared assembly
+        // exhausts the whole bounded window now, so no replacement cursor is emitted.
+        decodePastCursor(query.cursor, userId, 'past_window', {
+          from: query.pastFrom,
+          before: query.pastBefore,
+        });
+      }
 
-      const past = await readPast(
+      const past = await readPastWindow(
         userId,
         query.tz,
         now,
         today,
-        {
-          kind: 'window',
-          from: query.pastFrom,
-          before: query.pastBefore,
-          ...(resumed === undefined ? {} : { resumed }),
-        },
+        query.pastFrom,
+        requestedThrough,
         dependencies,
       );
 
@@ -177,12 +174,11 @@ export async function getPlans(
         pastCoverage: {
           requestedFrom: query.pastFrom,
           requestedThrough,
-          coveredFrom: past.coveredFrom ?? query.pastFrom,
-          coveredThrough: past.coveredThrough ?? requestedThrough,
-          complete: past.cursor === undefined,
-          ...(past.cursor === undefined ? {} : { nextCursor: past.cursor }),
+          coveredFrom: query.pastFrom,
+          coveredThrough: requestedThrough,
+          complete: true,
         },
-        warnings: [],
+        warnings: past.warnings,
       };
     }
 
@@ -378,6 +374,50 @@ function compareWithinDay(left: AgendaItem, right: AgendaItem): number {
   return left.activityId < right.activityId ? -1 : 1;
 }
 
+interface PastWindowResult {
+  readonly days: PlansDay[];
+  readonly warnings: PlansWarning[];
+}
+
+/**
+ * A bounded Past calendar range through the same recurrence and override assembly as Today.
+ *
+ * The assembler returns dates ascending for agenda rendering. Past uses the identical
+ * candidates but reverses the date groups after projection, preserving the Plans ordering
+ * inside each day. This is also the authoritative path for historical recurring occurrences:
+ * virtual `#R` dates do not exist in the open stored-row cursor below.
+ */
+async function readPastWindow(
+  userId: string,
+  timezone: string,
+  now: string,
+  today: string,
+  from: string,
+  through: string,
+  dependencies: PlansDependencies,
+): Promise<PastWindowResult> {
+  const assembly = await dependencies.assemble({
+    userId,
+    from,
+    to: through,
+    timezone,
+    now,
+    includeAnytimeUnscheduled: false,
+    includeOverdue: false,
+    includeReminders: false,
+  });
+
+  const clock: AgendaProjectionClock = { now, timezone, today };
+  const rows = assembly.days.flatMap((day) =>
+    [...day.schedule, ...day.anytime, ...day.earlier].map((candidate) => ({
+      date: day.date,
+      item: projectAgendaItem(candidate, clock),
+    })),
+  );
+
+  return { days: groupDescending(rows), warnings: [...assembly.warnings] };
+}
+
 /**
  * The earliest viewer-local date after `through`, from either source, or `null`.
  *
@@ -494,10 +534,11 @@ interface PastResult {
 }
 
 /**
- * Past: `#S` alone, newest first, below the viewer-local today boundary.
+ * Open Past pagination: stored `#S` rows, newest first, below viewer-local today.
  *
- * No `#R` and no expansion, per §2.2a's mode table — Past is the dated-Activity bucket, and a
- * recurring series' occurrences are not in it.
+ * Recurring occurrences are virtual rather than stored in `#S`; the bounded window above is
+ * therefore the authoritative source for every visible Past range. This cursor remains useful
+ * for discovering older stored one-offs without inventing a second recurrence materialisation.
  *
  * The scan **refills**. A page can come back entirely made of rows that convert out of range —
  * boundary candidates from the two-day overlap, or dates below a window's floor — and
