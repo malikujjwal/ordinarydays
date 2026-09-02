@@ -69,6 +69,32 @@ function readAgendaItem(value: string | undefined): AgendaItem {
   return parsed as AgendaItem;
 }
 
+/** Overlay the locally committed mutable row fields onto a lagging Plans-index snapshot. */
+function readProjectedAgendaItem(row: SqliteRow): AgendaItem {
+  const item = readAgendaItem(textColumn(row, 'item_json'));
+  if (textColumn(row, 'agenda_row_id') === undefined) return item;
+  const status = textColumn(row, 'agenda_status') as AgendaItem['status'] | undefined;
+  const isSnoozed = numberColumn(row, 'agenda_is_snoozed');
+  if (status === undefined || isSnoozed === undefined) {
+    throw new Error('Native Plans Agenda projection is incomplete.');
+  }
+  const time = textColumn(row, 'agenda_time');
+  const endTime = textColumn(row, 'agenda_end_time');
+  const originalTime = textColumn(row, 'agenda_original_time');
+  const projected: AgendaItem = {
+    ...item,
+    status,
+    isSnoozed: isSnoozed === 1,
+    ...(time === undefined ? {} : { time }),
+    ...(endTime === undefined ? {} : { endTime }),
+    ...(originalTime === undefined ? {} : { originalTime }),
+  };
+  if (time === undefined) delete projected.time;
+  if (endTime === undefined) delete projected.endTime;
+  if (originalTime === undefined) delete projected.originalTime;
+  return projected;
+}
+
 function jsonColumn<T>(row: SqliteRow, column: string, fallback: T): T {
   const value = textColumn(row, column);
   return value === undefined ? fallback : (JSON.parse(value) as T);
@@ -177,9 +203,10 @@ function dateWindows(dates: readonly WallDate[]): Array<{
  * Typed SQLite authority for the native Plans tab.
  *
  * HTTP responses enter only through {@link install}; UI reads reconstruct the date store from
- * constrained rows. Agenda status is joined at read time so a locally accepted completion is
- * visible without a second optimistic store, and Activity.lastActivityAt is the monotonic
- * Needs-a-date floor while the server's GSI projection catches up.
+ * constrained rows. Mutable Agenda fields are joined at read time so locally accepted
+ * completion and snooze writes are visible without a second optimistic store, and
+ * Activity.lastActivityAt is the monotonic Needs-a-date floor while the server's GSI
+ * projection catches up.
  */
 export class PlansRepository {
   constructor(
@@ -478,8 +505,10 @@ export class PlansRepository {
     }
 
     const dateRows = await reader.all(
-      `SELECT p.date, p.item_json,
-              COALESCE(a.status, p.status) AS effective_status
+      `SELECT p.date, p.item_json, a.row_id AS agenda_row_id,
+              a.status AS agenda_status, a.time AS agenda_time,
+              a.end_time AS agenda_end_time, a.is_snoozed AS agenda_is_snoozed,
+              a.original_time AS agenda_original_time
        FROM native_plans_date_rows p
        LEFT JOIN agenda_rows a
          ON a.activity_id = p.activity_id
@@ -495,13 +524,9 @@ export class PlansRepository {
     const byDate = new Map<WallDate, AgendaItem[]>();
     for (const row of dateRows) {
       const date = textColumn(row, 'date') as WallDate | undefined;
-      const status = textColumn(row, 'effective_status') as AgendaItem['status'];
-      if (date === undefined || status === undefined) {
-        throw new Error('Native Plans dated row is incomplete.');
-      }
-      const item = readAgendaItem(textColumn(row, 'item_json'));
+      if (date === undefined) throw new Error('Native Plans dated row is incomplete.');
       const rows = byDate.get(date) ?? [];
-      rows.push(item.status === status ? item : { ...item, status });
+      rows.push(readProjectedAgendaItem(row));
       byDate.set(date, rows);
     }
     const localRows = await reader.all(

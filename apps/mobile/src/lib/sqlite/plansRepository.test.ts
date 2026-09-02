@@ -292,4 +292,46 @@ describe('native Plans projection', () => {
       completed,
     ]);
   });
+
+  it('reads a locally snoozed time from Agenda before the Plans index catches up', async () => {
+    const scheduled = { ...datedItem(A), time: '09:00' };
+    const snoozed = {
+      ...scheduled,
+      time: '10:30',
+      isSnoozed: true,
+      originalTime: '09:00',
+    };
+    await transactions.run((transaction) =>
+      plans.install(transaction, TIMEZONE, initial([scheduled])),
+    );
+    await transactions.run((transaction) =>
+      agenda.replaceLocalActivityRows(transaction, A, {
+        days: [
+          {
+            date: PLANS_DATE,
+            schedule: [scheduled],
+            anytime: [],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+      }),
+    );
+
+    await transactions.run((transaction) =>
+      agenda.replaceLocalTargetRows(transaction, A, undefined, {
+        days: [
+          {
+            date: PLANS_DATE,
+            schedule: [snoozed],
+            anytime: [],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+      }),
+    );
+
+    expect((await plans.read(TIMEZONE))?.store.byDate.get(PLANS_DATE)).toEqual([snoozed]);
+  });
 });
