@@ -32,6 +32,7 @@ import {
 export interface OverflowMenuProps {
   open: boolean;
   onClose: () => void;
+  onClosed?: () => void;
   activity: Activity;
   onChangePlanKind: () => void;
   onChangeObject: () => void;
@@ -42,6 +43,7 @@ export interface OverflowMenuProps {
 export function OverflowMenu({
   open,
   onClose,
+  onClosed,
   activity,
   onChangePlanKind,
   onChangeObject,
@@ -54,7 +56,13 @@ export function OverflowMenu({
   const blocked = planToTaskBlockedMessage(blockers);
 
   return (
-    <Sheet open={open} onClose={onClose} title="More" testID="overflow-menu">
+    <Sheet
+      open={open}
+      onClose={onClose}
+      {...(onClosed === undefined ? {} : { onClosed })}
+      title="More"
+      testID="overflow-menu"
+    >
       <View style={{ gap: theme.space[4], alignItems: 'stretch' }}>
         {isTask ? null : (
           <Button
