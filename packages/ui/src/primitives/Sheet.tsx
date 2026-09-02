@@ -52,8 +52,14 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
  * were never `Modal`'s to give — React Native Web's fade ran at its own 250 ms, outside the
  * tokens, and withheld the dialog role until an `animationend` that never fired (see the
  * `animationType` note below). So the `Modal` mounts instantly on both platforms and the
- * surface and scrim animate themselves; the modal stays mounted through the exit, and
- * `onClose` reaches the caller only once the exit has finished.
+ * surface and scrim animate themselves, and the modal stays mounted through the exit.
+ *
+ * **The owner decides** (review of 2026-09-02, amending P3-51's "wait for the exit before
+ * `onClose`"): every control-driven close asks the owner through `onClose` at once and moves
+ * nothing; the exit runs — then the unmount — when the owner drops `open`. An owner that
+ * declines (a settings sheet whose ✕ means "back") keeps a visible sheet; a sheet that
+ * unmounts with its route on `onClose` simply gets no exit, which it never had before P3-51
+ * either.
  */
 export interface SheetProps {
   open: boolean;
