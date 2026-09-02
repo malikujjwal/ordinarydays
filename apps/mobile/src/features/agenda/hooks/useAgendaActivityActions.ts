@@ -285,9 +285,16 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         message: negative ? 'Outcome recorded' : 'Plan completed',
         failureMessage: "Couldn't record that outcome.",
         compensationFailureMessage: "Couldn't undo that outcome.",
+        // §5.3: the server chose the one follow-up; it rides on this confirmation's toast.
+        onAcknowledged: (result, toastId) =>
+          followUp.present(
+            result,
+            { activityId: item.activityId, activityType: item.type },
+            toastId,
+          ),
       });
     },
-    [complete, options, queryClient, uncomplete],
+    [complete, followUp, options, queryClient, uncomplete],
   );
 
   const snooze = useCallback(

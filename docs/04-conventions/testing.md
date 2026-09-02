@@ -23,7 +23,7 @@ broke the product.
 | Handler / route | Vitest + `aws-sdk-client-mock` | `services/api/test/routes/**` | ~70 | < 20 s | One test per endpoint in `api-contract.md` §2: happy path, auth, validation |
 | Integration — repository | Vitest + DynamoDB Local | `services/api/test/integration/**` | ~60 | < 90 s | Key design, transactions, GSI1 projections, tenant isolation, pagination |
 | Infrastructure | Vitest + `aws-cdk-lib/assertions` | `infra/test/**` | ~25 | < 30 s | Stack synthesis, IAM shape, removal policies, table schema parity |
-| E2E — web | Playwright | `e2e/specs/**` | 8 flows | < 4 min | The flows in §6.1 against the exported static site |
+| E2E — web | Playwright | `e2e/specs/**` | 14 flows | < 4 min | The flows in §6.1 against the exported static site |
 | E2E — iOS | Maestro | `apps/mobile/e2e/**` | 6 flows | < 8 min | The flows in §6.2 on a simulator |
 
 Counts are targets, not quotas. A layer far under its target means something is untested; a
@@ -462,6 +462,12 @@ site after `deploy-dev.yml` (`infrastructure.md` §7.2), and locally against
 | Reschedule from the time column | `reschedule.spec.ts` | U4 across the whole stack |
 | Complete, reschedule, edit, convert, end and restart recurring occurrences | `recurrence-stabilization.spec.ts` | Explicit occurrence scope and eventually-consistent agenda reconciliation across the whole stack |
 | Keyboard-only pass over Today | `a11y-keyboard.spec.ts` | `interaction-contract.md` §7.2, §7.3 |
+| Watchlist → Today (`plans-and-lists.md` §9.1): one row not two, one write on the Activity, the offered Progress update, and a dismissed second follow-up that creates nothing | `worked-examples.spec.ts` | P3-45 — the follow-up catalogue, the item link and the completion write only meet end to end |
+| Meal → Groceries (§9.2): three labelled items, `Added` on the meal, checking leaves the meal alone, `Clear checked` with Undo | `worked-examples.spec.ts` | P3-45 — provenance is not linkage, across the form, the list and the meal |
+| Trip plan → Packing list (§9.3): prep tasks, two plan-created lists, both survive the plan's completion untouched | `worked-examples.spec.ts` | P3-45 — the parent-completion rule against real lists and children |
+| A List that never links to anything: `Blank` is an explicit tap, rows carry no state chrome, zero Activities exist | `worked-examples.spec.ts` | P3-45 — lifecycle (i) is a complete use of the product |
+| A Plan with no date: Needs a date and nowhere else, then a Saturday moves it to Upcoming with no badge anywhere | `worked-examples.spec.ts` | P3-45 — `#P` → `#S`, read through the one Plans projection |
+| Plan-to-list side effects (§5.8, §8.1, §9.2 step 3): the four grocery resolutions and the Watch destination, every write behind its named confirmation | `plan-list-side-effects.spec.ts` | P3-43 — the destination rule across the form, the picker and the profile default |
 
 Rules: no `waitForTimeout`; wait on a role or a network response. From Phase 4 onward, each
 spec creates its own user via a fixture and deletes it in teardown; the explicit pre-auth
