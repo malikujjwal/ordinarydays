@@ -1,0 +1,56 @@
+appId: app.ordinarydays.ios.local
+name: P3 native Plans reflects local creates and completion
+jsEngine: graaljs
+tags: [p3, plans, ios, release, reconciliation]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: plans-live-projection
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- tapOn:
+    id: today-add-task
+- assertVisible:
+    id: compose-form
+- tapOn:
+    id: compose-title
+- inputText: ${output.title}
+- tapOn:
+    id: compose-save
+- assertVisible: ${output.title}
+- tapOn: Plans
+- assertVisible: ${output.title + ', not completed'}
+- tapOn: ${output.title + ', not completed'}
+- assertVisible: ${output.title + ', completed'}
+- tapOn: ${output.title + ', completed'}
+- assertVisible: ${output.title + ', not completed'}
+- tapOn:
+    id: ${'agenda-row-' + output.planId}
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: detail-complete
+- assertVisible:
+    id: detail-undo
+- tapOn:
+    id: detail-back
+- assertVisible: ${output.planTitle + ', completed'}
+- tapOn: ${output.planTitle}
+- assertVisible:
+    id: detail-undo
+- tapOn:
+    id: detail-undo
+- assertVisible:
+    id: detail-complete
+- tapOn:
+    id: detail-back
+- assertVisible: ${output.planTitle + ', not completed'}

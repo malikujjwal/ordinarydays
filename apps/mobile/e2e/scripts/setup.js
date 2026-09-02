@@ -116,6 +116,11 @@ if (FLOW === 'add-and-complete') {
   output.planTitle = `P3 native Plans schedule ${stamp}`;
   output.activityId = createPlan(output.planTitle, wall.date);
   output.activityIds.push(output.activityId);
+} else if (FLOW === 'plans-live-projection') {
+  output.title = `P3 native Plans task ${stamp}`;
+  output.planTitle = `P3 native Plans done ${stamp}`;
+  output.planId = createPlan(output.planTitle, wall.date);
+  output.activityIds.push(output.planId);
 } else if (FLOW === 'attachment-native-projection') {
   output.planTitle = `P3 native attachment ${stamp}`;
   output.activityId = createPlan(output.planTitle, wall.date);

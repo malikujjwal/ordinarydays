@@ -190,6 +190,21 @@ describe('completion commit gate', () => {
     expect(gate.isLocked(scheduled)).toBe(false);
   });
 
+  it('releases an older commit when a later transaction projects the inverse state', () => {
+    const gate = new CompletionCommitGate();
+    const scheduled = item();
+
+    gate.begin(scheduled, true, 'completed-on-plans', '2026-08-20');
+    gate.settle(scheduled, true, true, 10);
+    gate.reconcile(agenda(scheduled), 10);
+    expect(gate.isLocked(scheduled)).toBe(true);
+
+    // Activity detail can commit the inverse without entering this UI gate. A strictly newer
+    // SQLite snapshot is proof that the old visual override has been superseded.
+    gate.reconcile(agenda(scheduled), 11);
+    expect(gate.isLocked(scheduled)).toBe(false);
+  });
+
   it('does not let an old matching projection clear a newer inverse commit', () => {
     const gate = new CompletionCommitGate();
     const scheduled = item();

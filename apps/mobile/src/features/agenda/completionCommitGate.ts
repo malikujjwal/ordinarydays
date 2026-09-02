@@ -213,7 +213,13 @@ export class CompletionCommitGate {
     const day = this.latestDays.get(commit.viewerDate);
     if (day === undefined || day.revision < commit.requiredRevision) return;
     const item = day.items.get(key);
-    if (item === undefined || COMPLETED.has(item.status) === commit.checked) {
+    // An equal revision must prove this exact commit landed. A later SQLite snapshot may
+    // instead contain a durable inverse written outside this gate (for example, detail Undo).
+    if (
+      item === undefined ||
+      COMPLETED.has(item.status) === commit.checked ||
+      day.revision > commit.requiredRevision
+    ) {
       this.commits.delete(key);
       this.publish(key);
     }

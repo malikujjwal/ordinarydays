@@ -1,12 +1,13 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { plansData } from '@od/shared/schemas';
-import type { ActivityDetail } from '@od/shared/types';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseWallDate, plansData } from '@od/shared/schemas';
+import type { ActivityDetail, AgendaItem } from '@od/shared/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NeedsDateRowData } from '@/features/agenda/model/plansApply';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 import { ActivityRepository } from './activityRepository';
+import { AgendaRepository } from './agendaRepository';
 import type { SqliteDatabase } from './database';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { PlansRepository } from './plansRepository';
@@ -18,6 +19,7 @@ const TIMEZONE = 'America/New_York';
 const OWNER = 'usr_01J0000000000000000000000A';
 const A = 'act_01J8PANA000000000000000000';
 const B = 'act_01J8PANB000000000000000000';
+const PLANS_DATE = parseWallDate('2026-08-10');
 
 function needsDateRow(activityId: string, lastActivityAt: string): NeedsDateRowData {
   return {
@@ -68,14 +70,48 @@ function detail(activityId: string, lastActivityAt: string): ActivityDetail {
   };
 }
 
-function initial() {
+function scheduledDetail(activityId: string): ActivityDetail {
+  const base = detail(activityId, '2026-08-09T12:00:00.000Z');
+  return {
+    ...base,
+    activity: {
+      ...base.activity,
+      objectKind: 'task',
+      type: 'task',
+      status: 'scheduled',
+      details: { kind: 'task' },
+      schedule: { date: PLANS_DATE, timezone: TIMEZONE },
+    },
+  };
+}
+
+function datedItem(
+  activityId: string,
+  status: AgendaItem['status'] = 'scheduled',
+): AgendaItem {
+  return {
+    activityId,
+    type: 'task',
+    title: activityId,
+    status,
+    isRecurring: false,
+    isSnoozed: false,
+    hasCheckbox: true,
+    capabilities: { complete: true, skip: true, snooze: true },
+    participantAvatars: [],
+    participantCount: 0,
+    isPast: false,
+  };
+}
+
+function initial(upcoming: readonly AgendaItem[] = []) {
   return plansData.parse({
     mode: 'initial',
     needsDate: [
       needsDateRow(B, '2026-08-02T10:00:00.000Z'),
       needsDateRow(A, '2026-08-01T10:00:00.000Z'),
     ],
-    upcoming: [],
+    upcoming: upcoming.length === 0 ? [] : [{ date: PLANS_DATE, items: upcoming }],
     upcomingWindow: {
       from: '2026-08-06',
       through: '2026-10-06',
@@ -94,6 +130,7 @@ describe('native Plans projection', () => {
   let transactions: SerializedTransactionRunner;
   let plans: PlansRepository;
   let activities: ActivityRepository;
+  let agenda: AgendaRepository;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'ordinarydays-plans-'));
@@ -103,6 +140,7 @@ describe('native Plans projection', () => {
     transactions = new SerializedTransactionRunner(database, subscriptions);
     plans = new PlansRepository(database, subscriptions);
     activities = new ActivityRepository(database, subscriptions);
+    agenda = new AgendaRepository(database, subscriptions);
   });
 
   afterEach(async () => {
@@ -178,5 +216,80 @@ describe('native Plans projection', () => {
     expect(served).toBe(2);
     expect(first?.needsDate.map((row) => row.activityId)).toEqual([B, A]);
     expect(second).toEqual(first);
+  });
+
+  it('publishes and reads a newly created dated Task before the Plans index catches up', async () => {
+    const created = datedItem(A);
+    await transactions.run((transaction) =>
+      plans.install(transaction, TIMEZONE, initial()),
+    );
+    const invalidated = vi.fn();
+    const stop = plans.subscribe(invalidated);
+
+    await transactions.run(async (transaction) => {
+      await activities.putCanonical(transaction, scheduledDetail(A));
+      await agenda.replaceLocalActivityRows(transaction, A, {
+        days: [
+          {
+            date: PLANS_DATE,
+            schedule: [created],
+            anytime: [],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+      });
+    });
+    stop();
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect((await plans.read(TIMEZONE))?.store.byDate.get(PLANS_DATE)).toEqual([created]);
+  });
+
+  it('publishes a local Plan completion whose status is joined into the Plans row', async () => {
+    const scheduled = {
+      ...datedItem(A),
+      type: 'custom' as const,
+      hasCheckbox: false,
+    };
+    const completed = { ...scheduled, status: 'completed' as const };
+    await transactions.run((transaction) =>
+      plans.install(transaction, TIMEZONE, initial([scheduled])),
+    );
+    await transactions.run((transaction) =>
+      agenda.replaceLocalActivityRows(transaction, A, {
+        days: [
+          {
+            date: PLANS_DATE,
+            schedule: [scheduled],
+            anytime: [],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+      }),
+    );
+    const invalidated = vi.fn();
+    const stop = plans.subscribe(invalidated);
+
+    await transactions.run((transaction) =>
+      agenda.replaceLocalTargetRows(transaction, A, undefined, {
+        days: [
+          {
+            date: PLANS_DATE,
+            schedule: [],
+            anytime: [],
+            earlier: [completed],
+          },
+        ],
+        warnings: [],
+      }),
+    );
+    stop();
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect((await plans.read(TIMEZONE))?.store.byDate.get(PLANS_DATE)).toEqual([
+      completed,
+    ]);
   });
 });
