@@ -383,9 +383,11 @@ write frequency or activation semantics rather than reduce motion.
 > **no animation type on either platform** and animates its own surface and scrim from
 > `useMotion()`: `slow`/`decelerate` in, `slow`/`accelerate` out, `instant` under Reduce
 > Motion. A `compact` bottom sheet travels; the centred dialog fades and settles from a slight
-> scale. Dismissal waits for the exit before `onClose` reaches the caller, a drag-dismissed
-> sheet fades from wherever the finger left it rather than snapping back, and a `dirty` sheet
-> does not animate out until its discard prompt resolves. The dialog role and focus trap are
+> scale. Every control-driven close (✕, scrim, Escape, Back, a drag past the threshold) asks
+> the owner through `onClose` and moves nothing itself; the exit runs — and the modal unmounts
+> — once the owner drops `open`, so an owner that declines keeps its sheet, and a leaving
+> sheet takes no taps. A drag-dismissed sheet then fades from wherever the finger left it
+> rather than snapping back, and a `dirty` sheet routes ✕ to its discard prompt instead. The dialog role and focus trap are
 > pinned by `Sheet.test.tsx`; the lifecycle by the same file and `sheetMotion.test.ts`.
 
 > **A frame in a product doc does not place a control** — settled 2026-08-27 (founder), on
@@ -609,7 +611,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
 | `SectionHeader` | `title`, `count?`, `action?`, `icon?`, `appearance` (`plain` \| `tinted`) | `plain` is caption type, uppercase and wide-tracked. `tinted` is the compact icon/title/count boundary for grouped content. Both expose the title and count as one heading name. |
 | `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. A product anatomy may supply one compact, non-interactive `IconTile`; that is a semantic marker, not an illustration. |
-| `Toast` | `message`, `requestId?` (small, selectable API correlation id), `action?` (`{ label, onPress }`), `actions?` (a follow-up's own named choices, rendered before `action`, none pre-selected — P3-44), `onDismissPress?` (the visible `✕` a follow-up requires), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. Producers shorten a positive remaining server deadline before presenting; the singleton toast store owns the one expiry timer so screen or presenter lifecycle cannot extend it. The shell host suppresses an expired offer and refuses Undo at or beyond its absolute deadline. |
+| `Toast` | `message`, `requestId?` (small, selectable API correlation id), `action?` (`{ label, onPress }`), `actions?` (a follow-up's own named choices, rendered before `action`, none pre-selected — P3-44), `onDismissPress?` (the visible `✕` a follow-up requires), `detail?` (a follow-up's question as a second line under the confirmation, so `Undo` keeps a visible referent), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. Producers shorten a positive remaining server deadline before presenting; the singleton toast store owns the one expiry timer so screen or presenter lifecycle cannot extend it. The shell host suppresses an expired offer and refuses Undo at or beyond its absolute deadline. |
 | `Skeleton` | `shape` (`row` \| `card` \| `text`), `count` | Shimmer off under Reduce Motion. Minimum display 200 ms. |
 
 Two rules for all of them: every interactive primitive has a minimum 44 × 44 hit target

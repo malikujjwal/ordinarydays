@@ -245,3 +245,40 @@ describe('the P3-33 List settings hierarchy', () => {
     expect(screen.queryByText(/Meal integration/)).toBeNull();
   });
 });
+
+/**
+ * P3-51 review: ✕ in a sub-editor means "back to the main editor", and the primitive must
+ * ask the owner rather than leave on its own — the owner here declines, keeps `open`, and
+ * the sheet stays exactly where the user can see it.
+ */
+it('returns from a sub-editor on Close without leaving, and never tells the owner', () => {
+  const subject = list({
+    featureConfig: {
+      subItems: {
+        enabled: true,
+        sectionLabel: 'Ingredients',
+        singularLabel: 'Ingredient',
+        integration: 'mealIngredients',
+      },
+    },
+  });
+  const onClose = vi.fn();
+  render(
+    <ThemeProvider scheme="light">
+      <ListSettingsSheet
+        open
+        onClose={onClose}
+        list={subject}
+        settings={settings(subject)}
+      />
+    </ThemeProvider>,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Ingredients.*Edit/i }));
+  expect(screen.getByRole('dialog', { name: 'Sub-item settings' })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: 'List settings' })).toBeTruthy();
+  expect(screen.getByText('Item state')).toBeTruthy();
+});

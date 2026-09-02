@@ -235,26 +235,27 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
 
   useEffect(() => {
     if (landing === undefined) return;
+    // One landing for both stages: a fresh retry budget, the scroll, and the state cleared.
+    const land = (scroll: () => void) => {
+      pendingScroll.current = scroll;
+      landingAttempts.current = 0;
+      scroll();
+      setLanding(undefined);
+    };
     if (stage === 'upcoming') {
       for (const [sectionIndex, section] of upcomingSections.entries()) {
         const itemIndex = section.data.findIndex(
           (item) => item.kind === 'date' && item.date >= landing,
         );
         if (itemIndex === -1) continue;
-        pendingScroll.current = () =>
-          scrollTo(upcomingList.current, sectionIndex, itemIndex);
-        pendingScroll.current();
-        setLanding(undefined);
+        land(() => scrollTo(upcomingList.current, sectionIndex, itemIndex));
         return;
       }
     } else if (stage === 'past' && pastSections !== undefined) {
       for (const [sectionIndex, section] of pastSections.entries()) {
         const itemIndex = section.data.findIndex((day) => day.date <= landing);
         if (itemIndex === -1) continue;
-        pendingScroll.current = () => scrollTo(pastList.current, sectionIndex, itemIndex);
-        landingAttempts.current = 0;
-        pendingScroll.current();
-        setLanding(undefined);
+        land(() => scrollTo(pastList.current, sectionIndex, itemIndex));
         return;
       }
     }

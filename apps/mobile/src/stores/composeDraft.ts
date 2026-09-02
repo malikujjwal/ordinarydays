@@ -604,6 +604,7 @@ export function hasContent(
     | 'sourceUrl'
     | 'attachmentIds'
     | 'attachmentsBusy'
+    | 'attachmentsFailed'
     | 'schedule'
     | 'location'
     | 'details'
@@ -615,6 +616,8 @@ export function hasContent(
     (state.sourceUrl ?? '') !== '' ||
     state.attachmentIds.length > 0 ||
     state.attachmentsBusy ||
+    // A photo whose upload failed is still a photo the user picked; ✕ must still ask.
+    state.attachmentsFailed ||
     // A chosen date is content. Backing out of a form after picking Saturday and losing it
     // without being asked is the discard this prompt exists to prevent.
     state.schedule.date !== undefined ||

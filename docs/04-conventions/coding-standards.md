@@ -831,8 +831,10 @@ logic (`tech-stack.md` §3.2). If it grows, the screen body moves to
   should be excluded gets an inline `// biome-ignore` with a reason. Silencing it without a
   reason is a rejection.
 - `useQuery` and `useMutation` appear **only** in `src/features/*/hooks/**`
-  (`tech-stack.md` §3.2). A component that calls `useQuery` directly is a layering
-  violation.
+  (`tech-stack.md` §3.2) — or in `src/hooks/**` when the hook serves more than one feature,
+  which is where `repo-structure.md` §2 sends shared hooks (amended 2026-09-02, P3-43/P3-44:
+  `useDestination`, `useEligibleLists`, `useViewer`, `useFollowUp`). A component that calls
+  `useQuery` or `useMutation` directly is a layering violation.
 - Query keys come from a `keys.ts` factory, never an inline array literal — two spellings of
   the same key is a cache-invalidation bug that only shows up under a slow network.
 - Custom hooks return an object, not a positional tuple, once there are more than two values.

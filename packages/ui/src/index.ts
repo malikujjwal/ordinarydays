@@ -39,6 +39,7 @@ export {
   Skeleton,
   type SkeletonProps,
   Toast,
+  type ToastAction,
   type ToastProps,
 } from './primitives/Feedback';
 export { Field, type FieldProps } from './primitives/Field';

@@ -190,6 +190,11 @@ export interface ToastProps {
   actions?: readonly ToastAction[];
   /** The visible `✕` §1a.2 requires on a follow-up: dismissing is free and complete. */
   onDismissPress?: () => void;
+  /**
+   * A follow-up's question, under the confirmation it rides on — the confirmation stays
+   * visible, so `Undo` always has a visible referent (P3-44).
+   */
+  detail?: string;
   tone?: 'neutral' | 'error';
   /** The two product-owned toast windows. Producers clamp shorter server deadlines. */
   duration?: 6000 | 10000;
@@ -210,6 +215,7 @@ export function Toast({
   action,
   actions = [],
   onDismissPress,
+  detail,
   tone = 'neutral',
   duration = 6000,
   onDismiss,
@@ -252,6 +258,11 @@ export function Toast({
         <Text variant="subhead" color={tone === 'error' ? 'danger' : 'textPrimary'}>
           {message}
         </Text>
+        {detail === undefined ? null : (
+          <Text variant="footnote" color="textPrimary" testID="toast-detail">
+            {detail}
+          </Text>
+        )}
         {requestId === undefined ? null : (
           <Text
             variant="footnote"

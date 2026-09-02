@@ -174,18 +174,26 @@ export function usePlans(
    * gate. Coverage lands in the repository projection the list reads, so the calendar and
    * the list still derive from one state.
    */
+  /**
+   * Read through a ref so `loadRange` keeps one identity across the pages it lands: every
+   * page publishes a fresh projection, and a `loadRange` that changed with it would make the
+   * navigator abort and re-arm its walk after each page.
+   */
+  const projectionRef = useRef(projection);
+  projectionRef.current = projection;
   const loadRange = useCallback(
     async (
       stage: 'upcoming' | 'past',
       range: { from: WallDate; through: WallDate },
       signal: AbortSignal,
     ) => {
+      const current = projectionRef.current;
       await fetchStageRange({
         stage,
         range,
         tz: timezone,
-        store: projection?.store ?? EMPTY_STORE,
-        upcomingThrough: projection?.upcomingWindow.through,
+        store: current?.store ?? EMPTY_STORE,
+        upcomingThrough: current?.upcomingWindow.through,
         signal,
         pull: (request) => pullPlans.call(state.sync, request),
         onResponse: async () => {
@@ -193,7 +201,7 @@ export function usePlans(
         },
       });
     },
-    [projection, pullPlans, readCommitted, state.sync, timezone],
+    [pullPlans, readCommitted, state.sync, timezone],
   );
 
   return {

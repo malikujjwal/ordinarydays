@@ -376,6 +376,7 @@ describe('hasContent', () => {
     sourceUrl: undefined,
     attachmentIds: [],
     attachmentsBusy: false,
+    attachmentsFailed: false,
     schedule: EMPTY_SCHEDULE,
     location: EMPTY_LOCATION,
     details: EMPTY_DETAILS,
@@ -423,4 +424,22 @@ describe('hasContent', () => {
   ])('is true for %s', (_label, state) => {
     expect(hasContent(state)).toBe(true);
   });
+});
+
+/** P3-41 review: a photo whose upload failed is still content the user picked. */
+it('counts a failed attachment as content, so ✕ still asks', () => {
+  const state = useComposeDraft.getState();
+  expect(
+    hasContent({
+      title: '',
+      notes: '',
+      sourceUrl: undefined,
+      attachmentIds: [],
+      attachmentsBusy: false,
+      attachmentsFailed: true,
+      schedule: state.schedule,
+      location: state.location,
+      details: state.details,
+    }),
+  ).toBe(true);
 });

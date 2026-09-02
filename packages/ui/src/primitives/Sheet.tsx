@@ -151,15 +151,22 @@ export function Sheet({
   const [surfaceHeight, setSurfaceHeight] = useState<number | null>(null);
   const cancelTransition = useRef<() => void>(() => {});
 
+  /** How the next owner-driven exit leaves: `fade` once a drag has released past the threshold. */
+  const pendingExit = useRef<SheetExit>('travel');
+
   const present = useCallback(() => {
     cancelTransition.current();
+    // A re-present mid-exit starts from rest, whatever the interrupted exit had left behind.
+    dragY.setValue(0);
+    setExit('travel');
+    pendingExit.current = 'travel';
     movePhase('presenting');
     cancelTransition.current = runTransition(
       progress,
       { toValue: 1, duration: motion.duration.slow, easing: motion.easing.decelerate },
       () => movePhase('open'),
     );
-  }, [motion.duration.slow, motion.easing.decelerate, movePhase, progress]);
+  }, [dragY, motion.duration.slow, motion.easing.decelerate, movePhase, progress]);
 
   /**
    * Leave, then tell whoever asked. `onDone` runs **after** the exit, which is the whole
@@ -201,21 +208,32 @@ export function Sheet({
     }
     if (!open && wasOpen.current) {
       wasOpen.current = false;
-      if (phaseRef.current === 'open' || phaseRef.current === 'presenting')
-        dismiss('travel');
+      if (phaseRef.current === 'open' || phaseRef.current === 'presenting') {
+        const how = pendingExit.current;
+        pendingExit.current = 'travel';
+        dismiss(how);
+      }
     }
   }, [open, present, dismiss]);
 
   useEffect(() => () => cancelTransition.current(), []);
 
+  /**
+   * **The owner decides.** Every control-driven close — ✕, scrim, Escape, hardware Back, a
+   * drag past the threshold — asks the owner through `onClose` and changes nothing itself;
+   * the exit runs when the owner drops `open`. An owner that declines (a settings sheet whose
+   * ✕ means "back to the main editor") keeps a visible sheet, which is the contract every
+   * consumer was written against. A sheet already leaving takes no further requests, so a
+   * discard prompt cannot be re-raised over an exit.
+   */
   const requestClose = useCallback(() => {
+    if (phaseRef.current === 'dismissing' || phaseRef.current === 'closed') return;
     if (dirty && onDiscardRequest !== undefined) {
       onDiscardRequest();
       return;
     }
-    if (phaseRef.current === 'dismissing' || phaseRef.current === 'closed') return;
-    dismiss('travel', onClose);
-  }, [dirty, onDiscardRequest, onClose, dismiss]);
+    onClose();
+  }, [dirty, onDiscardRequest, onClose]);
 
   /**
    * Back to rest. **Reduce Motion gets no spring** — `interaction-contract.md` §6 keeps direct
@@ -274,14 +292,16 @@ export function Sheet({
           }
           /**
            * Already at its final offset: the exit is opacity only, from wherever the finger
-           * left it. Snapping to rest first would undo the gesture just made (§4.3).
+           * left it. Snapping to rest first would undo the gesture just made (§4.3). The
+           * owner is still the one to drop `open`; only the manner of leaving is decided here.
            */
           if (phaseRef.current === 'dismissing' || phaseRef.current === 'closed') return;
-          dismiss('fade', onClose);
+          pendingExit.current = 'fade';
+          onClose();
         },
         onPanResponderTerminate: settle,
       }),
-    [draggable, dirty, requestClose, dismiss, onClose, dragY, settle],
+    [draggable, dirty, requestClose, onClose, dragY, settle],
   );
 
   /**
@@ -358,6 +378,8 @@ export function Sheet({
           justifyContent: centred ? 'center' : 'flex-end',
           alignItems: centred ? 'center' : 'stretch',
           paddingBottom: centred ? 0 : keyboard,
+          // A leaving sheet is not a target: a second tap on a row mid-exit dispatches nothing.
+          pointerEvents: phase === 'dismissing' ? 'none' : 'auto',
         }}
       >
         {/* The scrim itself dismisses, and is hidden from assistive tech — the close

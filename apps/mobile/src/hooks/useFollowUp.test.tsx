@@ -2,6 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { apiClient } from '@/lib/apiClient';
+import type {
+  CompleteActivityVariables,
+  DeleteActivityVariables,
+  UncompleteActivityVariables,
+} from '@/lib/mutationDefaults';
+import { activityMutationKeys } from '@/lib/mutationKeys';
 import { useToast } from '@/stores/toast';
 import { useFollowUpActions } from './useFollowUp';
 
@@ -50,8 +57,36 @@ const visited = {
   },
 };
 
+/**
+ * The prep writes go through the keyed mutations, so the client carries the same defaults
+ * the app installs — pointed at the mocked endpoints — and the projections' seam is real.
+ */
 function wrapper({ children }: { children: ReactNode }) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  client.setMutationDefaults(activityMutationKeys.complete, {
+    mutationFn: (variables: CompleteActivityVariables) =>
+      completeActivity(
+        apiClient,
+        variables.activityId,
+        variables.input,
+        variables.idempotencyKey,
+      ),
+  });
+  client.setMutationDefaults(activityMutationKeys.uncomplete, {
+    mutationFn: (variables: UncompleteActivityVariables) =>
+      uncompleteActivity(
+        apiClient,
+        variables.activityId,
+        variables.input,
+        variables.idempotencyKey,
+      ),
+  });
+  client.setMutationDefaults(activityMutationKeys.delete, {
+    mutationFn: (variables: DeleteActivityVariables) =>
+      deleteActivity(apiClient, variables.activityId),
+  });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 

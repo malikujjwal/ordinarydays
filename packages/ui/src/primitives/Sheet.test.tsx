@@ -268,9 +268,10 @@ describe('Sheet — the pan is on the surface, not the header (§6.1)', () => {
  * **The present / dismiss motion is `Sheet`'s own** (`design-system.md` §4.3, P3-51).
  *
  * The lifecycle under test: the modal mounts instantly (so the dialog role above still holds),
- * the surface animates in from the tokens, and — the one ordering that matters — `onClose`
- * reaches the caller only after the exit has finished. Reduce Motion resolves every duration
- * to `instant`, and the same lifecycle then completes synchronously.
+ * the surface animates in from the tokens, every control-driven close asks the owner through
+ * `onClose` and moves nothing itself, and the exit runs — then the unmount — once the owner
+ * drops `open`. Reduce Motion resolves every duration to `instant`, and the same lifecycle
+ * then completes synchronously.
  *
  * The tween steps on `requestAnimationFrame` against `Date.now()`, so faking both puts time in
  * the test's hands (`sheetMotion.test.ts` covers the driver itself).
@@ -301,29 +302,43 @@ describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
     expect(dialogContainer()?.getAttribute('role')).toBe('dialog');
   });
 
-  it('fires onClose after the exit, not with it', () => {
+  /**
+   * The owner decides: ✕ asks through `onClose` at once and moves nothing, so an owner that
+   * declines (a sub-editor's "back") keeps its sheet; the exit runs once `open` drops, and
+   * only then does the modal unmount. A leaving sheet takes no taps.
+   */
+  it('asks the owner at once, exits when open drops, and ignores taps while leaving', () => {
     useFrameClock();
     const onClose = vi.fn();
-    mount(
+    const onRow = vi.fn();
+    const view = (open: boolean) => (
       <ThemeProvider scheme="light">
-        <Sheet open onClose={onClose} title="Repeat" testID="sheet">
-          <div>body</div>
+        <Sheet open={open} onClose={onClose} title="Repeat" testID="sheet">
+          <button type="button" onClick={onRow}>
+            Tomorrow
+          </button>
         </Sheet>
-      </ThemeProvider>,
+      </ThemeProvider>
     );
+    const rendered = render(view(true));
     act(() => vi.advanceTimersByTime(300)); // fully presented
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    // Declined: nothing moved, the sheet is still the sheet.
+    act(() => vi.advanceTimersByTime(400));
     expect(dialogContainer()).not.toBeNull();
 
-    act(() => vi.advanceTimersByTime(100)); // mid-exit: still mounted, still not reported
-    expect(onClose).not.toHaveBeenCalled();
+    rendered.rerender(view(false));
+    act(() => vi.advanceTimersByTime(100)); // mid-exit: mounted, inert
     expect(dialogContainer()).not.toBeNull();
+    expect(
+      (screen.getByTestId('sheet').parentElement as HTMLElement).style.pointerEvents,
+    ).toBe('none');
 
     act(() => vi.advanceTimersByTime(300)); // past `slow`
-    expect(onClose).toHaveBeenCalledOnce();
     expect(dialogContainer()).toBeNull();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   /** An owner that closes on its own — after a save — still gets the exit, then the unmount. */
@@ -379,10 +394,9 @@ describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
 
   /**
    * Reduce Motion resolves every duration to `instant`: the same lifecycle, completing
-   * synchronously — mounted as a dialog, and gone the moment the owner drops `open`, with
-   * `onClose` still ordered after the (instant) exit.
+   * synchronously — mounted as a dialog, and gone the moment the owner drops `open`.
    */
-  it('mounts and unmounts under Reduce Motion, with onClose after the instant exit', () => {
+  it('mounts and unmounts under Reduce Motion the moment the owner drops open', () => {
     motionState.reduced = true;
     const onClose = vi.fn();
     const view = (open: boolean) => (
@@ -397,9 +411,8 @@ describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
-    expect(dialogContainer()).toBeNull();
-
-    // The owner acknowledges, then reopens and closes again — still without a frame.
+    // Asked, not gone: the owner drops `open`, and the instant exit unmounts at once.
+    expect(dialogContainer()).not.toBeNull();
     rendered.rerender(view(false));
     expect(dialogContainer()).toBeNull();
     rendered.rerender(view(true));
@@ -413,27 +426,29 @@ describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
     motionState.breakpoint = 'medium';
     useFrameClock();
     const onClose = vi.fn();
-    mount(
+    const view = (open: boolean) => (
       <ThemeProvider scheme="light">
-        <Sheet open onClose={onClose} title="Repeat" testID="dialog">
+        <Sheet open={open} onClose={onClose} title="Repeat" testID="dialog">
           <div>body</div>
         </Sheet>
-      </ThemeProvider>,
+      </ThemeProvider>
     );
+    const rendered = render(view(true));
     expect(screen.queryByTestId('sheet-grabber')).toBeNull();
     expect(dialogContainer()?.getAttribute('role')).toBe('dialog');
     act(() => vi.advanceTimersByTime(300));
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(onClose).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(400));
     expect(onClose).toHaveBeenCalledOnce();
+    rendered.rerender(view(false));
+    expect(dialogContainer()).not.toBeNull();
+    act(() => vi.advanceTimersByTime(400));
     expect(dialogContainer()).toBeNull();
   });
 
   /**
    * A drag-dismissed sheet is already at its final offset: it leaves by opacity from there and
-   * never snaps back first. The responder cannot be driven under jsdom (see the pan note
+   * never snaps back first — once the owner drops `open`. The responder cannot be driven under jsdom (see the pan note
    * above), so the decision is `dragReleaseOutcome`'s (`sheetMotion.test.ts`) and this pins
    * that the release branch reaches the fade exit without resetting the drag first.
    */
@@ -443,7 +458,9 @@ describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
       source.indexOf('onPanResponderRelease'),
       source.indexOf('onPanResponderTerminate'),
     );
-    expect(release).toContain("dismiss('fade', onClose)");
+    // The manner is decided here; the owner still drops `open`, and the fall then fades.
+    expect(release).toContain("pendingExit.current = 'fade'");
+    expect(release).toContain('onClose()');
     expect(release).not.toContain('dragY.setValue(0)');
     expect(release).toContain("outcome === 'settle-then-discard'");
   });

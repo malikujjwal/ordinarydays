@@ -6,6 +6,8 @@ import {
 import { addWallDays } from '@od/shared/recurrence';
 import type { WallDate } from '@od/shared/time';
 import { format, getDay, getDaysInMonth, parseISO } from 'date-fns';
+import { pastDayHeading } from './plansStages';
+import { formatMonthHeading } from './plansWindow';
 
 /**
  * The calendar navigator's model (P3-48, `plans-and-lists.md` §1.3.4).
@@ -157,9 +159,9 @@ export function stageRange(
   return from > through ? undefined : { from, through };
 }
 
-/** `August 2026` — the expanded header. */
+/** `August 2026` — the expanded header, in the list's own month words. */
 export function monthTitle(month: CalendarMonth): string {
-  return format(parseISO(`${month}-01T12:00:00`), 'MMMM yyyy');
+  return formatMonthHeading(`${month}-01`);
 }
 
 /** `Aug` — the month/year grid. */
@@ -167,9 +169,9 @@ export function monthShortName(month: CalendarMonth): string {
   return format(parseISO(`${month}-01T12:00:00`), 'MMM');
 }
 
-/** `Fri 14 Aug` — a cell's accessible date. */
+/** `Fri 14 Aug` — a cell's accessible date, in the list's own day words. */
 export function cellDateLabel(date: WallDate): string {
-  return format(parseISO(`${date}T12:00:00`), 'EEE d MMM');
+  return pastDayHeading(date);
 }
 
 /** The load bar's height in points, from the mock's three steps. `0` draws the empty hairline. */
