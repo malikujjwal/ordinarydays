@@ -481,6 +481,82 @@ describe('serialized native convergence guard', () => {
       return seed;
     }
 
+    it('pulls and publishes the parent detail after accepting a Prep task create', async () => {
+      const parent = await activities.read({
+        kind: 'activity',
+        activityId: ACTIVITY,
+      });
+      if (parent === undefined) throw new Error('missing Prep parent fixture');
+      await transactions.run((transaction) =>
+        service.create(
+          transaction,
+          OWNER,
+          {
+            input: {
+              activityId: OTHER,
+              objectKind: 'task',
+              type: 'task',
+              title: childActivity.title,
+              schedule: childActivity.schedule,
+              parentActivityId: ACTIVITY,
+            },
+            idempotencyKey: 'create-prep-task',
+          },
+          clock,
+          timestamp,
+        ),
+      );
+      const canonicalParent: ActivityDetail = {
+        ...parent,
+        activity: {
+          ...parent.activity,
+          childCount: 1,
+          updatedAt: '2026-08-19T09:00:00.000Z',
+        },
+        children: [
+          {
+            activityId: OTHER,
+            title: childActivity.title,
+            status: 'scheduled',
+            restoredStatus: 'scheduled',
+            isRecurring: false,
+          },
+        ],
+      };
+      const activity = vi.fn(
+        async (target: Parameters<ActivityPullAdapter['activity']>[0]) =>
+          target.activityId === ACTIVITY
+            ? canonicalParent
+            : { activity: childActivity, reminders: [] },
+      );
+      const parentPublished = vi.fn();
+      const unsubscribe = subscriptions.subscribe(
+        activities.scope(ACTIVITY),
+        parentPublished,
+      );
+      const sync = syncEngine({
+        push: {
+          ...pushTransport(),
+          create: async () => ({ activity: childActivity }),
+        },
+        pull: { ...pullAdapter(), activity },
+      });
+
+      await sync.syncNow();
+      sync.stop();
+      unsubscribe();
+
+      expect(activity.mock.calls.map(([target]) => target)).toContainEqual({
+        kind: 'activity',
+        activityId: ACTIVITY,
+      });
+      expect(
+        (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
+      ).toEqual(canonicalParent.children);
+      expect(parentPublished).toHaveBeenCalled();
+      expect(await outbox.all()).toEqual([]);
+    });
+
     it('does not let an older completion acknowledgement regress the parent past a queued Undo', async () => {
       await installParentAndChild();
       await transactions.run((transaction) =>

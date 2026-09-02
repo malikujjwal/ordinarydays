@@ -1193,6 +1193,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
       const pushedActivity = activityFromResponse(response);
       let createdDetail: ActivityDetail | undefined;
+      let prepParentDetail: ActivityDetail | undefined;
       if (
         intent.mutationKey[0] === 'activity' &&
         intent.mutationKey[1] === 'create' &&
@@ -1220,6 +1221,42 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
               activityId: intent.entityId,
               message: message(error),
             });
+          }
+        }
+      }
+      if (intent.mutationKey[0] === 'activity' && intent.mutationKey[1] === 'create') {
+        const parentActivityId = field(
+          field(intent.variables, 'input'),
+          'parentActivityId',
+        );
+        if (typeof parentActivityId === 'string') {
+          try {
+            const detail = await this.serialNetwork((signal) =>
+              this.pull.activity(
+                { kind: 'activity', activityId: parentActivityId },
+                signal,
+              ),
+            );
+            if (detail.activity.activityId === parentActivityId) {
+              prepParentDetail = detail;
+            } else if (__DEV__) {
+              console.warn('native_prep_parent_detail_identity_mismatch', {
+                expectedActivityId: parentActivityId,
+                returnedActivityId: detail.activity.activityId,
+              });
+            }
+          } catch (error) {
+            /*
+             * The relationship write has already succeeded. The parent's strong read is
+             * reconciliation, not a reason to replay the accepted create; a later detail
+             * pull can still converge an unavailable response.
+             */
+            if (__DEV__) {
+              console.info('native_prep_parent_detail_pull_failed', {
+                parentActivityId,
+                message: message(error),
+              });
+            }
           }
         }
       }
@@ -1353,6 +1390,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           } else if (installable !== undefined) {
             await this.anytime.acceptCanonicalActivity(transaction, installable);
           }
+        }
+        if (prepParentDetail !== undefined) {
+          await this.activities.putCanonical(transaction, prepParentDetail);
         }
         if (installable !== undefined) {
           await this.outbox.rebaseNextQueuedPatch(

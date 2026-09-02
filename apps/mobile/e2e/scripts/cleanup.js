@@ -13,7 +13,8 @@ function headers() {
 
 http.post(`${CONTROL}/online`);
 const ids = output.activityIds || [];
-if (output.title && ids.length === 0 && output.today) {
+const cleanupTitles = output.cleanupTitles || [];
+if ((output.title || cleanupTitles.length > 0) && output.today) {
   const response = http.get(
     `${API}/v1/agenda?from=${output.today}&to=${output.today}&tz=${encodeURIComponent(ZONE)}&include=anytime_unscheduled,overdue`,
     { headers: headers() },
@@ -22,7 +23,10 @@ if (output.title && ids.length === 0 && output.today) {
   days.forEach((day) => {
     ['schedule', 'anytime', 'earlier'].forEach((section) => {
       (day[section] || []).forEach((item) => {
-        if (item.title === output.title && !ids.includes(item.activityId))
+        if (
+          (item.title === output.title || cleanupTitles.includes(item.title)) &&
+          !ids.includes(item.activityId)
+        )
           ids.push(item.activityId);
       });
     });
