@@ -140,6 +140,8 @@ describe('the canonical item editor shell', () => {
       target: { value: 'The Bear finale' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    // The sheet owns its exit (P3-51): `onClose` reaches the owner after the `slow` tween.
+    act(() => vi.advanceTimersByTime(300));
 
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear finale' });
     expect(onClose).toHaveBeenCalledOnce();
