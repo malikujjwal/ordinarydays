@@ -1234,9 +1234,11 @@ and the reference for every later task that adds a capability to this screen.
    long note in full is a disclosure that has disclosed everything while claiming to be shut,
    and it pushes every capability under it off the screen. The accessible name carries the
    whole text; the clamp is visual only.
-3. **A named future Plan capability may be discoverable without pretending to work.** People,
-   Preparation, Related lists and Attachments — plus Ingredients on a Meal — render as
-   non-interactive rows ending in `Coming later` until their owning phase builds them. They
+3. **A named future Plan capability may be discoverable without pretending to work.** People
+   — plus Ingredients on a Meal — render as non-interactive rows ending in `Coming later`
+   until their owning phase builds them. (Preparation, Related lists and Attachments were on
+   this list until P3-38, P3-39 and P3-41 wired them; each is now discovered through its chip
+   in the `Add to this plan` row while empty, and carries its own `+ Add …` once populated.) They
    have no chevron, disabled action, expansion or tap behaviour. All other unbuilt
    capabilities remain absent. A task still renders no Plan-only future rows. They are also
    **visibly subordinate**: `body` in `textSecondary` over `textMuted`, and shorter than

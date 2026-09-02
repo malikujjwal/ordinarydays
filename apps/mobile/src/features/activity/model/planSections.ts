@@ -49,6 +49,8 @@ export function sourceListLine(summary: SourceListSummary): string {
 export interface AddToPlanChips {
   readonly prepTask: boolean;
   readonly list: boolean;
+  /** `Photo` (P3-41): the picker, offered while the plan holds no attachment. */
+  readonly attachment: boolean;
 }
 
 /**
@@ -59,11 +61,13 @@ export interface AddToPlanChips {
 export function addToPlanChips(input: {
   readonly children: readonly ActivityChild[];
   readonly sourceLists: readonly SourceListSummary[];
-  readonly wired: { prepTask: boolean; list: boolean };
+  readonly attachmentCount?: number;
+  readonly wired: { prepTask: boolean; list: boolean; attachment?: boolean };
 }): AddToPlanChips {
   return {
     prepTask: input.wired.prepTask && input.children.length === 0,
     list: input.wired.list && input.sourceLists.length === 0,
+    attachment: input.wired.attachment === true && (input.attachmentCount ?? 0) === 0,
   };
 }
 

@@ -142,6 +142,11 @@ export interface ActivityDetailScreenProps {
    * prefill without re-reading the detail. Absent leaves the chip and the affordance out.
    */
   onAddList?: (planTitle: string) => void;
+  /**
+   * `Photo` / `+ Add photo` (P3-41): opens the picker with this plan fixed as the target.
+   * Absent leaves the chip and the affordance out, and the §2.2 discovery row stands in.
+   */
+  onAddAttachment?: () => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
@@ -163,6 +168,7 @@ export function ActivityDetailScreen({
   onOpenChild,
   onAddPrepTask,
   onAddList,
+  onAddAttachment,
   resolutionOccurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
@@ -585,6 +591,7 @@ export function ActivityDetailScreen({
           {...(onOpenList === undefined ? {} : { onOpenList })}
           {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
           {...(onAddList === undefined ? {} : { onAddList })}
+          {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
           onOpenReschedule={() => setRescheduleOpen(true)}
           onOpenRepeat={() => setRepeatOpen(true)}
           onOpenReminders={() => setRemindersOpen(true)}
@@ -961,6 +968,8 @@ interface LoadedProps {
   onAddPrepTask?: () => void;
   /** `+ Add list` (P3-39); absent leaves the chip and the affordance out. */
   onAddList?: (planTitle: string) => void;
+  /** `+ Add photo` (P3-41); absent leaves the chip and the affordance out. */
+  onAddAttachment?: () => void;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
   onOpenReminders: () => void;
@@ -1041,6 +1050,7 @@ function Loaded({
   onOpenList,
   onAddPrepTask,
   onAddList,
+  onAddAttachment,
   onOpenReschedule,
   onOpenRepeat,
   onOpenReminders,
@@ -1113,14 +1123,17 @@ function Loaded({
     childCount: children.length,
     sourceListCount: sourceLists.length,
     attachmentCount: attachments.length,
+    attachmentsWired: onAddAttachment !== undefined,
     updateCount,
   });
   const chips = addToPlanChips({
     children,
     sourceLists,
+    attachmentCount: attachments.length,
     wired: {
       prepTask: onAddPrepTask !== undefined,
       list: onAddList !== undefined,
+      attachment: onAddAttachment !== undefined,
     },
   });
 
@@ -1610,7 +1623,10 @@ function Loaded({
         </RowGroup>
       ) : null}
       {sections.some((section) => section.key === 'attachments') ? (
-        <AttachmentsSection attachments={attachments} />
+        <AttachmentsSection
+          attachments={attachments}
+          {...(onAddAttachment === undefined ? {} : { onAdd: onAddAttachment })}
+        />
       ) : null}
       {sections.some((section) => section.key === 'updates') ? (
         <UpdatesSection
@@ -1647,6 +1663,7 @@ function Loaded({
           {...(onAddList === undefined
             ? {}
             : { onAddList: () => onAddList(activity.title) })}
+          {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
         />
       ) : null}
     </View>

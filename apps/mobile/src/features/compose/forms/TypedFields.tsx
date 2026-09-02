@@ -31,6 +31,7 @@ import {
   timeForSlot,
   watchKind,
 } from '@/features/compose/model/fields';
+import type { AttachmentUploadController } from '@/hooks/useAttachmentUpload';
 
 /**
  * The five creation forms (P1-25) — as one renderer over five tables, not five components.
@@ -64,7 +65,8 @@ export interface TypedFieldsProps {
   details: DraftDetails;
   notes: string;
   sourceUrl: string | undefined;
-  attachmentUri: string | undefined;
+  /** The form's photo uploads (P3-41): the picker renders them and the save waits on them. */
+  attachments: AttachmentUploadController;
   /** The user's today, in their zone. Resolved at the route, never read from a clock here. */
   today: string;
   onDateChange: (date: string | undefined) => void;
@@ -81,8 +83,6 @@ export interface TypedFieldsProps {
   onDetailsChange: (patch: Partial<DraftDetails>) => void;
   onNotesChange: (notes: string) => void;
   onSourceUrlChange: (url: string) => void;
-  onAttach: (uri: string) => void;
-  onClearAttachment: () => void;
   fieldErrors: Record<string, string>;
 }
 
@@ -223,9 +223,7 @@ export function TypedFields(props: TypedFieldsProps) {
     <CaptureRow
       sourceUrl={props.sourceUrl}
       onSourceUrlChange={props.onSourceUrlChange}
-      attachmentUri={props.attachmentUri}
-      onAttach={props.onAttach}
-      onClearAttachment={props.onClearAttachment}
+      attachments={props.attachments}
     />
   );
 
@@ -481,9 +479,7 @@ function renderField(
         <CaptureRow
           sourceUrl={props.sourceUrl}
           onSourceUrlChange={props.onSourceUrlChange}
-          attachmentUri={props.attachmentUri}
-          onAttach={props.onAttach}
-          onClearAttachment={props.onClearAttachment}
+          attachments={props.attachments}
         />
       );
 

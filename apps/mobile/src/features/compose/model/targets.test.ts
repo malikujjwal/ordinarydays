@@ -628,3 +628,42 @@ describe('toScheduleListItemInput', () => {
     ).toBe('');
   });
 });
+
+/** A form-created activity carries the ids its picker uploaded (P3-41, criterion 24). */
+describe('toCreateActivityInput — uploaded photos', () => {
+  const ATT = 'att_01J8XKQ2M4N5P6R7S8T9V0W1A1';
+  const ATT_TWO = 'att_01J8XKQ2M4N5P6R7S8T9V0W1A2';
+  const fields: DraftFields = {
+    title: 'Dinner at Zahav',
+    notes: '',
+    schedule: EMPTY_SCHEDULE,
+    location: EMPTY_LOCATION,
+    reminderOffset: undefined,
+    details: EMPTY_DETAILS,
+    attachmentIds: [ATT, ATT_TWO],
+  };
+
+  it('carries the uploaded ids in attachmentIds, in pick order, on a Plan', () => {
+    const input = toCreateActivityInput(
+      { objectKind: 'plan', type: 'event' },
+      fields,
+      'America/New_York',
+    );
+    expect(input?.attachmentIds).toEqual([ATT, ATT_TWO]);
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  it('carries them on a Task too, and sends nothing when there are none', () => {
+    expect(
+      toCreateActivityInput({ objectKind: 'task', type: 'task' }, fields, 'UTC')
+        ?.attachmentIds,
+    ).toEqual([ATT, ATT_TWO]);
+    expect(
+      toCreateActivityInput(
+        { objectKind: 'task', type: 'task' },
+        { ...fields, attachmentIds: [] },
+        'UTC',
+      ),
+    ).not.toHaveProperty('attachmentIds');
+  });
+});

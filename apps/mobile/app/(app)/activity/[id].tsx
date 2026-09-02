@@ -1,9 +1,12 @@
 import type { ActivityDetailTarget } from '@od/shared/types';
+import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
+import { AttachmentPickerSheet } from '@/features/attachments/components/AttachmentPickerSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
+import { activityKey } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -30,6 +33,9 @@ export default function ActivityDetailRoute() {
     activityId: string;
     planTitle: string;
   }>();
+  // `Add photo` (P3-41): same reason — the attachments feature meets the activity feature here.
+  const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
+  const queryClient = useQueryClient();
   const activityId = id ?? '';
   const target: ActivityDetailTarget =
     occurrenceDate === undefined
@@ -66,6 +72,7 @@ export default function ActivityDetailRoute() {
           router.push('/compose');
         }}
         onAddList={(planTitle) => setListSource({ activityId, planTitle })}
+        onAddAttachment={() => setAttachmentSheetOpen(true)}
       />
       {/* The parent detail's refresh rides the process-wide MutationCache seam
           (`refreshActivityDetails` on the sourced `['list','create']`), not this route. */}
@@ -73,6 +80,16 @@ export default function ActivityDetailRoute() {
         open={listSource !== undefined}
         {...(listSource === undefined ? {} : { source: listSource })}
         onClose={() => setListSource(undefined)}
+      />
+      {/* Each confirmed photo refetches the detail so ATTACHMENTS shows the linked row; on
+          native the SQLite/hybrid detail reflects it on the next pull (the P3-39 caveat). */}
+      <AttachmentPickerSheet
+        open={attachmentSheetOpen}
+        activityId={activityId}
+        onClose={() => setAttachmentSheetOpen(false)}
+        onConfirmed={() => {
+          void queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
+        }}
       />
     </>
   );
