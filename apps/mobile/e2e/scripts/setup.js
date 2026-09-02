@@ -72,6 +72,24 @@ function create(title, date, time, recurrence) {
   return envelope.data.activityId;
 }
 
+function createPlan(title, date) {
+  const response = http.post(`${API}/v1/activities`, {
+    headers: headers(true),
+    body: JSON.stringify({
+      objectKind: 'plan',
+      type: 'custom',
+      title,
+      details: { kind: 'custom' },
+      schedule: { date, timezone: ZONE },
+    }),
+  });
+  const envelope = JSON.parse(response.body);
+  if (!envelope.data?.activityId) {
+    throw new Error(`Fixture Plan create failed: ${response.body}`);
+  }
+  return envelope.data.activityId;
+}
+
 http.post(`${CONTROL}/online`);
 const stamp = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
 const now = new Date();
@@ -82,6 +100,12 @@ output.activityIds = [];
 
 if (FLOW === 'add-and-complete') {
   output.title = `P2-37 iOS add ${stamp}`;
+} else if (FLOW === 'prep-parent-reconciliation') {
+  output.planTitle = `P3 native Prep parent ${stamp}`;
+  output.prepTitle = `Book room ${stamp}`;
+  output.activityId = createPlan(output.planTitle, wall.date);
+  output.activityIds.push(output.activityId);
+  output.cleanupTitles = [output.prepTitle];
 } else if (FLOW === 'snooze-occurrence') {
   output.title = `P2-37 iOS snooze ${stamp}`;
   const originalWall = parts(new Date(now.getTime() + 5 * 60 * 1000));

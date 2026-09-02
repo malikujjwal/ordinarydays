@@ -1,0 +1,37 @@
+appId: app.ordinarydays.ios.local
+name: P3 native Prep parent reconciliation
+jsEngine: graaljs
+tags: [p3, ios, release, reconciliation]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: prep-parent-reconciliation
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: ${'agenda-row-' + output.activityId}
+- assertVisible:
+    id: detail-content
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: add-to-plan-prep-task
+- assertVisible:
+    id: compose-form
+- tapOn:
+    id: compose-title
+- inputText: ${output.prepTitle}
+- tapOn:
+    id: compose-save
+- assertVisible:
+    id: section-prep
+- assertVisible: ${output.prepTitle}
