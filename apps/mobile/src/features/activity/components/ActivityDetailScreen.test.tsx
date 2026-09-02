@@ -2,15 +2,16 @@ import { fixedClock, type Instant } from '@od/shared/time';
 import type { Activity, ActivityDetail, AgendaData, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { Linking } from 'react-native';
+import { AccessibilityInfo, Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { readPlanActivityFloor } from '@/lib/planActivityFloors';
 import { createOfflineQueryClient } from '@/lib/queryClient';
+import { type NativeActivityState, setActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
@@ -210,7 +211,11 @@ beforeEach(() => {
   useToast.setState({ current: undefined });
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  setActiveNativeState(undefined);
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 const loaded = () =>
   waitFor(() => expect(screen.getByTestId('when-where')).toBeDefined());
@@ -1828,13 +1833,25 @@ describe('the ⋯ actions', () => {
 
   /** §6.4: delete always confirms, and the dialog names what goes. */
   it('confirms a delete before writing, in the §1a.1 shape', async () => {
+    vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+    vi.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({
+      remove: vi.fn(),
+    } as never);
     stubFetch({ status: 200, body: detailBody(plan({ notes: 'Check in after 3' })) });
     mount();
     await openMenu();
+    vi.useFakeTimers();
+    act(() => vi.advanceTimersByTime(400));
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    await waitFor(() => expect(screen.getByTestId('delete-confirm')).toBeDefined());
+    // iOS cannot present the confirmation while the outgoing More modal still owns the
+    // native view controller. Keep the destination absent until that Sheet actually closes.
+    expect(screen.queryByTestId('delete-confirm')).toBeNull();
+    expect(screen.getByTestId('overflow-menu')).toBeDefined();
+    act(() => vi.advanceTimersByTime(400));
+    expect(screen.getByTestId('delete-confirm')).toBeDefined();
+    vi.useRealTimers();
     expect(screen.getByText('Delete "Zahav"?')).toBeDefined();
     expect(screen.getByText('This removes: the plan and its notes.')).toBeDefined();
     // Cancel first, and the destructive button repeats the verb.
@@ -3517,12 +3534,24 @@ describe('the viewer and the hero (P3-42)', () => {
 
   /** A deletion confirms (§1a.1 rule 3), names the photo, and gets no undo (§4.1). */
   it('confirms a delete, names the cover, sends no undo, and the hero collapses', async () => {
+    vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+    vi.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({
+      remove: vi.fn(),
+    } as never);
     mountAs(OWNER, plan({ primaryAttachmentId: ATT_A }));
     await loaded();
+    vi.useFakeTimers();
 
     fireEvent.click(screen.getByRole('button', { name: 'Photo 1 of 2 options' }));
-    fireEvent.click(await screen.findByTestId('attachment-delete'));
+    act(() => vi.advanceTimersByTime(400));
+    fireEvent.click(screen.getByTestId('attachment-delete'));
+    // The actions Sheet remains mounted for its exit. The native confirmation must not race
+    // that modal dismissal or iOS can silently refuse to present it.
+    expect(screen.queryByTestId('attachment-delete-confirm')).toBeNull();
+    expect(screen.getByTestId('attachment-actions')).toBeDefined();
+    act(() => vi.advanceTimersByTime(400));
     expect(screen.getByText('Delete photo 1 of 2?')).toBeDefined();
+    vi.useRealTimers();
     expect(screen.getByText(/It is the cover/)).toBeDefined();
     expect(sent.find((s) => s.method === 'DELETE')).toBeUndefined();
 
@@ -3550,6 +3579,37 @@ describe('the viewer and the hero (P3-42)', () => {
     );
     await waitFor(() => expect(screen.queryByTestId('hero-image')).toBeNull());
     expect(useToast.getState().current?.kind).not.toBe('undo');
+  });
+
+  it('reconciles a deleted photo through the native Activity owner', async () => {
+    const pullActivity = vi.fn().mockResolvedValue(undefined);
+    setActiveNativeState({ sync: { pullActivity } } as unknown as NativeActivityState);
+    vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+    vi.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({
+      remove: vi.fn(),
+    } as never);
+    mountAs(OWNER, plan({ primaryAttachmentId: ATT_A }));
+    await loaded();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Photo 1 of 2 options' }));
+    act(() => vi.advanceTimersByTime(400));
+    fireEvent.click(screen.getByTestId('attachment-delete'));
+    act(() => vi.advanceTimersByTime(400));
+    vi.useRealTimers();
+    stubFetch({
+      status: 200,
+      body: {
+        data: { attachmentId: ATT_A, coverCleared: true },
+        meta: { requestId: 'req_test' },
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete photo' }));
+
+    await waitFor(() =>
+      expect(pullActivity).toHaveBeenCalledWith({ kind: 'activity', activityId: ID }),
+    );
   });
 
   it('offers neither action to anyone but the owner, while the viewer still opens', async () => {

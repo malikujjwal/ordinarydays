@@ -231,7 +231,9 @@ export function ActivityDetailScreen({
   );
   const [pending, setPending] = useState<PendingChange | undefined>(undefined);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteRequested, setDeleteRequested] = useState(false);
   const [deleteSeriesConfirmOpen, setDeleteSeriesConfirmOpen] = useState(false);
+  const [deleteSeriesConfirmRequested, setDeleteSeriesConfirmRequested] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
@@ -813,6 +815,11 @@ export function ActivityDetailScreen({
           <OverflowMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
+            onClosed={() => {
+              if (!deleteRequested) return;
+              setDeleteRequested(false);
+              setDeleteOpen(true);
+            }}
             activity={authoritativeActivity}
             onChangePlanKind={() => setKindSheet('planKind')}
             onChangeObject={() => {
@@ -824,7 +831,7 @@ export function ActivityDetailScreen({
               propose(authoritativeActivity, { objectKind: 'task', type: 'task' });
             }}
             onDuplicate={() => void duplicate()}
-            onDelete={() => setDeleteOpen(true)}
+            onDelete={() => setDeleteRequested(true)}
           />
 
           <ChangeKindSheet
@@ -873,6 +880,11 @@ export function ActivityDetailScreen({
               <Sheet
                 open={deleteOpen}
                 onClose={() => setDeleteOpen(false)}
+                onClosed={() => {
+                  if (!deleteSeriesConfirmRequested) return;
+                  setDeleteSeriesConfirmRequested(false);
+                  setDeleteSeriesConfirmOpen(true);
+                }}
                 title="Delete recurring activity"
                 detent="fit"
                 actions={
@@ -920,7 +932,7 @@ export function ActivityDetailScreen({
                   fullWidth
                   onPress={() => {
                     setDeleteOpen(false);
-                    setDeleteSeriesConfirmOpen(true);
+                    setDeleteSeriesConfirmRequested(true);
                   }}
                   testID="delete-whole-series"
                 />

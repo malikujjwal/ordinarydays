@@ -13,6 +13,7 @@ import {
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { activityKey } from '@/lib/queryKeys';
+import { getActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 
 /**
@@ -45,11 +46,13 @@ export function useAttachmentActions(input: {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const [target, setTarget] = useState<Attachment | undefined>(undefined);
+  const [confirmationRequested, setConfirmationRequested] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const close = useCallback(() => {
     setTarget(undefined);
+    setConfirmationRequested(false);
     setConfirming(false);
   }, []);
 
@@ -75,8 +78,6 @@ export function useAttachmentActions(input: {
     setBusy(true);
     try {
       await deleteAttachment(apiClient, activityId, removing.attachmentId);
-      close();
-      await queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
     } catch (error) {
       const failure = describeApiFailure(error, "Couldn't delete that photo.");
       close();
@@ -92,9 +93,27 @@ export function useAttachmentActions(input: {
           },
         },
       });
-    } finally {
       setBusy(false);
+      return;
     }
+
+    close();
+    try {
+      const native = getActiveNativeState();
+      if (native === undefined) {
+        await queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
+      } else {
+        await native.sync.pullActivity({ kind: 'activity', activityId });
+      }
+    } catch (error) {
+      if (__DEV__) {
+        console.info('attachment_delete_reconciliation_failed', {
+          activityId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    setBusy(false);
   }, [activityId, close, queryClient, target]);
 
   const position = target === undefined ? 0 : attachments.indexOf(target) + 1;
@@ -104,8 +123,13 @@ export function useAttachmentActions(input: {
     () => (
       <>
         <Sheet
-          open={target !== undefined && !confirming}
+          open={target !== undefined && !confirmationRequested && !confirming}
           onClose={close}
+          onClosed={() => {
+            if (!confirmationRequested) return;
+            setConfirmationRequested(false);
+            setConfirming(true);
+          }}
           title={position === 0 ? 'Photo' : `Photo ${position} of ${attachments.length}`}
           detent="fit"
           testID="attachment-actions"
@@ -123,7 +147,7 @@ export function useAttachmentActions(input: {
               label="Delete"
               variant="dangerGhost"
               fullWidth
-              onPress={() => setConfirming(true)}
+              onPress={() => setConfirmationRequested(true)}
               testID="attachment-delete"
             />
           </View>
@@ -149,6 +173,7 @@ export function useAttachmentActions(input: {
       attachments.length,
       busy,
       close,
+      confirmationRequested,
       confirming,
       isCover,
       position,

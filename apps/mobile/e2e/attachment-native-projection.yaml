@@ -40,6 +40,17 @@ onFlowComplete:
 - assertVisible:
     id: section-attachments
 - assertVisible: Photo 1 of 1
+- longPressOn:
+    text: Photo 1 of 1
+- assertVisible:
+    id: attachment-actions
+- tapOn:
+    id: attachment-delete
+- assertVisible:
+    id: attachment-delete-confirm
+- tapOn:
+    id: confirm-accept
+- assertNotVisible: Photo 1 of 1
 - pressKey: home
 - killApp
 - launchApp:
