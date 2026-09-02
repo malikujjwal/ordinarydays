@@ -6,6 +6,7 @@ import { type ActivityScope, scopeToWire, targetsWholeSeries } from '@od/shared/
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useRef } from 'react';
+import { useFollowUpActions } from '@/hooks/useFollowUp';
 import { projectOptimisticCompletion, projectOptimisticSnooze } from '@/lib/agendaCache';
 import type {
   CompleteActivityVariables,
@@ -20,6 +21,7 @@ import { startUndoable } from '@/lib/startUndoable';
 import { useToast } from '@/stores/toast';
 import {
   type ActivityActions,
+  type ActivityActionsOptions,
   describeActionFailure,
   OUTCOME_RECORDED,
 } from '../model/activityActions';
@@ -61,8 +63,12 @@ function isUnscopedSeries(
   return targetsWholeSeries(snapshot?.activity.recurrence !== undefined, scope);
 }
 
-export function useActivityActions(activityId: string): ActivityActions {
+export function useActivityActions(
+  activityId: string,
+  options: ActivityActionsOptions = {},
+): ActivityActions {
   const queryClient = useQueryClient();
+  const followUp = useFollowUpActions(options.followUp);
   const resolutionToastId = useRef<number | undefined>(undefined);
   const retryRef = useRef<(() => void) | undefined>(undefined);
 
@@ -319,6 +325,12 @@ export function useActivityActions(activityId: string): ActivityActions {
         message: OUTCOME_RECORDED,
         failureMessage: "Couldn't record that outcome.",
         compensationFailureMessage: "Couldn't undo that outcome.",
+        onAcknowledged: (result, toastId) =>
+          followUp.present(
+            result,
+            { activityId, activityType: snapshot?.activity.type },
+            toastId,
+          ),
       });
     },
     undoResolution: (scope, onProjected) => {

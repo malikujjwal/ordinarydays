@@ -9,6 +9,7 @@ import { scopeToWire } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
+import { type FollowUpNavigation, useFollowUpActions } from '@/hooks/useFollowUp';
 import { projectOptimisticCompletion } from '@/lib/agendaCache';
 import type {
   CompleteActivityVariables,
@@ -43,11 +44,14 @@ export interface UseAgendaActivityActionsOptions {
   completionProjection?: 'agenda' | 'anytime';
   getScrollOffset?: () => number;
   restoreScrollOffset?: (offset: number) => void;
+  /** Where a completion follow-up's navigation rows go (P3-44). */
+  followUp?: FollowUpNavigation;
 }
 
 /** Immediate agenda completion with cache/scroll rollback and compensating Undo. */
 export function useAgendaActivityActions(options: UseAgendaActivityActionsOptions) {
   const queryClient = useQueryClient();
+  const followUp = useFollowUpActions(options.followUp);
   const complete = useMutation<unknown, Error, CompleteActivityVariables>({
     mutationKey: activityMutationKeys.complete,
   });
@@ -177,10 +181,21 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         failureMessage: checked
           ? "Couldn't complete this task."
           : "Couldn't undo this completion.",
+        // §5.3: the server chose the one follow-up; it rides on this confirmation's toast.
+        ...(checked
+          ? {
+              onAcknowledged: (result: unknown, toastId: number) =>
+                followUp.present(
+                  result,
+                  { activityId: item.activityId, activityType: item.type },
+                  toastId,
+                ),
+            }
+          : {}),
       });
       return true;
     },
-    [complete, options, queryClient, uncomplete],
+    [complete, options, queryClient, uncomplete, followUp],
   );
 
   const onAgendaAction = useCallback(

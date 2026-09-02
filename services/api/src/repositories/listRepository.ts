@@ -1123,14 +1123,32 @@ export async function readWatchFollowUpSource(
   access: ListAccessGrant,
   itemId: string,
 ): Promise<WatchFollowUpSource | undefined> {
+  return readLinkedItemSource(userId, listId, access, itemId, (list) => {
+    const episodeProgressEnabled =
+      list.featureConfig.progress?.enabled === true &&
+      list.featureConfig.progress.kind === 'episode';
+    return episodeProgressEnabled || list.itemStateMode.mode !== 'none';
+  });
+}
+
+/**
+ * The caller's linked source item behind a completion follow-up (P3-16, P3-44): the List,
+ * the caller's own `LNK#` pointer, and the item, read under the fence. `eligible` lets the
+ * caller refuse early on the List's configuration — a Watch needs episode Progress or
+ * exposed state, an Event needs checkbox presentation with Place — before the item read.
+ */
+export async function readLinkedItemSource(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  itemId: string,
+  eligible: (list: List) => boolean = () => true,
+): Promise<WatchFollowUpSource | undefined> {
   assertListAccessGrant(userId, listId, access);
   const before = await getLiveListMetaStrong(listId);
   if (before === undefined) return undefined;
   assertFenceOpen(before);
-  const episodeProgressEnabled =
-    before.featureConfig.progress?.enabled === true &&
-    before.featureConfig.progress.kind === 'episode';
-  if (!episodeProgressEnabled && before.itemStateMode.mode === 'none') return undefined;
+  if (!eligible(before)) return undefined;
 
   const [linkRow, resolved] = await Promise.all([
     getItem<StoredItem>(listItemActivityLink(listId, userId, itemId), {

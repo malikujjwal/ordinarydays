@@ -13,6 +13,10 @@ export default function PlansTab() {
 
   return (
     <PlansScreen
+      followUp={{
+        openActivity: (activityId) => router.push(`/activity/${activityId}`),
+        openCompose: () => router.push('/compose'),
+      }}
       onOpen={({ activityId, occurrenceDate }) =>
         router.push({
           pathname: '/activity/[id]',

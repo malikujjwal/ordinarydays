@@ -4050,6 +4050,11 @@
                 "type": "string",
                 "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
+              "itemTitle": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
               "current": {
                 "type": "object",
                 "properties": {
@@ -4148,6 +4153,11 @@
                 "type": "string",
                 "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
+              "itemTitle": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
               "current": {
                 "type": "object",
                 "properties": {
@@ -4187,6 +4197,87 @@
               "itemId",
               "current",
               "target"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "open_prep"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 50
+              },
+              "childIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                "minItems": 1,
+                "maxItems": 50
+              }
+            },
+            "required": [
+              "kind",
+              "count",
+              "childIds"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "meal_ingredients"
+                ]
+              },
+              "remaining": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "kind",
+              "remaining"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "review_expenses"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "add_expense"
+                ]
+              }
+            },
+            "required": [
+              "kind"
             ],
             "additionalProperties": false
           }

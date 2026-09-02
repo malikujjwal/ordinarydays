@@ -5,6 +5,7 @@ import type {
   ActivityOutcome,
   ActivityScope,
 } from '@od/shared/types';
+import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 
 /**
  * The detail screen's action contract, owned once so the web (query cache) and native
@@ -77,4 +78,10 @@ export function describeActionFailure(error: unknown): string {
     return error.message;
   }
   return ACTION_FAILED;
+}
+
+/** Per-screen options for `useActivityActions` (P3-44). */
+export interface ActivityActionsOptions {
+  /** Where a completion follow-up's navigation rows go. */
+  followUp?: FollowUpNavigation;
 }

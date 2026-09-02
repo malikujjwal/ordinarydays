@@ -12,11 +12,29 @@ import { create } from 'zustand';
  * single value rather than a queue — a queue would let two undo windows overlap, and the
  * second toast would be describing an action the user can no longer see.
  */
+export interface FollowUpAction {
+  label: string;
+  onPress: () => void;
+  testID?: string;
+}
+
+/**
+ * One contextual follow-up (`interaction-contract.md` §1a.2, `activities.md` §5.3) shown in
+ * the confirmation slot: a question, its explicit choices, and the `✕` the host adds. It is
+ * presentation only — every write happens behind one of the `actions`' own taps.
+ */
+export interface FollowUpPresentation {
+  message: string;
+  actions: readonly FollowUpAction[];
+}
+
 export interface ToastMessage {
   message: string;
   requestId?: string;
   tone?: 'neutral' | 'error';
   action?: { label: string; onPress: () => void };
+  /** Renders the `✕`: the message is a question the reader may simply close. */
+  dismissible?: boolean;
   duration?: number;
 }
 
@@ -24,6 +42,8 @@ export interface UndoToastMessage {
   message: string;
   duration?: number;
   undoExpiresAt?: Instant;
+  /** A follow-up offered alongside this confirmation's Undo (§1a.2). */
+  followUp?: FollowUpPresentation;
   onUndo: () => void;
   onCommit: () => void;
 }
@@ -44,6 +64,12 @@ export interface ToastState {
   dismiss: (id?: number) => void;
   undo: (id?: number) => void;
   failUndo: (id: number, toast: ToastMessage) => number;
+  /**
+   * Attaches a follow-up to the Undo toast it belongs to, once the server has described one.
+   * Returns `false` — and shows nothing — when that toast is no longer current: a follow-up
+   * never outlives, replaces, or extends the confirmation window it rides on (§4.2).
+   */
+  attachFollowUp: (id: number, followUp: FollowUpPresentation) => boolean;
 }
 
 let nextToastId = 1;
@@ -108,6 +134,13 @@ export const useToast = create<ToastState>()((set, get) => {
       clearExpiry();
       set({ current: undefined });
       current.onUndo();
+    },
+    attachFollowUp: (id, followUp) => {
+      const current = get().current;
+      if (current === undefined || current.id !== id || current.kind !== 'undo')
+        return false;
+      set({ current: { ...current, followUp } });
+      return true;
     },
     failUndo: (id, toast) => {
       const current = get().current;

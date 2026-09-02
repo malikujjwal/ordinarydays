@@ -10,15 +10,22 @@ import { useAnytime } from '@/features/agenda/hooks/useAnytime';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { toAnytimeAgendaItem } from '@/features/agenda/model/toAnytimeAgendaItem';
 import { useClock } from '@/hooks/useClock';
+import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { SwipeableRow } from './SwipeableRow';
 
 export interface AnytimeScreenProps {
   onBack: () => void;
   onOpenAgendaItem: (item: AgendaItem) => void;
+  /** Where a completion follow-up's navigation rows go (P3-44). */
+  followUp?: FollowUpNavigation;
 }
 
 /** The pushed, cursor-paginated list of undated saved Tasks. */
-export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) {
+export function AnytimeScreen({
+  onBack,
+  onOpenAgendaItem,
+  followUp,
+}: AnytimeScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const compact = useBreakpoint() === 'compact';
@@ -34,6 +41,7 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
     currentMinute: toWallTime(now, anytime.timezone),
     timezone: anytime.timezone,
     completionProjection: 'anytime',
+    ...(followUp === undefined ? {} : { followUp }),
     getScrollOffset: () => scrollOffset.current,
     restoreScrollOffset: (offset) => {
       requestAnimationFrame(() =>

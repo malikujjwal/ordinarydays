@@ -13,10 +13,18 @@ import {
   ACTION_FAILED,
   ACTIVITY_GONE,
   type ActivityActions,
+  type ActivityActionsOptions,
   OUTCOME_RECORDED,
 } from '../model/activityActions';
 
-export function useActivityActions(activityId: string): ActivityActions {
+/**
+ * Follow-ups (P3-44) are not offered on native yet: the SQLite coordinator acknowledges a
+ * completion without the server's response body, which is where the one follow-up lives.
+ */
+export function useActivityActions(
+  activityId: string,
+  _options: ActivityActionsOptions = {},
+): ActivityActions {
   const state = requireActiveNativeState();
   const clock = useClock();
   const [busy, setBusy] = useState(false);

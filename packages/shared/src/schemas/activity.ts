@@ -661,6 +661,8 @@ const watchFollowUpItem = {
   listId: ulidId('lst'),
   listTitle: title,
   itemId: ulidId('itm'),
+  /** The item's own title, for `Mark {item title} visited in {list name}?` (P3-44). */
+  itemTitle: title.optional(),
 } as const;
 
 /**
@@ -725,6 +727,28 @@ export const completionFollowUp = z
       current: z.strictObject({ state: z.enum(['open', 'active']) }),
       target: z.strictObject({ state: z.literal('done') }),
     }),
+    /**
+     * `activities.md` §5.3's prep row (P3-44): the real count of incomplete **non-recurring**
+     * prep children, and exactly which ones, so `Complete all` / `Delete` act on those ids
+     * and nothing else. Wins over every other row when it applies.
+     */
+    z.strictObject({
+      kind: z.literal('open_prep'),
+      count: z.number().int().positive().max(MAX_PREP_TASKS_PER_PLAN),
+      childIds: z.array(ulidId('act')).min(1).max(MAX_PREP_TASKS_PER_PLAN),
+    }),
+    /**
+     * §5.3's meal row: the meal came from a List whose Sub-items carry the explicit
+     * `mealIngredients` integration and still has ingredients nobody has added to a list.
+     * Matching labels without the integration offer nothing.
+     */
+    z.strictObject({
+      kind: z.literal('meal_ingredients'),
+      remaining: z.number().int().positive(),
+    }),
+    /** §5.3's expense rows: navigation only, no write on tap. */
+    z.strictObject({ kind: z.literal('review_expenses') }),
+    z.strictObject({ kind: z.literal('add_expense') }),
   ])
   .meta({ id: 'CompletionFollowUp' });
 
