@@ -114,7 +114,7 @@ describe('AgendaRow affordances', () => {
     expect(onToggleComplete).not.toHaveBeenCalled();
   });
 
-  it('keeps a committing checkbox visible and locked while the row body still opens', () => {
+  it('keeps a committing checkbox responsive to an inverse tap while the row body opens', () => {
     const onOpen = vi.fn();
     const onToggleComplete = vi.fn();
     mount(
@@ -129,9 +129,9 @@ describe('AgendaRow affordances', () => {
     const checkbox = screen.getByRole('checkbox', {
       name: 'Call the dentist, not completed',
     });
-    expect(checkbox.getAttribute('aria-disabled')).toBe('true');
+    expect(checkbox.getAttribute('aria-disabled')).toBeNull();
     fireEvent.click(checkbox);
-    expect(onToggleComplete).not.toHaveBeenCalled();
+    expect(onToggleComplete).toHaveBeenCalledWith(expect.any(Object), true);
 
     fireEvent.click(screen.getByTestId('agenda-row-body'));
     expect(onOpen).toHaveBeenCalledOnce();

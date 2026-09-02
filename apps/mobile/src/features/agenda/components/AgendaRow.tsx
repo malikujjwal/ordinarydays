@@ -67,7 +67,7 @@ export interface AgendaRowProps {
    */
   connectorAbove?: boolean;
   connectorBelow?: boolean;
-  /** Locked only until this row reflects its SQLite-committed completion state. */
+  /** Locks competing row gestures while completion commits; the checkbox remains reversible. */
   completionLocked?: boolean;
   onOpen: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
@@ -152,7 +152,6 @@ export function AgendaRowWithIntentState({
   dense = false,
   connectorAbove = false,
   connectorBelow = false,
-  completionLocked = false,
   completionCheckedOverride,
   onOpen,
   onToggleComplete,
@@ -450,8 +449,8 @@ export function AgendaRowWithIntentState({
           type={item.type}
           checked={checked}
           title={item.title}
-          disabled={futureRecurringCompletion || completionLocked}
-          {...(onToggleComplete === undefined || inert || completionLocked
+          disabled={futureRecurringCompletion}
+          {...(onToggleComplete === undefined || inert
             ? {}
             : { onChange: (next) => onToggleComplete(item, next) })}
         />

@@ -85,6 +85,36 @@ export class CompletionCommitGate {
     return true;
   }
 
+  /**
+   * Changes the requested visual value while the first serialized SQLite write is still in
+   * flight. The action owner turns this into a dependent compensation after that write lands.
+   */
+  retargetCommitting(
+    item: AgendaItem,
+    checked: boolean,
+    intentId: string | undefined,
+    viewerDate: string | undefined,
+  ): boolean {
+    const key = completionTargetKey(item);
+    const current = this.commits.get(key);
+    if (
+      current?.phase !== 'committing' ||
+      current.checked === checked ||
+      current.viewerDate !== viewerDate
+    ) {
+      return false;
+    }
+    this.commits.set(key, {
+      checked,
+      phase: 'committing',
+      previousCommitted: current.previousCommitted,
+      intentId,
+      viewerDate,
+    });
+    this.publish(key);
+    return true;
+  }
+
   settle(
     item: AgendaItem,
     checked: boolean,

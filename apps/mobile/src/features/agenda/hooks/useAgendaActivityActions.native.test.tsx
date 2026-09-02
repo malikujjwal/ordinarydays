@@ -125,6 +125,64 @@ describe('native Agenda completion gate', () => {
     await waitFor(() => expect(gate.isLocked(scheduled)).toBe(false));
   });
 
+  it('projects an inverse tap immediately while the first transaction is committing', async () => {
+    const pending = deferred<{
+      kind: 'accepted';
+      status: 'queued';
+      intent: { intentId: string };
+      commitRevision: number;
+    }>();
+    const complete = vi.fn(() => pending.promise);
+    const undoCompletion = vi.fn(async () => ({
+      kind: 'accepted' as const,
+      status: 'queued' as const,
+      intent: { intentId: 'completion-2' },
+      commitRevision: 2,
+    }));
+    const coordinator = { complete, undoCompletion };
+    nativeState.current = { coordinator };
+    const gate = completionCommitGateFor(coordinator);
+    const scheduled = task();
+    const mounted = renderHook(() =>
+      useAgendaActivityActions(options(agenda(scheduled))),
+    );
+    let inverseAccepted = false;
+
+    act(() => {
+      mounted.result.current.toggleComplete(scheduled, true);
+      inverseAccepted = mounted.result.current.toggleComplete(scheduled, false);
+    });
+
+    expect(inverseAccepted).toBe(true);
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
+      'committing-unchecked',
+    );
+    await act(async () => {
+      pending.resolve({
+        kind: 'accepted',
+        status: 'queued',
+        intent: { intentId: 'completion-1' },
+        commitRevision: 1,
+      });
+      await pending.promise;
+    });
+    await waitFor(() => expect(undoCompletion).toHaveBeenCalledOnce());
+    expect(undoCompletion).toHaveBeenCalledWith(
+      'completion-1',
+      {
+        activityId: scheduled.activityId,
+        idempotencyKey: 'completion-2',
+        input: {},
+      },
+      false,
+      'scheduled',
+      expect.any(Object),
+    );
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
+      'committed-unchecked',
+    );
+  });
+
   it('unlocks immediately when SQLite refuses the action so the user can retry', async () => {
     const complete = vi.fn(async () => ({
       kind: 'refused' as const,
