@@ -527,7 +527,48 @@ describe('the sections', () => {
     ).toBe('false');
   });
 
-  it('previews Ingredients as a noninteractive future row on Meal plans only', async () => {
+  /**
+   * P3-43: a Meal with ingredient rows renders the picker — every row unchecked, the
+   * destination row visible before any write — and a Meal without rows shows no section.
+   */
+  it('renders the Ingredients picker on a Meal with rows, unchecked, and nothing without', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'meal',
+          details: {
+            kind: 'meal',
+            ingredients: [
+              { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+              {
+                ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+                name: 'Tortillas',
+                quantity: '8',
+              },
+            ],
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('section-ingredients')).toBeDefined();
+    expect(
+      screen.getByRole('checkbox', { name: 'Chicken' }).getAttribute('aria-checked'),
+    ).toBe('false');
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Tortillas (8)' })
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    // No list has loaded in this harness, so the row offers creation rather than a guess.
+    expect(screen.getByRole('button', { name: 'Choose or create a list' })).toBeDefined();
+    expect(sent.filter((s) => s.method === 'POST')).toHaveLength(0);
+  });
+
+  it('renders no Ingredients section on a Meal without rows', async () => {
     stubFetch({
       status: 200,
       body: detailBody(plan({ type: 'meal', details: { kind: 'meal' } })),
@@ -535,9 +576,8 @@ describe('the sections', () => {
     mount();
     await loaded();
 
-    expect(screen.getByText('Ingredients')).toBeDefined();
-    expect(screen.getByLabelText(/^Ingredients,.*Coming later$/)).toBeDefined();
-    expect(screen.queryByRole('button', { name: /Ingredients/ })).toBeNull();
+    expect(screen.queryByTestId('section-ingredients')).toBeNull();
+    expect(screen.queryByText('Ingredients')).toBeNull();
   });
 
   /** §5.6: a Task "renders no disabled placeholders for anything it lacks". */

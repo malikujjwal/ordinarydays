@@ -12,10 +12,11 @@ export const ME_QUERY_KEY = ['me'] as const;
  * has nothing there, so this makes the read explicit where a screen needs to tell the owner
  * from anyone else. Held indefinitely: the user does not change under the app.
  */
-export function useViewer(): User | undefined {
+export function useViewer(enabled = true): User | undefined {
   return useQuery({
     queryKey: ME_QUERY_KEY,
     queryFn: ({ signal }) => getMe(apiClient, signal),
     staleTime: Number.POSITIVE_INFINITY,
+    enabled,
   }).data;
 }

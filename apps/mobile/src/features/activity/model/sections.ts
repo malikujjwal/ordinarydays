@@ -116,15 +116,15 @@ export function sectionsFor(
     },
     ...(content.childCount > 0 ? [{ key: 'prep' }] : []),
     ...(content.sourceListCount > 0 ? [{ key: 'lists' }] : []),
-    ...(activity.type === 'meal'
-      ? [
-          {
-            key: 'ingredients',
-            label: 'Ingredients',
-            summary: 'Meal ingredients and shopping',
-            state: 'coming-later' as const,
-          },
-        ]
+    /**
+     * INGREDIENTS (P3-43): a Meal whose stored details carry ingredient rows renders the
+     * picker — selection checkboxes, the resolved destination, `Add n to <list>`. A Meal
+     * with no rows has nothing to add and shows no section; the rows are edited on the form.
+     */
+    ...(activity.type === 'meal' &&
+    activity.details.kind === 'meal' &&
+    (activity.details.ingredients?.length ?? 0) > 0
+      ? [{ key: 'ingredients' as const }]
       : []),
     /**
      * Attachments exists once it holds content; while empty it is discovered through the

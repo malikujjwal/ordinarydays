@@ -2,7 +2,9 @@ import type { ActivityType, Recurrence } from '@od/shared/types';
 import { DisclosureRow, Field, RowGroup, useTheme } from '@od/ui';
 import { Fragment } from 'react';
 import { View } from 'react-native';
+import { IngredientPicker } from '@/components/IngredientPicker';
 import { RepeatControl } from '@/components/RepeatControl';
+import { WatchListDestination } from '@/components/WatchListDestination';
 import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
   DateControl,
@@ -67,6 +69,20 @@ export interface TypedFieldsProps {
   sourceUrl: string | undefined;
   /** The form's photo uploads (P3-41): the picker renders them and the save waits on them. */
   attachments: AttachmentUploadController;
+  /**
+   * The list bridges (P3-43). `destinations` are this form's one-off choices; the titles are
+   * resolved by the screen so this table stays free of queries. `onChangeDestination` opens
+   * the route-composed picker.
+   */
+  listBridge: {
+    groceriesTitle: string | undefined;
+    groceriesState: 'use' | 'ask' | 'none' | undefined;
+    watchTitle: string | undefined;
+    watchState: 'use' | 'ask' | 'none' | undefined;
+    alsoAddToList: boolean;
+    onAlsoAddToListChange: (enabled: boolean) => void;
+    onChangeDestination: (slot: 'groceries' | 'watch') => void;
+  };
   /** The user's today, in their zone. Resolved at the route, never read from a clock here. */
   today: string;
   onDateChange: (date: string | undefined) => void;
@@ -340,9 +356,62 @@ function renderField(
      */
     case 'relatedPlan':
     case 'people':
-    case 'addIngredientsTo':
-    case 'alsoAddTo':
       return null;
+
+    /**
+     * P3-43: the ingredient selection lives on the `ingredients` rows above; this row is the
+     * always-visible destination the eventual `Save plan and add n items to <list>` writes to.
+     */
+    case 'addIngredientsTo':
+      return (
+        <IngredientPicker
+          rows={details.ingredients
+            .filter((row) => row.name.trim() !== '')
+            .map((row) => ({
+              ingredientId: row.id,
+              name: row.name,
+              ...(row.quantity === '' ? {} : { quantity: row.quantity }),
+            }))}
+          selected={
+            new Set(details.ingredients.filter((r) => r.selected).map((r) => r.id))
+          }
+          onToggle={(ingredientId, selected) => {
+            props.onDetailsChange({
+              ingredients: details.ingredients.map((row) =>
+                row.id === ingredientId ? { ...row, selected } : row,
+              ),
+            });
+            /**
+             * §5.8's `ask` case opens the one-time question the moment it is due — on the
+             * first selection — rather than waiting for the row; the answer is remembered
+             * there, so the next meal never asks.
+             */
+            if (
+              selected &&
+              props.listBridge.groceriesState === 'ask' &&
+              !details.ingredients.some((row) => row.selected)
+            ) {
+              props.listBridge.onChangeDestination('groceries');
+            }
+          }}
+          destinationTitle={props.listBridge.groceriesTitle}
+          destinationState={props.listBridge.groceriesState}
+          onChangeDestination={() => props.listBridge.onChangeDestination('groceries')}
+          lead={spec.label}
+          testID="compose-ingredient-destination"
+        />
+      );
+
+    case 'alsoAddTo':
+      return (
+        <WatchListDestination
+          enabled={props.listBridge.alsoAddToList}
+          onEnabledChange={props.listBridge.onAlsoAddToListChange}
+          destinationTitle={props.listBridge.watchTitle}
+          destinationState={props.listBridge.watchState}
+          onChangeDestination={() => props.listBridge.onChangeDestination('watch')}
+        />
+      );
 
     case 'slot':
       return (

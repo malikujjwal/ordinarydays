@@ -70,9 +70,22 @@ export interface NewListSheetProps {
    * title, duration and participants do not rank, hide or pre-select a style.
    */
   source?: { activityId: string; planTitle: string };
+  /**
+   * The Watch destination's `New list` (P3-43, §8.1): the flow needs a list that can hold
+   * the `watch` slot, so the catalogue shows only `Watch Later` — **still unselected**. The
+   * constraint comes from the user's explicit Watch-destination control; title and capture
+   * text are not inputs. Any other caller sees the seven types.
+   */
+  constrainTo?: 'watch-later';
 }
 
-export function NewListSheet({ open, onClose, onCreated, source }: NewListSheetProps) {
+export function NewListSheet({
+  open,
+  onClose,
+  onCreated,
+  source,
+  constrainTo,
+}: NewListSheetProps) {
   const theme = useTheme();
   const create = useCreateList();
   /**
@@ -81,9 +94,13 @@ export function NewListSheet({ open, onClose, onCreated, source }: NewListSheetP
    */
   const [style, setStyle] = useState<ListTemplateChoice>();
   const [title, setTitle] = useState('');
-  const choices = listTemplateChoices();
-  const blank = choices[0];
-  const typedChoices = choices.slice(1);
+  const catalogue = listTemplateChoices();
+  const choices =
+    constrainTo === undefined
+      ? catalogue
+      : catalogue.filter((choice) => choice.templateKey === constrainTo);
+  const blank = constrainTo === undefined ? choices[0] : undefined;
+  const typedChoices = constrainTo === undefined ? choices.slice(1) : choices;
 
   /** §5.4 rule 1: `Back` retains nothing, so the chooser is never returned to pre-selected. */
   function back() {

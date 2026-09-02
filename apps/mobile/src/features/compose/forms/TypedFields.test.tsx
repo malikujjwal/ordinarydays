@@ -78,6 +78,15 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     notes: '',
     sourceUrl: undefined,
     attachments: idleAttachments,
+    listBridge: {
+      groceriesTitle: undefined,
+      groceriesState: undefined,
+      watchTitle: undefined,
+      watchState: undefined,
+      alsoAddToList: false,
+      onAlsoAddToListChange: vi.fn(),
+      onChangeDestination: vi.fn(),
+    },
     today: TODAY,
     onDateChange: vi.fn(),
     onTimeChange: vi.fn(),
@@ -247,12 +256,19 @@ describe('the More options summary', () => {
 
   it.each([
     ['meal', 'People'],
-    ['watch', 'Also add to…'],
     ['task', 'Related plan'],
-    ['meal', 'Add selected ingredients to…'],
   ] as const)('%s never advertises %s', (type, label) => {
     mount(type, { schedule: DATED });
     expect(summaryOf()).not.toContain(label);
+  });
+
+  /** P3-43 built the two list bridges, so the summary now names them. */
+  it.each([
+    ['watch', 'Also add to…'],
+    ['meal', 'Add selected ingredients to…'],
+  ] as const)('%s advertises %s once the bridge exists', (type, label) => {
+    mount(type, { schedule: DATED });
+    expect(summaryOf()).toContain(label);
   });
 
   /** Undated, the only thing left on a Task is what does not need a day. */

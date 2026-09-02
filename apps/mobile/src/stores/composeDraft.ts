@@ -1,7 +1,7 @@
 import { changeActivityKind } from '@od/shared';
 import type { CreationTarget } from '@od/shared/client';
 import type { WallDate } from '@od/shared/time';
-import type { PlanType, Recurrence } from '@od/shared/types';
+import type { DefaultSlot, PlanType, Recurrence } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
 import { type BridgeSource, bridgePrefill } from '@/features/compose/model/bridge';
@@ -86,6 +86,14 @@ export interface ComposeDraftState {
   attachmentsBusy: boolean;
   attachmentsFailed: boolean;
   /**
+   * This form's one-off destination choices from the picker's `▾` (P3-43, §5.8). Never the
+   * stored default: remembering is the destination sheet's own write, and only in the
+   * `ask` case. `undefined` means "whatever the slot resolves to".
+   */
+  destinations: Partial<Record<DefaultSlot, string>>;
+  /** The Watch form's `Also add a list item to…` control — off in every context (§8.1). */
+  alsoAddToList: boolean;
+  /**
    * Generated once at the save boundary and reused on every retry, cleared whenever the draft
    * changes (`api-contract.md` §1). Clearing on change is what stops an edited-then-resaved
    * draft from being deduplicated against the previous body.
@@ -143,6 +151,9 @@ export interface ComposeDraftState {
     busy: boolean;
     failed: boolean;
   }) => void;
+  /** The picker's one-off choice for this form; the slot's stored default is untouched. */
+  setDestination: (slot: DefaultSlot, listId: string) => void;
+  setAlsoAddToList: (enabled: boolean) => void;
   setDate: (date: string | undefined) => void;
   setTime: (time: string | undefined) => void;
   /** The time a Meal slot implies, recorded as the app's guess rather than the user's. */
@@ -168,6 +179,8 @@ const EMPTY = {
   attachmentIds: [],
   attachmentsBusy: false,
   attachmentsFailed: false,
+  destinations: {},
+  alsoAddToList: false,
   idempotencyKey: undefined,
   activityId: undefined,
   bridge: undefined,
@@ -192,6 +205,8 @@ const EMPTY = {
   | 'setNotes'
   | 'setSourceUrl'
   | 'setAttachments'
+  | 'setDestination'
+  | 'setAlsoAddToList'
   | 'setDate'
   | 'setTime'
   | 'setTimeFromSlot'
@@ -439,6 +454,9 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   setTitle: (title) => set(edited({ title })),
   setNotes: (notes) => set(edited({ notes })),
   setSourceUrl: (sourceUrl) => set(edited({ sourceUrl })),
+  setDestination: (slot, listId) =>
+    set((state) => ({ destinations: { ...state.destinations, [slot]: listId } })),
+  setAlsoAddToList: (alsoAddToList) => set({ alsoAddToList }),
   setAttachments: ({ ids, busy, failed }) =>
     set((state) =>
       // Only a changed id set edits the body; progress flags are not a new draft.

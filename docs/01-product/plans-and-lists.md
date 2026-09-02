@@ -1040,7 +1040,7 @@ When the app asks and when it does not, following the four-step rule in
 | --- | --- |
 | Exactly one list holds the slot | The destination row shows it. No question is asked. The dropdown still works. |
 | Several, and a default is set | The destination row shows the default. Changing it in the dropdown applies **to this operation only** and does not change the default. |
-| Several, no default set | A one-time sheet: `Which list should ingredients go to?` with the eligible lists and `Remember this`, checked by default. The answer is stored in `user.defaultLists`. |
+| Several, no default set | A one-time sheet: `Which list should ingredients go to?` with the eligible lists and `Remember this choice`, checked by default (unchecking makes the choice one-off — P3-43). The answer is stored in `user.defaultLists`. |
 | None | The destination row reads `Choose or create a list` and opens the seven-type catalogue with nothing selected. After `Create list`, the original flow returns with that List visibly named; adding still requires its own named confirmation. |
 
 **In settings.** Profile → Settings → **Default lists** shows three rows — Groceries,

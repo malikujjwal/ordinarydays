@@ -39,6 +39,7 @@ import { SnoozeSheet } from '@/components/SnoozeSheet';
 import { AddToPlanRow } from '@/features/activity/components/AddToPlanRow';
 import { AttachmentsSection } from '@/features/activity/components/AttachmentsSection';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
+import { IngredientsSection } from '@/features/activity/components/IngredientsSection';
 import { ListsSection } from '@/features/activity/components/ListsSection';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
 import { PrepSection } from '@/features/activity/components/PrepSection';
@@ -154,6 +155,12 @@ export interface ActivityDetailScreenProps {
    * Absent leaves the chip and the affordance out, and the §2.2 discovery row stands in.
    */
   onAddAttachment?: () => void;
+  /**
+   * P3-43: the Meal's ingredient destination. The route keeps this operation's one-off
+   * choice and opens the destination picker; absent leaves the picker's `▾` inert.
+   */
+  ingredientDestination?: string | undefined;
+  onChooseIngredientDestination?: () => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
@@ -176,6 +183,8 @@ export function ActivityDetailScreen({
   onAddPrepTask,
   onAddList,
   onAddAttachment,
+  ingredientDestination,
+  onChooseIngredientDestination,
   resolutionOccurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
@@ -599,6 +608,10 @@ export function ActivityDetailScreen({
           {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
           {...(onAddList === undefined ? {} : { onAddList })}
           {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
+          ingredientDestination={ingredientDestination}
+          {...(onChooseIngredientDestination === undefined
+            ? {}
+            : { onChooseIngredientDestination })}
           onOpenReschedule={() => setRescheduleOpen(true)}
           onOpenRepeat={() => setRepeatOpen(true)}
           onOpenReminders={() => setRemindersOpen(true)}
@@ -977,6 +990,9 @@ interface LoadedProps {
   onAddList?: (planTitle: string) => void;
   /** `+ Add photo` (P3-41); absent leaves the chip and the affordance out. */
   onAddAttachment?: () => void;
+  /** P3-43: this operation's one-off ingredient destination, and the picker's opener. */
+  ingredientDestination?: string | undefined;
+  onChooseIngredientDestination?: () => void;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
   onOpenReminders: () => void;
@@ -1058,6 +1074,8 @@ function Loaded({
   onAddPrepTask,
   onAddList,
   onAddAttachment,
+  ingredientDestination,
+  onChooseIngredientDestination,
   onOpenReschedule,
   onOpenRepeat,
   onOpenReminders,
@@ -1501,6 +1519,7 @@ function Loaded({
           if (
             section.key === 'prep' ||
             section.key === 'lists' ||
+            section.key === 'ingredients' ||
             section.key === 'attachments' ||
             section.key === 'updates'
           ) {
@@ -1644,6 +1663,15 @@ function Loaded({
           {...(onAddList === undefined || pending
             ? {}
             : { onAddList: () => onAddList(activity.title) })}
+        />
+      ) : null}
+      {sections.some((section) => section.key === 'ingredients') &&
+      activity.details.kind === 'meal' ? (
+        <IngredientsSection
+          activityId={activity.activityId}
+          ingredients={activity.details.ingredients ?? []}
+          destinationOverride={ingredientDestination}
+          onChangeDestination={() => onChooseIngredientDestination?.()}
         />
       ) : null}
       {sections.some((section) => section.key === 'attachments-coming-later') ? (

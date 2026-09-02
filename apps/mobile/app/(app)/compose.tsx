@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
+import { DestinationSheet } from '@/features/lists/components/DestinationSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { apiClient } from '@/lib/apiClient';
 import { useComposeDraft } from '@/stores/composeDraft';
@@ -29,6 +30,10 @@ export default function ComposeRoute() {
   const profile = useQuery(profileQuery);
   const resetDraft = useComposeDraft((state) => state.reset);
   const [creatingList, setCreatingList] = useState(false);
+  // P3-43: the destination picker meets the compose feature here (features stay vertical).
+  const [choosingSlot, setChoosingSlot] = useState<'groceries' | 'watch'>();
+  const destinations = useComposeDraft((state) => state.destinations);
+  const setDestination = useComposeDraft((state) => state.setDestination);
 
   return (
     <>
@@ -41,7 +46,17 @@ export default function ComposeRoute() {
           return { reservationName: user.displayName, currency: user.currency };
         }}
         onCreateList={() => setCreatingList(true)}
+        onChooseDestination={setChoosingSlot}
       />
+      {choosingSlot === undefined ? null : (
+        <DestinationSheet
+          open
+          slot={choosingSlot}
+          current={destinations[choosingSlot]}
+          onChoose={(listId) => setDestination(choosingSlot, listId)}
+          onClose={() => setChoosingSlot(undefined)}
+        />
+      )}
       <NewListSheet
         open={creatingList}
         onClose={() => setCreatingList(false)}

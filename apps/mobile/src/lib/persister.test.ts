@@ -106,6 +106,53 @@ describe('the query-cache persister', () => {
     expect(dehydratePersistedClient(client, 'web').queries).toHaveLength(1);
   });
 
+  /**
+   * The web Plans projection holds a `Map`; JSON turns it into a plain object, and a page
+   * that rehydrated it crashed in `upcomingSectionsFromStore` (P3-43 finding). Projections
+   * are rebuilt from the server on open, so they are neither persisted nor restored.
+   */
+  it('never persists or restores a projection query', async () => {
+    const stored = {
+      timestamp: Date.now(),
+      buster: 'p2-33-v1',
+      clientState: {
+        queries: [
+          {
+            queryKey: ['plans', 'projection', 'UTC'],
+            queryHash: '["plans","projection","UTC"]',
+            state: {
+              data: { store: { byDate: {}, covered: [] } },
+              dataUpdateCount: 1,
+              dataUpdatedAt: Date.now(),
+              error: null,
+              errorUpdateCount: 0,
+              errorUpdatedAt: 0,
+              fetchFailureCount: 0,
+              fetchFailureReason: null,
+              fetchMeta: null,
+              isInvalidated: false,
+              status: 'success',
+              fetchStatus: 'idle',
+            },
+          },
+        ],
+        mutations: [],
+      },
+    };
+    vi.spyOn(queryPersister, 'restoreClient').mockResolvedValue(
+      stored as unknown as Awaited<ReturnType<typeof queryPersister.restoreClient>>,
+    );
+    const client = new QueryClient();
+
+    await restorePersistedClient(client, 'web');
+    expect(client.getQueryData(['plans', 'projection', 'UTC'])).toBeUndefined();
+    client.setQueryData(['plans', 'projection', 'UTC'], { store: { byDate: new Map() } });
+    client.setQueryData(['lists'], { pages: [] });
+    expect(
+      dehydratePersistedClient(client, 'web').queries.map((query) => query.queryKey),
+    ).toEqual([['lists']]);
+  });
+
   it('does not discard an expired native envelope before its intents are imported', async () => {
     vi.spyOn(queryPersister, 'restoreClient').mockResolvedValue({
       timestamp: 0,
