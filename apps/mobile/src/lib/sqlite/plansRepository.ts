@@ -106,14 +106,30 @@ export class PlansRepository {
     }
 
     const store = mergePlansResponse(current?.store ?? emptyPlansStore, data);
+    /**
+     * `initial` is the whole window. A later `upcoming_window` chunk — a scroll page or the
+     * calendar's jump — only ever **extends** it: `from` stays where the list starts, `through`
+     * is monotonic, and the sentinel follows the furthest window because it names the row
+     * after it. Installing the chunk's own bounds would hide every plan between today and the
+     * chunk from Upcoming, which is what the web hook's merge already guards against.
+     */
+    const held = current?.upcomingWindow;
     const upcomingWindow =
-      data.mode === 'initial' || data.mode === 'upcoming_window'
+      data.mode === 'initial' || (data.mode === 'upcoming_window' && held === undefined)
         ? {
             from: data.upcomingWindow.from as WallDate,
             through: data.upcomingWindow.through as WallDate,
             nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
           }
-        : current?.upcomingWindow;
+        : data.mode === 'upcoming_window' && held !== undefined
+          ? held.through > (data.upcomingWindow.through as WallDate)
+            ? held
+            : {
+                from: held.from,
+                through: data.upcomingWindow.through as WallDate,
+                nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
+              }
+          : held;
     if (upcomingWindow === undefined) {
       throw new Error('Native Plans projection has no upcoming window.');
     }

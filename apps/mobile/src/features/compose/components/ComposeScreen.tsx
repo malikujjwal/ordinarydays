@@ -186,13 +186,23 @@ export function ComposeScreen({
     } else {
       const saved = await writer.save(target, fields, timezone);
       if (!saved) return; // The banner is already showing; the draft stays put.
-      /** `Save plan and add n items to <list>` (§9.2 step 4): the meal first, then P3-17. */
+      /**
+       * `Save plan and add n items to <list>` (§9.2 step 4): the meal first, then P3-17. The
+       * meal exists either way, so the form still closes — but a refused or failed add keeps
+       * the bridge's own error toast ("The meal was saved, but …") rather than replacing it
+       * with a success it did not have. The ingredients stay addable from the meal's detail.
+       */
       if (mealBridge !== undefined) {
-        await listBridge.addIngredients(
+        const added = await listBridge.addIngredients(
           draft.takeActivityId(),
           mealBridge.listId,
           selectedIngredientIds,
         );
+        if (!added) {
+          draft.reset();
+          onClose();
+          return;
+        }
       }
     }
 

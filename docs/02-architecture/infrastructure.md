@@ -1021,6 +1021,13 @@ MinIO does not model CloudFront, OAC or Block Public Access. Those are propertie
 deployed bucket and distribution, asserted by the CDK tests until the stacks are deployed and
 exercised against the real media domain in Phase 5 — see `phase-05-ship-v1.md`.
 
+> **Local reads (P3-42).** Deployed, thumbnails and the viewer read through CloudFront with
+> OAC (`security-privacy.md` row 5); there is no CloudFront on a laptop, so `s3:create-bucket`
+> also installs a MinIO bucket policy granting anonymous `s3:GetObject` on `u/*` of
+> `od-media-local` — and only there. It is what lets `expo-image` load
+> `http://localhost:9000/od-media-local/u/…` directly. It is a property of the local bucket,
+> never of the deployed one, and nothing in application code depends on it.
+
 ### 6.2 Running the API locally
 
 The Lambda entry point is thin, so the same Hono app runs under Node directly:
@@ -1140,6 +1147,14 @@ const API = {
   prod:  'https://api.ordinarydays.app',
 } as const;
 
+// The media origin the client reads attachments from (P3-42): MinIO locally, the CloudFront
+// media domain deployed. `EXPO_PUBLIC_MEDIA_BASE_URL` overrides the local entry only.
+const MEDIA = {
+  local: process.env.EXPO_PUBLIC_MEDIA_BASE_URL ?? 'http://localhost:9000/od-media-local',
+  dev:   'https://media.dev.ordinarydays.app',
+  prod:  'https://media.ordinarydays.app',
+} as const;
+
 export default {
   name: PROFILE === 'prod' ? 'Ordinary Days' : `Ordinary Days (${PROFILE})`,
   slug: 'ordinarydays',
@@ -1152,6 +1167,7 @@ export default {
   extra: {
     profile: PROFILE,
     apiBaseUrl: API[PROFILE as keyof typeof API],
+    mediaBaseUrl: MEDIA[PROFILE as keyof typeof MEDIA],
     cognitoUserPoolId: process.env.EXPO_PUBLIC_COGNITO_POOL_ID,
     cognitoClientId: process.env.EXPO_PUBLIC_COGNITO_CLIENT_ID,
   },

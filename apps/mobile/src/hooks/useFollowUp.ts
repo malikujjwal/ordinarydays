@@ -1,13 +1,7 @@
-import {
-  completeActivity,
-  deleteActivity,
-  getList,
-  patchListItem,
-  uncompleteActivity,
-} from '@od/shared/client';
+import { getList, patchListItem } from '@od/shared/client';
 import { type CompletionFollowUp, completionFollowUp } from '@od/shared/schemas';
 import type { ActivityType, ListFeatureConfig, ListItemState } from '@od/shared/types';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
 import { apiClient } from '@/lib/apiClient';
@@ -19,6 +13,13 @@ import {
   nextSessionQuestion,
   progressUpdatedMessage,
 } from '@/lib/followUpCopy';
+import type {
+  CompleteActivityVariables,
+  DeleteActivityVariables,
+  UncompleteActivityVariables,
+} from '@/lib/mutationDefaults';
+import { activityMutationKeys } from '@/lib/mutationKeys';
+import { activityKey, LISTS_KEY } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
 
@@ -83,10 +84,24 @@ interface BridgedItem {
  * its own action — un-completing the Activity later never reverses it). `Keep` and the `✕`
  * write nothing. `Delete` names its count on a second tap before anything is removed
  * (§1a.1: deletions always confirm).
+ *
+ * Prep-task writes go through the `complete` / `uncomplete` / `delete` mutation keys, so the
+ * process-wide projections (`queryClient.ts`, `usePlans`) see them exactly as a tick on the
+ * row would be seen; list-item writes are the same online PATCH the item sheet sends, and
+ * refresh only the Lists root. Nothing here invalidates the world.
  */
 export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
   const queryClient = useQueryClient();
   const openPlanForItem = useComposeDraft((state) => state.openPlanForItem);
+  const complete = useMutation<unknown, Error, CompleteActivityVariables>({
+    mutationKey: activityMutationKeys.complete,
+  });
+  const uncomplete = useMutation<unknown, Error, UncompleteActivityVariables>({
+    mutationKey: activityMutationKeys.uncomplete,
+  });
+  const remove = useMutation<unknown, Error, DeleteActivityVariables>({
+    mutationKey: activityMutationKeys.delete,
+  });
 
   const present = useCallback(
     (result: unknown, subject: FollowUpSubject, toastId: number): void => {
@@ -100,15 +115,21 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
       const followUp = parsed.data;
 
       const toast = useToast.getState();
-      const refresh = () => void queryClient.invalidateQueries();
+      const refreshLists = () =>
+        void queryClient.invalidateQueries({ queryKey: LISTS_KEY });
+      const refreshParent = () =>
+        void queryClient.invalidateQueries({ queryKey: activityKey(subject.activityId) });
       const failed = (message: string) => toast.show({ message, tone: 'error' });
+      const openDetail = () => {
+        toast.dismiss(toastId);
+        navigation?.openActivity(subject.activityId);
+      };
 
       const createPlanFor = (
         source: WatchProgress,
         item: BridgedItem,
         session: { season: number; episode: number },
       ) => {
-        const { season, episode } = session;
         void getList(apiClient, source.listId)
           .then((detail) => {
             // P3-34's bridge: the kind chooser opens unselected; fields fill only after the tap.
@@ -127,8 +148,8 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
                     ...(source.mediaKind === undefined
                       ? {}
                       : { mediaKind: source.mediaKind }),
-                    season,
-                    episode,
+                    season: session.season,
+                    episode: session.episode,
                   },
                 },
               },
@@ -148,10 +169,13 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
           features: { progress: { kind: 'episode', ...mediaKind, season, episode } },
         })
           .then((item) => {
-            refresh();
+            refreshLists();
+            /**
+             * Undo restores the exact prior Progress value — including one with no season or
+             * episode yet, which is itself a valid value — so the offered `Undo` always does
+             * what it says.
+             */
             const previous = source.current;
-            const canRestore =
-              previous.season !== undefined && previous.episode !== undefined;
             toast.showUndo({
               message: progressUpdatedMessage(season, episode),
               // §5.3: the next session is a second, separate step, offered only for shows.
@@ -171,18 +195,21 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
                 : {}),
               onCommit: () => {},
               onUndo: () => {
-                if (!canRestore) return;
                 void patchListItem(apiClient, source.listId, source.itemId, {
                   features: {
                     progress: {
                       kind: 'episode',
                       ...mediaKind,
-                      season: previous.season ?? season,
-                      episode: previous.episode ?? episode,
+                      ...(previous.season === undefined
+                        ? {}
+                        : { season: previous.season }),
+                      ...(previous.episode === undefined
+                        ? {}
+                        : { episode: previous.episode }),
                     },
                   },
                 })
-                  .then(refresh)
+                  .then(refreshLists)
                   .catch(() => failed("Couldn't undo that progress update."));
               },
             });
@@ -194,7 +221,7 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
         const visited = subject.activityType === 'event';
         void patchListItem(apiClient, source.listId, source.itemId, { state: 'done' })
           .then(() => {
-            refresh();
+            refreshLists();
             toast.showUndo({
               message: visited
                 ? `${source.itemTitle ?? 'Item'} marked visited`
@@ -204,7 +231,7 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
                 void patchListItem(apiClient, source.listId, source.itemId, {
                   state: source.current.state,
                 })
-                  .then(refresh)
+                  .then(refreshLists)
                   .catch(() => failed("Couldn't undo that."));
               },
             });
@@ -214,31 +241,37 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
           );
       };
 
+      /** Each child is its own keyed mutation, named with its parent, as a tick on its row is. */
+      const childVariables = (childId: string) => ({
+        activityId: childId,
+        input: {},
+        idempotencyKey: randomUUID(),
+        parentActivityId: subject.activityId,
+      });
+
       const completeAllPrep = (source: OpenPrep) => {
         const count = source.childIds.length;
         void Promise.all(
-          source.childIds.map((childId) =>
-            completeActivity(apiClient, childId, {}, randomUUID()),
-          ),
+          source.childIds.map((childId) => complete.mutateAsync(childVariables(childId))),
         )
           .then(() => {
-            refresh();
+            refreshParent();
             toast.showUndo({
               message: `Completed ${count} prep ${count === 1 ? 'task' : 'tasks'}`,
               onCommit: () => {},
               onUndo: () => {
                 void Promise.all(
                   source.childIds.map((childId) =>
-                    uncompleteActivity(apiClient, childId, {}, randomUUID()),
+                    uncomplete.mutateAsync(childVariables(childId)),
                   ),
                 )
-                  .then(refresh)
+                  .then(refreshParent)
                   .catch(() => failed("Couldn't undo those completions."));
               },
             });
           })
           .catch(() => {
-            refresh();
+            refreshParent();
             failed("Couldn't complete every prep task.");
           });
       };
@@ -254,16 +287,18 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
             label: confirmation.label,
             onPress: () => {
               void Promise.all(
-                source.childIds.map((childId) => deleteActivity(apiClient, childId)),
+                source.childIds.map((childId) =>
+                  remove.mutateAsync({ activityId: childId, intentId: randomUUID() }),
+                ),
               )
                 .then(() => {
-                  refresh();
+                  refreshParent();
                   toast.show({
                     message: `Deleted ${count} prep ${count === 1 ? 'task' : 'tasks'}`,
                   });
                 })
                 .catch(() => {
-                  refresh();
+                  refreshParent();
                   failed("Couldn't delete every prep task.");
                 });
             },
@@ -274,21 +309,12 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
       const handlers: FollowUpHandlers = {
         updateProgress,
         markDone,
-        addIngredients: () => {
-          toast.dismiss(toastId);
-          navigation?.openActivity(subject.activityId);
-        },
+        addIngredients: openDetail,
         keepPrep: () => toast.dismiss(toastId),
         completeAllPrep,
         deletePrep,
-        reviewExpenses: () => {
-          toast.dismiss(toastId);
-          navigation?.openActivity(subject.activityId);
-        },
-        addExpense: () => {
-          toast.dismiss(toastId);
-          navigation?.openActivity(subject.activityId);
-        },
+        reviewExpenses: openDetail,
+        addExpense: openDetail,
       };
 
       toast.attachFollowUp(
@@ -296,7 +322,7 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
         followUpPresentation(followUp, { activityType: subject.activityType }, handlers),
       );
     },
-    [navigation, openPlanForItem, queryClient],
+    [navigation, openPlanForItem, queryClient, complete, uncomplete, remove],
   );
 
   return { present };

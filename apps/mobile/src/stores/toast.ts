@@ -1,4 +1,5 @@
 import type { Instant } from '@od/shared/time';
+import type { ToastAction } from '@od/ui';
 import { create } from 'zustand';
 
 /**
@@ -12,11 +13,8 @@ import { create } from 'zustand';
  * single value rather than a queue — a queue would let two undo windows overlap, and the
  * second toast would be describing an action the user can no longer see.
  */
-export interface FollowUpAction {
-  label: string;
-  onPress: () => void;
-  testID?: string;
-}
+/** The same shape the `Toast` primitive renders; one definition, not a lookalike. */
+export type FollowUpAction = ToastAction;
 
 /**
  * One contextual follow-up (`interaction-contract.md` §1a.2, `activities.md` §5.3) shown in

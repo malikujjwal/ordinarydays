@@ -1,16 +1,9 @@
-import { ApiError, addIngredientsToList } from '@od/shared/client';
 import type { MealIngredient } from '@od/shared/types';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
 import { IngredientPicker } from '@/components/IngredientPicker';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
+import { useAddIngredients } from '@/features/activity/hooks/useAddIngredients';
 import { useDestination } from '@/hooks/useDestination';
-import { apiClient } from '@/lib/apiClient';
-import { describeApiFailure } from '@/lib/apiFailure';
-import { INGREDIENTS_CHANGED } from '@/lib/destinationCopy';
-import { activityKey, LISTS_KEY } from '@/lib/queryKeys';
-import { useToast } from '@/stores/toast';
 
 /**
  * The INGREDIENTS section on a Meal (P3-43, `plans-and-lists.md` §7.3): rows with
@@ -36,46 +29,10 @@ export function IngredientsSection({
   destinationOverride,
   onChangeDestination,
 }: IngredientsSectionProps) {
-  const queryClient = useQueryClient();
   const destination = useDestination('groceries', destinationOverride);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
-
-  const add = useMutation({
-    mutationFn: (input: { listId: string; ingredientIds: readonly string[] }) =>
-      addIngredientsToList(
-        apiClient,
-        activityId,
-        {
-          listId: input.listId,
-          ingredients: input.ingredientIds.map((ingredientId) => ({ ingredientId })),
-        },
-        randomUUID(),
-      ),
-    onSuccess: async () => {
-      setSelected(new Set());
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: activityKey(activityId) }),
-        queryClient.invalidateQueries({ queryKey: LISTS_KEY }),
-      ]);
-    },
-    onError: (error: unknown) => {
-      const changed = error instanceof ApiError && error.status === 409;
-      const failure = describeApiFailure(error, "Couldn't add those ingredients.");
-      useToast.getState().show({
-        message: changed ? INGREDIENTS_CHANGED : failure.message,
-        tone: 'error',
-        ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
-        action: changed
-          ? {
-              label: 'Reopen',
-              onPress: () => {
-                setSelected(new Set());
-                void queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
-              },
-            }
-          : { label: 'Retry', onPress: () => add.mutate(add.variables as never) },
-      });
-    },
+  const add = useAddIngredients(activityId, {
+    onSettledSelection: () => setSelected(new Set()),
   });
 
   const addedCount = ingredients.filter((row) => row.addedToListId !== undefined).length;

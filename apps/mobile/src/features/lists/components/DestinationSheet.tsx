@@ -4,12 +4,14 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useDestination } from '@/hooks/useDestination';
+import { describeApiFailure } from '@/lib/apiFailure';
 import {
   CHOOSE_ANOTHER_LIST,
   destinationQuestion,
   NEW_LIST,
   REMEMBER_THIS_CHOICE,
 } from '@/lib/destinationCopy';
+import { useToast } from '@/stores/toast';
 
 /**
  * The destination picker behind every add-to flow's `▾` (P3-43, `plans-and-lists.md`
@@ -70,8 +72,20 @@ export function DestinationSheet({
   }
 
   async function choose(list: List) {
-    // Remembering is the one profile write here, and only the `ask` case offers it.
-    if (asking && remember) await destination.remember(list.listId);
+    // Remembering is the one profile write here, and only the `ask` case offers it. It is
+    // secondary to the choice: a failed default leaves the choice standing, one-off, and says so.
+    if (asking && remember) {
+      try {
+        await destination.remember(list.listId);
+      } catch (error: unknown) {
+        const failure = describeApiFailure(error, "Couldn't remember that choice.");
+        useToast.getState().show({
+          message: failure.message,
+          tone: 'error',
+          ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
+        });
+      }
+    }
     onChoose(list.listId);
     close();
   }

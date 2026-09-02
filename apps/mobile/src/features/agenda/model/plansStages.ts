@@ -55,8 +55,8 @@ export interface PastMonthSection {
   readonly data: PastDay[];
 }
 
-/** `Wed 12 Aug` — the muted day heading Past draws (§7.3's day-card grammar). */
-const pastDayHeading = (date: WallDate): string =>
+/** `Wed 12 Aug` — the muted day heading Past draws (§7.3's day-card grammar); the calendar's cell label too. */
+export const pastDayHeading = (date: WallDate): string =>
   format(parseISO(`${date}T12:00:00`), 'EEE d MMM');
 
 /** `August` within the current year, `August 2025` beyond it — the sticky month header. */

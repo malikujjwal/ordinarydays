@@ -97,8 +97,10 @@ export function ToastHost() {
       }}
     >
       <Toast
-        message={followUp?.message ?? current.message}
-        {...(followUp === undefined ? {} : { actions: followUp.actions })}
+        message={current.message}
+        {...(followUp === undefined
+          ? {}
+          : { detail: followUp.message, actions: followUp.actions })}
         {...(followUp === undefined && !dismissible
           ? {}
           : { onDismissPress: () => dismiss(current.id) })}

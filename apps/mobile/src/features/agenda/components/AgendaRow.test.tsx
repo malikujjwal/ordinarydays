@@ -633,9 +633,23 @@ describe('AgendaRow structural guards', () => {
      * against `task`, or `hasCheckbox` and the kind on one line. The glyph lookup is the pure
      * `typeMarker`, reached only after `hasCheckbox` has already said no.
      */
-    expect(leadingSource).not.toMatch(/type\s*[!=]==?\s*'task'/);
-    expect(leadingSource).not.toMatch(/hasCheckbox.*\btype\b|\btype\b.*hasCheckbox/);
     expect(leadingSource).toContain('const marker = typeMarker(type);');
+    /**
+     * Strip the comments and the four sanctioned readings of the word — the prop, its
+     * destructure, the glyph lookup and the accent — and the kind must not appear anywhere
+     * else. A comparison against `task`, a hoisted constant, a set lookup or a multi-line
+     * `||` would all leave a fifth reading behind.
+     */
+    const sanctioned = leadingSource
+      .replace(/\/\*\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '')
+      // `import type` is the keyword, not the kind.
+      .replace(/import type \{[^}]*\} from '[^']*';/g, '')
+      .replace('type: ActivityType;', '')
+      .replace(/\n\s*type,\n/, '\n')
+      .replace('typeMarker(type)', '')
+      .replace('theme.typeAccent(type)', '');
+    expect(sanctioned).not.toMatch(/\btype\b/);
     /**
      * Still `item.hasCheckbox` and still never the kind — P2-50 only adds the pending gate, and
      * the gate is named here so the guard documents both facts rather than being loosened to
