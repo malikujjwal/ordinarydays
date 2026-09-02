@@ -93,6 +93,7 @@ import {
 } from '@/lib/passedPlanResolution';
 import type { PendingActivity } from '@/lib/pendingActivity';
 import { planKindLabel } from '@/lib/planKinds';
+import { ME_QUERY_KEY } from '@/lib/queryKeys';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 
 /**
@@ -1124,7 +1125,7 @@ function Loaded({
    * The viewer, the cover and deletion (P3-42). The owner sees the long-press actions; a
    * participant — or a viewer the app has not identified — sees the tiles and the viewer only.
    */
-  const viewerUserId = useQueryClient().getQueryData<User>(['me'])?.userId;
+  const viewerUserId = useQueryClient().getQueryData<User>(ME_QUERY_KEY)?.userId;
   const manageAttachments = canManageAttachments(
     'ownerId' in activity ? activity : { ownerId: undefined },
     viewerUserId,

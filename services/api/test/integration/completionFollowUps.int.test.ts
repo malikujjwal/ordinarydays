@@ -26,13 +26,19 @@ beforeAll(async () => {
 
 const app = () => createApp();
 
-const request = (method: string, path: string, body?: unknown) =>
+const request = (
+  method: string,
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+) =>
   app().fetch(
     new Request(`http://localhost${path}`, {
       method,
       headers: {
         'Content-Type': 'application/json',
         ...(method === 'POST' ? { 'Idempotency-Key': crypto.randomUUID() } : {}),
+        ...headers,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
@@ -114,6 +120,21 @@ describe('an Event bridged from a checkbox List with Place', () => {
       target: { state: 'done' },
     });
     expect(await listPartition(list.listId)).toEqual(before);
+  });
+
+  it('offers nothing once the List hides item state, even with Place', async () => {
+    const list = await createList('Places', 'places-to-visit');
+    const item = await addItem(list.listId, 'Louvre');
+    await planItem(list.listId, item.itemId, 'event', { kind: 'event' });
+    const hidden = await request(
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { itemStateMode: { mode: 'none' } },
+      { 'Idempotency-Key': crypto.randomUUID(), 'If-Match': list.updatedAt },
+    );
+    expect(hidden.status, await hidden.clone().text()).toBe(200);
+
+    expect((await complete(ACT)).followUp).toBeUndefined();
   });
 
   it('offers nothing from a List without Place, or for an Event typed by hand', async () => {
@@ -212,6 +233,27 @@ describe('open prep tasks', () => {
       count: 1,
       childIds: [open.activityId],
     });
+  });
+
+  it('offers no prep row when every open child is recurring', async () => {
+    const plan = await createActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      title: 'Trip',
+    });
+    await createActivity({
+      objectKind: 'task',
+      type: 'task',
+      title: 'Water plants',
+      parentActivityId: plan.activityId,
+      schedule: { date: '2026-09-01', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-09-01' }],
+      },
+    });
+
+    expect((await complete(plan.activityId)).followUp).toBeUndefined();
   });
 
   it('wins over the type row when both apply', async () => {

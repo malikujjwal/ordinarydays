@@ -1,6 +1,7 @@
 import type { TimeZone } from '@od/shared/time';
 import type { User } from '@od/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
+import { ME_QUERY_KEY } from './queryKeys';
 
 /**
  * The viewer timezone every product-owned window resolves against.
@@ -18,6 +19,6 @@ import type { QueryClient } from '@tanstack/react-query';
  * shared in practice before it was shared in position.
  */
 export function resolveViewerTimezone(client: QueryClient): TimeZone {
-  return (client.getQueryData<User>(['me'])?.timezone ??
+  return (client.getQueryData<User>(ME_QUERY_KEY)?.timezone ??
     Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
 }

@@ -8,6 +8,7 @@ import { AttachmentPickerSheet } from '@/features/attachments/components/Attachm
 import { DestinationSheet } from '@/features/lists/components/DestinationSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useViewer } from '@/hooks/useViewer';
+import { followUpNavigation } from '@/lib/followUpNavigation';
 import { activityKey } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -54,10 +55,7 @@ export default function ActivityDetailRoute() {
     <>
       <ActivityDetailScreen
         target={target}
-        followUp={{
-          openActivity: (id) => router.push(`/activity/${id}`),
-          openCompose: () => router.push('/compose'),
-        }}
+        followUp={followUpNavigation(router)}
         today={format(new Date(), 'yyyy-MM-dd')}
         onBack={() => router.back()}
         {...(resolvePassed === '1'

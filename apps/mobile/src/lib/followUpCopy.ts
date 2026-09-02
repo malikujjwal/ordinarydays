@@ -24,8 +24,6 @@ export interface FollowUpHandlers {
   keepPrep: () => void;
   completeAllPrep: (followUp: FollowUpOf<'open_prep'>) => void;
   deletePrep: (followUp: FollowUpOf<'open_prep'>) => void;
-  reviewExpenses: () => void;
-  addExpense: () => void;
 }
 
 export interface FollowUpContext {
@@ -89,8 +87,6 @@ export function deletePrepConfirmation(count: number): {
 }
 
 export const ADD_INGREDIENTS_QUESTION = 'Add ingredients to a list?';
-export const REVIEW_EXPENSES_QUESTION = 'Review expenses?';
-export const ADD_EXPENSE_QUESTION = 'Add an expense?';
 
 /** The one follow-up's question and its explicit choices. */
 export function followUpPresentation(
@@ -146,28 +142,6 @@ export function followUpPresentation(
             label: 'Delete',
             onPress: () => handlers.deletePrep(followUp),
             testID: 'follow-up-delete',
-          },
-        ],
-      };
-    case 'review_expenses':
-      return {
-        message: REVIEW_EXPENSES_QUESTION,
-        actions: [
-          {
-            label: 'Review',
-            onPress: handlers.reviewExpenses,
-            testID: 'follow-up-review',
-          },
-        ],
-      };
-    case 'add_expense':
-      return {
-        message: ADD_EXPENSE_QUESTION,
-        actions: [
-          {
-            label: 'Add expense',
-            onPress: handlers.addExpense,
-            testID: 'follow-up-add-expense',
           },
         ],
       };

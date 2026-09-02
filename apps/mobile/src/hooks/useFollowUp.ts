@@ -313,8 +313,6 @@ export function useFollowUpActions(navigation: FollowUpNavigation | undefined) {
         keepPrep: () => toast.dismiss(toastId),
         completeAllPrep,
         deletePrep,
-        reviewExpenses: openDetail,
-        addExpense: openDetail,
       };
 
       toast.attachFollowUp(

@@ -51,6 +51,9 @@ export const activityKey = (activityId: string) => ['activity', activityId] as c
  */
 export const LISTS_KEY = ['lists'] as const;
 
+/** The signed-in profile (`GET /v1/me`): who is looking, their timezone, their defaults. */
+export const ME_QUERY_KEY = ['me'] as const;
+
 /** One authoritative detail projection; occurrence reads never alias the series cache. */
 export const activityDetailKey = (
   target:

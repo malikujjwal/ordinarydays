@@ -1,5 +1,6 @@
 import { type Href, useRouter } from 'expo-router';
 import { TodayScreen } from '@/features/agenda/components/TodayScreen';
+import { followUpNavigation } from '@/lib/followUpNavigation';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /** Thin Today route: the feature owns the projection; this edge owns pushed navigation. */
@@ -9,10 +10,7 @@ export default function TodayTab() {
   const openTodayTask = useComposeDraft((state) => state.openTodayTask);
   return (
     <TodayScreen
-      followUp={{
-        openActivity: (activityId) => router.push(`/activity/${activityId}`),
-        openCompose: () => router.push('/compose'),
-      }}
+      followUp={followUpNavigation(router)}
       onAdd={() => {
         openDraft();
         router.push('/compose');
