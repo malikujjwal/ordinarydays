@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../theme/ThemeProvider';
 
 /**
@@ -15,6 +15,38 @@ const keyboardInset = vi.hoisted(() => ({ value: 0 }));
 vi.mock('../theme/keyboard', () => ({
   useKeyboardInset: () => keyboardInset.value,
 }));
+
+/**
+ * Motion and width are the two inputs the lifecycle tests at the bottom steer: Reduce Motion
+ * resolves every duration to `0`, and the breakpoint chooses the bottom sheet or the dialog.
+ * Everything else in the theme is the real thing.
+ */
+const motionState = vi.hoisted(() => ({
+  reduced: false,
+  breakpoint: 'compact' as string,
+}));
+vi.mock('../theme/index', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../theme/index')>();
+  const { motion } = await import('../theme/tokens');
+  return {
+    ...actual,
+    useMotion: () =>
+      motionState.reduced
+        ? {
+            duration: { instant: 0, fast: 0, base: 0, switch: 0, slow: 0, max: 0 },
+            easing: motion.easing,
+            spring: motion.spring,
+            reduced: true,
+          }
+        : {
+            duration: motion.duration,
+            easing: motion.easing,
+            spring: motion.spring,
+            reduced: false,
+          },
+    useBreakpoint: () => motionState.breakpoint,
+  };
+});
 
 const { Sheet } = await import('./Sheet');
 const { Button } = await import('./Button');
@@ -34,6 +66,14 @@ const sheet = (actions?: ReactNode) => (
     <div>body</div>
   </Sheet>
 );
+
+beforeEach(() => {
+  keyboardInset.value = 0;
+  motionState.reduced = false;
+  motionState.breakpoint = 'compact';
+});
+
+afterEach(() => vi.useRealTimers());
 
 describe('Sheet — the keyboard contract (§20)', () => {
   it('sits on the safe-area inset while the keyboard is closed', () => {
@@ -163,8 +203,10 @@ describe('Sheet — dirty state guards every exit', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  /** Under Reduce Motion the exit is instant, so the close reports synchronously. */
   it('closes directly once there is nothing to lose', () => {
     keyboardInset.value = 0;
+    motionState.reduced = true;
     const onClose = vi.fn();
     const onDiscardRequest = vi.fn();
     mount(
@@ -219,5 +261,190 @@ describe('Sheet — the pan is on the surface, not the header (§6.1)', () => {
   it('claims the gesture in the capture phase', () => {
     expect(source).toContain('onMoveShouldSetPanResponderCapture');
     expect(source).not.toContain('onMoveShouldSetPanResponder:');
+  });
+});
+
+/**
+ * **The present / dismiss motion is `Sheet`'s own** (`design-system.md` §4.3, P3-51).
+ *
+ * The lifecycle under test: the modal mounts instantly (so the dialog role above still holds),
+ * the surface animates in from the tokens, and — the one ordering that matters — `onClose`
+ * reaches the caller only after the exit has finished. Reduce Motion resolves every duration
+ * to `instant`, and the same lifecycle then completes synchronously.
+ *
+ * The tween steps on `requestAnimationFrame` against `Date.now()`, so faking both puts time in
+ * the test's hands (`sheetMotion.test.ts` covers the driver itself).
+ */
+const useFrameClock = () =>
+  vi.useFakeTimers({
+    toFake: [
+      'setTimeout',
+      'clearTimeout',
+      'Date',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+    ],
+  });
+
+const dialogContainer = () => document.querySelector('[aria-modal="true"]');
+
+describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
+  it('mounts as a dialog at once and never hands the animation back to the modal', () => {
+    const source = readFileSync(resolve(__dirname, 'Sheet.tsx'), 'utf8');
+    // The literal, on both platforms: the role and the focus trap depend on its absence on web.
+    expect(source).toContain('animationType="none"');
+    expect(source).not.toContain('animationType={');
+
+    useFrameClock();
+    mount(sheet());
+    // Present, and a dialog, before a single frame has run.
+    expect(dialogContainer()?.getAttribute('role')).toBe('dialog');
+  });
+
+  it('fires onClose after the exit, not with it', () => {
+    useFrameClock();
+    const onClose = vi.fn();
+    mount(
+      <ThemeProvider scheme="light">
+        <Sheet open onClose={onClose} title="Repeat" testID="sheet">
+          <div>body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+    act(() => vi.advanceTimersByTime(300)); // fully presented
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialogContainer()).not.toBeNull();
+
+    act(() => vi.advanceTimersByTime(100)); // mid-exit: still mounted, still not reported
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialogContainer()).not.toBeNull();
+
+    act(() => vi.advanceTimersByTime(300)); // past `slow`
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(dialogContainer()).toBeNull();
+  });
+
+  /** An owner that closes on its own — after a save — still gets the exit, then the unmount. */
+  it('animates out before unmounting when the owner drops open', () => {
+    useFrameClock();
+    const onClose = vi.fn();
+    const view = (open: boolean) => (
+      <ThemeProvider scheme="light">
+        <Sheet open={open} onClose={onClose} title="Repeat" testID="sheet">
+          <div>body</div>
+        </Sheet>
+      </ThemeProvider>
+    );
+    const rendered = render(view(true));
+    act(() => vi.advanceTimersByTime(300));
+
+    rendered.rerender(view(false));
+    expect(dialogContainer()).not.toBeNull();
+    act(() => vi.advanceTimersByTime(400));
+    expect(dialogContainer()).toBeNull();
+    // The owner already knows; it is not told twice.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /** `dirty` routes through the discard prompt and does not leave until the prompt resolves. */
+  it('does not animate out while a dirty sheet waits on its discard prompt', () => {
+    useFrameClock();
+    const onClose = vi.fn();
+    const onDiscardRequest = vi.fn();
+    mount(
+      <ThemeProvider scheme="light">
+        <Sheet
+          open
+          onClose={onClose}
+          onDiscardRequest={onDiscardRequest}
+          dirty
+          title="Notes"
+          testID="dirty"
+        >
+          <div>body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+    act(() => vi.advanceTimersByTime(300));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    act(() => vi.advanceTimersByTime(600));
+
+    expect(onDiscardRequest).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialogContainer()).not.toBeNull();
+  });
+
+  /**
+   * Reduce Motion resolves every duration to `instant`: the same lifecycle, completing
+   * synchronously — mounted as a dialog, and gone the moment the owner drops `open`, with
+   * `onClose` still ordered after the (instant) exit.
+   */
+  it('mounts and unmounts under Reduce Motion, with onClose after the instant exit', () => {
+    motionState.reduced = true;
+    const onClose = vi.fn();
+    const view = (open: boolean) => (
+      <ThemeProvider scheme="light">
+        <Sheet open={open} onClose={onClose} title="Repeat" testID="sheet">
+          <div>body</div>
+        </Sheet>
+      </ThemeProvider>
+    );
+    const rendered = render(view(true));
+    expect(dialogContainer()?.getAttribute('role')).toBe('dialog');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(dialogContainer()).toBeNull();
+
+    // The owner acknowledges, then reopens and closes again — still without a frame.
+    rendered.rerender(view(false));
+    expect(dialogContainer()).toBeNull();
+    rendered.rerender(view(true));
+    expect(dialogContainer()?.getAttribute('role')).toBe('dialog');
+    rendered.rerender(view(false));
+    expect(dialogContainer()).toBeNull();
+  });
+
+  /** One component, two resolved treatments: the centred dialog runs the same lifecycle. */
+  it('runs the same lifecycle for the centred dialog', () => {
+    motionState.breakpoint = 'medium';
+    useFrameClock();
+    const onClose = vi.fn();
+    mount(
+      <ThemeProvider scheme="light">
+        <Sheet open onClose={onClose} title="Repeat" testID="dialog">
+          <div>body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+    expect(screen.queryByTestId('sheet-grabber')).toBeNull();
+    expect(dialogContainer()?.getAttribute('role')).toBe('dialog');
+    act(() => vi.advanceTimersByTime(300));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(400));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(dialogContainer()).toBeNull();
+  });
+
+  /**
+   * A drag-dismissed sheet is already at its final offset: it leaves by opacity from there and
+   * never snaps back first. The responder cannot be driven under jsdom (see the pan note
+   * above), so the decision is `dragReleaseOutcome`'s (`sheetMotion.test.ts`) and this pins
+   * that the release branch reaches the fade exit without resetting the drag first.
+   */
+  it('leaves by fade from the finger after a drag, without snapping back', () => {
+    const source = readFileSync(resolve(__dirname, 'Sheet.tsx'), 'utf8');
+    const release = source.slice(
+      source.indexOf('onPanResponderRelease'),
+      source.indexOf('onPanResponderTerminate'),
+    );
+    expect(release).toContain("dismiss('fade', onClose)");
+    expect(release).not.toContain('dragY.setValue(0)');
+    expect(release).toContain("outcome === 'settle-then-discard'");
   });
 });

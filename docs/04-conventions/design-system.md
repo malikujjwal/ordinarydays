@@ -374,15 +374,19 @@ Recognition and persistence delays are not motion and remain unchanged under Red
 These delays do not animate a visual property. Reducing them would change input recognition,
 write frequency or activation semantics rather than reduce motion.
 
-> **Sheet present / dismiss is unimplemented on web** — recorded 2026-08-27 (P3-26). The
-> animation was never this component's: it was React Native Web's `Modal` fading its own
-> container, at RNW's 250 ms rather than `slow`, and outside `useMotion()`'s reach. That
-> `Modal` also withholds `role="dialog"` and its focus trap until the fade ends, and the end
-> event never arrives — measured in Chromium, `role: null` two seconds after mount, which axe
-> reports as a **critical** `aria-allowed-attr` on every sheet. `Sheet` therefore passes no
-> animation type on web, and a present animation this table can hold true belongs to `Sheet`
-> itself, gated by `useMotion()` like every other row. Native is unaffected. **Owned by
-> P3-51**, which builds this row on both platforms; the accessibility fix stays either way.
+> **Sheet present / dismiss is `Sheet`'s own** — recorded 2026-08-27 (P3-26), built by
+> P3-51. The animation was never this component's: it was React Native Web's `Modal` fading
+> its own container, at RNW's 250 ms rather than `slow`, and outside `useMotion()`'s reach.
+> That `Modal` also withholds `role="dialog"` and its focus trap until the fade ends, and the
+> end event never arrives — measured in Chromium, `role: null` two seconds after mount, which
+> axe reports as a **critical** `aria-allowed-attr` on every sheet. `Sheet` therefore passes
+> **no animation type on either platform** and animates its own surface and scrim from
+> `useMotion()`: `slow`/`decelerate` in, `slow`/`accelerate` out, `instant` under Reduce
+> Motion. A `compact` bottom sheet travels; the centred dialog fades and settles from a slight
+> scale. Dismissal waits for the exit before `onClose` reaches the caller, a drag-dismissed
+> sheet fades from wherever the finger left it rather than snapping back, and a `dirty` sheet
+> does not animate out until its discard prompt resolves. The dialog role and focus trap are
+> pinned by `Sheet.test.tsx`; the lifecycle by the same file and `sheetMotion.test.ts`.
 
 > **A frame in a product doc does not place a control** — settled 2026-08-27 (founder), on
 > the divergence raised in P3-26's PR and recorded in

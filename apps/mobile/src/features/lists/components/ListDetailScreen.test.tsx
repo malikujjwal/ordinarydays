@@ -1,7 +1,7 @@
 import { instant } from '@od/shared/schemas';
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
@@ -451,7 +451,13 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByText('Linked Plans will remain')).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete list' }));
+    // The settings sheet is still animating out (P3-51) while the alert is up, so the
+    // confirming control is the alert's own, not the sheet's row of the same name.
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'Delete list',
+      }),
+    );
 
     expect(mocks.removeList).toHaveBeenCalledWith(LIST);
     expect(mocks.back).toHaveBeenCalledOnce();

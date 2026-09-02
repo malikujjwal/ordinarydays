@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Modal,
@@ -21,7 +21,16 @@ import {
 } from '../theme/index';
 import { IconButton } from './IconButton';
 import { shouldCaptureDrag, shouldDismissOnRelease } from './sheetGesture';
+import {
+  DIALOG_ENTER_SCALE,
+  dragReleaseOutcome,
+  runTransition,
+  type SheetExit,
+  type SheetPhase,
+} from './sheetMotion';
 import { Text } from './Text';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 /**
  * A modal surface, and the behaviour that goes with it (`design-system.md` §6.1, §6.2).
@@ -35,6 +44,16 @@ import { Text } from './Text';
  * scrolling and its own footer. That is how `Repeat` — three controls — came to occupy almost a
  * whole phone: it set `maxHeight: 620` on its own body, which §0's ownership rule now forbids in
  * as many words. **A screen supplies content and actions; it does not decide geometry.**
+ *
+ * ## And its own motion (§4.3, P3-51)
+ *
+ * Present and dismiss are this component's, driven from `useMotion()`: `slow` / `decelerate`
+ * in, `slow` / `accelerate` out, and `instant` under Reduce Motion without a branch here. They
+ * were never `Modal`'s to give — React Native Web's fade ran at its own 250 ms, outside the
+ * tokens, and withheld the dialog role until an `animationend` that never fired (see the
+ * `animationType` note below). So the `Modal` mounts instantly on both platforms and the
+ * surface and scrim animate themselves; the modal stays mounted through the exit, and
+ * `onClose` reaches the caller only once the exit has finished.
  */
 export interface SheetProps {
   open: boolean;
@@ -98,7 +117,10 @@ export function Sheet({
   /** Only a bottom sheet drags, and only when it is allowed to close at all. */
   const draggable = !centred && dismissible;
 
-  const translateY = useRef(new Animated.Value(0)).current;
+  /** The finger's offset while dragging. Separate from the entrance so the two compose. */
+  const dragY = useRef(new Animated.Value(0)).current;
+  /** `0` fully away, `1` fully present. Drives the scrim and the surface's entrance/exit. */
+  const progress = useRef(new Animated.Value(0)).current;
   /**
    * Whether the body is scrolled to its top. **This is what stops the gesture being ambiguous**
    * (§25): mid-scroll, a downward drag scrolls the content; at the top, it dismisses. Without
@@ -106,13 +128,94 @@ export function Sheet({
    */
   const bodyAtTop = useRef(true);
 
+  /**
+   * The lifecycle the motion needs and `open` alone cannot express: the modal has to stay
+   * mounted while it leaves. `phase` is state because the mounted-ness renders; `phaseRef`
+   * mirrors it for the effects and handlers that must read the latest value without
+   * re-subscribing.
+   */
+  const [phase, setPhase] = useState<SheetPhase>(open ? 'presenting' : 'closed');
+  const phaseRef = useRef<SheetPhase>(phase);
+  const movePhase = useCallback((next: SheetPhase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+  /** How the current exit leaves — `fade` after a drag, `travel` otherwise. */
+  const [exit, setExit] = useState<SheetExit>('travel');
+  /**
+   * The bottom sheet's travel distance: its own height once measured, the viewport until then.
+   * Layout reports before the first frame in practice, so a `fit` sheet slides in from just
+   * below its resting place rather than from the bottom of the screen; if it ever reported
+   * late, the remaining travel would shorten once, never lengthen.
+   */
+  const [surfaceHeight, setSurfaceHeight] = useState<number | null>(null);
+  const cancelTransition = useRef<() => void>(() => {});
+
+  const present = useCallback(() => {
+    cancelTransition.current();
+    movePhase('presenting');
+    cancelTransition.current = runTransition(
+      progress,
+      { toValue: 1, duration: motion.duration.slow, easing: motion.easing.decelerate },
+      () => movePhase('open'),
+    );
+  }, [motion.duration.slow, motion.easing.decelerate, movePhase, progress]);
+
+  /**
+   * Leave, then tell whoever asked. `onDone` runs **after** the exit, which is the whole
+   * point: a sheet whose route unmounts on `onClose` would otherwise vanish mid-frame.
+   */
+  const dismiss = useCallback(
+    (how: SheetExit, onDone?: () => void) => {
+      cancelTransition.current();
+      setExit(how);
+      movePhase('dismissing');
+      cancelTransition.current = runTransition(
+        progress,
+        { toValue: 0, duration: motion.duration.slow, easing: motion.easing.accelerate },
+        () => {
+          movePhase('closed');
+          dragY.setValue(0);
+          setExit('travel');
+          onDone?.();
+        },
+      );
+    },
+    [dragY, motion.duration.slow, motion.easing.accelerate, movePhase, progress],
+  );
+
+  /**
+   * `open` is the owner's word. Rising presents; falling animates out and unmounts — which
+   * covers an owner that closes on its own (after a save, say) without going through this
+   * component's controls. A fall that arrives while a control-driven exit is already under way
+   * changes nothing: that exit finishes and reports. Initial mount with `open` already true
+   * is a rise, so the first render is already `presenting` (no closed frame) and the tween
+   * starts here.
+   */
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      wasOpen.current = true;
+      present();
+      return;
+    }
+    if (!open && wasOpen.current) {
+      wasOpen.current = false;
+      if (phaseRef.current === 'open' || phaseRef.current === 'presenting')
+        dismiss('travel');
+    }
+  }, [open, present, dismiss]);
+
+  useEffect(() => () => cancelTransition.current(), []);
+
   const requestClose = useCallback(() => {
     if (dirty && onDiscardRequest !== undefined) {
       onDiscardRequest();
       return;
     }
-    onClose();
-  }, [dirty, onDiscardRequest, onClose]);
+    if (phaseRef.current === 'dismissing' || phaseRef.current === 'closed') return;
+    dismiss('travel', onClose);
+  }, [dirty, onDiscardRequest, onClose, dismiss]);
 
   /**
    * Back to rest. **Reduce Motion gets no spring** — `interaction-contract.md` §6 keeps direct
@@ -121,15 +224,15 @@ export function Sheet({
    */
   const settle = useCallback(() => {
     if (motion.reduced) {
-      translateY.setValue(0);
+      dragY.setValue(0);
       return;
     }
-    Animated.spring(translateY, {
+    Animated.spring(dragY, {
       toValue: 0,
       useNativeDriver: Platform.OS !== 'web',
       ...motion.spring,
     }).start();
-  }, [motion.reduced, motion.spring, translateY]);
+  }, [motion.reduced, motion.spring, dragY]);
 
   const responder = useMemo(
     () =>
@@ -156,19 +259,29 @@ export function Sheet({
           shouldCaptureDrag(gesture, { draggable, bodyAtTop: bodyAtTop.current }),
         onPanResponderMove: (_event, gesture) => {
           // Downward only. An upward drag on a bottom sheet has nowhere to go.
-          if (gesture.dy > 0) translateY.setValue(gesture.dy);
+          if (gesture.dy > 0) dragY.setValue(gesture.dy);
         },
         onPanResponderRelease: (_event, gesture) => {
-          if (shouldDismissOnRelease(gesture)) {
-            translateY.setValue(0);
+          const outcome = dragReleaseOutcome(shouldDismissOnRelease(gesture), dirty);
+          if (outcome === 'settle') {
+            settle();
+            return;
+          }
+          if (outcome === 'settle-then-discard') {
+            settle();
             requestClose();
             return;
           }
-          settle();
+          /**
+           * Already at its final offset: the exit is opacity only, from wherever the finger
+           * left it. Snapping to rest first would undo the gesture just made (§4.3).
+           */
+          if (phaseRef.current === 'dismissing' || phaseRef.current === 'closed') return;
+          dismiss('fade', onClose);
         },
         onPanResponderTerminate: settle,
       }),
-    [draggable, requestClose, translateY, settle],
+    [draggable, dirty, requestClose, dismiss, onClose, dragY, settle],
   );
 
   /**
@@ -182,12 +295,35 @@ export function Sheet({
         ? { height: '58%' as const }
         : { maxHeight: '90%' as const };
 
+  /**
+   * Two resolved treatments from one value, no second component: the dialog fades and settles
+   * from a slight scale; the bottom sheet travels — unless it is leaving by `fade`, when its
+   * offset holds and only its opacity goes.
+   */
+  const travel = surfaceHeight ?? viewportHeight;
+  const entrance = progress.interpolate({ inputRange: [0, 1], outputRange: [travel, 0] });
+  const surfaceMotion = centred
+    ? {
+        opacity: progress,
+        transform: [
+          {
+            scale: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [DIALOG_ENTER_SCALE, 1],
+            }),
+          },
+        ],
+      }
+    : exit === 'fade'
+      ? { opacity: progress, transform: [{ translateY: dragY }] }
+      : { transform: [{ translateY: Animated.add(dragY, entrance) }] };
+
   return (
     <Modal
-      visible={open}
+      visible={phase !== 'closed'}
       transparent
       /**
-       * **`none` on web, and that is an accessibility fix rather than a taste.**
+       * **`none`, on both platforms — and on web that is an accessibility fix, not a taste.**
        *
        * React Native Web's `Modal` marks itself *active* only when its own show animation
        * ends, and until it does it writes `aria-modal="true"` with **no** `role="dialog"` and
@@ -197,15 +333,12 @@ export function Sheet({
        * product, and a modal that assistive technology is not told is modal.
        *
        * With no animation type, RNW completes that lifecycle synchronously on mount, so the
-       * dialog role and the focus trap both exist. The cost is the decorative opacity ramp on
-       * web, which RNW was failing to finish anyway; `interaction-contract.md` §6 and §7 —
-       * roles and web focus management — outrank `design-system.md` §4.3's motion row, and the
-       * present animation the table asks for belongs to this component rather than to a
-       * third-party modal. Raised in P3-26's PR rather than resolved here.
-       *
-       * Native keeps the fade: nothing on iOS or Android depends on the web active state.
+       * dialog role and the focus trap both exist (P3-26). The motion the §4.3 row asks for is
+       * this component's own, above: it animates the surface and the scrim inside a modal that
+       * mounted instantly, so nothing here waits on an event that never comes. Native drops
+       * its fade for the same reason — one animation, ours, under `useMotion()`.
        */
-      animationType={Platform.OS === 'web' ? 'none' : 'fade'}
+      animationType="none"
       accessibilityLabel={title ?? 'Dialog'}
       // Hardware Back on Android and Escape on web arrive here — and go through the same guard.
       onRequestClose={dismissible ? requestClose : undefined}
@@ -222,25 +355,38 @@ export function Sheet({
          */
         style={{
           flex: 1,
-          backgroundColor: theme.colors.scrim,
           justifyContent: centred ? 'center' : 'flex-end',
           alignItems: centred ? 'center' : 'stretch',
           paddingBottom: centred ? 0 : keyboard,
         }}
       >
         {/* The scrim itself dismisses, and is hidden from assistive tech — the close
-            button is the accessible route out. */}
-        <Pressable
+            button is the accessible route out. It carries the scrim colour so it can fade
+            with the surface. */}
+        <AnimatedPressable
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           onPress={dismissible ? requestClose : undefined}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+          testID={testID === undefined ? undefined : `${testID}-scrim`}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: theme.colors.scrim,
+            opacity: progress,
+          }}
         />
 
         <Animated.View
           {...(Platform.OS === 'web' ? {} : { accessibilityViewIsModal: true })}
           {...(draggable ? responder.panHandlers : {})}
           testID={testID}
+          onLayout={(event) => {
+            const measured = event.nativeEvent.layout.height;
+            if (measured > 0 && measured !== surfaceHeight) setSurfaceHeight(measured);
+          }}
           style={[
             {
               backgroundColor: theme.colors.surfaceOverlay,
@@ -262,7 +408,7 @@ export function Sheet({
                     borderTopLeftRadius: theme.radius.sheet,
                     borderTopRightRadius: theme.radius.sheet,
                   }),
-              transform: [{ translateY }],
+              ...surfaceMotion,
             },
             theme.elevation('e3'),
           ]}
