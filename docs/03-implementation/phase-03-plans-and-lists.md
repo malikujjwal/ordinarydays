@@ -3499,7 +3499,17 @@ under this component's control.
 are the same value plus an opacity on the scrim, driven from `useMotion()` so `instant` under
 Reduce Motion is not a branch this component writes. Dismissal must **wait for the exit**
 before `onClose` reaches the caller, or a sheet that unmounts with its route will still
-disappear instantly. Do not reintroduce `animationType` on web: the dialog role and the focus
+disappear instantly.
+
+> **Amended 2026-09-02 (batch review).** Built as written, that rule stranded any owner whose
+> `onClose` declines rather than drops `open` — List settings' sub-editor ✕ means "back to
+> the main editor", and the sheet had already left. The contract is now **the owner
+> decides**: every control-driven close asks through `onClose` at once and moves nothing;
+> the exit runs, then the unmount, once the owner drops `open`. A sheet that unmounts with
+> its route on `onClose` gets no exit — as it never had before P3-51 — and a leaving sheet
+> takes no taps. `design-system.md` §4.3 carries the same wording.
+
+Do not reintroduce `animationType` on web: the dialog role and the focus
 trap depend on its absence, and `Sheet.test.tsx` asserts the role under jsdom precisely so a
 change that puts it back behind an `animationend` fails.
 
@@ -3514,8 +3524,9 @@ change that puts it back behind an `animationend` fails.
   resolves.
 
 **Tests.** Reduce Motion resolves every duration to `instant` and the sheet still mounts and
-unmounts; `onClose` fires after the exit rather than with it; the dialog-role assertion from
-P3-26 still passes, which is what pins the accessibility fix in place.
+unmounts; ✕ asks the owner at once and the exit follows `open` (amended above); the
+dialog-role assertion from P3-26 still passes, which is what pins the accessibility fix in
+place.
 
 ## Acceptance criteria
 

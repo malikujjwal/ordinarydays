@@ -746,9 +746,6 @@ export const completionFollowUp = z
       kind: z.literal('meal_ingredients'),
       remaining: z.number().int().positive(),
     }),
-    /** §5.3's expense rows: navigation only, no write on tap. */
-    z.strictObject({ kind: z.literal('review_expenses') }),
-    z.strictObject({ kind: z.literal('add_expense') }),
   ])
   .meta({ id: 'CompletionFollowUp' });
 

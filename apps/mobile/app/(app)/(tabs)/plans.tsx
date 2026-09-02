@@ -1,5 +1,6 @@
 import { type Href, useRouter } from 'expo-router';
 import { PlansScreen } from '@/features/agenda/components/PlansScreen';
+import { followUpNavigation } from '@/lib/followUpNavigation';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -13,10 +14,7 @@ export default function PlansTab() {
 
   return (
     <PlansScreen
-      followUp={{
-        openActivity: (activityId) => router.push(`/activity/${activityId}`),
-        openCompose: () => router.push('/compose'),
-      }}
+      followUp={followUpNavigation(router)}
       onOpen={({ activityId, occurrenceDate }) =>
         router.push({
           pathname: '/activity/[id]',

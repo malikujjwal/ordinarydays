@@ -384,7 +384,8 @@ type WatchSession = Extract<ActivityDetails, { kind: 'watch' }>;
  *    live to-dos left behind. Recurring children are excluded from the count and the ids.
  * 3. Otherwise the type's own row: Watch progress / done (P3-16), an Event bridged from a
  *    checkbox List with Place (`Mark … visited`), a Meal bridged from a List whose Sub-items
- *    carry the `mealIngredients` integration with ingredients still to add.
+ *    carry the `mealIngredients` integration with ingredients still to add. §5.3's expense
+ *    rows are Phase 7's, with the expense section they navigate to.
  *
  * Nothing here writes. Confirming is the client's ordinary item `PATCH`, prep action or
  * navigation, each behind its own tap.
@@ -395,9 +396,7 @@ async function followUpFor(
 ): Promise<CompletionFollowUp | undefined> {
   const prep = await openPrepFollowUp(activity);
   if (prep !== undefined) return prep;
-  const typed = await typeFollowUp(userId, activity);
-  if (typed !== undefined) return typed;
-  return expenseFollowUp(activity);
+  return typeFollowUp(userId, activity);
 }
 
 async function typeFollowUp(
@@ -414,24 +413,6 @@ async function typeFollowUp(
     default:
       return undefined;
   }
-}
-
-/**
- * §5.3's expense rows, from the counters the row already carries. `≥ 1 expense` is read as
- * a non-zero total: the row keeps no expense count, and a set of expenses that nets to zero
- * is the one case this misses.
- */
-export function expenseFollowUp(
-  activity: Pick<Activity, 'objectKind' | 'participantCount' | 'expenseTotalCents'>,
-): CompletionFollowUp | undefined {
-  if (activity.objectKind !== 'plan') return undefined;
-  if (activity.participantCount >= 1 && activity.expenseTotalCents !== 0) {
-    return { kind: 'review_expenses' };
-  }
-  if (activity.participantCount >= 2 && activity.expenseTotalCents === 0) {
-    return { kind: 'add_expense' };
-  }
-  return undefined;
 }
 
 async function openPrepFollowUp(
@@ -474,7 +455,7 @@ async function eventFollowUp(
       return undefined;
     return stateSuggestionFor(source.list, source.item);
   } catch (error) {
-    logger.info(
+    logger.debug(
       { userId, activityId: activity.activityId, listId, listItemId, err: error },
       'No completion follow-up: the linked list item could not be read.',
     );
@@ -507,7 +488,7 @@ async function mealFollowUp(
       return undefined;
     return { kind: 'meal_ingredients', remaining };
   } catch (error) {
-    logger.info(
+    logger.debug(
       { userId, activityId: activity.activityId, listId, listItemId, err: error },
       'No completion follow-up: the linked list item could not be read.',
     );
@@ -552,7 +533,7 @@ async function watchFollowUp(
     }
     return stateSuggestionFor(source.list, source.item);
   } catch (error) {
-    logger.info(
+    logger.debug(
       { userId, activityId: activity.activityId, listId, listItemId, err: error },
       'No completion follow-up: the linked list item could not be read.',
     );

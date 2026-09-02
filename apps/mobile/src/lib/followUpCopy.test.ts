@@ -21,8 +21,6 @@ const handlers = (): FollowUpHandlers => ({
   keepPrep: vi.fn(),
   completeAllPrep: vi.fn(),
   deletePrep: vi.fn(),
-  reviewExpenses: vi.fn(),
-  addExpense: vi.fn(),
 });
 
 const progress: CompletionFollowUp = {
@@ -96,7 +94,7 @@ describe('the follow-up copy', () => {
     });
   });
 
-  it('routes every other row to its one named tap', () => {
+  it('routes the meal row to its one named tap', () => {
     const given = handlers();
     const meal = followUpPresentation(
       { kind: 'meal_ingredients', remaining: 3 },
@@ -104,20 +102,8 @@ describe('the follow-up copy', () => {
       given,
     );
     expect(meal.message).toBe('Add ingredients to a list?');
+    expect(meal.actions.map((action) => action.label)).toEqual(['Add ingredients']);
     meal.actions[0]?.onPress();
     expect(given.addIngredients).toHaveBeenCalledOnce();
-
-    const review = followUpPresentation(
-      { kind: 'review_expenses' },
-      { activityType: 'custom' },
-      given,
-    );
-    expect(review.message).toBe('Review expenses?');
-    const add = followUpPresentation(
-      { kind: 'add_expense' },
-      { activityType: 'custom' },
-      given,
-    );
-    expect(add.actions.map((action) => action.label)).toEqual(['Add expense']);
   });
 });
