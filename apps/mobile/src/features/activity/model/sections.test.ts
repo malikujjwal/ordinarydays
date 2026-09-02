@@ -118,6 +118,19 @@ describe('a Plan renders settings always and sections only once they hold conten
     expect(sections.filter((s) => s.state === 'coming-later')).toHaveLength(2);
   });
 
+  /** With the picker wired (P3-41) the chip row discovers Attachments; no row, no heading. */
+  it('drops the Attachments discovery row once the add flow is wired', () => {
+    const keys = sectionsFor(activity({}), {
+      childCount: 0,
+      sourceListCount: 0,
+      attachmentCount: 0,
+      attachmentsWired: true,
+      updateCount: 0,
+    }).map((s) => s.key);
+    expect(keys).not.toContain('attachments-coming-later');
+    expect(keys).not.toContain('attachments');
+  });
+
   it('replaces the Attachments discovery row with the real section once content exists', () => {
     const populated = sectionsFor(activity({}), {
       childCount: 0,

@@ -37,6 +37,8 @@ beforeEach(() => {
  * stepping back.
  */
 
+const ATT = 'att_01J8XKQ2M4N5P6R7S8T9V0W1A1';
+
 describe('nothing is selected until the user taps', () => {
   it('opens on the object step with no target', () => {
     draft().open();
@@ -157,9 +159,9 @@ describe('typed words never choose anything', () => {
 
   it('an attached image cannot fix a target either', () => {
     draft().open();
-    draft().attachImage('file:///tmp/poster.jpg');
+    draft().setAttachments({ ids: [ATT], busy: false, failed: false });
     expect(draft().target).toBeUndefined();
-    expect(draft().attachmentUri).toBe('file:///tmp/poster.jpg');
+    expect(draft().attachmentIds).toEqual([ATT]);
   });
 });
 
@@ -283,7 +285,10 @@ describe('the idempotency key', () => {
     ['the title changes', () => draft().setTitle('Call the dentist tomorrow')],
     ['the notes change', () => draft().setNotes('bring the referral')],
     ['a link is added', () => draft().setSourceUrl('https://example.com')],
-    ['a photo is attached', () => draft().attachImage('file:///tmp/a.jpg')],
+    [
+      'a photo is attached',
+      () => draft().setAttachments({ ids: [ATT], busy: false, failed: false }),
+    ],
     ['the Plan kind changes', () => draft().choosePlanKind('meal')],
   ])('is regenerated when %s', (_label, change) => {
     draft().chooseObject('task');
@@ -345,10 +350,22 @@ describe('reset and open', () => {
     expect(draft().title).toBe('');
   });
 
-  it('clearAttachment removes the image', () => {
-    draft().attachImage('file:///tmp/a.jpg');
-    draft().clearAttachment();
-    expect(draft().attachmentUri).toBeUndefined();
+  it('setAttachments with no ids clears the photos', () => {
+    draft().setAttachments({ ids: [ATT], busy: false, failed: false });
+    draft().setAttachments({ ids: [], busy: false, failed: false });
+    expect(draft().attachmentIds).toEqual([]);
+  });
+
+  /** Progress flags are not an edit: the key survives a tick that changes no id. */
+  it('keeps the idempotency key while only the upload flags change', () => {
+    draft().chooseObject('task');
+    draft().setTitle('Call the dentist');
+    draft().setAttachments({ ids: [ATT], busy: true, failed: false });
+    const key = draft().takeIdempotencyKey();
+    draft().setAttachments({ ids: [ATT], busy: false, failed: false });
+    expect(draft().takeIdempotencyKey()).toBe(key);
+    draft().setAttachments({ ids: [], busy: false, failed: false });
+    expect(draft().takeIdempotencyKey()).not.toBe(key);
   });
 });
 
@@ -357,7 +374,8 @@ describe('hasContent', () => {
     title: '',
     notes: '',
     sourceUrl: undefined,
-    attachmentUri: undefined,
+    attachmentIds: [],
+    attachmentsBusy: false,
     schedule: EMPTY_SCHEDULE,
     location: EMPTY_LOCATION,
     details: EMPTY_DETAILS,
@@ -380,7 +398,8 @@ describe('hasContent', () => {
     ['a title', { ...empty, title: 'x' }],
     ['notes', { ...empty, notes: 'x' }],
     ['a source URL', { ...empty, sourceUrl: 'https://example.com' }],
-    ['an attachment', { ...empty, attachmentUri: 'file:///tmp/a.jpg' }],
+    ['an attachment', { ...empty, attachmentIds: [ATT] }],
+    ['a photo still uploading', { ...empty, attachmentsBusy: true }],
     // A chosen date is content too: backing out and losing Saturday without being asked is
     // exactly what the discard prompt exists to prevent (P1-25).
     [

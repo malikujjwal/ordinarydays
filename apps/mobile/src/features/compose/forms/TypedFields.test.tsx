@@ -10,6 +10,7 @@ import {
   EMPTY_SCHEDULE,
 } from '@/features/compose/model/draft';
 import { fieldRegions } from '@/features/compose/model/fields';
+import type { AttachmentUploadController } from '@/hooks/useAttachmentUpload';
 import { TypedFields, type TypedFieldsProps } from './TypedFields';
 
 /**
@@ -55,6 +56,17 @@ const wrap = (ui: ReactNode) =>
     </SafeAreaProvider>,
   );
 
+/** No photos, nothing moving: the picker renders its two buttons and nothing else. */
+const idleAttachments: AttachmentUploadController = {
+  uploads: [],
+  refusal: undefined,
+  pick: vi.fn(async () => {}),
+  retry: vi.fn(),
+  remove: vi.fn(),
+  busy: false,
+  attachmentIds: [],
+};
+
 function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
   const props: TypedFieldsProps = {
     type,
@@ -65,7 +77,7 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     details: EMPTY_DETAILS,
     notes: '',
     sourceUrl: undefined,
-    attachmentUri: undefined,
+    attachments: idleAttachments,
     today: TODAY,
     onDateChange: vi.fn(),
     onTimeChange: vi.fn(),
@@ -76,8 +88,6 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     onDetailsChange: vi.fn(),
     onNotesChange: vi.fn(),
     onSourceUrlChange: vi.fn(),
-    onAttach: vi.fn(),
-    onClearAttachment: vi.fn(),
     fieldErrors: {},
     ...overrides,
   };
@@ -323,7 +333,8 @@ describe('the when block is one even group', () => {
     mount('task', { schedule: DATED });
     openMore();
 
-    const capture = screen.getByTestId('capture-photos').parentElement?.parentElement;
+    // The picker (P3-41) sits inside the row: picker root → row root → the spaced block.
+    const capture = screen.getByTestId('capture').parentElement;
     const block = capture?.parentElement as HTMLElement;
     expect(getComputedStyle(block).marginTop).not.toBe('0px');
   });

@@ -141,6 +141,11 @@ export interface DraftFields extends CommonDraftFields {
    * that labelled contextual action supplies it — never a word in the title.
    */
   parentActivityId?: string;
+  /**
+   * Photos already uploaded by the form's picker (P3-41). The create carries their ids and
+   * P3-22 confirms them server-side; an empty list sends nothing.
+   */
+  attachmentIds?: readonly string[];
 }
 
 /**
@@ -215,6 +220,9 @@ export function toCreateActivityInput(
     ...(location === undefined ? {} : { location }),
     ...(reminders === undefined ? {} : { reminders }),
     ...(recurrence === undefined ? {} : { recurrence }),
+    ...(fields.attachmentIds === undefined || fields.attachmentIds.length === 0
+      ? {}
+      : { attachmentIds: [...fields.attachmentIds] }),
   };
 
   if (target.objectKind === 'task') {

@@ -1,5 +1,5 @@
 import { Button, Close, IconButton, ScreenShell, useTheme } from '@od/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { AudienceChooser } from '@/features/compose/components/AudienceChooser';
 import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
@@ -12,6 +12,7 @@ import { useScheduleListItem } from '@/features/compose/hooks/useScheduleListIte
 import { titleLabel } from '@/features/compose/model/fields';
 import type { ObjectChoice } from '@/features/compose/model/targets';
 import { canSave, successToast } from '@/features/compose/model/targets';
+import { useAttachmentUpload } from '@/hooks/useAttachmentUpload';
 import {
   type EventDraftDefaults,
   hasContent,
@@ -93,6 +94,24 @@ export function ComposeScreen({
     onClose();
   }
 
+  /**
+   * The form's photo uploads (P3-41). Owned here rather than in the capture row so a kind
+   * change — which remounts the typed fields — cannot lose an upload in flight. The draft
+   * mirrors the ids and the flags so the save gate and the discard prompt see them.
+   */
+  const attachments = useAttachmentUpload();
+  const attachmentsFailed = attachments.uploads.some(
+    (upload) => upload.status === 'failed',
+  );
+  const setAttachments = draft.setAttachments;
+  useEffect(() => {
+    setAttachments({
+      ids: attachments.attachmentIds,
+      busy: attachments.busy,
+      failed: attachmentsFailed,
+    });
+  }, [setAttachments, attachments.attachmentIds, attachments.busy, attachmentsFailed]);
+
   async function save() {
     if (draft.target === undefined) return;
     const target = draft.target;
@@ -110,6 +129,7 @@ export function ComposeScreen({
         ...(draft.parentActivityId === undefined
           ? {}
           : { parentActivityId: draft.parentActivityId }),
+        attachmentIds: attachments.attachmentIds,
       },
       timezone,
     );
@@ -135,7 +155,7 @@ export function ComposeScreen({
       <ComposeSaveBar
         target={draft.target}
         saveEnabled={writeEnabled}
-        attachmentUri={draft.attachmentUri}
+        attachments={{ busy: attachments.busy, failed: attachmentsFailed }}
         onSave={() => void save()}
         isSaving={writer.isSaving}
       />
@@ -225,7 +245,7 @@ export function ComposeScreen({
                   details={draft.details}
                   notes={draft.notes}
                   sourceUrl={draft.sourceUrl}
-                  attachmentUri={draft.attachmentUri}
+                  attachments={attachments}
                   today={today}
                   onDateChange={draft.setDate}
                   onTimeChange={draft.setTime}
@@ -237,8 +257,6 @@ export function ComposeScreen({
                   onDetailsChange={draft.setDetails}
                   onNotesChange={draft.setNotes}
                   onSourceUrlChange={draft.setSourceUrl}
-                  onAttach={draft.attachImage}
-                  onClearAttachment={draft.clearAttachment}
                   fieldErrors={writer.fieldErrors}
                 />
               }

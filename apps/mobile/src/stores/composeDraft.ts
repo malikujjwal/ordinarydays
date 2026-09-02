@@ -76,8 +76,15 @@ export interface ComposeDraftState {
    * `undefined` rather than holding a destination nobody chose.
    */
   target: CreationTarget | undefined;
-  /** A locally picked image. Phase 3 uploads it; Phase 1 shows it and blocks save with it. */
-  attachmentUri: string | undefined;
+  /**
+   * Uploaded photo ids (P3-41), collected by the form's picker and carried on the create as
+   * `attachmentIds`. `attachmentsBusy` holds the save while one is still moving;
+   * `attachmentsFailed` holds it while one needs Retry or Remove — a save that silently
+   * dropped the photo is the one behaviour that would lose user content.
+   */
+  attachmentIds: readonly string[];
+  attachmentsBusy: boolean;
+  attachmentsFailed: boolean;
   /**
    * Generated once at the save boundary and reused on every retry, cleared whenever the draft
    * changes (`api-contract.md` §1). Clearing on change is what stops an edited-then-resaved
@@ -130,8 +137,12 @@ export interface ComposeDraftState {
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
   setSourceUrl: (url: string) => void;
-  attachImage: (uri: string) => void;
-  clearAttachment: () => void;
+  /** Mirrors the picker's state into the draft, so the save gate and the discard prompt see it. */
+  setAttachments: (state: {
+    ids: readonly string[];
+    busy: boolean;
+    failed: boolean;
+  }) => void;
   setDate: (date: string | undefined) => void;
   setTime: (time: string | undefined) => void;
   /** The time a Meal slot implies, recorded as the app's guess rather than the user's. */
@@ -154,7 +165,9 @@ const EMPTY = {
   title: '',
   notes: '',
   sourceUrl: undefined,
-  attachmentUri: undefined,
+  attachmentIds: [],
+  attachmentsBusy: false,
+  attachmentsFailed: false,
   idempotencyKey: undefined,
   activityId: undefined,
   bridge: undefined,
@@ -178,8 +191,7 @@ const EMPTY = {
   | 'setTitle'
   | 'setNotes'
   | 'setSourceUrl'
-  | 'attachImage'
-  | 'clearAttachment'
+  | 'setAttachments'
   | 'setDate'
   | 'setTime'
   | 'setTimeFromSlot'
@@ -427,8 +439,18 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   setTitle: (title) => set(edited({ title })),
   setNotes: (notes) => set(edited({ notes })),
   setSourceUrl: (sourceUrl) => set(edited({ sourceUrl })),
-  attachImage: (attachmentUri) => set(edited({ attachmentUri })),
-  clearAttachment: () => set(edited({ attachmentUri: undefined })),
+  setAttachments: ({ ids, busy, failed }) =>
+    set((state) =>
+      // Only a changed id set edits the body; progress flags are not a new draft.
+      state.attachmentIds.length === ids.length &&
+      state.attachmentIds.every((id, index) => id === ids[index])
+        ? { attachmentsBusy: busy, attachmentsFailed: failed }
+        : edited({
+            attachmentIds: [...ids],
+            attachmentsBusy: busy,
+            attachmentsFailed: failed,
+          }),
+    ),
 
   /**
    * Clearing the date clears the time with it, and the reminder after that.
@@ -562,7 +584,8 @@ export function hasContent(
     | 'title'
     | 'notes'
     | 'sourceUrl'
-    | 'attachmentUri'
+    | 'attachmentIds'
+    | 'attachmentsBusy'
     | 'schedule'
     | 'location'
     | 'details'
@@ -572,7 +595,8 @@ export function hasContent(
     state.title.trim() !== '' ||
     state.notes.trim() !== '' ||
     (state.sourceUrl ?? '') !== '' ||
-    state.attachmentUri !== undefined ||
+    state.attachmentIds.length > 0 ||
+    state.attachmentsBusy ||
     // A chosen date is content. Backing out of a form after picking Saturday and losing it
     // without being asked is the discard this prompt exists to prevent.
     state.schedule.date !== undefined ||

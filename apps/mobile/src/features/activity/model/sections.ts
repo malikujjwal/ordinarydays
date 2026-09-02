@@ -59,6 +59,8 @@ export interface PlanSectionContent {
   readonly childCount: number;
   readonly sourceListCount: number;
   readonly attachmentCount: number;
+  /** The picker is reachable (P3-41), so an empty section needs no discovery row. */
+  readonly attachmentsWired?: boolean;
   readonly updateCount: number;
 }
 
@@ -125,22 +127,25 @@ export function sectionsFor(
         ]
       : []),
     /**
-     * Attachments keeps the §2.2 pre-build treatment while empty: its interactive flow is
-     * P3-41's, so with no chip to offer yet, an empty plan would otherwise carry **no**
-     * signal that it can hold photos at all. The 2026-08-13 clarification names exactly this
-     * state — an unbuilt capability "may show … as non-interactive discovery rows ending in
-     * `Coming later`". P3-41 replaces the row with the wired chip.
+     * Attachments exists once it holds content; while empty it is discovered through the
+     * `Photo` chip in the `Add to this plan` row (§2.1 amended, P3-41). The §2.2 pre-build
+     * discovery row survives only for a caller that has not wired the picker — the
+     * 2026-08-13 clarification's "non-interactive discovery rows ending in `Coming later`"
+     * for an unbuilt capability — so an empty plan never loses the signal that it can hold
+     * photos.
      */
     ...(content.attachmentCount > 0
       ? [{ key: 'attachments' }]
-      : [
-          {
-            key: 'attachments-coming-later',
-            label: 'Attachments',
-            summary: 'Photos and files',
-            state: 'coming-later' as const,
-          },
-        ]),
+      : content.attachmentsWired === true
+        ? []
+        : [
+            {
+              key: 'attachments-coming-later',
+              label: 'Attachments',
+              summary: 'Photos and files',
+              state: 'coming-later' as const,
+            },
+          ]),
     // §2.2's one owner of the rule: hidden while private with no entries (P3-40).
     ...(updatesSectionVisible(activity.visibility, content.updateCount)
       ? [{ key: 'updates' }]

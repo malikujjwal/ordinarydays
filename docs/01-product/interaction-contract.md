@@ -500,6 +500,9 @@ Section-level empty states on Today are specified in
 | `422 reminder_limit_exceeded` | Inline in the reminder picker: `You can add up to 3 reminders.` | — |
 | `422` on a sixth date suggestion | Inline in the suggestion sheet: `You can suggest up to 5 dates.` | — |
 | `429 rate_limited` | `Too many requests. Try again in <Retry-After>.` | Auto-retry once after the header's delay for `GET`s only |
+| Attachment upload failure (P3-41) | The row shows the failure; error toast: `Couldn't upload that photo.` — or the envelope's own message for a `429` from the upload-url route. An expired presigned URL is retried silently once before this shows. | `Retry` runs the whole chain again from a fresh URL |
+| Attachment refused before upload (P3-41) | Inline under the picker's buttons, no request made: `Photos must be JPEG, PNG, HEIC or WebP.` / `Photos must be under 10 MB.` | Pick another photo |
+| Creation form with a photo still moving or failed (P3-41) | The save button waits: `Waiting for the photo to finish uploading.` / `Retry or remove the photo to save this.` — a save that silently dropped the photo would lose user content | `Retry` or `Remove` on the row |
 | `426 upgrade_required` | Blocking screen: `Update Ordinary Days to keep going.` | `Update` → `updateUrl` |
 | `501 not_implemented` (capture) | Silent on the text path; the manual-entry message on image/link paths | See [`ai-capture.md`](ai-capture.md#61-the-failure-matrix) |
 | `500 internal` | `Something went wrong.` plus the request id | `Try again` |

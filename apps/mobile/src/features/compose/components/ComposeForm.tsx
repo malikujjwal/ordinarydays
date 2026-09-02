@@ -46,11 +46,13 @@ export interface ComposeFormProps {
 }
 
 /**
- * Phase 1 has no attachment upload (`POST /v1/attachments/upload-url` is Phase 3), so a
- * picked photo cannot be part of a save. The image stays, the save waits — the alternative,
- * saving and silently dropping the photo, is the one behaviour that would lose user content.
+ * A photo still uploading, or one that failed, holds the save (P3-41). The alternative —
+ * saving and silently dropping the photo — is the one behaviour that would lose user
+ * content. The row itself carries `Retry` and `Remove`; this line only says why the button
+ * waits.
  */
-const SAVE_BLOCKED_BY_PHOTO = 'Remove the photo to save this.';
+const SAVE_WAITS_FOR_UPLOAD = 'Waiting for the photo to finish uploading.';
+const SAVE_BLOCKED_BY_FAILED_UPLOAD = 'Retry or remove the photo to save this.';
 
 export function ComposeForm({
   target,
@@ -153,7 +155,8 @@ export interface ComposeSaveBarProps {
   listName?: string;
   /** Whether the named write is available. `title` alone; see `canSave`. */
   saveEnabled: boolean;
-  attachmentUri: string | undefined;
+  /** The picker's state: `busy` while a photo moves, `failed` while one needs attention. */
+  attachments: { busy: boolean; failed: boolean };
   onSave: () => void;
   isSaving: boolean;
 }
@@ -173,12 +176,12 @@ export function ComposeSaveBar({
   target,
   listName,
   saveEnabled,
-  attachmentUri,
+  attachments,
   onSave,
   isSaving,
 }: ComposeSaveBarProps) {
   const theme = useTheme();
-  const blockedByPhoto = attachmentUri !== undefined;
+  const blockedByPhoto = attachments.busy || attachments.failed;
 
   return (
     <View style={{ gap: theme.space[3] }}>
@@ -193,7 +196,7 @@ export function ComposeSaveBar({
       />
       {blockedByPhoto ? (
         <Text variant="footnote" color="textSecondary" align="center">
-          {SAVE_BLOCKED_BY_PHOTO}
+          {attachments.busy ? SAVE_WAITS_FOR_UPLOAD : SAVE_BLOCKED_BY_FAILED_UPLOAD}
         </Text>
       ) : null}
     </View>

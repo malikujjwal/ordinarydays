@@ -8,12 +8,19 @@ import { View } from 'react-native';
  * visible section always carries its own composer (see `AddToPlanChips`).
  */
 export interface AddToPlanRowProps {
-  chips: { prepTask: boolean; list: boolean };
+  chips: { prepTask: boolean; list: boolean; attachment: boolean };
   onAddPrepTask?: () => void;
   onAddList?: () => void;
+  /** `Photo` (P3-41): opens the picker with this plan fixed as the target. */
+  onAddAttachment?: () => void;
 }
 
-export function AddToPlanRow({ chips, onAddPrepTask, onAddList }: AddToPlanRowProps) {
+export function AddToPlanRow({
+  chips,
+  onAddPrepTask,
+  onAddList,
+  onAddAttachment,
+}: AddToPlanRowProps) {
   const theme = useTheme();
   const entries = [
     chips.prepTask && onAddPrepTask !== undefined
@@ -21,6 +28,9 @@ export function AddToPlanRow({ chips, onAddPrepTask, onAddList }: AddToPlanRowPr
       : undefined,
     chips.list && onAddList !== undefined
       ? { label: 'List', onPress: onAddList }
+      : undefined,
+    chips.attachment && onAddAttachment !== undefined
+      ? { label: 'Photo', onPress: onAddAttachment }
       : undefined,
   ].filter(
     (entry): entry is { label: string; onPress: () => void } => entry !== undefined,
