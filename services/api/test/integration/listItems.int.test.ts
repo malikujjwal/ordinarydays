@@ -1037,6 +1037,81 @@ describe('the two timestamps (P3-47)', () => {
       expect(result.itemActivityMoved).toBe(true);
       expect(result.updatedAtMoved).toBe(false);
     });
+
+    /**
+     * **P3-33's writers.** A typed-feature edit — a sub-item added, a progress value set —
+     * is an item edit through the same field pipeline, and the founder's 2026-08-25 note
+     * on this task says it must move the card like any other. Enumerated here so the
+     * feature path cannot be forgotten by a later change to how sub-items are stored.
+     */
+    it('typed feature edit: a sub-item (P3-33)', async () => {
+      const list = await seedList({
+        featureConfig: {
+          subItems: {
+            enabled: true,
+            sectionLabel: 'Ingredients',
+            singularLabel: 'Ingredient',
+            secondaryLabel: 'Quantity',
+          },
+        },
+      });
+      const item = await seedItem(list.listId, 'Sunday dinner');
+
+      const result = await around(list.listId, () =>
+        request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+          features: {
+            subItems: {
+              entries: [
+                { id: 'ing_chicken', title: 'Chicken', secondary: '2 lb', rank: 'U' },
+              ],
+            },
+          },
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    it('typed feature edit: a progress value (P3-33)', async () => {
+      const list = await seedList({
+        featureConfig: { progress: { enabled: true, kind: 'episode' } },
+      });
+      const item = await seedItem(list.listId, 'Severance');
+
+      const result = await around(list.listId, () =>
+        request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+          features: { progress: { kind: 'episode', season: 2, episode: 4 } },
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    /**
+     * **`Plan this item` is not an item write.** The bridge leaves the ListItem byte-identical
+     * (acceptance criterion 7) and writes only the caller's `LNK#` pointer, so the card must
+     * not claim the list was used — and the list's concurrency token must not move either.
+     */
+    it('the schedule bridge moves neither, because the item is untouched', async () => {
+      const list = await seedList();
+      const item = await seedItem(list.listId, 'Zahav');
+
+      const result = await around(list.listId, () =>
+        request(app(), 'POST', `/v1/lists/${list.listId}/items/${item.itemId}/schedule`, {
+          activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
+          creationTarget: { objectKind: 'plan', type: 'event' },
+          audience: { mode: 'just_me' },
+        }),
+      );
+
+      expect(result.status).toBe(201);
+      expect(result.itemActivityMoved).toBe(false);
+      expect(result.updatedAtMoved).toBe(false);
+    });
   });
 
   /**

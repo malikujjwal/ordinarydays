@@ -1487,3 +1487,64 @@ describe('a tombstoned destination id', () => {
     expect(res.status).toBe(409);
   });
 });
+
+/**
+ * **The ingredient action is an item writer too** (P3-47, per the founder's 2026-08-25 note
+ * that the P3-33-era writers must move the card). Both of its shapes — a new row, and the
+ * provenance-label extension of a row that already exists — change items, so both move
+ * `lastItemActivityAt`; neither is a List-row change, so `updatedAt` stays for `If-Match`.
+ */
+describe('the two timestamps (P3-47)', () => {
+  const stampsOf = async (listId: string) => {
+    const meta = (await rawItem(`LIST#${listId}`, 'META')) as {
+      updatedAt: string;
+      lastItemActivityAt: string;
+    };
+    return { updatedAt: meta.updatedAt, lastItemActivityAt: meta.lastItemActivityAt };
+  };
+
+  it('adding ingredients moves lastItemActivityAt and leaves updatedAt byte-identical', async () => {
+    const { list } = await setUp();
+    const before = await stampsOf(list.listId);
+
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+    expect(res.status).toBe(201);
+
+    const after = await stampsOf(list.listId);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.lastItemActivityAt).not.toBe(before.lastItemActivityAt);
+  });
+
+  it('extending an existing row’s provenance label moves it again', async () => {
+    const { list } = await setUp();
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+    const between = await stampsOf(list.listId);
+    // A second meal on another day adds the same ingredient to a row that is not `done`.
+    await createMeal(
+      {
+        title: 'Chicken salad',
+        schedule: {
+          date: addWallDays(SUNDAY, 4),
+          time: '12:00',
+          timezone: 'America/New_York',
+        },
+      },
+      OTHER_MEAL,
+    );
+
+    // Same ingredient, no destination id: the service finds the live row and extends it.
+    const res = await request(
+      'POST',
+      `/v1/activities/${OTHER_MEAL}/ingredients/add-to-list`,
+      {
+        listId: list.listId,
+        ingredients: [{ ingredientId: CHICKEN }],
+      },
+    );
+    expect(res.status).toBe(201);
+
+    const after = await stampsOf(list.listId);
+    expect(after.updatedAt).toBe(between.updatedAt);
+    expect(after.lastItemActivityAt).not.toBe(between.lastItemActivityAt);
+  });
+});

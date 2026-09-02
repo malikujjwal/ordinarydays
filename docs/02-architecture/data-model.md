@@ -1167,8 +1167,11 @@ interface ListItemActivityLink {   // LIST#<listId> / LNK#<viewerUserId>#<itemId
 **Two timestamps on a List, two jobs.** `updatedAt` backs `If-Match` on list-level edits and
 moves only when the List row itself changes — a rename, a state-presentation change, a
 feature-setting change or a slot change. `lastItemActivityAt` moves when any **item** is
-created, edited, changes state, is deleted, reordered
-or touched by a bulk operation, and backs nothing. The Lists index renders the second
+created, edited, changes state, has a typed feature or Sub-item changed, is deleted,
+reordered, touched by a bulk operation or its Undo, or receives ingredients from a Meal
+(P3-17), and backs nothing. It does **not** move for `Plan this item` (the item is
+byte-identical; only the caller's `LNK#` pointer is written), for a rank repair, or for
+P3-33's stored-schema migration — those are not the user using the list. The Lists index renders the second
 (`design-system.md` §7.2): a card that still said `Updated 3 days ago` immediately after the
 user checked three things off, while moving the moment they renamed the list, would be
 backwards from what the line means to a reader. One field for both would also make an

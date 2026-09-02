@@ -166,6 +166,8 @@ describe('legacy List aggregate migration', () => {
     expect(storedMeta).not.toHaveProperty('capabilities');
     expect(storedMeta).not.toHaveProperty('uncheckedCount');
     expect(storedMeta).not.toHaveProperty('schemaMigrationId');
+    // Stored-shape conversion is not item activity (P3-47): the card's timestamp holds.
+    expect(storedMeta).toMatchObject({ lastItemActivityAt: NOW, updatedAt: NOW });
 
     const prefix = keys.listItemPrefix(listId);
     const items = await base.queryAll<Record<string, unknown>>(
