@@ -12,6 +12,16 @@ function headers() {
 }
 
 http.post(`${CONTROL}/online`);
+const cleanupListTitles = output.cleanupListTitles || [];
+if (cleanupListTitles.length > 0) {
+  const response = http.get(`${API}/v1/lists`, { headers: headers() });
+  const lists = JSON.parse(response.body).data || [];
+  lists.forEach((list) => {
+    if (cleanupListTitles.includes(list.title)) {
+      http.delete(`${API}/v1/lists/${list.listId}`, { headers: headers() });
+    }
+  });
+}
 const ids = output.activityIds || [];
 const cleanupTitles = output.cleanupTitles || [];
 if ((output.title || cleanupTitles.length > 0) && output.today) {

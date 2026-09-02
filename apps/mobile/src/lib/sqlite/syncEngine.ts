@@ -1171,6 +1171,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         const canonicalRows =
           intent.mutationKey[1] === 'undo' ? await this.pullAllLists() : undefined;
         let canonicalItem: ListItemRow | undefined;
+        let sourceActivityDetail: ActivityDetail | undefined;
         if (
           isListMutation(intent, 'itemUndo') &&
           field(response, 'outcome') === 'applied'
@@ -1187,7 +1188,45 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             throw new Error('List item Undo restored a different item.');
           }
         }
-        await this.settleListIntent(intent, response, canonicalRows, canonicalItem);
+        if (intent.mutationKey[1] === 'create') {
+          const sourceActivityId = field(
+            field(intent.variables, 'input'),
+            'sourceActivityId',
+          );
+          if (typeof sourceActivityId === 'string') {
+            try {
+              const detail = await this.serialNetwork((signal) =>
+                this.pull.activity(
+                  { kind: 'activity', activityId: sourceActivityId },
+                  signal,
+                ),
+              );
+              if (detail.activity.activityId === sourceActivityId) {
+                sourceActivityDetail = detail;
+              } else if (__DEV__) {
+                console.warn('native_source_list_detail_identity_mismatch', {
+                  expectedActivityId: sourceActivityId,
+                  returnedActivityId: detail.activity.activityId,
+                });
+              }
+            } catch (error) {
+              /* The List exists already; a failed source read must never replay its create. */
+              if (__DEV__) {
+                console.info('native_source_list_detail_pull_failed', {
+                  sourceActivityId,
+                  message: message(error),
+                });
+              }
+            }
+          }
+        }
+        await this.settleListIntent(
+          intent,
+          response,
+          canonicalRows,
+          canonicalItem,
+          sourceActivityDetail,
+        );
         this.retryIndex = 0;
         return 'continue';
       }
@@ -1543,6 +1582,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     response: unknown,
     canonicalRows?: readonly List[],
     canonicalItem?: ListItemRow,
+    sourceActivityDetail?: ActivityDetail,
   ): Promise<void> {
     const lists = this.lists;
     if (lists === undefined) throw new Error('Native Lists state is not ready.');
@@ -1768,6 +1808,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           transaction.database,
           originalIntentId,
         );
+      }
+      if (sourceActivityDetail !== undefined) {
+        await this.activities.putCanonical(transaction, sourceActivityDetail);
       }
       await this.outbox.acknowledge(transaction.database, intent.intentId);
       transaction.changed('outbox');
