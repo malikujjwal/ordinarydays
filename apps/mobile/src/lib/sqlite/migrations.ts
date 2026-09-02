@@ -1402,6 +1402,33 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         CREATE INDEX activity_children_by_child ON activity_children (child_activity_id);
       `),
   },
+  {
+    version: 27,
+    name: 'activity-attachments-projection',
+    /**
+     * The phone-use gate in ADR-059 is satisfied for this one bounded collection. The state
+     * bit distinguishes a detail that predates this projection from an authoritative empty
+     * collection; rows retain permanent media keys only, never URLs or image bytes.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE activity_detail_projection_state
+          ADD COLUMN attachments_installed INTEGER NOT NULL DEFAULT 0
+            CHECK (attachments_installed IN (0, 1));
+        CREATE TABLE activity_attachments (
+          attachment_id TEXT PRIMARY KEY NOT NULL,
+          activity_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+          key TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+          created_at TEXT NOT NULL,
+          schema_version INTEGER NOT NULL CHECK (schema_version = 1)
+        );
+        CREATE UNIQUE INDEX activity_attachments_activity_order
+          ON activity_attachments (activity_id, ordinal);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

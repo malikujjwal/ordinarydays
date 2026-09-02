@@ -1,8 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CreateActivityInput } from '@od/shared/schemas';
-import type { ActivityDetail } from '@od/shared/types';
+import { type CreateActivityInput, instant } from '@od/shared/schemas';
+import type { ActivityDetail, Attachment } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { planFromCommittedRows } from '@/features/reminders/localSchedule.native';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -586,19 +586,98 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       clock,
     );
 
-    expect(await activities.hasInstalledCapabilities(ACTIVITY)).toBe(false);
-    expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('deferred');
+    expect(await activities.hasInstalledDetail(ACTIVITY)).toBe(false);
+    expect(await activities.detailHydrationState(ACTIVITY)).toBe('deferred');
 
     await transactions.run((transaction) =>
       activities.setLocalState(transaction, ACTIVITY, 'canonical'),
     );
-    expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('deferred');
+    expect(await activities.detailHydrationState(ACTIVITY)).toBe('deferred');
 
     await transactions.run(async (transaction) => {
       await transaction.database.run('DELETE FROM outbox_intents;');
       transaction.changed('outbox');
     });
-    expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('missing');
+    expect(await activities.detailHydrationState(ACTIVITY)).toBe('missing');
+  });
+
+  it('round-trips canonical attachments in order and retains them after repository restart', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'attachment-round-trip' },
+      clock,
+    );
+    const local = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (local === undefined) throw new Error('missing attachment fixture');
+    const attachments: Attachment[] = [
+      {
+        attachmentId: 'att_01J0000000000000000000000B',
+        activityId: ACTIVITY,
+        key: `u/${OWNER}/second.jpg`,
+        contentType: 'image/jpeg',
+        byteSize: 2048,
+        createdAt: instant.parse('2026-08-19T02:00:00.000Z'),
+        schemaVersion: 1,
+      },
+      {
+        attachmentId: 'att_01J0000000000000000000000A',
+        activityId: ACTIVITY,
+        key: `u/${OWNER}/first.png`,
+        contentType: 'image/png',
+        byteSize: 1024,
+        createdAt: instant.parse('2026-08-19T01:00:00.000Z'),
+        schemaVersion: 1,
+      },
+    ];
+    const canonical: ActivityDetail = {
+      ...local,
+      activity: {
+        ...local.activity,
+        updatedAt: '2026-08-19T03:00:00.000Z',
+      },
+      capabilities: { complete: true, skip: true, snooze: true },
+      attachments,
+    };
+
+    await transactions.run((transaction) =>
+      activities.installAcknowledgedActivity(transaction, canonical.activity, canonical),
+    );
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.attachments,
+    ).toEqual(attachments);
+
+    await database?.close();
+    database = await createNodeSqliteFactory(directory).open('slice.sqlite');
+    activities = new ActivityRepository(database, subscriptions);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.attachments,
+    ).toEqual(attachments);
+  });
+
+  it('distinguishes an authoritative empty attachment collection from one never installed', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'attachment-empty-readiness' },
+      clock,
+    );
+    const local = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (local === undefined) throw new Error('missing empty-attachment fixture');
+    expect(local).not.toHaveProperty('attachments');
+
+    const canonical: ActivityDetail = {
+      ...local,
+      activity: {
+        ...local.activity,
+        updatedAt: '2026-08-19T03:00:00.000Z',
+      },
+      capabilities: { complete: true, skip: true, snooze: true },
+      attachments: [],
+    };
+    await transactions.run((transaction) =>
+      activities.installAcknowledgedActivity(transaction, canonical.activity, canonical),
+    );
+
+    expect(
+      await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+    ).toHaveProperty('attachments', []);
   });
 
   it.each(['queued', 'updating'] as const)(
@@ -623,6 +702,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
           updatedAt: '2026-08-19T02:00:00.000Z',
         },
         capabilities: { complete: true, skip: true, snooze: true },
+        attachments: [],
       };
       await transactions.run(async (transaction) => {
         await activities.installAcknowledgedActivity(
@@ -640,8 +720,8 @@ describe('Activity/Agenda transactional SQLite slice', () => {
         transaction.changed('outbox');
       });
 
-      expect(await activities.hasInstalledCapabilities(ACTIVITY)).toBe(true);
-      expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('installed');
+      expect(await activities.hasInstalledDetail(ACTIVITY)).toBe(true);
+      expect(await activities.detailHydrationState(ACTIVITY)).toBe('installed');
       expect(
         (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.capabilities,
       ).toEqual({ complete: true, skip: true, snooze: true });

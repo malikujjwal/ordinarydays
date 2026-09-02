@@ -2,6 +2,7 @@ import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schem
 import {
   activity as activitySchema,
   activityUpdate as activityUpdateSchema,
+  attachment as attachmentSchema,
 } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type {
@@ -11,6 +12,7 @@ import type {
   ActivityDetailTarget,
   ActivityUpdate,
   ActivityUpdatePage,
+  Attachment,
   Occurrence,
   OccurrenceDetailProjection,
   PostActivityUpdateResult,
@@ -25,7 +27,7 @@ import type { TransactionContext } from '@/lib/sqlite/transaction';
 
 export type NativeRowState = 'canonical' | 'queued' | 'updating' | 'needs_attention';
 
-export type CapabilityHydrationState = 'installed' | 'missing' | 'deferred';
+export type DetailHydrationState = 'installed' | 'missing' | 'deferred';
 
 export interface DurablePendingUpdate {
   readonly localId: string;
@@ -156,6 +158,18 @@ function activityUpdateFromRow(row: SqliteRow): ActivityUpdate {
       ? {}
       : { authorUserId: text(row, 'author_user_id') }),
     body: text(row, 'body'),
+    createdAt: text(row, 'created_at'),
+    schemaVersion: number(row, 'schema_version'),
+  });
+}
+
+function attachmentFromRow(row: SqliteRow): Attachment {
+  return attachmentSchema.parse({
+    attachmentId: text(row, 'attachment_id'),
+    activityId: text(row, 'activity_id'),
+    key: text(row, 'key'),
+    contentType: text(row, 'content_type'),
+    byteSize: number(row, 'byte_size'),
     createdAt: text(row, 'created_at'),
     schemaVersion: number(row, 'schema_version'),
   });
@@ -483,28 +497,45 @@ export class ActivityRepository {
     transaction.changed(this.updatesScope(activityId));
   }
 
-  /** Whether a server-authored authorisation projection has ever been installed. */
-  async hasInstalledCapabilities(activityId: string): Promise<boolean> {
+  /** Whether the modern server-authored detail projections have all been installed. */
+  async hasInstalledDetail(activityId: string): Promise<boolean> {
     const row = await this.reader.first(
-      'SELECT capabilities_json FROM activities WHERE activity_id = ?;',
+      `SELECT activity.capabilities_json, state.attachments_installed
+       FROM activities activity
+       LEFT JOIN activity_detail_projection_state state
+         ON state.activity_id = activity.activity_id
+       WHERE activity.activity_id = ?;`,
       [activityId],
     );
-    return row !== undefined && text(row, 'capabilities_json') !== undefined;
+    return (
+      row !== undefined &&
+      text(row, 'capabilities_json') !== undefined &&
+      number(row, 'attachments_installed') === 1
+    );
   }
 
   /**
-   * Presentation-only readiness check for targeted capability hydration.
+   * Presentation-only readiness check for targeted canonical-detail hydration.
    *
    * Capability provenance and local projection state are deliberately separate: an edit
    * preserves already-installed capabilities, while a genuinely missing projection must wait
    * until the same guards used by canonical installation no longer protect local work.
    */
-  async capabilityHydrationState(activityId: string): Promise<CapabilityHydrationState> {
+  async detailHydrationState(activityId: string): Promise<DetailHydrationState> {
     const row = await this.reader.first(
-      'SELECT capabilities_json, local_state FROM activities WHERE activity_id = ?;',
+      `SELECT activity.capabilities_json, activity.local_state,
+              state.attachments_installed
+       FROM activities activity
+       LEFT JOIN activity_detail_projection_state state
+         ON state.activity_id = activity.activity_id
+       WHERE activity.activity_id = ?;`,
       [activityId],
     );
-    if (row !== undefined && text(row, 'capabilities_json') !== undefined) {
+    if (
+      row !== undefined &&
+      text(row, 'capabilities_json') !== undefined &&
+      number(row, 'attachments_installed') === 1
+    ) {
       return 'installed';
     }
     if (row !== undefined && text(row, 'local_state') !== 'canonical') {
@@ -754,6 +785,11 @@ export class ActivityRepository {
           ? {}
           : { sourceLists: current.sourceLists }
         : { sourceLists: usableEnrichment.sourceLists }),
+      ...(usableEnrichment?.attachments === undefined
+        ? current?.attachments === undefined
+          ? {}
+          : { attachments: current.attachments }
+        : { attachments: usableEnrichment.attachments }),
     };
     return this.installCanonicalDetail(transaction, detail, {
       preserveLocalReminders: options.preserveLocalReminders ?? false,
@@ -941,6 +977,10 @@ export class ActivityRepository {
     }
     await transaction.database.run(
       'DELETE FROM activity_source_lists WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_attachments WHERE activity_id = ?;',
       [activityId],
     );
     await transaction.database.run(
@@ -1273,9 +1313,9 @@ export class ActivityRepository {
   private async readBoundedDetail(
     activityId: string,
     database: SqliteReader,
-  ): Promise<Pick<ActivityDetail, 'children' | 'sourceLists'>> {
+  ): Promise<Pick<ActivityDetail, 'attachments' | 'children' | 'sourceLists'>> {
     const state = await database.first(
-      `SELECT children_installed, source_lists_installed
+      `SELECT children_installed, source_lists_installed, attachments_installed
        FROM activity_detail_projection_state WHERE activity_id = ?;`,
       [activityId],
     );
@@ -1313,9 +1353,20 @@ export class ActivityRepository {
             doneCount: number(row, 'done_count') ?? 0,
           }))
         : [];
+    const attachments: Attachment[] =
+      number(state, 'attachments_installed') === 1
+        ? (
+            await database.all(
+              `SELECT * FROM activity_attachments
+               WHERE activity_id = ? ORDER BY ordinal;`,
+              [activityId],
+            )
+          ).map(attachmentFromRow)
+        : [];
     return {
       ...(number(state, 'children_installed') === 1 ? { children } : {}),
       ...(number(state, 'source_lists_installed') === 1 ? { sourceLists } : {}),
+      ...(number(state, 'attachments_installed') === 1 ? { attachments } : {}),
     };
   }
 
@@ -1367,20 +1418,53 @@ export class ActivityRepository {
         );
       }
     }
-    if (detail.children !== undefined || detail.sourceLists !== undefined) {
+    if (detail.attachments !== undefined) {
+      await database.run('DELETE FROM activity_attachments WHERE activity_id = ?;', [
+        activityId,
+      ]);
+      for (const [ordinal, attachment] of detail.attachments.entries()) {
+        if (attachment.activityId !== activityId) {
+          throw new Error('Canonical attachment crossed its Activity boundary.');
+        }
+        await database.run(
+          `INSERT INTO activity_attachments
+             (attachment_id, activity_id, ordinal, key, content_type, byte_size,
+              created_at, schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          [
+            attachment.attachmentId,
+            activityId,
+            ordinal,
+            attachment.key,
+            attachment.contentType,
+            attachment.byteSize,
+            attachment.createdAt,
+            attachment.schemaVersion,
+          ],
+        );
+      }
+    }
+    if (
+      detail.children !== undefined ||
+      detail.sourceLists !== undefined ||
+      detail.attachments !== undefined
+    ) {
       await database.run(
         `INSERT INTO activity_detail_projection_state
-           (activity_id, children_installed, source_lists_installed)
-         VALUES (?, ?, ?)
+           (activity_id, children_installed, source_lists_installed, attachments_installed)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(activity_id) DO UPDATE SET
            children_installed=CASE WHEN ? = 1 THEN 1 ELSE children_installed END,
-           source_lists_installed=CASE WHEN ? = 1 THEN 1 ELSE source_lists_installed END;`,
+           source_lists_installed=CASE WHEN ? = 1 THEN 1 ELSE source_lists_installed END,
+           attachments_installed=CASE WHEN ? = 1 THEN 1 ELSE attachments_installed END;`,
         [
           activityId,
           detail.children === undefined ? 0 : 1,
           detail.sourceLists === undefined ? 0 : 1,
+          detail.attachments === undefined ? 0 : 1,
           detail.children === undefined ? 0 : 1,
           detail.sourceLists === undefined ? 0 : 1,
+          detail.attachments === undefined ? 0 : 1,
         ],
       );
     }

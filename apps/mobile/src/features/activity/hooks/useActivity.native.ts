@@ -25,7 +25,7 @@ import { CanonicalActivityInstallDeferredError } from '@/lib/sqlite/syncEngine';
 
 export { activityKey };
 
-const CAPABILITY_RETRY_DELAYS_MS = [500, 2_000, 10_000] as const;
+const DETAIL_RETRY_DELAYS_MS = [500, 2_000, 10_000] as const;
 const HYDRATION_RETRY_MESSAGE =
   "Latest details are still syncing. We'll retry automatically.";
 
@@ -37,7 +37,7 @@ function manualHydrationMessage(error: unknown): string {
       : String(error);
 }
 
-function shouldRetryCapabilityHydration(error: unknown): boolean {
+function shouldRetryDetailHydration(error: unknown): boolean {
   return error instanceof CanonicalActivityInstallDeferredError || isRetryable(error);
 }
 
@@ -117,8 +117,8 @@ export function useActivityDetail(
     if (!mounted.current || getActiveNativeState() !== state) return;
     if (retryTimer.current !== undefined) return;
     const delay =
-      CAPABILITY_RETRY_DELAYS_MS[
-        Math.min(retryIndex.current, CAPABILITY_RETRY_DELAYS_MS.length - 1)
+      DETAIL_RETRY_DELAYS_MS[
+        Math.min(retryIndex.current, DETAIL_RETRY_DELAYS_MS.length - 1)
       ];
     retryIndex.current += 1;
     retryTimer.current = setTimeout(() => {
@@ -149,7 +149,7 @@ export function useActivityDetail(
     void (async () => {
       const committed = await load(generation);
       if (!isCurrentRequest(generation)) return;
-      const hydrationState = await state.activities.capabilityHydrationState(activityId);
+      const hydrationState = await state.activities.detailHydrationState(activityId);
       if (!isCurrentRequest(generation)) return;
       if (hydrationState === 'deferred') {
         if (committed === undefined) {
@@ -165,7 +165,7 @@ export function useActivityDetail(
         setDetail(canonical);
         setStatus('success');
         setLoadMessage(undefined);
-        const hydrated = await state.activities.hasInstalledCapabilities(activityId);
+        const hydrated = await state.activities.hasInstalledDetail(activityId);
         if (!isCurrentRequest(generation)) return;
         if (hydrated) {
           automaticPullKey.current = pullKey;
@@ -185,7 +185,7 @@ export function useActivityDetail(
           setStatus('success');
         }
         setLoadMessage(manualHydrationMessage(error));
-        if (shouldRetryCapabilityHydration(error)) {
+        if (shouldRetryDetailHydration(error)) {
           scheduleRetry();
         } else {
           automaticPullKey.current = `${targetKey}:${retained?.activity.updatedAt ?? 'missing'}`;
@@ -227,7 +227,7 @@ export function useActivityDetail(
     requestGeneration.current = generation;
     void load(generation).then(async (committed) => {
       if (!isCurrentRequest(generation)) return;
-      const hydrationState = await state.activities.capabilityHydrationState(activityId);
+      const hydrationState = await state.activities.detailHydrationState(activityId);
       if (!isCurrentRequest(generation)) return;
       if (hydrationState === 'deferred') {
         clearRetry();
@@ -249,7 +249,7 @@ export function useActivityDetail(
           setDetail(canonical);
           setStatus('success');
           setLoadMessage(undefined);
-          const hydrated = await state.activities.hasInstalledCapabilities(activityId);
+          const hydrated = await state.activities.hasInstalledDetail(activityId);
           if (!isCurrentRequest(generation)) return;
           if (hydrated) {
             automaticPullKey.current = pullKey;
@@ -269,7 +269,7 @@ export function useActivityDetail(
             setDetail(retained);
             setStatus('success');
           }
-          const retryable = shouldRetryCapabilityHydration(error);
+          const retryable = shouldRetryDetailHydration(error);
           setLoadMessage(
             retained === undefined
               ? retryable
