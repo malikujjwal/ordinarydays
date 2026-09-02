@@ -49,10 +49,34 @@ export function isNativeActivityKey(key: unknown): boolean {
   );
 }
 
+/**
+ * **A projection is not a cache entry** (P3-43 finding). The web Plans store lives under
+ * `['plans', 'projection', …]` and keeps a `Map`, which JSON turns into a plain object; a
+ * page that rehydrated it rendered `store.byDate.entries is not a function`. Projections
+ * are rebuilt from the server on open, so they are neither persisted nor restored.
+ */
+export function isProjectionKey(key: unknown): boolean {
+  return Array.isArray(key) && key[0] === 'plans' && key[1] === 'projection';
+}
+
+/** What a restore may hydrate: never a projection, and on iOS never native Activity state. */
+export function restorableState(
+  state: DehydratedState,
+  platform: string,
+): DehydratedState {
+  const base = platform === 'ios' ? withoutNativeActivityState(state) : state;
+  return {
+    ...base,
+    queries: base.queries.filter((query) => !isProjectionKey(query.queryKey)),
+  };
+}
+
 export function withoutNativeActivityState(state: DehydratedState): DehydratedState {
   return {
     ...state,
-    queries: state.queries.filter((query) => !isNativeActivityKey(query.queryKey)),
+    queries: state.queries.filter(
+      (query) => !isNativeActivityKey(query.queryKey) && !isProjectionKey(query.queryKey),
+    ),
     mutations: state.mutations.filter(
       (mutation) => !isNativeActivityKey(mutation.mutationKey),
     ),
@@ -78,6 +102,7 @@ function persistedState(client: QueryClient, platform = Platform.OS): StoredClie
       shouldDehydrateMutation: () => false,
       shouldDehydrateQuery: (query) =>
         query.state.status === 'success' &&
+        !isProjectionKey(query.queryKey) &&
         (platform !== 'ios' || !isNativeActivityKey(query.queryKey)),
     }),
   };
@@ -152,12 +177,7 @@ export async function restorePersistedClient(
        * has since fetched is newer than this.
        */
       if (validStoredClient(value)) {
-        hydrate(
-          client,
-          platform === 'ios'
-            ? withoutNativeActivityState(value.clientState)
-            : value.clientState,
-        );
+        hydrate(client, restorableState(value.clientState, platform));
       }
       settleLate?.();
       return value;
@@ -206,12 +226,7 @@ export async function restorePersistedClient(
       nativeLegacyPersistence: { kind: 'available', storedClient: value },
     };
   }
-  hydrate(
-    client,
-    platform === 'ios'
-      ? withoutNativeActivityState(value.clientState)
-      : value.clientState,
-  );
+  hydrate(client, restorableState(value.clientState, platform));
   return {
     status: 'restored',
     safeToPersist: Promise.resolve(),

@@ -5,6 +5,7 @@ import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
 import { AttachmentPickerSheet } from '@/features/attachments/components/AttachmentPickerSheet';
+import { DestinationSheet } from '@/features/lists/components/DestinationSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useViewer } from '@/hooks/useViewer';
 import { activityKey } from '@/lib/queryKeys';
@@ -36,6 +37,9 @@ export default function ActivityDetailRoute() {
   }>();
   // `Add photo` (P3-41): same reason — the attachments feature meets the activity feature here.
   const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
+  // P3-43: the Meal's ingredient destination — this operation's one-off choice lives here.
+  const [ingredientDestination, setIngredientDestination] = useState<string>();
+  const [choosingDestination, setChoosingDestination] = useState(false);
   const queryClient = useQueryClient();
   // The owner-only photo actions need to know who is looking; a direct route load has not
   // passed through a tab that fills `['me']`, so the route asks (P3-42).
@@ -77,6 +81,15 @@ export default function ActivityDetailRoute() {
         }}
         onAddList={(planTitle) => setListSource({ activityId, planTitle })}
         onAddAttachment={() => setAttachmentSheetOpen(true)}
+        ingredientDestination={ingredientDestination}
+        onChooseIngredientDestination={() => setChoosingDestination(true)}
+      />
+      <DestinationSheet
+        open={choosingDestination}
+        slot="groceries"
+        current={ingredientDestination}
+        onChoose={setIngredientDestination}
+        onClose={() => setChoosingDestination(false)}
       />
       {/* The parent detail's refresh rides the process-wide MutationCache seam
           (`refreshActivityDetails` on the sourced `['list','create']`), not this route. */}

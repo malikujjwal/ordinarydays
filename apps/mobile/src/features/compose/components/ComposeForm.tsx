@@ -157,6 +157,8 @@ export interface ComposeSaveBarProps {
   saveEnabled: boolean;
   /** The picker's state: `busy` while a photo moves, `failed` while one needs attention. */
   attachments: { busy: boolean; failed: boolean };
+  /** P3-43: the combined write's own name — `Save plan and add 3 items to Groceries`. */
+  bridgeLabel?: string;
   onSave: () => void;
   isSaving: boolean;
 }
@@ -177,6 +179,7 @@ export function ComposeSaveBar({
   listName,
   saveEnabled,
   attachments,
+  bridgeLabel,
   onSave,
   isSaving,
 }: ComposeSaveBarProps) {
@@ -186,7 +189,7 @@ export function ComposeSaveBar({
   return (
     <View style={{ gap: theme.space[3] }}>
       <Button
-        label={saveLabel(target, listName)}
+        label={bridgeLabel ?? saveLabel(target, listName)}
         size="lg"
         fullWidth
         onPress={onSave}

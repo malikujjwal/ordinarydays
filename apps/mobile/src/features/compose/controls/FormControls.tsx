@@ -311,11 +311,6 @@ export function IngredientsControl({ rows, onChange }: IngredientsControlProps) 
           key={row.id}
           style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[3] }}
         >
-          <Checkbox
-            checked={row.selected}
-            label={`Select ${row.name === '' ? `ingredient ${index + 1}` : row.name}`}
-            onChange={(selected) => update(index, { selected })}
-          />
           <View style={{ flex: 2 }}>
             <Field
               label={`Ingredient ${index + 1}`}

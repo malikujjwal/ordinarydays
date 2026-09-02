@@ -142,12 +142,28 @@ describe('a Plan renders settings always and sections only once they hold conten
     expect(populated).not.toContain('attachments-coming-later');
   });
 
-  it('previews Ingredients only on a Meal plan', () => {
-    expect(
-      sectionsFor(activity({ type: 'meal', details: { kind: 'meal', ingredients: [] } })),
-    ).toContainEqual(
-      expect.objectContaining({ key: 'ingredients', state: 'coming-later' }),
+  /** P3-43: the section exists exactly when the Meal has ingredient rows to add. */
+  it('renders Ingredients only on a Meal plan that has ingredient rows', () => {
+    const withRows = sectionsFor(
+      activity({
+        type: 'meal',
+        details: {
+          kind: 'meal',
+          ingredients: [
+            { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+          ],
+        },
+      }),
     );
+    expect(withRows).toContainEqual({ key: 'ingredients' });
+    expect(
+      withRows.some((s) => s.key === 'ingredients' && s.state === 'coming-later'),
+    ).toBe(false);
+    expect(
+      sectionsFor(
+        activity({ type: 'meal', details: { kind: 'meal', ingredients: [] } }),
+      ).map((section) => section.key),
+    ).not.toContain('ingredients');
     expect(sectionsFor(activity({})).map((section) => section.key)).not.toContain(
       'ingredients',
     );

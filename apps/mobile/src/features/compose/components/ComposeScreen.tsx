@@ -8,11 +8,17 @@ import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
+import { useListBridge } from '@/features/compose/hooks/useListBridge';
 import { useScheduleListItem } from '@/features/compose/hooks/useScheduleListItem';
 import { titleLabel } from '@/features/compose/model/fields';
 import type { ObjectChoice } from '@/features/compose/model/targets';
 import { canSave, successToast } from '@/features/compose/model/targets';
 import { useAttachmentUpload } from '@/hooks/useAttachmentUpload';
+import { useDestination } from '@/hooks/useDestination';
+import {
+  savePlanAndAddItemsLabel,
+  savePlanAndAddTitleLabel,
+} from '@/lib/destinationCopy';
 import {
   type EventDraftDefaults,
   hasContent,
@@ -45,6 +51,8 @@ export interface ComposeScreenProps {
   loadEventDefaults?: () => Promise<EventDraftDefaults | undefined>;
   /** Opens the ordinary unselected List catalogue. */
   onCreateList?: () => void;
+  /** P3-43: opens the route-composed destination picker for one of the form's slots. */
+  onChooseDestination?: (slot: 'groceries' | 'watch') => void;
 }
 
 export function ComposeScreen({
@@ -53,6 +61,7 @@ export function ComposeScreen({
   timezone,
   loadEventDefaults,
   onCreateList,
+  onChooseDestination,
 }: ComposeScreenProps) {
   const theme = useTheme();
   const draft = useComposeDraft();
@@ -112,28 +121,80 @@ export function ComposeScreen({
     });
   }, [setAttachments, attachments.attachmentIds, attachments.busy, attachmentsFailed]);
 
+  /**
+   * The list bridges (P3-43): the Meal's ingredient destination and the Watch form's
+   * `Also add a list item to…`. Resolved here — the field table stays free of queries — and
+   * the combined writes run after the plan's own save, each named on the button.
+   */
+  const mealForm = draft.target?.objectKind === 'plan' && draft.target.type === 'meal';
+  const watchForm = draft.target?.objectKind === 'plan' && draft.target.type === 'watch';
+  const groceries = useDestination('groceries', draft.destinations.groceries, mealForm);
+  const watchList = useDestination(
+    'watch',
+    draft.destinations.watch,
+    watchForm && draft.alsoAddToList,
+  );
+  const listBridge = useListBridge();
+  const selectedIngredientIds = draft.details.ingredients
+    .filter((row) => row.selected && row.name.trim() !== '')
+    .map((row) => row.id);
+  const mealBridge =
+    draft.target?.objectKind === 'plan' &&
+    draft.target.type === 'meal' &&
+    selectedIngredientIds.length > 0 &&
+    groceries.list !== undefined
+      ? { listId: groceries.list.listId, listTitle: groceries.list.title }
+      : undefined;
+  const watchBridge =
+    draft.target?.objectKind === 'plan' &&
+    draft.target.type === 'watch' &&
+    draft.alsoAddToList &&
+    watchList.list !== undefined
+      ? { list: watchList.list }
+      : undefined;
+
   async function save() {
     if (draft.target === undefined) return;
     const target = draft.target;
-    const saved = await writer.save(
-      target,
-      {
-        title: draft.title,
-        notes: draft.notes,
-        ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
-        schedule: draft.schedule,
-        location: draft.location,
-        reminderOffset: draft.reminderOffset,
-        ...(draft.recurrence === undefined ? {} : { recurrence: draft.recurrence }),
-        details: draft.details,
-        ...(draft.parentActivityId === undefined
-          ? {}
-          : { parentActivityId: draft.parentActivityId }),
-        attachmentIds: attachments.attachmentIds,
-      },
-      timezone,
-    );
-    if (!saved) return; // The banner is already showing; the draft stays put.
+    const fields = {
+      title: draft.title,
+      notes: draft.notes,
+      ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
+      schedule: draft.schedule,
+      location: draft.location,
+      reminderOffset: draft.reminderOffset,
+      ...(draft.recurrence === undefined ? {} : { recurrence: draft.recurrence }),
+      details: draft.details,
+      ...(draft.parentActivityId === undefined
+        ? {}
+        : { parentActivityId: draft.parentActivityId }),
+      attachmentIds: attachments.attachmentIds,
+    };
+    /**
+     * `Save plan and add <title> to <list>` (P3-43, §8.1): the item is written first, then
+     * the reviewed Plan goes through P3-13's bridge from it, with `audience: just_me`
+     * supplied by this caller. The item outlives a failed bridge as an ordinary saved item.
+     */
+    if (watchBridge !== undefined) {
+      const saved = await listBridge.saveWatchItemAndPlan(
+        target,
+        fields,
+        timezone,
+        watchBridge,
+      );
+      if (!saved) return;
+    } else {
+      const saved = await writer.save(target, fields, timezone);
+      if (!saved) return; // The banner is already showing; the draft stays put.
+      /** `Save plan and add n items to <list>` (§9.2 step 4): the meal first, then P3-17. */
+      if (mealBridge !== undefined) {
+        await listBridge.addIngredients(
+          draft.takeActivityId(),
+          mealBridge.listId,
+          selectedIngredientIds,
+        );
+      }
+    }
 
     // §2.5's order: the form dismisses, then the toast names where it landed.
     draft.reset();
@@ -156,6 +217,21 @@ export function ComposeScreen({
         target={draft.target}
         saveEnabled={writeEnabled}
         attachments={{ busy: attachments.busy, failed: attachmentsFailed }}
+        {...(mealBridge === undefined
+          ? watchBridge === undefined
+            ? {}
+            : {
+                bridgeLabel: savePlanAndAddTitleLabel(
+                  draft.title.trim() || 'this',
+                  watchBridge.list.title,
+                ),
+              }
+          : {
+              bridgeLabel: savePlanAndAddItemsLabel(
+                selectedIngredientIds.length,
+                mealBridge.listTitle,
+              ),
+            })}
         onSave={() => void save()}
         isSaving={writer.isSaving}
       />
@@ -246,6 +322,15 @@ export function ComposeScreen({
                   notes={draft.notes}
                   sourceUrl={draft.sourceUrl}
                   attachments={attachments}
+                  listBridge={{
+                    groceriesTitle: groceries.list?.title,
+                    groceriesState: groceries.resolution?.kind,
+                    watchTitle: watchList.list?.title,
+                    watchState: watchList.resolution?.kind,
+                    alsoAddToList: draft.alsoAddToList,
+                    onAlsoAddToListChange: draft.setAlsoAddToList,
+                    onChangeDestination: (slot) => onChooseDestination?.(slot),
+                  }}
                   today={today}
                   onDateChange={draft.setDate}
                   onTimeChange={draft.setTime}

@@ -159,8 +159,7 @@ export const fieldsByType: Readonly<Record<ActivityType, readonly FieldSpec[]>> 
 export const UNBUILT_FIELDS: ReadonlySet<FieldKey> = new Set<FieldKey>([
   'people', //           Participants and sharing — Phase 6
   'relatedPlan', //      The plan picker — Phase 3
-  'addIngredientsTo', // The list bridge — Phase 3
-  'alsoAddTo', //        The list bridge — Phase 3
+  // `addIngredientsTo` and `alsoAddTo` are P3-43's and render.
 ]);
 
 /**
