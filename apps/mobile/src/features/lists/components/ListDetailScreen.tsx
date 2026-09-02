@@ -118,6 +118,7 @@ export function ListDetailScreen({
   const add = useAddListItem();
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsRequested, setSettingsRequested] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -312,6 +313,11 @@ export function ListDetailScreen({
         <ListHeaderMenu
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
+          onClosed={() => {
+            if (!settingsRequested) return;
+            setSettingsRequested(false);
+            setSettingsOpen(true);
+          }}
           list={list}
           /*
            * Zero until every page has landed, which makes `Uncheck all` absent rather than
@@ -332,8 +338,8 @@ export function ListDetailScreen({
             setDeleteOpen(true);
           }}
           onOpenSettings={() => {
+            setSettingsRequested(true);
             setMenuOpen(false);
-            setSettingsOpen(true);
           }}
         />
       )}

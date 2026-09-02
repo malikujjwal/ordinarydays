@@ -1,7 +1,7 @@
 import { instant } from '@od/shared/schemas';
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
@@ -436,6 +436,24 @@ describe('the configuration-driven List detail', () => {
       'req_context_add_9',
     );
     expect(mocks.view.refresh).not.toHaveBeenCalled();
+  });
+
+  it('waits for the More sheet to close before presenting List settings', () => {
+    vi.useFakeTimers();
+    mount();
+
+    fireEvent.click(screen.getByTestId('list-detail-menu'));
+    act(() => vi.advanceTimersByTime(400));
+    fireEvent.click(screen.getByTestId('list-settings-open'));
+
+    // iOS can present only one native modal in this transition. The outgoing sheet remains
+    // mounted for its exit, so the destination must wait for that lifecycle to complete.
+    expect(screen.queryByRole('dialog', { name: 'List settings' })).toBeNull();
+    expect(screen.getByTestId('list-header-menu')).toBeTruthy();
+
+    act(() => vi.advanceTimersByTime(400));
+    expect(screen.queryByRole('dialog', { name: 'More' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'List settings' })).toBeTruthy();
   });
 
   it('confirms list deletion from the detail menu before deleting and leaving', () => {

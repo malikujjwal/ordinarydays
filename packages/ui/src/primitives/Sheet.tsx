@@ -64,6 +64,8 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 export interface SheetProps {
   open: boolean;
   onClose: () => void;
+  /** Called after an owner-driven exit and, on iOS, its native modal dismissal have finished. */
+  onClosed?: () => void;
   title?: string;
   children: React.ReactNode;
   /**
@@ -101,6 +103,7 @@ export interface SheetProps {
 export function Sheet({
   open,
   onClose,
+  onClosed,
   title,
   children,
   detent = 'fit',
@@ -191,10 +194,20 @@ export function Sheet({
           dragY.setValue(0);
           setExit('travel');
           onDone?.();
+          // iOS owns one more asynchronous boundary: wait for its view controller dismissal
+          // below before a consumer presents the next modal.
+          if (Platform.OS !== 'ios') onClosed?.();
         },
       );
     },
-    [dragY, motion.duration.slow, motion.easing.accelerate, movePhase, progress],
+    [
+      dragY,
+      motion.duration.slow,
+      motion.easing.accelerate,
+      movePhase,
+      onClosed,
+      progress,
+    ],
   );
 
   /**
@@ -368,6 +381,9 @@ export function Sheet({
       accessibilityLabel={title ?? 'Dialog'}
       // Hardware Back on Android and Escape on web arrive here — and go through the same guard.
       onRequestClose={dismissible ? requestClose : undefined}
+      {...(Platform.OS === 'ios' && onClosed !== undefined
+        ? { onDismiss: onClosed }
+        : {})}
     >
       <View
         /**
