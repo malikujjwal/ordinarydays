@@ -29,7 +29,8 @@ services:
   # The local media bucket (P3-21), the first consumer of object storage. MinIO speaks the
   # S3 API including SigV4 presigned PUT, so the attachment path is @aws-sdk/client-s3 either
   # way and only the endpoint and credentials differ. `pnpm --filter @od/api s3:create-bucket`
-  # creates `od-media-local` in it, idempotently.
+  # creates `od-media-local` in it, idempotently, and allows anonymous reads on its `u/`
+  # prefix — the local stand-in for the Phase 5 media distribution the app reads by key.
   #
   # It models no part of CloudFront, OAC or Block Public Access; those are properties of the
   # deployed bucket, asserted by the CDK tests.

@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
 import { AttachmentPickerSheet } from '@/features/attachments/components/AttachmentPickerSheet';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
+import { useViewer } from '@/hooks/useViewer';
 import { activityKey } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -36,6 +37,9 @@ export default function ActivityDetailRoute() {
   // `Add photo` (P3-41): same reason — the attachments feature meets the activity feature here.
   const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
   const queryClient = useQueryClient();
+  // The owner-only photo actions need to know who is looking; a direct route load has not
+  // passed through a tab that fills `['me']`, so the route asks (P3-42).
+  useViewer();
   const activityId = id ?? '';
   const target: ActivityDetailTarget =
     occurrenceDate === undefined

@@ -506,7 +506,7 @@ inherits the creator's, and the owner cannot set one for anyone else.
 
 | Section | Hidden when |
 | --- | --- |
-| Hero image | No `primaryAttachmentId` |
+| Hero image | No `primaryAttachmentId`, or one that names no attachment the plan holds (P3-42: a deleted cover collapses the slot rather than rendering a broken image). Tapping the hero opens the viewer at the cover. |
 | When / where | Never hidden. If unscheduled it renders `Not scheduled` with a `Schedule` action for the owner, `Suggest a date` for a participant (§2.3). |
 | Reminder row (inside when / where) | Hidden when the plan has no date — there is nothing to count back from |
 | Dates suggested (§2.3) | Hidden when the plan has a date. On an undated plan it is never hidden: its empty state is the suggest affordance alone |
@@ -515,7 +515,7 @@ inherits the creator's, and the owner cannot set one for anyone else.
 | Lists | Never hidden. Empty state is `Add list` alone. |
 | Expenses | Hidden when the plan has < 2 participants and 0 expenses |
 | Notes | Empty state is a tappable `Add notes` placeholder |
-| Attachments | Never hidden once the picker exists (P3-41, built 2026-09-01): while empty it is discovered through the `Photo` chip in the `Add to this plan` row, and once it holds content the section carries its own `+ Add photo`, like Prep and Lists. Picking a photo shows its row at once — thumbnail, `Uploading n%`, `Pending` while offline, `Retry` on failure — and the row reads `Added` when the confirm lands. The 2026-08-13 pre-build discovery row (`Attachments · Photos and files · Coming later`) remains only for a caller that has not wired the picker. |
+| Attachments | Never hidden once the picker exists (P3-41, built 2026-09-01): while empty it is discovered through the `Photo` chip in the `Add to this plan` row, and once it holds content the section carries its own `+ Add photo`, like Prep and Lists. Picking a photo shows its row at once — thumbnail, `Uploading n%`, `Pending` while offline, `Retry` on failure — and the row reads `Added` when the confirm lands. Tapping a thumbnail opens the full-screen viewer at that photo, swiping between the plan's images (P3-42); long-pressing one offers the owner `Set as cover` (additive, standard undo) and `Delete` (confirms, no undo). The 2026-08-13 pre-build discovery row (`Attachments · Photos and files · Coming later`) remains only for a caller that has not wired the picker. |
 | Updates | Hidden when `visibility === 'private'` and there are no entries. **Exception to the 2026-08-25 empty-case note (recorded by P3-40):** when this row makes the section visible with zero entries — a shared plan before anything has happened — it renders as the section itself carrying `+ Write an update`, not as a chip. The feed's entry point lives at the feed's foot wherever the feed may show, so there is no Update chip in the `Add to this plan` row at all; on a private plan with no entries the deliberate consequence is no entry point until a system entry exists. |
 | Completion button | Hidden when `status` is `completed`, `skipped` or `cancelled` — replaced by the outcome and an `Undo` affordance — **and hidden for everyone but the owner**, who is the only person who can complete, skip or snooze a shared plan. A participant sees the outcome when there is one and nothing where the button would be. |
 

@@ -44,7 +44,7 @@ const profile = typeof extra.profile === 'string' ? extra.profile : 'local';
  */
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
 
-function metroLanHost(): string | undefined {
+export function metroLanHost(): string | undefined {
   const hostUri = Constants.expoConfig?.hostUri;
   if (typeof hostUri !== 'string' || hostUri === '') return undefined;
 
