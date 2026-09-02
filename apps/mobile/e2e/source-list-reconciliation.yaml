@@ -1,0 +1,41 @@
+appId: app.ordinarydays.ios.local
+name: P3 native source List reconciliation
+jsEngine: graaljs
+tags: [p3, ios, release, reconciliation]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: source-list-reconciliation
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: ${'agenda-row-' + output.activityId}
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: add-to-plan-list
+- assertVisible:
+    id: list-style-chooser
+- tapOn:
+    id: list-style-checklist
+- assertVisible:
+    id: new-list-title-step
+- tapOn:
+    id: new-list-title
+- eraseText
+- inputText: ${output.listTitle}
+- tapOn:
+    id: new-list-create
+- assertVisible:
+    id: section-lists
+- assertVisible: ${output.listTitle}

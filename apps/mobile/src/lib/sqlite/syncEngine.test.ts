@@ -5207,6 +5207,72 @@ describe('serialized native convergence guard', () => {
       expect(await outbox.all()).toEqual([]);
     });
 
+    it('pulls and publishes the source Activity after accepting a sourced List create', async () => {
+      if (database === undefined) throw new Error('missing sourced List database');
+      const source = await activities.read({
+        kind: 'activity',
+        activityId: ACTIVITY,
+      });
+      if (source === undefined) throw new Error('missing sourced List Activity');
+      const { lists, listService } = listHarness(database);
+      const sourcedCreate = {
+        ...CREATE,
+        intentId: 'create-sourced-costco-run',
+        idempotencyKey: 'create-sourced-costco-run',
+        input: { ...CREATE.input, sourceActivityId: ACTIVITY },
+      };
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          sourcedCreate,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const canonicalList = { ...canonical(), sourceActivityId: ACTIVITY };
+      const canonicalSource: ActivityDetail = {
+        ...source,
+        activity: {
+          ...source.activity,
+          updatedAt: '2026-08-27T09:20:00.000Z',
+        },
+        sourceLists: [
+          {
+            listId: LIST_ID,
+            title: canonicalList.title,
+            icon: canonicalList.icon,
+            itemCount: 0,
+            doneCount: 0,
+          },
+        ],
+      };
+      const activity = vi.fn(async () => canonicalSource);
+      const sourcePublished = vi.fn();
+      const unsubscribe = subscriptions.subscribe(
+        activities.scope(ACTIVITY),
+        sourcePublished,
+      );
+      const sync = engine(
+        lists,
+        listPushTransport(async () => canonicalList),
+        { activity },
+      );
+
+      await sync.syncNow();
+      sync.stop();
+      unsubscribe();
+
+      expect(activity).toHaveBeenCalledWith(
+        { kind: 'activity', activityId: ACTIVITY },
+        expect.anything(),
+      );
+      expect(
+        (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.sourceLists,
+      ).toEqual(canonicalSource.sourceLists);
+      expect(sourcePublished).toHaveBeenCalled();
+      expect(await outbox.all()).toEqual([]);
+    });
+
     /**
      * §P3-05's rule, asserted where it can actually fail: a transport retry reuses **both**
      * the minted `lst_` and the mutation id. A fresh id on a retry is how one confirmed
