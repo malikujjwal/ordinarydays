@@ -47,6 +47,16 @@ export default defineConfig({
        * reads the bottom inset now, so both workspaces need the same stand-in and two copies
        * is two things to keep in step.
        */
+      /**
+       * `expo-image` reaches native code on load. The stub renders a plain `<img>` with the
+       * source and accessible name, which is all a test reads (P3-42).
+       */
+      {
+        find: /^expo-image$/,
+        replacement: fileURLToPath(
+          new URL('./test/expo-image-stub.tsx', import.meta.url),
+        ),
+      },
       {
         find: /^react-native-safe-area-context$/,
         replacement: fileURLToPath(

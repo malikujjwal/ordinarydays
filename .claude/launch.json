@@ -21,6 +21,21 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@od/api", "dev"],
       "port": 3000
+    },
+    {
+      "name": "expo-web-8082",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@od/mobile",
+        "exec",
+        "expo",
+        "start",
+        "--web",
+        "--port",
+        "8082"
+      ],
+      "port": 8082
     }
   ]
 }

@@ -103,6 +103,8 @@ line added to it in the same pull request.
 | Deleting a whole recurring series | destructive | The series and the count of stored past completions — `Delete "Gym"? This removes: the series and its 40 past completions.` ([`activities.md`](activities.md) §6.4). `End series` is the gentler primary alternative and needs no confirmation (§4) |
 | Deleting a person, an expense, or a settlement | destructive | Per [`expenses.md`](expenses.md) and [`sharing-and-people.md`](sharing-and-people.md). Deleting a Person with an outstanding balance names it: `Priya still owes you $215.00 — deleting removes this balance.` |
 | Deleting the account | destructive | The 30-day window, with a typed confirmation |
+| Setting a plan's cover photo (P3-42) | additive | — (no confirmation; the standard undo) |
+| Deleting a photo from a plan (P3-42) | destructive | The photo by position — `Delete photo 2 of 3?` — and, when it is the cover, that the plan will have none until another is set. `Keeps:` everything else on the plan |
 
 > **Decision (2026-08-07) — a shared plan with participants is cancelled before it is
 > deleted.** The delete action on an active shared plan runs cancellation first — which
@@ -403,6 +405,8 @@ there is one is §1a.1.
 | Change Task/Plan or Plan kind | **Yes**, when fields would be dropped, in the §1a.1 shape | No | — | [`activities.md`](activities.md#63-changing-object-or-plan-kind) |
 | Discard an unsaved draft | **Yes** | No | — | |
 | Delete the account | **Yes**, typed confirmation | 30 days, by signing back in | 30 d | Soft delete, then purge |
+| Set a plan's cover photo | No | Yes | 6 s | `PATCH primaryAttachmentId` back to the previous cover, or `null` |
+| Delete a photo from a plan | **Yes**, naming the photo (§1a.1) | No | — | `DELETE /v1/activities/:id/attachments/:attachmentId`; deleting the cover clears `primaryAttachmentId` in the same write |
 
 ### 4.2 Toast rules
 

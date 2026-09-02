@@ -1,4 +1,4 @@
-import type { ChangeTarget } from '@od/shared';
+import type { ChangeTarget, User } from '@od/shared';
 import { addWallDays, describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
@@ -30,7 +30,9 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type NativeScrollEvent, type NativeSyntheticEvent, View } from 'react-native';
+import { AttachmentViewer } from '@/components/AttachmentViewer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { HeroImage } from '@/components/HeroImage';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { PendingNotice } from '@/components/PendingNotice';
 import { SnoozeSheet } from '@/components/SnoozeSheet';
@@ -54,6 +56,11 @@ import {
   useActivityActions,
 } from '@/features/activity/hooks/useActivityActions';
 import { useActivityUpdates } from '@/features/activity/hooks/useActivityUpdates';
+import { useAttachmentActions } from '@/features/activity/hooks/useAttachmentActions';
+import {
+  canManageAttachments,
+  resolveHero,
+} from '@/features/activity/model/attachmentActions';
 import {
   type Confirmation,
   deleteConfirmation,
@@ -1089,6 +1096,23 @@ function Loaded({
   const sourceLists = detail.detail?.sourceLists ?? [];
   const attachments = detail.detail?.attachments ?? [];
   /**
+   * The viewer, the cover and deletion (P3-42). The owner sees the long-press actions; a
+   * participant — or a viewer the app has not identified — sees the tiles and the viewer only.
+   */
+  const viewerUserId = useQueryClient().getQueryData<User>(['me'])?.userId;
+  const manageAttachments = canManageAttachments(
+    'ownerId' in activity ? activity : { ownerId: undefined },
+    viewerUserId,
+  );
+  const hero = resolveHero(activity.primaryAttachmentId, attachments);
+  const [viewerIndex, setViewerIndex] = useState<number | undefined>(undefined);
+  const attachmentActions = useAttachmentActions({
+    activityId: activity.activityId,
+    attachments,
+    primaryAttachmentId: activity.primaryAttachmentId,
+    patch: detail.patch,
+  });
+  /**
    * The live feed over the embedded first page (P3-40): optimistic posts, deletes and the
    * cursor continuation, reconciled against whatever page the next detail refetch embeds.
    */
@@ -1235,6 +1259,18 @@ function Loaded({
       )}
 
       <View style={{ gap: theme.space[5] }} testID="detail-header">
+        {/** The cover, when there is one; it opens the viewer at itself (§2.1 row 1). */}
+        <HeroImage
+          attachment={hero}
+          onPress={() =>
+            setViewerIndex(
+              Math.max(
+                0,
+                attachments.findIndex((a) => a.attachmentId === hero?.attachmentId),
+              ),
+            )
+          }
+        />
         {/** Title and type/audience are one header unit, not two unrelated form rows. */}
         <View style={{ gap: theme.space[2] }}>
           {pending ? (
@@ -1625,6 +1661,9 @@ function Loaded({
       {sections.some((section) => section.key === 'attachments') ? (
         <AttachmentsSection
           attachments={attachments}
+          coverAttachmentId={activity.primaryAttachmentId}
+          onOpen={setViewerIndex}
+          {...(manageAttachments ? { onActions: attachmentActions.open } : {})}
           {...(onAddAttachment === undefined ? {} : { onAdd: onAddAttachment })}
         />
       ) : null}
@@ -1666,6 +1705,13 @@ function Loaded({
           {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
         />
       ) : null}
+      <AttachmentViewer
+        open={viewerIndex !== undefined}
+        attachments={attachments}
+        initialIndex={viewerIndex ?? 0}
+        onClose={() => setViewerIndex(undefined)}
+      />
+      {attachmentActions.sheet}
     </View>
   );
 }

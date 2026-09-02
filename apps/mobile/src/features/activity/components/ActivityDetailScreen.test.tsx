@@ -2919,7 +2919,11 @@ describe('the Plan detail anatomy (P3-37)', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Prep 1, not completed' }));
 
-    await waitFor(() => expect(screen.getByTestId('detail-action-error')).toBeDefined());
+    // The transport retries a 5xx with backoff before the error surfaces; under full-suite
+    // load that outruns the default 1 s, so the wait is widened rather than the assertion.
+    await waitFor(() => expect(screen.getByTestId('detail-action-error')).toBeDefined(), {
+      timeout: 8000,
+    });
     expect(screen.getByText('Something went wrong.')).toBeDefined();
     expect(screen.getByTestId('detail-action-error-request-id').textContent).toBe(
       'req_child_failure',
@@ -3346,5 +3350,179 @@ describe('the Updates section (P3-40)', () => {
       (call) => call.method === 'GET' && call.url.includes('cursor=cur_1'),
     );
     expect(paged).toBeDefined();
+  });
+});
+
+/**
+ * The attachment viewer and the hero (P3-42, `plans-and-lists.md` §2.1 rows 1 and 8, §2.2).
+ *
+ * `['me']` is seeded so the screen can tell the owner from anyone else: the long-press
+ * actions are the owner's alone and are absent — not disabled — for everybody else.
+ */
+describe('the viewer and the hero (P3-42)', () => {
+  const ATT_A = 'att_01J8XKQ2M4N5P6R7S8T9V0W1A1';
+  const ATT_B = 'att_01J8XKQ2M4N5P6R7S8T9V0W1A2';
+  const photo = (attachmentId: string) => ({
+    attachmentId,
+    activityId: ID,
+    key: `u/usr_01J0000000000000000000000B/${attachmentId.slice(4)}.jpg`,
+    contentType: 'image/jpeg' as const,
+    byteSize: 1024,
+    createdAt: '2026-08-08T10:00:00.000Z' as Instant,
+    schemaVersion: 1 as const,
+  });
+  const photos = [photo(ATT_A), photo(ATT_B)];
+
+  function mountAs(
+    viewer: string,
+    activity: Activity,
+    extras: Record<string, unknown> = {},
+  ) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    queryClient.setQueryData(['me'], {
+      userId: viewer,
+      displayName: 'Dev',
+      timezone: 'America/New_York',
+      currency: 'USD',
+      weekStartsOn: 1,
+    });
+    stubFetch({
+      status: 200,
+      body: detailBody(activity, [], undefined, undefined, undefined, {
+        attachments: photos,
+        ...extras,
+      }),
+    });
+    return mount(undefined, undefined, undefined, undefined, queryClient);
+  }
+  const OWNER = 'usr_01J0000000000000000000000B';
+  const GUEST = 'usr_01J0000000000000000000000C';
+
+  it('renders no hero without primaryAttachmentId, and the thumbnails by key', async () => {
+    mountAs(OWNER, plan());
+    await loaded();
+
+    expect(screen.queryByTestId('hero-image')).toBeNull();
+    const tile = screen.getByTestId(`attachment-thumbnail-${ATT_A}`);
+    expect(tile.getAttribute('src')).toContain(`/u/${OWNER}/${ATT_A.slice(4)}.jpg`);
+    expect(screen.getByRole('button', { name: 'Photo 1 of 2' })).toBeDefined();
+  });
+
+  it('renders the hero when the cover names one of the plan’s photos, and not when it is stale', async () => {
+    mountAs(OWNER, plan({ primaryAttachmentId: ATT_B }));
+    await loaded();
+    expect(screen.getByRole('button', { name: 'Cover photo' })).toBeDefined();
+    expect(screen.getByTestId('hero-image-picture').getAttribute('src')).toContain(
+      ATT_B.slice(4),
+    );
+    // Announced once: the hero carries no second copy of the title.
+    expect(screen.getAllByText('Zahav')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Photo 2 of 2, cover' })).toBeDefined();
+  });
+
+  it('collapses the hero slot when the cover id names no attachment', async () => {
+    mountAs(OWNER, plan({ primaryAttachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1A9' }));
+    await loaded();
+    expect(screen.queryByTestId('hero-image')).toBeNull();
+  });
+
+  it('opens the viewer from the hero at the cover, and from a thumbnail at that photo', async () => {
+    mountAs(OWNER, plan({ primaryAttachmentId: ATT_B }));
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cover photo' }));
+    expect(screen.getByTestId('attachment-viewer-caption').textContent).toBe(
+      'Photo 2 of 2',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('attachment-viewer-caption')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Photo 1 of 2' }));
+    expect(screen.getByTestId('attachment-viewer-caption').textContent).toBe(
+      'Photo 1 of 2',
+    );
+    // Every image is named by position, for a screen reader paging through.
+    expect(screen.getByRole('img', { name: 'Photo 2 of 2' })).toBeDefined();
+  });
+
+  /** Additive (§1a.1): the hero appears at once and the toast offers undo (criterion 25). */
+  it('sets the cover optimistically with an undo toast, and the hero appears', async () => {
+    const { queryClient } = mountAs(OWNER, plan());
+    await loaded();
+    stubFetch({
+      status: 200,
+      body: {
+        data: plan({ primaryAttachmentId: ATT_A, updatedAt: '2026-08-09T10:00:00.000Z' }),
+        meta: { requestId: 'req_test' },
+      },
+    });
+
+    // A pointer's long press is the tile's `⋯` on web (§7); jsdom cannot hold a pointer.
+    fireEvent.click(screen.getByRole('button', { name: 'Photo 1 of 2 options' }));
+    fireEvent.click(await screen.findByTestId('attachment-set-cover'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Cover photo' })).toBeDefined(),
+    );
+    const patch = sent.find((s) => s.method === 'PATCH');
+    expect(patch?.body).toEqual({ primaryAttachmentId: ATT_A });
+    expect(useToast.getState().current).toMatchObject({
+      kind: 'undo',
+      message: 'Cover set',
+    });
+    expect(queryClient.getQueryData(['me'])).toBeDefined();
+  });
+
+  /** A deletion confirms (§1a.1 rule 3), names the photo, and gets no undo (§4.1). */
+  it('confirms a delete, names the cover, sends no undo, and the hero collapses', async () => {
+    mountAs(OWNER, plan({ primaryAttachmentId: ATT_A }));
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Photo 1 of 2 options' }));
+    fireEvent.click(await screen.findByTestId('attachment-delete'));
+    expect(screen.getByText('Delete photo 1 of 2?')).toBeDefined();
+    expect(screen.getByText(/It is the cover/)).toBeDefined();
+    expect(sent.find((s) => s.method === 'DELETE')).toBeUndefined();
+
+    stubFetch(
+      {
+        status: 200,
+        body: {
+          data: { attachmentId: ATT_A, coverCleared: true },
+          meta: { requestId: 'req_test' },
+        },
+      },
+      {
+        status: 200,
+        body: detailBody(plan(), [], undefined, undefined, undefined, {
+          attachments: [photo(ATT_B)],
+        }),
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete photo' }));
+
+    await waitFor(() =>
+      expect(sent.find((s) => s.method === 'DELETE')?.url).toContain(
+        `/attachments/${ATT_A}`,
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId('hero-image')).toBeNull());
+    expect(useToast.getState().current?.kind).not.toBe('undo');
+  });
+
+  it('offers neither action to anyone but the owner, while the viewer still opens', async () => {
+    mountAs(GUEST, plan({ primaryAttachmentId: ATT_A }));
+    await loaded();
+
+    const tile = screen.getByRole('button', { name: 'Photo 1 of 2, cover' });
+    expect(screen.queryByRole('button', { name: 'Photo 1 of 2 options' })).toBeNull();
+    expect(screen.queryByTestId('attachment-set-cover')).toBeNull();
+    expect(screen.queryByTestId('attachment-delete')).toBeNull();
+    fireEvent.click(tile);
+    expect(screen.getByTestId('attachment-viewer-caption').textContent).toBe(
+      'Photo 1 of 2',
+    );
   });
 });

@@ -1,6 +1,7 @@
 import {
   CreateBucketCommand,
   HeadBucketCommand,
+  PutBucketPolicyCommand,
   S3Client,
   S3ServiceException,
 } from '@aws-sdk/client-s3';
@@ -85,6 +86,39 @@ export async function createLocalBucket(
   }
 }
 
+/**
+ * The local stand-in for Phase 5's media distribution (P3-42).
+ *
+ * Deployed, the bucket is private behind CloudFront with an origin access control, and the
+ * app reads `https://media.<stage>…/<key>`. MinIO has no CloudFront, so the same read —
+ * `http://localhost:9000/od-media-local/<key>` — needs the bucket itself to answer an
+ * anonymous `GET` on the **permanent** prefix. `tmp/` stays private: an unconfirmed upload
+ * is nobody's to read. This script refuses to run without `S3_ENDPOINT` (above), so the
+ * policy can never reach a deployed bucket, whose Block Public Access the CDK tests assert.
+ */
+export async function allowLocalAnonymousReads(
+  client: S3Client,
+  bucket: string,
+): Promise<void> {
+  await client.send(
+    new PutBucketPolicyCommand({
+      Bucket: bucket,
+      Policy: JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Sid: 'LocalMediaRead',
+            Effect: 'Allow',
+            Principal: { AWS: ['*'] },
+            Action: ['s3:GetObject'],
+            Resource: [`arn:aws:s3:::${bucket}/u/*`],
+          },
+        ],
+      }),
+    }),
+  );
+}
+
 async function main(): Promise<void> {
   const { endpoint, region, bucket } = requireEndpoint();
   const client = new S3Client({
@@ -96,11 +130,12 @@ async function main(): Promise<void> {
   });
 
   const result = await createLocalBucket(client, bucket);
+  await allowLocalAnonymousReads(client, bucket);
 
   console.log(
     result === 'created'
       ? `Created ${bucket} at ${endpoint}.`
-      : `${bucket} already exists at ${endpoint}. Nothing to do.`,
+      : `${bucket} already exists at ${endpoint}; anonymous reads on u/ confirmed.`,
   );
 }
 

@@ -34,6 +34,17 @@ const API: Record<Profile, string> = {
   prod: 'https://api.ordinarydays.app',
 };
 
+/**
+ * Where attachment bytes are read from, by key (ADR-023, P3-42). The deployed origins are
+ * Phase 5's CloudFront distributions; until then `local` is the MinIO bucket path, which
+ * `src/lib/mediaUrl.ts` rewrites to the LAN host on a device the same way the API is.
+ */
+const MEDIA: Record<Profile, string> = {
+  local: process.env.EXPO_PUBLIC_MEDIA_BASE_URL ?? 'http://localhost:9000/od-media-local',
+  dev: 'https://media.dev.ordinarydays.app',
+  prod: 'https://media.ordinarydays.app',
+};
+
 const config: ExpoConfig = {
   name: PROFILE === 'prod' ? 'Ordinary Days' : `Ordinary Days (${PROFILE})`,
   slug: 'ordinarydays',
@@ -79,6 +90,7 @@ const config: ExpoConfig = {
   extra: {
     profile: PROFILE,
     apiBaseUrl: API[PROFILE],
+    mediaBaseUrl: MEDIA[PROFILE],
     // Cognito arrives in Phase 4. The keys are declared so that adding identity is a
     // deployment variable rather than a config change.
     cognitoUserPoolId: process.env.EXPO_PUBLIC_COGNITO_POOL_ID,
