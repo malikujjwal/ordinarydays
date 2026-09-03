@@ -193,6 +193,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const [selectedGap, setSelectedGap] = useState<SelectedGap>();
   const [reschedule, setReschedule] = useState<SelectedAgendaItem>();
   const [calendarHidden, setCalendarHidden] = useState(false);
+  const [calendarHeight, setCalendarHeight] = useState(0);
   const calendarHiddenRef = useRef(false);
   const calendarScrollAnchor = useRef(0);
   const calendarScrollDirection = useRef<-1 | 0 | 1>(0);
@@ -391,6 +392,9 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   );
   const listPadding = {
     gap: theme.space[5],
+    ...(stage === 'needsDate' || calendarHeight === 0
+      ? {}
+      : { paddingTop: calendarHeight }),
     // The final row scrolls above the global Add button without shrinking the viewport.
     paddingBottom: bottomChromeScrollPadding(insets.bottom),
   };
@@ -648,8 +652,9 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           {stage === 'needsDate' ? (
             <View style={{ flex: 1 }}>{stageBody()}</View>
           ) : (
-            // Calendar and list share one gapless stack so the animated height becomes real
-            // list space instead of leaving two static flex gaps behind while it collapses.
+            // The navigator overlays the dated list. Its measured height is stable list
+            // content inset, while scroll-driven visibility uses only compositor
+            // translation/opacity; no sibling is relaid out during the transition.
             <View style={{ flex: 1 }}>
               <CalendarNavigator
                 stage={stage}
@@ -658,6 +663,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
                 loadRange={plans.loadRange}
                 onSelectDate={setLanding}
                 hidden={calendarHidden}
+                onHeightChange={setCalendarHeight}
               />
               <View style={{ flex: 1 }}>{stageBody()}</View>
             </View>

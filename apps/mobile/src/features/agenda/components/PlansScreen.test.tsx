@@ -484,6 +484,12 @@ it('auto-hides the calendar while advancing the list and restores it on reverse 
   expect(screen.getByRole('button', { name: 'Collapse calendar' })).toBeDefined();
   expect(calendar.style.display).not.toBe('none');
 
+  // The navigator is an overlay over one continuously scrolling surface. Hiding it may
+  // animate opacity/translation, but it must never animate its layout height and pull the
+  // visible month/cards along with it.
+  expect(calendar.style.position).toBe('absolute');
+  expect(calendar.style.maxHeight).toBe('');
+
   Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
   fireEvent.scroll(list);
   // The calendar remains mounted while its height/opacity transition runs; an abrupt

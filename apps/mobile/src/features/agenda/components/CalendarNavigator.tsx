@@ -56,6 +56,8 @@ export interface CalendarNavigatorProps {
   testID?: string;
   /** Preserve navigator state while the list temporarily reclaims its vertical space. */
   hidden?: boolean;
+  /** Keep the dated list's first row clear of this non-layout overlay. */
+  onHeightChange?: (height: number) => void;
 }
 
 /** Stable keys for the Monday-first header; two labels read `T` and two read `S`. */
@@ -76,6 +78,7 @@ export function CalendarNavigator({
   storage,
   testID = 'plans-calendar',
   hidden = false,
+  onHeightChange,
 }: CalendarNavigatorProps) {
   const theme = useTheme();
   const motion = useMotion();
@@ -96,7 +99,7 @@ export function CalendarNavigator({
     const transition = Animated.timing(visibility, {
       toValue: hidden ? 0 : 1,
       duration: motion.duration.base,
-      useNativeDriver: false,
+      useNativeDriver: true,
     });
     transition.start();
     return () => transition.stop();
@@ -125,20 +128,18 @@ export function CalendarNavigator({
       accessibilityElementsHidden={hidden}
       importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
       style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 1,
         overflow: 'hidden',
         opacity: visibility,
-        maxHeight:
-          contentHeight === 0
-            ? undefined
-            : visibility.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, contentHeight],
-              }),
         transform: [
           {
             translateY: visibility.interpolate({
               inputRange: [0, 1],
-              outputRange: [-theme.space[2], 0],
+              outputRange: [-contentHeight, 0],
             }),
           },
         ],
@@ -148,7 +149,10 @@ export function CalendarNavigator({
       <View
         onLayout={(event) => {
           const height = event.nativeEvent.layout.height;
-          if (height > 0 && height !== contentHeight) setContentHeight(height);
+          if (height > 0 && height !== contentHeight) {
+            setContentHeight(height);
+            onHeightChange?.(height);
+          }
         }}
         style={{ paddingBottom: theme.space[4] }}
       >
