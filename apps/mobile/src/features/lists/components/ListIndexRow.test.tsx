@@ -74,15 +74,16 @@ describe('the card renders the list, not its template', () => {
   });
 });
 
-describe('the caption and the progress bar', () => {
-  it('shows done-of-total once a checkable collection has been started', () => {
+describe('the one-line row summary', () => {
+  it('shows count and freshness without turning the index into a progress dashboard', () => {
     mount(list());
 
-    expect(screen.getByText('5 of 12 done · today')).toBeTruthy();
-    expect(screen.getByTestId('card-progress')).toBeTruthy();
+    expect(screen.getByText('12 items · today')).toBeTruthy();
+    expect(screen.queryByText(/done/)).toBeNull();
+    expect(screen.queryByTestId('card-progress')).toBeNull();
   });
 
-  it('shows a plain count and no bar on an unstarted checkable collection', () => {
+  it('shows a plain count on an unstarted checkable collection', () => {
     mount(list({ doneCount: 0 }));
 
     expect(screen.getByText('12 items · today')).toBeTruthy();
@@ -122,7 +123,7 @@ describe('the freshness half of the caption', () => {
   it('renders lastItemActivityAt', () => {
     mount(list({ lastItemActivityAt: instant.parse('2026-08-26T09:00:00.000Z') }));
 
-    expect(screen.getByText('5 of 12 done · today')).toBeTruthy();
+    expect(screen.getByText('12 items · today')).toBeTruthy();
   });
 
   /**
@@ -138,7 +139,7 @@ describe('the freshness half of the caption', () => {
       }),
     );
 
-    expect(screen.getByText('5 of 12 done · 6 days ago')).toBeTruthy();
+    expect(screen.getByText('12 items · 6 days ago')).toBeTruthy();
     expect(screen.queryByText(/today/)).toBeNull();
   });
 });
@@ -156,6 +157,17 @@ describe('tapping the card', () => {
     mount(list());
 
     // Two lines, one stop. Separate nodes would be stops each saying part of a sentence.
-    expect(screen.getByLabelText('Groceries. 5 of 12 done · today')).toBeTruthy();
+    expect(screen.getByLabelText('Groceries. 12 items · today')).toBeTruthy();
+  });
+});
+
+describe('the full-width row layout', () => {
+  it('places the icon beside a clean two-line text stack and ends with a divider', () => {
+    mount(list());
+
+    const content = screen.getByTestId('card-row-content');
+    expect(getComputedStyle(content).flexDirection).toBe('row');
+    expect(getComputedStyle(screen.getByTestId('card')).borderBottomWidth).toBe('1px');
+    expect(getComputedStyle(screen.getByTestId('card')).minHeight).toBe('72px');
   });
 });

@@ -6,7 +6,6 @@ import {
   Field,
   IconButton,
   MoreHorizontal,
-  Pencil,
   Text,
   Touchable,
   useTheme,
@@ -48,6 +47,8 @@ import { ConnectivityStatus } from '@/components/ConnectivityStatus';
 export interface ListHeaderProps {
   /** Absent while the projection is still loading; the title falls back to `List`. */
   list: List | undefined;
+  /** The detail page's authoritative paged count when it is newer than the List row. */
+  itemCount?: number;
   onBack: () => void;
   /** Opens the `⋯` menu. Absent list means no menu — there is nothing to act on yet. */
   onOpenMenu: () => void;
@@ -58,8 +59,15 @@ export interface ListHeaderProps {
   testID?: string;
 }
 
+function headerKind(list: List): string {
+  if (list.itemStateMode.mode === 'stages') return 'STAGED LIST';
+  if (list.itemStateMode.mode === 'checkbox') return 'CHECKLIST';
+  return 'SIMPLE LIST';
+}
+
 export function ListHeader({
   list,
+  itemCount,
   onBack,
   onOpenMenu,
   onRename,
@@ -70,6 +78,7 @@ export function ListHeader({
   const [draft, setDraft] = useState<string>();
   const editing = draft !== undefined;
   const title = list?.title ?? 'List';
+  const visibleItemCount = itemCount ?? list?.itemCount ?? 0;
   const returning = useRef(false);
   const leaving = useRef(false);
 
@@ -157,6 +166,13 @@ export function ListHeader({
           </>
         )}
       </View>
+      {list === undefined ? null : (
+        <View style={{ marginTop: theme.space[7] }}>
+          <Text variant="caption" color="textSecondary" testID="list-header-caption">
+            {`${headerKind(list)} · ${String(visibleItemCount)} ${visibleItemCount === 1 ? 'ITEM' : 'ITEMS'}`}
+          </Text>
+        </View>
+      )}
       <View
         testID="list-header-title-line"
         style={{
@@ -171,7 +187,7 @@ export function ListHeader({
               label="List name"
               hideLabel
               appearance="bare"
-              textVariant="heading"
+              textVariant="display"
               autoFocus
               value={draft}
               onChangeText={(next) => {
@@ -209,28 +225,13 @@ export function ListHeader({
               }}
             >
               <Text
-                variant="title"
+                variant="display"
                 color="textDisplay"
                 accessibilityRole="header"
                 numberOfLines={2}
               >
                 {title}
               </Text>
-              <View
-                aria-hidden
-                testID="list-title-pencil"
-                style={{
-                  width: 30,
-                  height: 30,
-                  flexShrink: 0,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: theme.radius.md,
-                  backgroundColor: theme.colors.surfaceRaised,
-                }}
-              >
-                <Pencil size={14} color={theme.colors.accent} />
-              </View>
             </Touchable>
           )}
         </View>

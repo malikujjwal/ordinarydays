@@ -75,7 +75,8 @@ const createStyles = (theme: Theme) =>
     rowQuiet: { backgroundColor: 'transparent' },
     handleSlot: {
       position: 'absolute',
-      top: theme.space[2],
+      top: '50%',
+      marginTop: -theme.layout.hitTarget / 2,
       pointerEvents: 'auto',
       zIndex: 3,
     },

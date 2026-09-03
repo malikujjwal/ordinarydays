@@ -136,6 +136,9 @@ describe('newest-first order', () => {
     setView({ lists: shuffled });
     mount();
 
+    expect(screen.getByText('3 LISTS')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Recent, 3' })).toBeTruthy();
+
     const rendered = ['Newest', 'Middle', 'Oldest'].map((title) =>
       screen.getByText(title),
     );

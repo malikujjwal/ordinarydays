@@ -38,6 +38,7 @@ export function IndexChromeFixture({ state }: IndexChromeFixtureProps) {
   return (
     <TabScreen
       title="Lists"
+      caption={`${String(active.length)} LISTS`}
       testID="lists-contract-tab"
       bleedBody
       headerAction={
@@ -68,19 +69,26 @@ export function IndexChromeFixture({ state }: IndexChromeFixtureProps) {
           />
         ) : (
           <View style={{ gap: theme.space[6] }}>
-            <ListCardGrid>
-              {active.map((list) => (
-                <SwipeableListCard
-                  key={list.listId}
-                  list={list}
-                  now={NOW}
-                  timezone={TIMEZONE}
-                  onPress={() => {}}
-                  actions={listSwipeActions('owner')}
-                  onAction={() => {}}
-                />
-              ))}
-            </ListCardGrid>
+            <View style={{ marginTop: theme.space[8] }}>
+              <SectionHeader
+                title="Recent"
+                count={active.length}
+                variant="sectionLabel"
+              />
+              <ListCardGrid>
+                {active.map((list) => (
+                  <SwipeableListCard
+                    key={list.listId}
+                    list={list}
+                    now={NOW}
+                    timezone={TIMEZONE}
+                    onPress={() => {}}
+                    actions={listSwipeActions('owner')}
+                    onAction={() => {}}
+                  />
+                ))}
+              </ListCardGrid>
+            </View>
             <View style={{ gap: theme.space[2] }}>
               <SectionHeader title="Archived" count={1} />
               <ListCardGrid>

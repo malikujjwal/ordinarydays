@@ -4,7 +4,6 @@ import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 import { View } from 'react-native';
 import type { ListItemRow as ListItemRowData } from '@/lib/sqlite/listItemsRepository';
-import { countLine } from '../model/listCard';
 import { ITEM_SCROLL_FETCH_RATIO, mayShowEmptyState } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
 import { planStateLine, spokenPlanStateLine } from '../model/planStateLine';
@@ -13,7 +12,6 @@ import { ListAddRow } from './ListAddRow';
 import { ListEmptyState } from './ListEmptyState';
 import { ListHeader } from './ListHeader';
 import { ListItemRow } from './ListItemRow';
-import { ListOverview } from './ListOverview';
 import { ReorderableList } from './ReorderableList';
 import { isGroupedStageList, StateSections } from './StateSections';
 
@@ -112,6 +110,7 @@ export function ListDetailSurface({
       header={
         <ListHeader
           list={list}
+          itemCount={itemCount}
           onBack={onBack}
           onOpenMenu={onOpenMenu}
           onRename={onRename}
@@ -162,8 +161,7 @@ export function ListDetailSurface({
             {addEditor}
           </View>
         ) : list === undefined ? null : isGroupedStageList(list) ? (
-          <View style={{ gap: theme.space[3] }}>
-            <ListOverview count={countLine(list)} />
+          <View>
             <StateSections
               list={list}
               items={items}
@@ -173,8 +171,7 @@ export function ListDetailSurface({
             />
           </View>
         ) : (
-          <View style={{ gap: theme.space[2] }}>
-            <ListOverview count={countLine(list)} />
+          <View>
             <ReorderableList
               items={orderedItems(items)}
               keyOf={(item) => item.itemId}
