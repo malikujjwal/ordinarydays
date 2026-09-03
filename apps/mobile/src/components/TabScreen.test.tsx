@@ -79,6 +79,18 @@ describe('TabScreen', () => {
       'padding-bottom',
     );
   });
+
+  it('can yield only its standard header to screen-owned overlay chrome', () => {
+    wrap(
+      <TabScreen title="Plans" testID="plans-screen" hideHeader>
+        <Text>Plan list</Text>
+      </TabScreen>,
+    );
+
+    expect(screen.queryByRole('heading', { name: 'Plans' })).toBeNull();
+    expect(screen.getByText('Plan list')).toBeDefined();
+    expect(screen.getByTestId('tab-screen-body')).toBeDefined();
+  });
 });
 
 /**

@@ -124,11 +124,15 @@ function createClient() {
   return client;
 }
 
-function mount(ui: ReactNode, client = createClient()) {
+function mount(
+  ui: ReactNode,
+  client = createClient(),
+  scheme: 'light' | 'dark' = 'light',
+) {
   const mounted = render(
     <SafeAreaProvider>
       <ClockProvider clock={fixedClock('2026-08-06T15:10:00.000Z' as Instant)}>
-        <ThemeProvider scheme="light">
+        <ThemeProvider scheme={scheme}>
           <QueryClientProvider client={client}>{ui}</QueryClientProvider>
         </ThemeProvider>
       </ClockProvider>
@@ -138,6 +142,8 @@ function mount(ui: ReactNode, client = createClient()) {
 }
 
 afterEach(async () => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+  window.dispatchEvent(new Event('resize'));
   onlineManager.setOnline(true);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -533,14 +539,25 @@ describe('TodayScreen', () => {
 
   it('renders untimed work as three open flat groups without timeline connectors', async () => {
     stubFetch(
-      response([
-        row(1, {
-          title: 'Old paperwork',
-          overdueFromDate: '2026-08-04',
-        }),
-        row(2, { title: 'For this date' }),
-        row(3, { title: 'Whenever', status: 'saved' }),
-      ]),
+      response(
+        [
+          row(1, {
+            title: 'Old paperwork',
+            overdueFromDate: '2026-08-04',
+          }),
+          row(2, {
+            title:
+              'A dated untimed title that is intentionally long enough to wrap twice',
+            subtitle: 'Dentist appointment',
+            isRecurring: true,
+            recurrenceDescription: 'Daily',
+          }),
+          row(3, { title: 'Whenever', status: 'saved' }),
+          row(5, { title: 'No metadata', status: 'saved' }),
+        ],
+        undefined,
+        [row(4, { title: 'Tomorrow task', time: '14:00' })],
+      ),
     );
     mount(
       <TodayScreen
@@ -554,12 +571,14 @@ describe('TodayScreen', () => {
     const untimed = await screen.findByTestId('today-untimed');
     expect(screen.getByRole('heading', { name: 'Overdue, 1' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Today · no time, 1' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Anytime · no date, 1' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Anytime · no date, 2' })).toBeDefined();
     expect(
       within(screen.getByTestId('today-overdue')).getByText('Old paperwork'),
     ).toBeDefined();
     expect(
-      within(screen.getByTestId('today-no-time')).getByText('For this date'),
+      within(screen.getByTestId('today-no-time')).getByText(
+        'A dated untimed title that is intentionally long enough to wrap twice',
+      ),
     ).toBeDefined();
     expect(
       within(screen.getByTestId('today-anytime-no-date')).getByText('Whenever'),
@@ -567,12 +586,50 @@ describe('TodayScreen', () => {
     expect(within(screen.getByTestId('today-overdue')).getByText('1')).toBeDefined();
     expect(within(screen.getByTestId('today-no-time')).getByText('1')).toBeDefined();
     expect(
-      within(screen.getByTestId('today-anytime-no-date')).getByText('1'),
+      within(screen.getByTestId('today-anytime-no-date')).getByText('2'),
     ).toBeDefined();
     expect(within(untimed).queryAllByTestId(/agenda-row-connector/)).toHaveLength(0);
+    const todaySection = screen.getByTestId('today-no-time');
+    const overdueSection = screen.getByTestId('today-overdue');
+    const anytimeSection = screen.getByTestId('today-anytime-no-date');
+    const tomorrowSection = screen.getByTestId('today-tomorrow');
+    expect(
+      todaySection.compareDocumentPosition(overdueSection) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      overdueSection.compareDocumentPosition(anytimeSection) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      anytimeSection.compareDocumentPosition(tomorrowSection) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(untimed.style.gap).toBe('16px');
+    expect(within(overdueSection).getByText('Due Aug 4')).toBeDefined();
+    expect(within(todaySection).getByText('Dentist appointment')).toBeDefined();
+    expect(within(todaySection).getByText('↻ Daily')).toBeDefined();
+    expect(
+      within(todaySection).getByTestId('agenda-row-title').style.webkitLineClamp,
+    ).toBe('2');
+    expect(within(anytimeSection).getByText('No metadata')).toBeDefined();
+    expect(within(anytimeSection).queryByTestId('agenda-row-subtitle')).toBeNull();
+    expect(
+      within(overdueSection).getByRole('button', {
+        name: 'Overdue from Tuesday 4 August',
+      }).textContent,
+    ).toContain('2 days');
+    const rows = within(untimed).getAllByTestId(/^agenda-row-act_/);
+    expect(rows.every((item) => item.style.paddingBottom === '4px')).toBe(true);
+    expect(rows.every((item) => Number.parseFloat(item.style.minHeight) >= 44)).toBe(
+      true,
+    );
+    const anytimeRows = within(anytimeSection).getAllByTestId(/^agenda-row-act_/);
+    expect(anytimeRows[0]?.style.borderBottomWidth).toBe('1px');
+    expect(anytimeRows[1]?.style.borderBottomWidth).toBe('0px');
   });
 
-  it('uses equal compact spacing around Now and bridges the timed marker rail', async () => {
+  it('keeps Now between timed sections without bridging their marker rails', async () => {
     stubFetch(
       response([
         row(1, { title: 'Morning', time: '10:00', isPast: true }),
@@ -590,10 +647,49 @@ describe('TodayScreen', () => {
 
     const timeline = await screen.findByTestId('today-timed-continuity');
     expect(timeline.style.gap).toBe('16px');
-    const bridge = screen.getByTestId('today-now-timeline-bridge');
-    expect(bridge.style.top).toBe('-16px');
-    expect(bridge.style.bottom).toBe('-16px');
-    expect(screen.getByTestId('today-schedule-timeline-entry')).toBeDefined();
+    expect(screen.queryByTestId('today-now-timeline-bridge')).toBeNull();
+    expect(screen.queryByTestId('today-schedule-timeline-entry')).toBeNull();
+    expect(
+      within(screen.getByTestId('today-earlier')).queryByTestId(
+        'agenda-row-connector-below',
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps the compact untimed geometry on a narrow dark-theme screen', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
+    window.dispatchEvent(new Event('resize'));
+    stubFetch(
+      response([
+        row(1, {
+          title: 'A long narrow-screen title that uses its second allowed line',
+          subtitle: 'Household',
+        }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+      createClient(),
+      'dark',
+    );
+
+    const section = await screen.findByTestId('today-no-time');
+    expect(screen.getByTestId('today-screen').style.backgroundColor).toBe(
+      cssColor(colors.dark.surface),
+    );
+    expect(
+      (screen.getByTestId('today-agenda').firstElementChild as HTMLElement).style
+        .paddingLeft,
+    ).toBe('16px');
+    expect(within(section).getByTestId('agenda-row-title').style.webkitLineClamp).toBe(
+      '2',
+    );
+    expect(within(section).getByText('Household')).toBeDefined();
   });
 
   it('shows the all-completed note above Earlier today', async () => {

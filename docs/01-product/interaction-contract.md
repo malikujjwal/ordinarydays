@@ -445,7 +445,7 @@ One contract, applied identically everywhere.
 
 | Situation | Presentation |
 | --- | --- |
-| First load of a screen with no cached data | Skeleton rows matching the real layout's shape and count (5 rows), with no spinner and no text. Minimum display 200 ms to avoid a flash. |
+| First load of a screen with no cached data | Skeleton rows matching the real layout's shape and count (5 rows), with no spinner and no text. Minimum display 200 ms to avoid a flash. **Explicit exception:** Plans uses one centred activity indicator announced as `Loading plans` (`plans-and-lists.md` §1.3.3). |
 | Refresh of a screen with cached data | Cached content stays fully visible and interactive. A 2 pt progress bar under the header. **Never** a blocking spinner over existing content. |
 | Pull to refresh | Platform refresh control. Web: a `Refresh` button in the header plus `R`. |
 | A mutation in flight | The affected row is optimistically updated. No spinner on the row. A spinner appears only on a modal's primary button, and only after 400 ms. |

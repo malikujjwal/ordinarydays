@@ -3,7 +3,7 @@ import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SectionList } from 'react-native';
+import { AccessibilityInfo, Animated, SectionList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
@@ -36,6 +36,16 @@ function reportCalendarHeight(height: number): void {
   expect(content.__reactLayoutHandler).toBeTypeOf('function');
   act(() => {
     content.__reactLayoutHandler?.({
+      nativeEvent: { layout: { x: 0, y: 0, width: 390, height } },
+    });
+  });
+}
+
+function reportLayout(testID: string, height: number): void {
+  const element = screen.getByTestId(testID) as LayoutAwareElement;
+  expect(element.__reactLayoutHandler).toBeTypeOf('function');
+  act(() => {
+    element.__reactLayoutHandler?.({
       nativeEvent: { layout: { x: 0, y: 0, width: 390, height } },
     });
   });
@@ -173,6 +183,7 @@ it('shows the loading state while the initial request is pending', () => {
   mount();
 
   expect(screen.getByTestId('plans-loading')).toBeDefined();
+  expect(screen.getByRole('progressbar', { name: 'Loading plans' })).toBeDefined();
 });
 
 it('renders the whole screen from one initial /v1/plans request', async () => {
@@ -489,7 +500,7 @@ it('waits for a cold Past date before landing instead of accepting an older load
   );
 });
 
-it('auto-hides the calendar while advancing the list and restores it on reverse scroll', async () => {
+it('keeps compact stage and month navigation away from the top without changing scroll position', async () => {
   stubFetch(
     initialBody({
       upcoming: [plansDay('2026-08-08', [row(1)]), plansDay('2026-08-09', [row(2)])],
@@ -498,32 +509,165 @@ it('auto-hides the calendar while advancing the list and restores it on reverse 
   mount();
 
   const list = await screen.findByTestId('plans-list');
-  const calendar = screen.getByTestId('plans-calendar');
-  if (screen.queryByRole('button', { name: 'Collapse calendar' }) === null) {
-    fireEvent.click(screen.getByRole('button', { name: 'Expand calendar' }));
-  }
-  expect(screen.getByRole('button', { name: 'Collapse calendar' })).toBeDefined();
-  expect(calendar.style.display).not.toBe('none');
-
-  // The navigator is an overlay over one continuously scrolling surface. Hiding it may
-  // animate opacity/translation, but it must never animate its layout height and pull the
-  // visible month/cards along with it.
-  expect(calendar.style.position).toBe('absolute');
-  expect(calendar.style.maxHeight).toBe('');
+  expect(screen.getByRole('heading', { name: 'Plans' })).toBeDefined();
+  expect(screen.queryByRole('button', { name: 'Open full calendar' })).toBeNull();
 
   Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
   fireEvent.scroll(list);
-  // The calendar remains mounted while its height/opacity transition runs; an abrupt
-  // `display: none` cannot animate and used to make the list jump.
-  expect(calendar.style.display).not.toBe('none');
-  await waitFor(() => expect(Number(calendar.style.opacity)).toBeLessThan(1));
-  // The section month remains the list's sticky header while the navigator is hidden.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Open full calendar' })).toBeDefined(),
+  );
+  expect(screen.queryByRole('heading', { name: 'Plans' })).toBeNull();
+  expect(screen.getByRole('tab', { name: 'Upcoming' })).toBeDefined();
+  expect(screen.getByRole('button', { name: 'Previous month' })).toBeDefined();
+  expect(screen.getByRole('button', { name: 'Next month' })).toBeDefined();
+  expect(list.scrollTop).toBe(40);
   expect(screen.getByTestId('plans-month-2026-08')).toBeDefined();
 
   list.scrollTop = 20;
   fireEvent.scroll(list);
-  await waitFor(() => expect(Number(calendar.style.opacity)).toBeGreaterThan(0));
-  expect(screen.getByRole('button', { name: 'Collapse calendar' })).toBeDefined();
+  expect(screen.getByRole('button', { name: 'Open full calendar' })).toBeDefined();
+  expect(screen.queryByRole('heading', { name: 'Plans' })).toBeNull();
+  expect(list.scrollTop).toBe(20);
+
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { name: 'Plans' })).toBeDefined(),
+  );
+  expect(screen.queryByRole('button', { name: 'Open full calendar' })).toBeNull();
+  expect(list.scrollTop).toBe(0);
+});
+
+it('keeps the compact stage switcher usable and shows no calendar controls for Needs a date', async () => {
+  stubFetch(
+    initialBody({
+      needsDate: [needsDateRow(1, { title: 'Pick a weekend' })],
+      upcoming: [plansDay('2026-08-08', [row(2)])],
+    }),
+  );
+  mount();
+
+  const list = await screen.findByTestId('plans-list');
+  Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
+  fireEvent.scroll(list);
+  await screen.findByRole('button', { name: 'Open full calendar' });
+  openStage('Needs a date');
+
+  expect(screen.getByText('Pick a weekend')).toBeDefined();
+  expect(screen.getByRole('tab', { name: 'Needs a date' })).toBeDefined();
+  expect(screen.queryByRole('button', { name: 'Open full calendar' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Previous month' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Next month' })).toBeNull();
+});
+
+it('lands a compact full-calendar day below the complete visible overlay', async () => {
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)])],
+    }),
+  );
+  mount();
+
+  const list = await screen.findByTestId('plans-list');
+  Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
+  fireEvent.scroll(list);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open full calendar' }));
+  await screen.findByTestId('plans-calendar-compact-grid');
+  reportLayout('plans-compact-chrome', 88);
+  reportLayout('plans-calendar-compact-grid', 200);
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-08-08'));
+
+  await waitFor(() =>
+    expect(scrollToLocation).toHaveBeenCalledWith(
+      expect.objectContaining({ itemIndex: 1, viewOffset: 339 }),
+    ),
+  );
+  expect(list.scrollTop).toBe(40);
+});
+
+it('reaches the same full and compact states immediately when reduced motion is enabled', async () => {
+  vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+  const timing = vi.spyOn(Animated, 'timing');
+  stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)])],
+    }),
+  );
+  mount();
+
+  const list = await screen.findByTestId('plans-list');
+  await waitFor(() =>
+    expect(timing).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ duration: 0, useNativeDriver: true }),
+    ),
+  );
+  timing.mockClear();
+
+  Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
+  fireEvent.scroll(list);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Open full calendar' })).toBeDefined(),
+  );
+  expect(screen.queryByRole('heading', { name: 'Plans' })).toBeNull();
+  expect(timing).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ duration: 0, useNativeDriver: true }),
+  );
+
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { name: 'Plans' })).toBeDefined(),
+  );
+  expect(screen.queryByRole('button', { name: 'Open full calendar' })).toBeNull();
+});
+
+it('loads and lands an Upcoming day beyond the initial window boundary', async () => {
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  const calls = stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)])],
+      upcomingWindow: {
+        from: '2026-08-06',
+        through: '2026-10-06',
+        nextFrom: null,
+      },
+    }),
+    {
+      data: {
+        mode: 'upcoming_window',
+        upcoming: [plansDay('2026-11-05', [row(2, { title: 'November fifth' })])],
+        upcomingWindow: { from: '2026-10-07', through: '2026-12-06', nextFrom: null },
+        warnings: [],
+      },
+      meta: { requestId: 'req_november_window' },
+    },
+  );
+  mount();
+
+  await screen.findByText('Plan 1');
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand !== null) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-11-05'));
+
+  await screen.findByText('November fifth');
+  await waitFor(() =>
+    expect(scrollToLocation).toHaveBeenCalledWith(
+      expect.objectContaining({ itemIndex: 1 }),
+    ),
+  );
+  expect(calls.some(({ url }) => url.includes('upcomingFrom=2026-10-07'))).toBe(true);
+  expect(calls.some(({ url }) => url.includes('upcomingTo=2026-12-06'))).toBe(true);
 });
 
 it('opens the gap date picker pre-set to the first day without writing anything', async () => {

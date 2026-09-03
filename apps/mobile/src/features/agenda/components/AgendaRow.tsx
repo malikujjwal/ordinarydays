@@ -22,6 +22,7 @@ import {
   outcomeVerb,
   passedPlanResolution,
 } from '@/lib/passedPlanResolution';
+import { formatOverdueDueDate } from '../model/formatOverdueChip';
 import { OverdueChip } from './OverdueChip';
 import { RowBadges } from './RowBadges';
 import { RowLeading, TIMELINE_NODE_SIZE } from './RowLeading';
@@ -56,6 +57,8 @@ export interface AgendaRowProps {
    * under dynamic type, so `design-system.md` §0's "fixed-height rows do not exist" holds.
    */
   dense?: boolean;
+  /** Compact flat-row treatment for Today's three untimed task groups. */
+  compactUntimed?: boolean;
   /**
    * The timeline connector (`design-system.md` §7.1, P2-44) — "it is what makes the day read as
    * a timeline".
@@ -150,6 +153,7 @@ export function AgendaRowWithIntentState({
   subtitlePrefix,
   divider = true,
   dense = false,
+  compactUntimed = false,
   connectorAbove = false,
   connectorBelow = false,
   completionCheckedOverride,
@@ -235,7 +239,11 @@ export function AgendaRowWithIntentState({
    * reads the grouping without a separator to help it.
    */
   const rowPaddingTop = dense ? theme.space[1] : theme.space[4];
-  const rowPaddingBottom = dense ? theme.space[1] : theme.space[4] + theme.space[1];
+  const rowPaddingBottom = dense
+    ? theme.space[1]
+    : compactUntimed
+      ? theme.space[2]
+      : theme.space[4] + theme.space[1];
   /**
    * **How far the leading control is lifted**, so its 44 pt box centres on the title's first
    * line rather than on the row (founder, 2026-08-17).
@@ -465,7 +473,12 @@ export function AgendaRowWithIntentState({
        */}
       <View
         pointerEvents="box-none"
-        style={{ flex: 1, minWidth: 0, gap: theme.space[2] }}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          gap: theme.space[2],
+          ...(compactUntimed ? { flexDirection: 'row', alignItems: 'flex-start' } : {}),
+        }}
       >
         <Touchable
           disabled={openInert}
@@ -498,6 +511,7 @@ export function AgendaRowWithIntentState({
            * whole row clickable" that cannot be done.
            */
           style={{
+            ...(compactUntimed ? { flex: 1, minWidth: 0 } : {}),
             alignItems: 'flex-start',
             alignSelf: 'stretch',
             paddingLeft: theme.space[2],
@@ -530,10 +544,16 @@ export function AgendaRowWithIntentState({
             variant={titleVariant}
             color={dimmed ? 'textMuted' : 'textPrimary'}
             struck={checked}
-            numberOfLines={dense ? 1 : undefined}
+            numberOfLines={dense ? 1 : compactUntimed ? 2 : undefined}
+            testID="agenda-row-title"
           >
             {item.title}
           </Text>
+          {!compactUntimed || item.overdueFromDate === undefined ? null : (
+            <Text variant="footnote" color="warning" testID="agenda-row-overdue-due">
+              {formatOverdueDueDate(item.overdueFromDate)}
+            </Text>
+          )}
           {/**
            * **A skipped row says so** (founder, 2026-08-15). `Show skipped` renders these in
            * EARLIER TODAY "de-emphasised" (`today-and-tasks.md` §3.2), and de-emphasis was all
@@ -626,6 +646,19 @@ export function AgendaRowWithIntentState({
           )}
         </Touchable>
 
+        {!compactUntimed ||
+        item.overdueFromDate === undefined ||
+        today === undefined ? null : (
+          <OverdueChip
+            overdueFromDate={item.overdueFromDate}
+            today={today}
+            age
+            {...(onOpenOverdue === undefined || inert
+              ? {}
+              : { onPress: () => onOpenOverdue(item) })}
+          />
+        )}
+
         {/**
          * **Recurrence and snooze are not passed here any more** — they render inside the
          * metadata line above (founder, 2026-08-17). Passing them as well rendered `↻ Daily`
@@ -642,7 +675,7 @@ export function AgendaRowWithIntentState({
             {recurrenceEdit.message}
           </Text>
         )}
-        {dense ? null : (
+        {dense || compactUntimed ? null : (
           <RowBadges
             {...(item.overdueFromDate === undefined || showTime
               ? {}

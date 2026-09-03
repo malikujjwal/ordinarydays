@@ -929,12 +929,14 @@ hairline connector, content to the right:
   line, not a horizontal rule.
 
 **Untimed task groups.** The block below the scheduled timeline is deliberately not part of the
-timeline. It renders `OVERDUE`, `TODAY · NO TIME`, and `ANYTIME · NO DATE` as open sections separated
-by whitespace. Rows are flat on `surface`, retain the standard 44 pt minimum target and checkbox
-size, and do not reserve a time rail, draw marker connectors, add horizontal dividers, or acquire
-card chrome. Title and useful metadata keep the normal row grammar; only overdue date/age copy uses
-`warning`. Empty groups disappear. The overdue group retains its three-row disclosure, and the
-no-date group retains the product's 20-row cap and `See all` destination.
+timeline. It renders `TODAY · NO TIME`, `OVERDUE`, `ANYTIME · NO DATE`, then the read-only
+`TOMORROW` preview as open sections separated by one `space[5]` gap. Rows are flat on `surface`,
+retain a 56 pt minimum measure and 44 pt target, and do not reserve a time rail, draw marker
+connectors, or acquire card chrome. Adjacent rows within one group may use a single `border`
+hairline; no decorative separator sits between groups. Titles wrap to at most two lines, useful
+metadata stays subdued, and only overdue due-date/age copy uses `warning`. Empty groups disappear.
+The overdue group retains its three-row disclosure, and the no-date group retains the product's
+20-row cap and `See all` destination.
 
 ### 7.2 Lists — collection rows
 
@@ -1178,15 +1180,18 @@ clip; the grip retains its 44 pt target.
   > paginate — stops burying Upcoming below the fold.
 
 - **The calendar navigator sits directly beneath the switcher on Upcoming and Past**, and is
-  absent on Needs a date. Collapsed it is a seven-column rolling strip; expanded it is a
-  normal month calendar of the same seven columns, so one day-cell component serves both.
-  On forward scroll it is an absolute overlay that translates and fades away; reverse scroll
-  restores it. Its measured height is retained only as the dated list's leading content inset:
-  the navigator never animates `height` or `maxHeight`, so the visible month and cards do not
-  move when it hides or returns. The overlay has an opaque `surface` background so scrolling rows
-  never show through its calendar furniture. A selected day lands below the visible overlay using
-  that same measured height as `viewOffset`; Upcoming and Past use the same rule. The list's month
-  headings remain sticky.
+  absent on Needs a date. At the top, collapsed is a seven-column rolling strip and expanded is
+  a normal month calendar of the same seven columns, so one day-cell component serves both. Away
+  from the top the large `Plans` heading fades/translates away while the switcher stays. The dated
+  stages crossfade to a compact month row — previous, tappable month/year, next, and an explicit
+  full-calendar button — while Needs a date keeps only the switcher. Reverse scrolling away from
+  the top retains compact chrome; only the top tolerance restores the complete header. No compact
+  duplicate title renders. The full measured header height remains the list's leading inset, and
+  all state changes happen in an opaque absolute overlay using compositor opacity/translation,
+  so no transition changes scroll offset or pulls cards. Reduced motion makes the same state
+  transition immediate. A selected day lands below the currently visible full or compact overlay
+  using that measured visible height as `viewOffset`; Upcoming and Past use the same rule. The
+  list's month headings remain sticky.
   Three cell treatments, and the middle one is the one to get right: a live date in the
   displayed month is normal, a live date spilling in from an adjacent month is subordinate
   but plainly readable and tappable, and an out-of-stage date is inert. Behaviour, eligibility

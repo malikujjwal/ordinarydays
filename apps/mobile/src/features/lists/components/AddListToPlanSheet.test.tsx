@@ -108,12 +108,15 @@ it('starts with exactly Create new list and Choose existing list, with nothing s
   expect(screen.queryByRole('button', { name: 'Add to plan' })).toBeNull();
 });
 
-it('hands Create new list to the unchanged sourced creation flow', () => {
+it('dismisses the chooser before presenting the sourced creation flow', async () => {
   mount();
 
   fireEvent.click(screen.getByRole('button', { name: 'Create new list' }));
 
-  expect(screen.getByTestId('create-list-flow')).toBeDefined();
+  // Native may present only one modal owner at a time. The chooser must finish its exit
+  // before the creation sheet mounts, otherwise iOS leaves a blank modal over frozen detail.
+  expect(screen.queryByTestId('create-list-flow')).toBeNull();
+  await vi.waitFor(() => expect(screen.getByTestId('create-list-flow')).toBeDefined());
 });
 
 it('shows active accessible Lists and explains every ineligible row', () => {

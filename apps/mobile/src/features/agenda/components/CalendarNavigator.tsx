@@ -1,5 +1,6 @@
 import type { WallDate } from '@od/shared/time';
 import {
+  Calendar,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -54,8 +55,8 @@ export interface CalendarNavigatorProps {
   settleMs?: number;
   storage?: CalendarStorage;
   testID?: string;
-  /** Preserve navigator state while the list temporarily reclaims its vertical space. */
-  hidden?: boolean;
+  /** Switch to the fixed two-row month chrome while preserving remembered calendar state. */
+  compact?: boolean;
   /** Keep the dated list's first row clear of this non-layout overlay. */
   onHeightChange?: (height: number) => void;
 }
@@ -77,13 +78,16 @@ export function CalendarNavigator({
   settleMs,
   storage,
   testID = 'plans-calendar',
-  hidden = false,
+  compact = false,
   onHeightChange,
 }: CalendarNavigatorProps) {
   const theme = useTheme();
   const motion = useMotion();
-  const visibility = useRef(new Animated.Value(hidden ? 0 : 1)).current;
+  const presentation = useRef(new Animated.Value(compact ? 1 : 0)).current;
+  const compactGridProgress = useRef(new Animated.Value(0)).current;
   const [contentHeight, setContentHeight] = useState(0);
+  const [compactOpen, setCompactOpen] = useState(false);
+  const [compactGridMounted, setCompactGridMounted] = useState(false);
   const navigator = useCalendarNavigator({
     stage,
     today,
@@ -91,19 +95,45 @@ export function CalendarNavigator({
     loadRange,
     ...(settleMs === undefined ? {} : { settleMs }),
     ...(storage === undefined ? {} : { storage }),
+    ...(compact ? { expandedOverride: compactOpen, windowExpandedOverride: true } : {}),
   });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(() => Number(navigator.month.slice(0, 4)));
 
   useEffect(() => {
-    const transition = Animated.timing(visibility, {
-      toValue: hidden ? 0 : 1,
+    const transition = Animated.timing(presentation, {
+      toValue: compact ? 1 : 0,
       duration: motion.duration.base,
       useNativeDriver: true,
     });
     transition.start();
     return () => transition.stop();
-  }, [hidden, motion.duration.base, visibility]);
+  }, [compact, motion.duration.base, presentation]);
+
+  useEffect(() => {
+    if (!compact) setCompactOpen(false);
+  }, [compact]);
+
+  useEffect(() => {
+    if (compactOpen) setCompactGridMounted(true);
+    if (compact && !compactOpen) onHeightChange?.(theme.layout.hitTarget);
+    const transition = Animated.timing(compactGridProgress, {
+      toValue: compactOpen ? 1 : 0,
+      duration: motion.duration.base,
+      useNativeDriver: true,
+    });
+    transition.start(({ finished }) => {
+      if (finished && !compactOpen) setCompactGridMounted(false);
+    });
+    return () => transition.stop();
+  }, [
+    compact,
+    compactGridProgress,
+    compactOpen,
+    motion.duration.base,
+    onHeightChange,
+    theme.layout.hitTarget,
+  ]);
 
   const select = (date: WallDate) => {
     if (navigator.expanded) navigator.setMonth(monthOf(date));
@@ -111,6 +141,7 @@ export function CalendarNavigator({
   };
 
   const weeks = chunkWeeks(navigator.cells);
+  const gridExpanded = compact || navigator.expanded;
   const toggle = (
     <IconButton
       icon={navigator.expanded ? ChevronUp : ChevronDown}
@@ -121,32 +152,193 @@ export function CalendarNavigator({
     />
   );
 
+  const openPicker = () => {
+    setPickerYear(Number(navigator.month.slice(0, 4)));
+    setPickerOpen(true);
+  };
+
+  const fullControls = navigator.expanded ? (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      <IconButton
+        icon={ChevronLeft}
+        label="Previous month"
+        tone="accent"
+        disabled={!navigator.canGoBack}
+        onPress={() => navigator.shift(-1)}
+        testID={`${testID}-previous`}
+      />
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
+        onPress={openPicker}
+        square={false}
+        testID={`${testID}-month`}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[2] }}
+      >
+        <Text variant="subhead" color="textPrimary">
+          {monthTitle(navigator.month)}
+        </Text>
+        <Text variant="caption" color="textAction">
+          ▾
+        </Text>
+      </Touchable>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <IconButton
+          icon={ChevronRight}
+          label="Next month"
+          tone="accent"
+          disabled={!navigator.canGoForward}
+          onPress={() => navigator.shift(1)}
+          testID={`${testID}-next`}
+        />
+        {toggle}
+      </View>
+    </View>
+  ) : (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
+        {STRIP_CAPTION[stage]}
+      </Text>
+      {toggle}
+    </View>
+  );
+
+  const compactControls = (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: theme.layout.hitTarget,
+      }}
+    >
+      <IconButton
+        icon={ChevronLeft}
+        label="Previous month"
+        tone="accent"
+        disabled={!navigator.canGoBack}
+        onPress={() => navigator.shift(-1)}
+        testID={`${testID}-compact-previous`}
+      />
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
+        onPress={openPicker}
+        square={false}
+        testID={`${testID}-compact-month`}
+        style={{ flex: 1, alignItems: 'center' }}
+      >
+        <Text variant="subhead" color="textPrimary" numberOfLines={1}>
+          {monthTitle(navigator.month)}
+        </Text>
+      </Touchable>
+      <IconButton
+        icon={ChevronRight}
+        label="Next month"
+        tone="accent"
+        disabled={!navigator.canGoForward}
+        onPress={() => navigator.shift(1)}
+        testID={`${testID}-compact-next`}
+      />
+      <IconButton
+        icon={Calendar}
+        label={compactOpen ? 'Close full calendar' : 'Open full calendar'}
+        tone="accent"
+        onPress={() => setCompactOpen((open) => !open)}
+        testID={`${testID}-compact-toggle`}
+      />
+    </View>
+  );
+
+  const calendarBody = (
+    <>
+      {gridExpanded ? (
+        <View style={{ flexDirection: 'row', gap: 3, marginBottom: theme.space[1] }}>
+          {WEEKDAY_LABELS.map((label, index) => (
+            <View key={WEEKDAY_KEYS[index]} style={{ flex: 1, alignItems: 'center' }}>
+              <Text variant="caption" color="textMuted">
+                {label}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={{ gap: 4 }} testID={`${testID}-grid`}>
+        {weeks.map((week) => (
+          <View key={week[0]?.date ?? 'week'} style={{ flexDirection: 'row', gap: 3 }}>
+            {week.map((cell) => (
+              <DayCell
+                key={cell.date}
+                cell={cell}
+                stage={stage}
+                compact={gridExpanded}
+                loading={navigator.loading}
+                {...(gridExpanded
+                  ? {}
+                  : { weekday: WEEKDAY_LABELS[weekdayIndex(cell.date)] ?? '' })}
+                onPress={select}
+              />
+            ))}
+          </View>
+        ))}
+      </View>
+
+      {navigator.loading ? (
+        <View testID={`${testID}-loading`} style={{ paddingTop: theme.space[2] }}>
+          <Skeleton shape="text" count={1} />
+        </View>
+      ) : navigator.failed ? (
+        <View
+          testID={`${testID}-error`}
+          accessibilityRole="alert"
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingTop: theme.space[2],
+          }}
+        >
+          <Text variant="footnote" color="textSecondary">
+            Couldn't load this month.
+          </Text>
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Try again"
+            onPress={navigator.retry}
+            square={false}
+            testID={`${testID}-retry`}
+          >
+            <Text variant="footnoteStrong" color="textAction">
+              Try again
+            </Text>
+          </Touchable>
+        </View>
+      ) : null}
+    </>
+  );
+
   return (
     <Animated.View
       testID={testID}
       accessibilityState={{ expanded: navigator.expanded }}
-      accessibilityElementsHidden={hidden}
-      importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
       style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 1,
-        overflow: 'hidden',
+        position: 'relative',
+        overflow: compact ? 'visible' : 'hidden',
         // The navigator floats above the dated list; without its own paper surface, rows
         // show through while the calendar translates and make the header look clipped.
         backgroundColor: theme.colors.surface,
-        opacity: visibility,
-        transform: [
-          {
-            translateY: visibility.interpolate({
-              inputRange: [0, 1],
-              outputRange: [-contentHeight, 0],
-            }),
-          },
-        ],
-        pointerEvents: hidden ? 'none' : 'auto',
       }}
     >
       <View
@@ -157,134 +349,96 @@ export function CalendarNavigator({
             onHeightChange?.(height);
           }
         }}
-        style={{ paddingBottom: theme.space[4] }}
+        style={{ paddingBottom: compact ? theme.space[0] : theme.space[4] }}
       >
-        {navigator.expanded ? (
-          <View
+        <View
+          style={{
+            height: theme.layout.hitTarget,
+            paddingBottom: compact ? theme.space[0] : theme.space[2],
+          }}
+        >
+          <Animated.View
+            aria-hidden={compact}
+            accessibilityElementsHidden={compact}
+            importantForAccessibility={compact ? 'no-hide-descendants' : 'auto'}
+            pointerEvents={compact ? 'none' : 'auto'}
             style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingBottom: theme.space[2],
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              opacity: presentation.interpolate({
+                inputRange: [0, 1],
+                outputRange: [1, 0],
+              }),
+              transform: [
+                {
+                  translateY: presentation.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, -theme.space[3]],
+                  }),
+                },
+              ],
             }}
           >
-            <IconButton
-              icon={ChevronLeft}
-              label="Previous month"
-              tone="accent"
-              disabled={!navigator.canGoBack}
-              onPress={() => navigator.shift(-1)}
-              testID={`${testID}-previous`}
-            />
-            <Touchable
-              accessibilityRole="button"
-              accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
-              onPress={() => {
-                setPickerYear(Number(navigator.month.slice(0, 4)));
-                setPickerOpen(true);
-              }}
-              square={false}
-              testID={`${testID}-month`}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[2] }}
-            >
-              <Text variant="subhead" color="textPrimary">
-                {monthTitle(navigator.month)}
-              </Text>
-              <Text variant="caption" color="textAction">
-                ▾
-              </Text>
-            </Touchable>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <IconButton
-                icon={ChevronRight}
-                label="Next month"
-                tone="accent"
-                disabled={!navigator.canGoForward}
-                onPress={() => navigator.shift(1)}
-                testID={`${testID}-next`}
-              />
-              {toggle}
-            </View>
-          </View>
-        ) : (
-          <View
+            {fullControls}
+          </Animated.View>
+          <Animated.View
+            aria-hidden={!compact}
+            accessibilityElementsHidden={!compact}
+            importantForAccessibility={!compact ? 'no-hide-descendants' : 'auto'}
+            pointerEvents={compact ? 'auto' : 'none'}
             style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingBottom: theme.space[2],
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              opacity: presentation,
+              transform: [
+                {
+                  translateY: presentation.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [theme.space[3], 0],
+                  }),
+                },
+              ],
             }}
           >
-            <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
-              {STRIP_CAPTION[stage]}
-            </Text>
-            {toggle}
-          </View>
-        )}
-
-        {navigator.expanded ? (
-          <View style={{ flexDirection: 'row', gap: 3, marginBottom: theme.space[1] }}>
-            {WEEKDAY_LABELS.map((label, index) => (
-              <View key={WEEKDAY_KEYS[index]} style={{ flex: 1, alignItems: 'center' }}>
-                <Text variant="caption" color="textMuted">
-                  {label}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        <View style={{ gap: 4 }} testID={`${testID}-grid`}>
-          {weeks.map((week) => (
-            <View key={week[0]?.date ?? 'week'} style={{ flexDirection: 'row', gap: 3 }}>
-              {week.map((cell) => (
-                <DayCell
-                  key={cell.date}
-                  cell={cell}
-                  stage={stage}
-                  compact={navigator.expanded}
-                  loading={navigator.loading}
-                  {...(navigator.expanded
-                    ? {}
-                    : { weekday: WEEKDAY_LABELS[weekdayIndex(cell.date)] ?? '' })}
-                  onPress={select}
-                />
-              ))}
-            </View>
-          ))}
+            {compactControls}
+          </Animated.View>
         </View>
+        {compact ? null : calendarBody}
 
-        {navigator.loading ? (
-          <View testID={`${testID}-loading`} style={{ paddingTop: theme.space[2] }}>
-            <Skeleton shape="text" count={1} />
-          </View>
-        ) : navigator.failed ? (
-          <View
-            testID={`${testID}-error`}
-            accessibilityRole="alert"
+        {!compact || !compactGridMounted ? null : (
+          <Animated.View
+            testID={`${testID}-compact-grid`}
+            aria-hidden={!compactOpen}
+            accessibilityElementsHidden={!compactOpen}
+            importantForAccessibility={compactOpen ? 'auto' : 'no-hide-descendants'}
+            pointerEvents={compactOpen ? 'auto' : 'none'}
+            onLayout={(event) => {
+              const bodyHeight = event.nativeEvent.layout.height;
+              if (bodyHeight > 0) onHeightChange?.(theme.layout.hitTarget + bodyHeight);
+            }}
             style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingTop: theme.space[2],
+              position: 'absolute',
+              top: theme.layout.hitTarget,
+              left: 0,
+              right: 0,
+              paddingBottom: theme.space[4],
+              backgroundColor: theme.colors.surface,
+              opacity: compactGridProgress,
+              transform: [
+                {
+                  translateY: compactGridProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-theme.space[3], 0],
+                  }),
+                },
+              ],
             }}
           >
-            <Text variant="footnote" color="textSecondary">
-              Couldn't load this month.
-            </Text>
-            <Touchable
-              accessibilityRole="button"
-              accessibilityLabel="Try again"
-              onPress={navigator.retry}
-              square={false}
-              testID={`${testID}-retry`}
-            >
-              <Text variant="footnoteStrong" color="textAction">
-                Try again
-              </Text>
-            </Touchable>
-          </View>
-        ) : null}
+            {calendarBody}
+          </Animated.View>
+        )}
 
         <MonthYearSheet
           open={pickerOpen}

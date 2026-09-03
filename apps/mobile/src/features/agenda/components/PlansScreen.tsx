@@ -11,11 +11,14 @@ import {
   Skeleton,
   Text,
   Touchable,
+  useMotion,
   useTheme,
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Animated,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   RefreshControl,
@@ -174,6 +177,7 @@ function calendarLandingTarget<Item>(
 
 export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const theme = useTheme();
+  const motion = useMotion();
   const insets = useSafeAreaInsets();
   const tick = useMinuteTicker();
   const queryClient = useQueryClient();
@@ -195,12 +199,13 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const [stage, setStage] = useState<Stage>('upcoming');
   const [selectedGap, setSelectedGap] = useState<SelectedGap>();
   const [reschedule, setReschedule] = useState<SelectedAgendaItem>();
-  const [calendarHidden, setCalendarHidden] = useState(false);
+  const [compactHeader, setCompactHeader] = useState(false);
   const [calendarHeight, setCalendarHeight] = useState(0);
-  const calendarHiddenRef = useRef(false);
-  const calendarScrollAnchor = useRef(0);
-  const calendarScrollDirection = useRef<-1 | 0 | 1>(0);
-  const lastCalendarScrollY = useRef(0);
+  const [fullHeaderHeight, setFullHeaderHeight] = useState(0);
+  const [titleBlockHeight, setTitleBlockHeight] = useState(0);
+  const [chromeHeight, setChromeHeight] = useState(0);
+  const compactHeaderRef = useRef(false);
+  const headerProgress = useRef(new Animated.Value(0)).current;
   /**
    * The calendar's day tap (P3-48): land the list on that date, within the stage. Held as
    * state so the landing can wait for the sections that a just-fetched window produces; a
@@ -213,37 +218,33 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const pendingScroll = useRef<() => void>(() => {});
   const landingAttempts = useRef(0);
 
-  const resetCalendarVisibility = useCallback(() => {
-    calendarHiddenRef.current = false;
-    setCalendarHidden(false);
-    calendarScrollAnchor.current = 0;
-    calendarScrollDirection.current = 0;
-    lastCalendarScrollY.current = 0;
+  const resetHeaderVisibility = useCallback(() => {
+    compactHeaderRef.current = false;
+    setCompactHeader(false);
   }, []);
-  const calendarScrollThreshold = theme.space[4];
+
+  useEffect(() => {
+    const transition = Animated.timing(headerProgress, {
+      toValue: compactHeader ? 1 : 0,
+      duration: motion.duration.base,
+      useNativeDriver: true,
+    });
+    transition.start();
+    return () => transition.stop();
+  }, [compactHeader, headerProgress, motion.duration.base]);
+
   const handlePlansScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const y = Math.max(0, event.nativeEvent.contentOffset.y);
-      const previous = lastCalendarScrollY.current;
-      lastCalendarScrollY.current = y;
       if (y <= theme.space[2]) {
-        resetCalendarVisibility();
+        resetHeaderVisibility();
         return;
       }
-      const direction = y === previous ? 0 : y > previous ? 1 : -1;
-      if (direction === 0) return;
-      if (direction !== calendarScrollDirection.current) {
-        calendarScrollDirection.current = direction;
-        calendarScrollAnchor.current = previous;
-      }
-      if (Math.abs(y - calendarScrollAnchor.current) < calendarScrollThreshold) return;
-      const nextHidden = direction === 1;
-      calendarScrollAnchor.current = y;
-      if (nextHidden === calendarHiddenRef.current) return;
-      calendarHiddenRef.current = nextHidden;
-      setCalendarHidden(nextHidden);
+      if (compactHeaderRef.current) return;
+      compactHeaderRef.current = true;
+      setCompactHeader(true);
     },
-    [calendarScrollThreshold, resetCalendarVisibility, theme.space],
+    [resetHeaderVisibility, theme.space],
   );
 
   const upcomingSections = useMemo(
@@ -324,6 +325,14 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     if (shouldAdvance) loadMoreUpcoming();
   }, [shouldAdvance, loadMoreUpcoming]);
 
+  const stableHeaderInset = fullHeaderHeight || calendarHeight;
+  const compactCalendarExtension = compactHeader
+    ? Math.max(calendarHeight - theme.layout.hitTarget, 0)
+    : 0;
+  const visibleHeaderOffset = compactHeader
+    ? insets.top + theme.space[2] + chromeHeight + compactCalendarExtension
+    : stableHeaderInset;
+
   useEffect(() => {
     if (landing === undefined) return;
     // One landing for both stages: a fresh retry budget, the scroll, and the state cleared.
@@ -347,7 +356,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             upcomingList.current,
             target.sectionIndex,
             target.itemIndex,
-            calendarHeight,
+            visibleHeaderOffset,
           ),
         );
       }
@@ -365,12 +374,12 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             pastList.current,
             target.sectionIndex,
             target.itemIndex,
-            calendarHeight,
+            visibleHeaderOffset,
           ),
         );
       }
     }
-  }, [landing, stage, upcomingSections, pastSections, plans.store, calendarHeight]);
+  }, [landing, stage, upcomingSections, pastSections, plans.store, visibleHeaderOffset]);
 
   /**
    * The tap projects **synchronously and on both platforms** — native has no MutationCache
@@ -401,7 +410,12 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const refreshableEmpty = (testID: string, child: React.ReactNode) => (
     <ScrollView
       refreshControl={refresh}
-      contentContainerStyle={{ flexGrow: 1 }}
+      onScroll={handlePlansScroll}
+      scrollEventThrottle={16}
+      contentContainerStyle={{
+        flexGrow: 1,
+        ...(stableHeaderInset === 0 ? {} : { paddingTop: stableHeaderInset }),
+      }}
       testID={testID}
     >
       {child}
@@ -409,9 +423,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   );
   const listPadding = {
     gap: theme.space[5],
-    ...(stage === 'needsDate' || calendarHeight === 0
-      ? {}
-      : { paddingTop: calendarHeight }),
+    ...(stableHeaderInset === 0 ? {} : { paddingTop: stableHeaderInset }),
     // The final row scrolls above the global Add button without shrinking the viewport.
     paddingBottom: bottomChromeScrollPadding(insets.bottom),
   };
@@ -479,6 +491,8 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           sections={needsDateSections}
           keyExtractor={(item) => item.activityId}
           refreshControl={refresh}
+          onScroll={handlePlansScroll}
+          scrollEventThrottle={16}
           renderItem={renderNeedsDateItem}
           contentContainerStyle={listPadding}
         />
@@ -596,10 +610,22 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   };
 
   return (
-    <TabScreen title="Plans" testID="plans-screen">
+    <TabScreen
+      title="Plans"
+      testID="plans-screen"
+      hideHeader={plans.status === 'success' && !allEmpty}
+    >
       {plans.status === 'pending' ? (
-        <View testID="plans-loading">
-          <Skeleton shape="card" count={5} />
+        <View
+          testID="plans-loading"
+          style={{ alignItems: 'center', paddingTop: theme.space[8] }}
+        >
+          <ActivityIndicator
+            accessibilityRole="progressbar"
+            accessibilityLabel="Loading plans"
+            size="large"
+            color={theme.colors.accent}
+          />
         </View>
       ) : plans.status === 'error' ? (
         <View testID="plans-error">
@@ -619,72 +645,139 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           />,
         )
       ) : (
-        <View style={{ flex: 1, gap: theme.space[4] }}>
-          <SegmentedControl
-            segments={STAGES.map(({ label }) => ({ label }))}
-            selectedIndex={STAGES.findIndex(({ key }) => key === stage)}
-            onChange={(index) => {
-              const next = STAGES[index];
-              if (next !== undefined) {
-                resetCalendarVisibility();
-                setStage(next.key);
-              }
-            }}
-            testID="plans-stage-switcher"
-          />
+        <View style={{ flex: 1 }}>
           {/**
-           * A refresh or pagination failure after a successful load (§5.3): the stages keep
-           * showing what they hold, and the failure is said out loud instead of a spinner
-           * that ends in silence. Cleared by the next successful load.
+           * One non-reflowing header owns the title, stage switcher and calendar. The list
+           * retains the full header's measured inset while compositor-only transforms replace
+           * the title/calendar with compact chrome, so scrolling never changes its offset.
            */}
-          {plans.message === undefined ? null : (
-            <View
-              accessibilityRole="alert"
-              accessibilityLiveRegion="polite"
-              testID="plans-stale-error"
+          <View
+            pointerEvents="box-none"
+            testID="plans-header"
+            onLayout={(event) => {
+              if (compactHeader) return;
+              const height = event.nativeEvent.layout.height;
+              if (height > 0 && height !== fullHeaderHeight) setFullHeaderHeight(height);
+            }}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 2,
+            }}
+          >
+            <Animated.View
+              testID="plans-title-block"
+              aria-hidden={compactHeader}
+              accessibilityElementsHidden={compactHeader}
+              importantForAccessibility={compactHeader ? 'no-hide-descendants' : 'auto'}
+              pointerEvents="none"
+              onLayout={(event) => {
+                const height = event.nativeEvent.layout.height;
+                if (height > 0 && height !== titleBlockHeight) {
+                  setTitleBlockHeight(height);
+                }
+              }}
               style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: theme.space[3],
+                paddingTop: insets.top + theme.space[5],
+                paddingBottom: theme.space[4],
+                backgroundColor: theme.colors.surface,
+                opacity: headerProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 0],
+                }),
+                transform: [
+                  {
+                    translateY: headerProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, -theme.space[5]],
+                    }),
+                  },
+                ],
               }}
             >
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text variant="footnote" color="danger">
-                  {plans.message}
-                </Text>
-              </View>
-              <Touchable
-                accessibilityRole="button"
-                accessibilityLabel="Try again"
-                onPress={plans.refetch}
-                testID="plans-stale-retry"
-              >
-                <Text variant="footnoteStrong" color="textAction">
-                  Try again
-                </Text>
-              </Touchable>
-            </View>
-          )}
-          {stage === 'needsDate' ? (
-            <View style={{ flex: 1 }}>{stageBody()}</View>
-          ) : (
-            // The navigator overlays the dated list. Its measured height is stable list
-            // content inset, while scroll-driven visibility uses only compositor
-            // translation/opacity; no sibling is relaid out during the transition.
-            <View style={{ flex: 1 }}>
-              <CalendarNavigator
-                stage={stage}
-                today={today}
-                projection={plans.store}
-                loadRange={plans.loadRange}
-                onSelectDate={setLanding}
-                hidden={calendarHidden}
-                onHeightChange={setCalendarHeight}
+              <Text variant="display" color="textDisplay" accessibilityRole="header">
+                Plans
+              </Text>
+            </Animated.View>
+
+            <Animated.View
+              testID="plans-compact-chrome"
+              onLayout={(event) => {
+                const height = event.nativeEvent.layout.height;
+                if (height > 0 && height !== chromeHeight) setChromeHeight(height);
+              }}
+              style={{
+                gap: compactHeader ? theme.space[0] : theme.space[4],
+                paddingBottom: compactHeader ? theme.space[0] : theme.space[4],
+                backgroundColor: theme.colors.surface,
+                transform: [
+                  {
+                    translateY: headerProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [
+                        0,
+                        -Math.max(titleBlockHeight - insets.top - theme.space[2], 0),
+                      ],
+                    }),
+                  },
+                ],
+              }}
+            >
+              <SegmentedControl
+                segments={STAGES.map(({ label }) => ({ label }))}
+                selectedIndex={STAGES.findIndex(({ key }) => key === stage)}
+                onChange={(index) => {
+                  const next = STAGES[index];
+                  if (next !== undefined) setStage(next.key);
+                }}
+                testID="plans-stage-switcher"
               />
-              <View style={{ flex: 1 }}>{stageBody()}</View>
-            </View>
-          )}
+              {stage === 'needsDate' ? null : (
+                <CalendarNavigator
+                  stage={stage}
+                  today={today}
+                  projection={plans.store}
+                  loadRange={plans.loadRange}
+                  onSelectDate={setLanding}
+                  compact={compactHeader}
+                  onHeightChange={setCalendarHeight}
+                />
+              )}
+              {plans.message === undefined ? null : (
+                <View
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  testID="plans-stale-error"
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: theme.space[3],
+                  }}
+                >
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text variant="footnote" color="danger">
+                      {plans.message}
+                    </Text>
+                  </View>
+                  <Touchable
+                    accessibilityRole="button"
+                    accessibilityLabel="Try again"
+                    onPress={plans.refetch}
+                    testID="plans-stale-retry"
+                  >
+                    <Text variant="footnoteStrong" color="textAction">
+                      Try again
+                    </Text>
+                  </Touchable>
+                </View>
+              )}
+            </Animated.View>
+          </View>
+
+          <View style={{ flex: 1 }}>{stageBody()}</View>
         </View>
       )}
 

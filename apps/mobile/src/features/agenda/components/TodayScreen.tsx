@@ -571,7 +571,6 @@ export function TodayScreen({
                 items={earlierVisible}
                 testID="today-earlier"
                 showTime
-                connectToNext={earlierVisible.length > 0 && schedule.length > 0}
                 headerAction={
                   <Button
                     label={`${earlierDoneCount} done`}
@@ -610,7 +609,7 @@ export function TodayScreen({
               />
             )}
             {earlier.length === 0 || schedule.length === 0 ? null : (
-              <NowDivider currentMinute={currentMinute} bridgeGap={theme.space[5]} />
+              <NowDivider currentMinute={currentMinute} />
             )}
             {schedule.length === 0 && showEmptySchedule ? (
               <View testID="today-schedule" style={{ gap: theme.space[2] }}>
@@ -633,7 +632,6 @@ export function TodayScreen({
                 items={schedule}
                 testID="today-schedule"
                 showTime
-                connectFromPrevious={earlier.length > 0}
                 onOpen={onOpenAgendaItem}
                 onOpenReschedule={setRescheduleItem}
                 onToggleComplete={handleToggleComplete}
@@ -644,75 +642,80 @@ export function TodayScreen({
             )}
           </View>
         )}
-        {visibleAnytime.length === 0 ? null : (
-          <View testID="today-anytime" style={{ gap: theme.space[7] }}>
-            <View testID="today-untimed" style={{ gap: theme.space[7] }}>
-              {visibleOverdue.length === 0 ? null : (
-                <AgendaSection
-                  title="Overdue"
-                  headerVariant="sectionLabel"
-                  headerCount={overdue.length}
-                  timeline={false}
-                  items={visibleOverdue}
-                  testID="today-overdue"
-                  onOpen={onOpenAgendaItem}
-                  onOpenReschedule={setRescheduleItem}
-                  onOpenOverdue={setRescheduleItem}
-                  onToggleComplete={handleToggleComplete}
-                  onAction={effectiveAgendaAction}
-                  completionTransitionKeys={completionTransitionKeys}
-                  onCompletionTransitionFinished={finishCompletionTransition}
-                  interstitialAfterIndex={visibleOverdue.length - 1}
-                  interstitial={
-                    collapsesOverdue ? (
-                      <OverdueCollapse
-                        hiddenCount={hiddenOverdueCount}
-                        expanded={showAllOverdue}
-                        onToggle={() => setShowAllOverdue((expanded) => !expanded)}
-                      />
-                    ) : null
-                  }
-                  today={today}
-                />
-              )}
-              {todayNoTime.length === 0 ? null : (
-                <AgendaSection
-                  title="Today · no time"
-                  headerVariant="sectionLabel"
-                  headerCount={todayNoTime.length}
-                  timeline={false}
-                  items={todayNoTime}
-                  testID="today-no-time"
-                  onOpen={onOpenAgendaItem}
-                  onOpenReschedule={setRescheduleItem}
-                  onToggleComplete={handleToggleComplete}
-                  onAction={effectiveAgendaAction}
-                  completionTransitionKeys={completionTransitionKeys}
-                  onCompletionTransitionFinished={finishCompletionTransition}
-                />
-              )}
-              {anytimeNoDate.length === 0 ? null : (
-                <AgendaSection
-                  title="Anytime · no date"
-                  headerVariant="sectionLabel"
-                  headerCount={anytimeNoDate.length}
-                  timeline={false}
-                  items={anytimeNoDate}
-                  testID="today-anytime-no-date"
-                  onOpen={onOpenAgendaItem}
-                  onOpenReschedule={setRescheduleItem}
-                  onToggleComplete={handleToggleComplete}
-                  onAction={effectiveAgendaAction}
-                  completionTransitionKeys={completionTransitionKeys}
-                  onCompletionTransitionFinished={finishCompletionTransition}
-                />
-              )}
+        <View testID="today-untimed-flow" style={{ gap: theme.space[5] }}>
+          {visibleAnytime.length === 0 ? null : (
+            <View testID="today-anytime" style={{ gap: theme.space[4] }}>
+              <View testID="today-untimed" style={{ gap: theme.space[5] }}>
+                {todayNoTime.length === 0 ? null : (
+                  <AgendaSection
+                    title="Today · no time"
+                    headerVariant="sectionLabel"
+                    headerCount={todayNoTime.length}
+                    timeline={false}
+                    compactUntimed
+                    items={todayNoTime}
+                    testID="today-no-time"
+                    onOpen={onOpenAgendaItem}
+                    onOpenReschedule={setRescheduleItem}
+                    onToggleComplete={handleToggleComplete}
+                    onAction={effectiveAgendaAction}
+                    completionTransitionKeys={completionTransitionKeys}
+                    onCompletionTransitionFinished={finishCompletionTransition}
+                  />
+                )}
+                {visibleOverdue.length === 0 ? null : (
+                  <AgendaSection
+                    title="Overdue"
+                    headerVariant="sectionLabel"
+                    headerCount={overdue.length}
+                    timeline={false}
+                    compactUntimed
+                    items={visibleOverdue}
+                    testID="today-overdue"
+                    onOpen={onOpenAgendaItem}
+                    onOpenReschedule={setRescheduleItem}
+                    onOpenOverdue={setRescheduleItem}
+                    onToggleComplete={handleToggleComplete}
+                    onAction={effectiveAgendaAction}
+                    completionTransitionKeys={completionTransitionKeys}
+                    onCompletionTransitionFinished={finishCompletionTransition}
+                    interstitialAfterIndex={visibleOverdue.length - 1}
+                    interstitial={
+                      collapsesOverdue ? (
+                        <OverdueCollapse
+                          hiddenCount={hiddenOverdueCount}
+                          expanded={showAllOverdue}
+                          onToggle={() => setShowAllOverdue((expanded) => !expanded)}
+                        />
+                      ) : null
+                    }
+                    today={today}
+                  />
+                )}
+                {anytimeNoDate.length === 0 ? null : (
+                  <AgendaSection
+                    title="Anytime · no date"
+                    headerVariant="sectionLabel"
+                    headerCount={anytimeNoDate.length}
+                    timeline={false}
+                    compactUntimed
+                    items={anytimeNoDate}
+                    testID="today-anytime-no-date"
+                    onOpen={onOpenAgendaItem}
+                    onOpenReschedule={setRescheduleItem}
+                    onToggleComplete={handleToggleComplete}
+                    onAction={effectiveAgendaAction}
+                    completionTransitionKeys={completionTransitionKeys}
+                    onCompletionTransitionFinished={finishCompletionTransition}
+                  />
+                )}
+              </View>
+              {anytimeFooter}
             </View>
-            {anytimeFooter}
-          </View>
-        )}
-        {visibleAnytime.length === 0 ? anytimeFooter : null}
-        <TomorrowPreview items={tomorrowItems} />
+          )}
+          {visibleAnytime.length === 0 ? anytimeFooter : null}
+          <TomorrowPreview items={tomorrowItems} />
+        </View>
       </ScrollView>
       <SnoozeSheet
         open={snoozeItem !== undefined}

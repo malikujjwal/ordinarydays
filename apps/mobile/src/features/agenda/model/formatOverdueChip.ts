@@ -14,6 +14,17 @@ export function formatOverdueChip(overdueFromDate: string, today: string): strin
   return format(date, 'd MMM');
 }
 
+/** Compact age used at the trailing edge of Today's untimed overdue rows. */
+export function formatOverdueAge(overdueFromDate: string, today: string): string {
+  const days = Math.max(1, differenceInWallDays(today, overdueFromDate));
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/** The original due date shown beneath an overdue task title. */
+export function formatOverdueDueDate(overdueFromDate: string): string {
+  return `Due ${format(parseISO(overdueFromDate), 'MMM d')}`;
+}
+
 /** The unabbreviated date spoken for an overdue chip. */
 export function formatOverdueAccessibilityLabel(overdueFromDate: string): string {
   return `Overdue from ${format(parseISO(overdueFromDate), 'EEEE d MMMM')}`;

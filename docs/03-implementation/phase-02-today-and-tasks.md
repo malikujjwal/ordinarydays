@@ -8,8 +8,8 @@ touching I/O and without drifting across a daylight-saving boundary or a short m
 `GET /v1/agenda` call returns everything Today renders — timed items, untimed items, undated
 saved items, expanded recurring occurrences with their overrides applied, and tasks rolled
 forward from the last 30 days. The client presents timed work as UP NEXT → EARLIER TODAY →
-NOW → SCHEDULE, followed by OVERDUE → TODAY · NO TIME → ANYTIME · NO DATE, advancing on a
-one-minute ticker without a refetch. Completing today's
+NOW → SCHEDULE, followed by TODAY · NO TIME → OVERDUE → ANYTIME · NO DATE → TOMORROW,
+advancing on a one-minute ticker without a refetch. Completing today's
 Gym completes today's Gym and leaves tomorrow's alone, provably. Tasks can be completed,
 un-completed, skipped, snoozed and rescheduled, optimistically, with a six-second undo, and
 those mutations survive a subway ride. Local reminders fire on device. Passed plans stop

@@ -58,6 +58,10 @@ export interface UseCalendarNavigatorOptions {
   readonly loadRange: CalendarLoadRange;
   readonly settleMs?: number;
   readonly storage?: CalendarStorage;
+  /** Presentation-only override; remembered expansion remains untouched. */
+  readonly expandedOverride?: boolean;
+  /** Lets compact month controls fetch the displayed grid before it is explicitly opened. */
+  readonly windowExpandedOverride?: boolean;
 }
 
 export interface CalendarNavigatorState {
@@ -84,6 +88,8 @@ export function useCalendarNavigator({
   loadRange,
   settleMs = SETTLE_MS,
   storage = asyncStorage,
+  expandedOverride,
+  windowExpandedOverride,
 }: UseCalendarNavigatorOptions): CalendarNavigatorState {
   const [expanded, setExpandedState] = useState(false);
   const [month, setMonthState] = useState<CalendarMonth>(() => monthOf(today));
@@ -132,19 +138,21 @@ export function useCalendarNavigator({
   );
   const canGoBack = canShowMonth(stage, shiftMonth(month, -1), today);
   const canGoForward = canShowMonth(stage, shiftMonth(month, 1), today);
+  const visibleExpanded = expandedOverride ?? expanded;
+  const windowExpanded = windowExpandedOverride ?? visibleExpanded;
 
   const window = useMemo(
-    () => (expanded ? monthGridWindow(month) : stripWindow(stage, today)),
-    [expanded, month, stage, today],
+    () => (windowExpanded ? monthGridWindow(month) : stripWindow(stage, today)),
+    [windowExpanded, month, stage, today],
   );
   const cells = useMemo(
     () =>
       deriveCalendarCells(projection, window, {
         stage,
         today,
-        ...(expanded ? { month } : {}),
+        ...(windowExpanded ? { month } : {}),
       }),
-    [projection, window, stage, today, expanded, month],
+    [projection, window, stage, today, windowExpanded, month],
   );
 
   /**
@@ -202,7 +210,7 @@ export function useCalendarNavigator({
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   return {
-    expanded,
+    expanded: visibleExpanded,
     setExpanded,
     month,
     setMonth,

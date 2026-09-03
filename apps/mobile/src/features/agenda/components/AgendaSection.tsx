@@ -1,5 +1,5 @@
 import type { AgendaItem } from '@od/shared/types';
-import { SectionHeader, type as typeScale, useTheme } from '@od/ui';
+import { SectionHeader, useTheme } from '@od/ui';
 import { Fragment, type ReactNode } from 'react';
 import { View } from 'react-native';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
@@ -27,10 +27,8 @@ export interface AgendaSectionProps {
   showTime?: boolean;
   /** Untimed work is a flat list, not part of the day timeline. */
   timeline?: boolean;
-  /** Continue the marker rail from the preceding block through this section header. */
-  connectFromPrevious?: boolean;
-  /** Continue the final row to the following block instead of ending at its node. */
-  connectToNext?: boolean;
+  /** Today's untimed groups use compact rows and subtle within-group dividers. */
+  compactUntimed?: boolean;
   today?: string;
   onOpen: (item: AgendaItem) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
@@ -58,8 +56,7 @@ export function AgendaSection({
   testID,
   showTime = false,
   timeline = true,
-  connectFromPrevious = false,
-  connectToNext = false,
+  compactUntimed = false,
   today,
   onOpen,
   onOpenReschedule,
@@ -78,27 +75,8 @@ export function AgendaSection({
    * at its own bottom edge and the next row's upper segment began at its top, so the thread
    * showed a hairline gap at every boundary. The rows abut now and the spine runs unbroken.
    */
-  const headerLineHeight = typeScale[headerVariant ?? 'caption'].lineHeight;
-
   return (
     <View testID={testID} style={{ gap: theme.space[0], position: 'relative' }}>
-      {timeline && connectFromPrevious && items.length > 0 ? (
-        <View
-          aria-hidden
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          pointerEvents="none"
-          testID={`${testID}-timeline-entry`}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: (showTime ? theme.space[11] : 0) + theme.layout.hitTarget / 2,
-            height: headerLineHeight + theme.space[2],
-            width: 1,
-            backgroundColor: theme.colors.border,
-          }}
-        />
-      ) : null}
       <SectionHeader
         title={title}
         {...(headerVariant === undefined ? {} : { variant: headerVariant })}
@@ -116,16 +94,17 @@ export function AgendaSection({
           <SwipeableRow
             item={item}
             /**
-             * **No rule under a row on Today** (founder, 2026-08-17). The timeline already has a
+             * **No rule under a timed row on Today** (founder, 2026-08-17). The timeline already has a
              * separator — the connector hairline running between the markers — and a horizontal
              * rule under every row cut across it, so the day read as a table rather than as a
              * thread. §7.1 says as much in its own words: "separator is the connector line, not
              * a horizontal rule".
              */
-            divider={false}
+            divider={compactUntimed && index < items.length - 1}
+            compactUntimed={compactUntimed}
             showTime={showTime}
-            connectorAbove={timeline && (index > 0 || connectFromPrevious)}
-            connectorBelow={timeline && (index < items.length - 1 || connectToNext)}
+            connectorAbove={timeline && index > 0}
+            connectorBelow={timeline && index < items.length - 1}
             {...(today === undefined ? {} : { today })}
             onOpen={onOpen}
             {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}

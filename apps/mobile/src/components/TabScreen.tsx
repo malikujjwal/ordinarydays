@@ -57,6 +57,8 @@ export interface TabScreenProps {
    * left and right sides".
    */
   bleedBody?: boolean;
+  /** Lets a screen supply animated overlay chrome; the default header remains unchanged. */
+  hideHeader?: boolean;
 }
 
 /** The horizontal gutter a tab's own scroll content must apply when it bleeds the body. */
@@ -74,6 +76,7 @@ export function TabScreen({
   caption,
   belowHeader,
   bleedBody = false,
+  hideHeader = false,
 }: TabScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -83,64 +86,66 @@ export function TabScreen({
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.surface }} testID={testID}>
-      <View
-        style={{
-          width: '100%',
-          alignSelf: 'center',
-          ...(compact ? {} : { maxWidth: 720 }),
-          paddingTop: insets.top + theme.space[5],
-          paddingHorizontal: gutter,
-          paddingBottom: theme.space[4],
-        }}
-      >
-        {caption === undefined ? null : (
-          <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
-            {caption}
-          </Text>
-        )}
+      {hideHeader ? null : (
         <View
           style={{
-            minHeight: theme.layout.hitTarget,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: theme.space[3],
+            width: '100%',
+            alignSelf: 'center',
+            ...(compact ? {} : { maxWidth: 720 }),
+            paddingTop: insets.top + theme.space[5],
+            paddingHorizontal: gutter,
+            paddingBottom: theme.space[4],
           }}
         >
-          <Text variant="display" color="textDisplay" accessibilityRole="header">
-            {title}
-          </Text>
-          {titleAccessory === undefined ? null : (
-            /**
-             * This flexible middle slot always exists while its child renders, even when that
-             * child returns nothing. The title stays pinned left and actions stay pinned right;
-             * on a narrow screen only the accessory may ellipsise.
-             */
-            <View
-              testID={`${testID}-title-accessory-slot`}
-              style={{ flex: 1, minWidth: 0, alignItems: 'flex-start' }}
-            >
-              {titleAccessory}
-            </View>
+          {caption === undefined ? null : (
+            <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
+              {caption}
+            </Text>
           )}
-          {headerAction === undefined ? null : (
-            <View
-              style={{
-                flexShrink: 0,
-                ...(titleAccessory === undefined ? { marginLeft: 'auto' } : {}),
-              }}
-            >
-              {headerAction}
-            </View>
+          <View
+            style={{
+              minHeight: theme.layout.hitTarget,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.space[3],
+            }}
+          >
+            <Text variant="display" color="textDisplay" accessibilityRole="header">
+              {title}
+            </Text>
+            {titleAccessory === undefined ? null : (
+              /**
+               * This flexible middle slot always exists while its child renders, even when that
+               * child returns nothing. The title stays pinned left and actions stay pinned right;
+               * on a narrow screen only the accessory may ellipsise.
+               */
+              <View
+                testID={`${testID}-title-accessory-slot`}
+                style={{ flex: 1, minWidth: 0, alignItems: 'flex-start' }}
+              >
+                {titleAccessory}
+              </View>
+            )}
+            {headerAction === undefined ? null : (
+              <View
+                style={{
+                  flexShrink: 0,
+                  ...(titleAccessory === undefined ? { marginLeft: 'auto' } : {}),
+                }}
+              >
+                {headerAction}
+              </View>
+            )}
+          </View>
+          {belowHeader === undefined ? null : (
+            /**
+             * The same step above the bar as the header block leaves below it, so the bar sits
+             * evenly between the title and the first card rather than hugging the title.
+             */
+            <View style={{ paddingTop: theme.space[4] }}>{belowHeader}</View>
           )}
         </View>
-        {belowHeader === undefined ? null : (
-          /**
-           * The same step above the bar as the header block leaves below it, so the bar sits
-           * evenly between the title and the first card rather than hugging the title.
-           */
-          <View style={{ paddingTop: theme.space[4] }}>{belowHeader}</View>
-        )}
-      </View>
+      )}
 
       <View
         testID="tab-screen-body"

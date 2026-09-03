@@ -32,6 +32,7 @@ export function AddListToPlanSheet({ open, source, onClose }: AddListToPlanSheet
   const attach = useAttachListToPlan();
   const [step, setStep] = useState<Step>('start');
   const [selectedId, setSelectedId] = useState<string>();
+  const [createRequested, setCreateRequested] = useState(false);
   const [creating, setCreating] = useState(false);
   const active = lists.lists.filter((list) => !list.archived);
   const selected = active.find((list) => list.listId === selectedId);
@@ -43,6 +44,7 @@ export function AddListToPlanSheet({ open, source, onClose }: AddListToPlanSheet
   function reset() {
     setStep('start');
     setSelectedId(undefined);
+    setCreateRequested(false);
     attach.dismissError();
   }
 
@@ -59,8 +61,13 @@ export function AddListToPlanSheet({ open, source, onClose }: AddListToPlanSheet
   return (
     <>
       <Sheet
-        open={open && !creating}
+        open={open && !createRequested && !creating}
         onClose={close}
+        onClosed={() => {
+          if (!createRequested) return;
+          setCreateRequested(false);
+          setCreating(true);
+        }}
         title={step === 'start' ? 'Add list' : 'Choose existing list'}
         detent={step === 'start' ? 'fit' : 'large'}
         testID="add-list-to-plan-sheet"
@@ -89,7 +96,7 @@ export function AddListToPlanSheet({ open, source, onClose }: AddListToPlanSheet
                     <SettingRow
                       label="Create new list"
                       opens
-                      onPress={() => setCreating(true)}
+                      onPress={() => setCreateRequested(true)}
                     />
                     <SettingRow
                       label="Choose existing list"

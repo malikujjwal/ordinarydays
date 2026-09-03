@@ -249,6 +249,12 @@ line of guidance, at most one action.
 Both `Add` actions open the same global **Task / Plan / Add list** chooser with nothing
 selected. Being on the Plans tab never pre-selects Plan or skips the Plan-kind choice.
 
+> **Plans cold-load exception — 2026-09-03 (founder).** With no cached projection, the Plans
+> body shows one centred, accent activity indicator announced as `Loading plans`. The standard
+> tab title remains visible. This is the explicit Plans exception to
+> [`interaction-contract.md`](interaction-contract.md) §5.1; refreshes keep the existing
+> projection visible and continue to use the platform refresh treatment.
+
 #### 1.3.4 The calendar navigator
 
 > **Added 2026-08-25 (founder).** This resolves `../00-open-decisions.md` deferred item #52,
@@ -317,21 +323,34 @@ disagree with the list at every midnight boundary.
 Collapsed or expanded is remembered **locally** on each platform. It is view state, not
 profile data.
 
-**Scroll visibility is a non-reflowing overlay.** Once dated content advances, the calendar
-translates and fades out; reversing direction brings it back. Its measured open height remains
-the list's leading content inset, so hiding or showing the overlay never changes the list
-viewport or pulls the visible month/cards up and down. At the top, that inset keeps the first
-month below the calendar; after scrolling, content naturally passes behind it. Month headings
-remain sticky on the dated list. Reduced-motion settings collapse the transition duration, not
-the layout contract. The overlay paints the screen `surface` itself; it is never transparent over
-the rows passing beneath it.
+**Scroll visibility is a non-reflowing overlay with two stable states.** At scroll position zero,
+the overlay shows the large `Plans` heading, the exact `Needs a date · Upcoming · Past` switcher,
+and Upcoming or Past's locally remembered collapsed/expanded calendar. Once content leaves the
+top tolerance, the large heading translates and fades out. The switcher remains, and the dated
+stages replace the full navigator with one compact month row: previous month, tappable month/year,
+next month, and a calendar button that explicitly opens or closes the full month grid. Needs a
+date retains only the switcher and never gains calendar controls. There is no duplicate compact
+`Plans` title.
 
-A day tap lands the exact matching day card below the currently visible calendar. Both Upcoming
+Reversing scroll direction away from the top **does not** restore the large heading or full
+calendar. Only reaching the top tolerance restores the complete header. The user may explicitly
+open the full calendar at any scroll position. The complete header's measured height remains the
+list's leading inset, so state transitions never alter scroll offset or pull visible month/cards.
+The changing chrome floats above that stable inset on an opaque `surface`; scrolling rows never
+show through it. Month headings remain sticky. The compact dated chrome is approximately the two
+44 pt control rows, excluding safe area. The transition crossfades controls and uses only opacity
+and vertical translation over the existing base motion duration (approximately 180–240 ms), with
+native/compositor animation where supported. Reduced-motion collapses the duration to zero while
+preserving the same two final states.
+
+A day tap lands the exact matching day card below the currently visible overlay. Both Upcoming
 and Past use the same adapter: find the exact viewer-local `WallDate` first, apply the one
-`VirtualizedSectionList` header-index correction, then use the measured calendar height as the
-landing `viewOffset`. The directional neighbour is a fallback only after coverage proves the
-selected date empty. Moving the calendar out of layout must not reset the offset to viewport zero,
-which would place the correct row underneath the overlay and make the preceding day appear chosen.
+`VirtualizedSectionList` header-index correction, then use the measured full or compact visible
+header height as the landing `viewOffset`. The directional neighbour is a fallback only after
+coverage proves the selected date empty. Moving the header out of layout must not reset the offset
+to viewport zero, which would place the correct row underneath the overlay and make the preceding
+day appear chosen. Moving into a month outside the initial response loads that bounded window from
+the same projection before landing; the initial response boundary is never a navigation clamp.
 
 ### 1.4 Giving a needs-a-date plan a date
 
@@ -692,6 +711,11 @@ exactly two unselected actions: `Create new list` and `Choose existing list`.
 with nothing selected. Plan kind, title, participants, dates, and AI never rank, recommend,
 or hide a preset. The user explicitly chooses Blank, Checklist, Groceries, Watch Later,
 Books to Read, Places to Visit, or Meal Ideas.
+
+The two steps are separate native-modal presentations. After `Create new list`, the two-choice
+sheet completes its exit (including iOS's native dismissal) before the preset catalogue presents.
+The outgoing sheet's closed callback performs that handoff; the app never mounts two native
+modals concurrently or leaves Activity detail blocked behind an invisible modal.
 
 Selecting a preset creates a local List draft with `sourceActivityId` set to the Plan.
 Item state presentation, optional feature configuration, icon and slot are previewed from

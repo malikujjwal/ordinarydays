@@ -1,6 +1,7 @@
 import type { WallDate } from '@od/shared/time';
 import { ThemeProvider } from '@od/ui';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { AccessibilityInfo, Animated } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarLoadRange } from '../hooks/useCalendarNavigator';
 import type { CalendarProjection } from '../model/deriveCalendarCells';
@@ -41,6 +42,7 @@ function mount(
   data: CalendarProjection,
   loadRange: CalendarLoadRange = vi.fn(async () => undefined),
   onSelectDate = vi.fn(),
+  compact = false,
 ) {
   render(
     <ThemeProvider scheme="light">
@@ -52,6 +54,7 @@ function mount(
         onSelectDate={onSelectDate}
         settleMs={10}
         storage={memoryStorage()}
+        compact={compact}
       />
     </ThemeProvider>,
   );
@@ -59,7 +62,10 @@ function mount(
 }
 
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const settle = async () => {
   await act(async () => {
@@ -215,4 +221,50 @@ describe('CalendarNavigator', () => {
     await settle();
     expect(screen.getByRole('button', { name: /October 2026/ })).toBeDefined();
   });
+
+  it.each([
+    ['upcoming', 'Previous month', 'Next month'],
+    ['past', 'Next month', 'Previous month'],
+  ] as const)(
+    'keeps the %s clamp and opens the full calendar from compact month controls',
+    async (stage, clamped, reachable) => {
+      vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+      const timing = vi.spyOn(Animated, 'timing');
+      mount(
+        stage,
+        projection({}, [{ from: '2026-06-01', through: '2026-10-31' }]),
+        vi.fn(async () => undefined),
+        vi.fn(),
+        true,
+      );
+      await settle();
+      timing.mockClear();
+
+      expect(screen.queryByTestId('plans-calendar-grid')).toBeNull();
+      expect(
+        screen.getByRole('button', { name: clamped }).getAttribute('aria-disabled'),
+      ).toBe('true');
+      expect(
+        screen.getByRole('button', { name: reachable }).getAttribute('aria-disabled'),
+      ).not.toBe('true');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open full calendar' }));
+      const opening = timing.mock.calls.find(([, config]) => config.toValue === 1);
+      expect(opening?.[1].duration).toBeGreaterThanOrEqual(180);
+      expect(opening?.[1].duration).toBeLessThanOrEqual(240);
+      expect(opening?.[1].useNativeDriver).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(screen.getByTestId('plans-calendar-grid')).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Close full calendar' })).toBeDefined();
+      timing.mockClear();
+      fireEvent.click(screen.getByRole('button', { name: 'Close full calendar' }));
+      expect(timing.mock.calls.some(([, config]) => config.toValue === 0)).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(screen.queryByTestId('plans-calendar-grid')).toBeNull();
+    },
+  );
 });

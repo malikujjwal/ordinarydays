@@ -42,8 +42,9 @@ request to render Today is rejected.
 
 > **Section order amended — 2026-08-17 (founder, P2-44).** EARLIER TODAY now renders **second**,
 > directly beneath the UP NEXT card and **above** SCHEDULE, with the NOW divider between it and
-> SCHEDULE. The timed order is UP NEXT → EARLIER TODAY → *NOW* → SCHEDULE. The three
-> untimed groups follow in the fixed order OVERDUE → TODAY · NO TIME → ANYTIME · NO DATE.
+> SCHEDULE. The timed order is UP NEXT → EARLIER TODAY → *NOW* → SCHEDULE. The untimed
+> groups then follow in the fixed order TODAY · NO TIME → OVERDUE → ANYTIME · NO DATE,
+> followed by the read-only TOMORROW preview when it has rows.
 >
 > The founder's report: *"The earlier today section makes more sense on the top so that it feels
 > like we have a timeline. The current section makes things a little confusing."* Reading down the
@@ -105,11 +106,11 @@ SCHEDULE
   7:30 PM  ◇  Chicken tacos            Meal
   8:00 PM  ◇  Severance                Watch · S2 E4
 
-OVERDUE
-  □  Call apartment office                Due Tue
-
 TODAY · NO TIME
   □  Submit insurance form
+
+OVERDUE
+  □  Call apartment office              Due Aug 4   2 days
 
 ANYTIME · NO DATE
   □  Water the plants
@@ -165,19 +166,27 @@ has no end time, at the moment its start time is reached — see §6.1.
 Rows show: time on the left, affordance (checkbox for tasks, a non-interactive marker for
 everything else — §4), title, and a type-derived subtitle.
 
+The vertical rail connects rows only **within** EARLIER TODAY or SCHEDULE. It ends at the last
+row before NOW and begins at the first row after NOW; no line bridges either section heading,
+the whitespace around NOW, or the boundary between those two timed sections.
+
 ### 2.3 UNTIMED WORK
 
 Three explicit, open groups render beneath the timed day, in this order:
 
-1. `Overdue`
-2. `Today · no time`
+1. `Today · no time`
+2. `Overdue`
 3. `Anytime · no date`
+4. `Tomorrow`, when its read-only preview has dated rows (§2)
 
 These groups are a scan list, not another timeline. They are separated by whitespace, not cards,
-horizontal dividers, or marker connectors. Every task uses the same flat row and the same checkbox
-alignment. Rows omit the empty time rail and show only metadata that helps identify or act on the
-task. Ordinary labels and metadata use the neutral text tokens; overdue date/age information is
-the only coloured text in this block.
+large backgrounds, shadows, decorative rules, or marker connectors. Every task uses the same flat
+row, 56 pt minimum row measure, 44 × 44 pt interactive control, compact internal padding, and the
+same checkbox/title/metadata/trailing alignment. A subtle `border` hairline separates adjacent rows
+inside one populated group; it never separates groups. Titles wrap to at most two lines. Rows omit
+the empty time rail and repeated `No date` / `No time` copy, and show only useful list, parent-plan,
+or recurrence metadata in subdued text. Ordinary labels and metadata use neutral text tokens;
+overdue due-date and trailing age information is the only coloured text in this block.
 
 Each heading carries its own plain item count and deliberately does **not** report `n of m done`:
 the Today header remains the only completion figure for the day. Empty groups are absent. The
@@ -185,10 +194,11 @@ overdue group keeps its existing bounded disclosure: the first three rows render
 the existing expander reveals or hides the remainder. The `Anytime · no date` group remains capped
 at 20 rows with the existing `See all (47)` route.
 
-1. **Overdue tasks** rolled forward from previous days (§7), oldest original date first.
-   Each carries a date chip showing its original date.
-2. **Dated-but-untimed items for today** — anything with `schedule.date === today` and no
+1. **Dated-but-untimed items for today** — anything with `schedule.date === today` and no
    `schedule.time`. These come from `days[0].anytime`.
+2. **Overdue tasks** rolled forward from previous days (§7), oldest original date first.
+   Each shows a short `Due Aug 4` line beneath its title and, when useful, a compact trailing age
+   such as `2 days`; both use `warning`.
 3. **Undated tasks** — `objectKind: 'task'`, `type: 'task'`, `status: 'saved'`, and no
    `schedule`. Tasks do not carry participants. These come from the
    `include=anytime_unscheduled` merge, newest-created first.

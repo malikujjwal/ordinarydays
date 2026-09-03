@@ -478,7 +478,9 @@ describe('the note line', () => {
       resolve(process.cwd(), 'src/features/agenda/components/AgendaRow.tsx'),
       'utf8',
     );
-    expect(rowSource).toContain('numberOfLines={dense ? 1 : undefined}');
+    expect(rowSource).toContain(
+      'numberOfLines={dense ? 1 : compactUntimed ? 2 : undefined}',
+    );
     expect(screen.queryByTestId('agenda-row-note')).toBeNull();
     expect(screen.getByTestId('agenda-row-metadata').textContent).toBe(
       '9:30 AM · Morning routine · ↻ Daily',
