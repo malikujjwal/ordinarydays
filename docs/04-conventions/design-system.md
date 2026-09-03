@@ -1178,7 +1178,10 @@ clip; the grip retains its 44 pt target.
   On forward scroll it is an absolute overlay that translates and fades away; reverse scroll
   restores it. Its measured height is retained only as the dated list's leading content inset:
   the navigator never animates `height` or `maxHeight`, so the visible month and cards do not
-  move when it hides or returns. The list's month headings remain sticky.
+  move when it hides or returns. The overlay has an opaque `surface` background so scrolling rows
+  never show through its calendar furniture. A selected day lands below the visible overlay using
+  that same measured height as `viewOffset`; Upcoming and Past use the same rule. The list's month
+  headings remain sticky.
   Three cell treatments, and the middle one is the one to get right: a live date in the
   displayed month is normal, a live date spilling in from an adjacent month is subordinate
   but plainly readable and tappable, and an out-of-stage date is inert. Behaviour, eligibility

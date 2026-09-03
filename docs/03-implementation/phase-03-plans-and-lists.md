@@ -3388,6 +3388,11 @@ a date has no dates to navigate. It resolves `00-open-decisions.md` #52.
   settle, and cancel a superseded request. While a cold month loads, keep the calendar shell
   and its weekday header with quiet skeleton density; never collapse the control or block the
   Plans screen.
+- **Landing contract.** Upcoming and Past share one exact-date target finder and one
+  `scrollToLocation` adapter. The adapter owns RN 0.81's single section-header index correction.
+  Because the navigator is an absolute overlay, it also owns a positive `viewOffset` equal to the
+  navigator's measured height, placing the selected card below the visible calendar rather than
+  behind it. The navigator paints `theme.colors.surface` while content passes underneath.
 
 **Edge cases.**
 
@@ -3408,6 +3413,15 @@ never handed a network payload — its signature admits none. A render test that
   settled month and cancel the rest. A dense 42-day Past grid test drains partial coverage
   before marking empty dates. An offline test that a month with no loaded range renders the
   shell and no false dots. A grep test that the feature directory constructs no `Date`.
+
+> **Overlay regression fix — 2026-09-03 (founder report).** The non-reflowing motion amendment
+> correctly removed the calendar from layout but left date landing at `viewOffset: 0` and left the
+> overlay transparent. The target finder and RN header-index correction were already correct; the
+> selected row was merely hidden beneath the calendar, exposing the preceding card and reading as
+> an off-by-one error. The shared adapter now receives the measured overlay height for both dated
+> stages, and the overlay paints `surface`. Component tests measure distinct heights and pin the
+> exact Upcoming and Past calls, plus the opaque background. Cold Past coverage/fallback, month
+> controls, expansion, retry, and scroll-hide/show coverage remain green.
 
 ---
 
