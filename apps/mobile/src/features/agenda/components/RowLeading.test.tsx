@@ -14,6 +14,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type MarkerGlyph, typeMarker } from '../model/typeMarker';
 import { RowLeading } from './RowLeading';
 
+const cssColor = (hex: string): string => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`;
+};
+
 /**
  * P3-49 — per-type row markers (`design-system.md` §5.2).
  *
@@ -88,7 +93,10 @@ describe('RowLeading marker rendering', () => {
     );
 
     expect(screen.getByTestId('agenda-leading-marker')).toBeDefined();
-    expect(screen.getByTestId(`agenda-leading-marker-${glyph}`)).toBeDefined();
+    const visual = screen.getByTestId(`agenda-leading-marker-${glyph}`);
+    expect(visual.style.width).toBe('24px');
+    expect(visual.style.height).toBe('24px');
+    expect(visual.style.backgroundColor).toBe(cssColor(typeAccents.light[type].surface));
     expect(screen.queryByRole('checkbox')).toBeNull();
     // 16 × 16, in the type's light accent — the only colour a marker may take.
     expect(lastProps(Icon)).toEqual(

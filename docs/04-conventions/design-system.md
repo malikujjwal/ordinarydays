@@ -274,7 +274,7 @@ export const type = {
 | Wordmark, sheet and dialog title | `title` (serif for the wordmark and screen-level surfaces; sheets may use `heading` when the sheet is a control, not a place) | `Ordinary Days` in the rail, reschedule sheet, confirmation dialogs |
 | Card and group title | `heading` | Plan card title, list card title, `Field` group labels |
 | Row title, primary content | `body` | Every row's title, note bodies, update entries |
-| Emphasised row title | `bodyStrong` | The UP NEXT card title, an unread notification |
+| Emphasised row title | `bodyStrong` | A current timeline row, an unread notification |
 | Row subtitle, secondary content | `subhead` | Type-derived subtitles, participant summaries, empty-state guidance |
 | Metadata | `footnote` | Time column, date chips, relative times, balance lines, `+n more`, `Updated 3 days ago` |
 | Emphasised metadata | `footnoteStrong` | The time on the UP NEXT card, a balance figure, `2 of 6 done` |
@@ -497,9 +497,10 @@ background.
 | `event` | `map-pin` | `#8C4A5E` | `#AD748C` | 6.1:1 / ≥ 3:1 |
 | `custom` | `diamond` | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 
-Non-task rows render a small non-interactive marker in the type's accent — outlined, sized
-`16 × 16` and `accessibilityElementsHidden` — its meaning goes into the row's label instead
-(`interaction-contract.md` §6.2).
+Non-task rows render a small non-interactive marker in the type's accent — a `16 × 16`
+outlined glyph centred on a quiet `24 × 24` type surface and
+`accessibilityElementsHidden`. The 24 pt surface matches the task checkbox's visual footprint;
+its meaning goes into the row's label instead (`interaction-contract.md` §6.2).
 
 > **Corrected 2026-08-25 (founder), P3-49.** This paragraph named abstract shapes — "a
 > diamond outline for events, a ring for meals" — which contradicted the table directly above
@@ -826,7 +827,7 @@ the `base` width ease, and at `0 of n` it renders empty, not hidden.
 ```
  ┌────────────────────────────────────────────────────┐  radius.xl · e3 (mulberry shadow)
  │ 2:30 ║ UP NEXT · IN 2H 15M                         │  time rail · double rule · caption, textAction
- │  PM  ║ Dentist appointment                         │  bodyStrong — no marker, no checkbox
+ │  PM  ║ Dentist appointment                         │  title — no marker, no checkbox
  │      ║ ─────────────────────────                   │  1 px border rule under each band
  │      ║ Jefferson Dental Center                     │  subhead — the metadata band
  │      ║ ─────────────────────────                   │
@@ -836,7 +837,9 @@ the `base` width ease, and at `0 of n` it renders empty, not hidden.
 ```
 
 One card, always the next timed thing, per `today-and-tasks.md` §2.1. Its actions are the
-row's own quick actions as text buttons — no icons, no chrome.
+row's own quick actions as text buttons — no icons, no chrome. The single metadata band joins
+the row projection's available location, note excerpt, type subtitle and recurrence copy in
+that order, de-duplicated and clipped to one line. Missing fields do not leave an empty band.
 
 > **Restructured — 2026-08-31 (founder frame, the planner page).** The time moved off the
 > subtitle line into a margin rail — `heading` numerals in `textAction`, the meridiem
@@ -878,8 +881,9 @@ hairline connector, content to the right:
   > 16 pt semibold with 13 pt beneath it. It was `body` over `subhead`, which left two points
   > between the two lines and made every row read as two equal ones. The rail is `space[11]`
   > wide: `12:00 PM` measures 58 pt in `footnote`, so the previous `space[10]` truncated it.
-- Marker column: the task checkbox or the 16 pt type marker; a 1 px `border` connector
-  line runs vertically between markers — it is what makes the day read as a timeline.
+- Marker column: the 24 pt task-checkbox visual or a 16 pt type glyph on a 24 pt quiet surface;
+  a 1 px `border` connector runs vertically to each 24 pt node edge — no halo gap and no line
+  through the glyph. It is what makes the day read as a timeline.
 - The **NOW divider** sits between EARLIER TODAY and what remains: `NOW` in `caption`
   **`textAction`**, a 1 px `accent` hairline across, the current time right-aligned in
   `footnoteStrong` **`textAction`**.

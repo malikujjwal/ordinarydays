@@ -3,6 +3,9 @@ import { Checkbox, MARKER_SIZE, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import { typeMarker } from '../model/typeMarker';
 
+/** Checkbox visual and non-task marker surface share one timeline-node footprint. */
+export const TIMELINE_NODE_SIZE = 24;
+
 export interface RowLeadingProps {
   hasCheckbox: boolean;
   checked: boolean;
@@ -42,13 +45,14 @@ export function RowLeading({
   }
 
   const marker = typeMarker(type);
+  const accent = theme.typeAccent(type);
 
   /**
    * Non-interactive and hidden from assistive technology: the marker keeps no hit target and
    * its meaning is already in the row's label (`interaction-contract.md` §6.2). It is drawn
-   * from the marker forms at 16 pt in the kind's accent — a 1.9 viewBox stroke that renders
-   * visibly lighter than the checkbox border on the adjacent row, so it does not begin to
-   * read as a control (§5.2).
+   * from the marker forms at 16 pt in the kind's accent, centred in the same 24 pt visual
+   * footprint as the checkbox. The quiet type surface aligns the nodes without turning the
+   * non-interactive glyph into a control (§5.2).
    */
   return (
     <View
@@ -64,8 +68,18 @@ export function RowLeading({
       }}
     >
       {marker === undefined ? null : (
-        <View testID={`agenda-leading-marker-${marker.glyph}`}>
-          <marker.Icon size={MARKER_SIZE} color={theme.typeAccent(type).accent} />
+        <View
+          testID={`agenda-leading-marker-${marker.glyph}`}
+          style={{
+            width: TIMELINE_NODE_SIZE,
+            height: TIMELINE_NODE_SIZE,
+            borderRadius: theme.radius.pill,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: accent.surface,
+          }}
+        >
+          <marker.Icon size={MARKER_SIZE} color={accent.accent} />
         </View>
       )}
     </View>

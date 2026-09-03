@@ -1357,6 +1357,16 @@ describe('TodayScreen timeline furniture', () => {
      */
     expect(schedule.queryAllByTestId('agenda-row-connector-above')).toHaveLength(2);
     expect(schedule.queryAllByTestId('agenda-row-connector-below')).toHaveLength(2);
+    expect(
+      Number.parseFloat(
+        schedule.getAllByTestId('agenda-row-connector-above')[0]?.style.height ?? '0',
+      ),
+    ).toBeGreaterThanOrEqual(10);
+    expect(
+      Number.parseFloat(
+        schedule.getAllByTestId('agenda-row-connector-below')[0]?.style.top ?? '99',
+      ),
+    ).toBeLessThan(40);
   });
 
   it('draws no connector on a lone row', async () => {
@@ -1402,6 +1412,22 @@ describe('TodayScreen timeline furniture', () => {
     const body = card.getByTestId('up-next-backdrop');
     expect(body.getAttribute('aria-label')).toContain('Groceries');
     expect(actions.getAttribute('aria-hidden')).toBeNull();
+  });
+
+  it('uses one compact detail line and the serif planner title in Up Next', async () => {
+    const timed = row(1, {
+      title: 'Dentist appointment',
+      time: '17:30',
+      locationLabel: 'Jefferson Dental Center',
+      noteExcerpt: 'Bring insurance card',
+      subtitle: 'Annual checkup',
+    });
+    await openToday([timed], timed);
+
+    expect(screen.getByTestId('up-next-meta').textContent).toBe(
+      'Jefferson Dental Center · Bring insurance card · Annual checkup',
+    );
+    expect(screen.getByTestId('up-next-title').style.fontSize).toBe('24px');
   });
 
   it('keeps Up Next inspectable while recurrence topology blocks mutations', () => {

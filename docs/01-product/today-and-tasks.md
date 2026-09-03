@@ -134,6 +134,10 @@ local wall-clock minute, and whose status is not `completed`, `completed_occurre
   initial paint and then recomputes.
 - The UP NEXT row is visually larger than a SCHEDULE row and shows a relative time
   (`in 20 minutes`, `in 2 hours`, `now`). Below 60 seconds it reads `now`.
+- Its planner card keeps one secondary band. Available `locationLabel`, `noteExcerpt`,
+  type `subtitle`, and recurrence copy are joined in that order and de-duplicated; if none
+  exists the band and its rules are absent. The full source URL is deliberately not part of
+  the trimmed Agenda projection, so this display rule does not widen the wire model.
 
 If every timed item today is in the past, UP NEXT is not rendered (see §2.5).
 

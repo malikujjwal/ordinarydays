@@ -24,7 +24,7 @@ import {
 } from '@/lib/passedPlanResolution';
 import { OverdueChip } from './OverdueChip';
 import { RowBadges } from './RowBadges';
-import { RowLeading } from './RowLeading';
+import { RowLeading, TIMELINE_NODE_SIZE } from './RowLeading';
 
 export interface AgendaRowProps {
   item: AgendaItem;
@@ -313,9 +313,10 @@ export function AgendaRowWithIntentState({
    * came out a few pixels tall, and the thread disappeared between rows entirely — the founder's
    * report that "the vertical line is disconnected".
    *
-   * Both halves are back, each stopping `space[2]` clear of the marker, so the glyph sits in a
-   * gap on a continuous thread. `above` is suppressed on a section's first row and `below` on its
-   * last, which is what keeps the spine inside the section rather than trailing out of it.
+   * Both halves stop exactly at the shared 24 pt node edge. That node is either the checkbox
+   * visual or the quiet surface behind a non-task glyph, so the thread touches every kind with
+   * one geometry and never runs through it. `above` is suppressed on a section's first row and
+   * `below` on its last, which keeps the spine inside the section.
    */
   const connector = (half: 'above' | 'below') => (
     <View
@@ -332,10 +333,10 @@ export function AgendaRowWithIntentState({
         ...(half === 'above'
           ? {
               top: 0,
-              height: Math.max(markerCentreY - theme.layout.hitTarget / 2, 0),
+              height: Math.max(markerCentreY - TIMELINE_NODE_SIZE / 2, 0),
             }
           : {
-              top: markerCentreY + theme.layout.hitTarget / 2,
+              top: markerCentreY + TIMELINE_NODE_SIZE / 2,
               bottom: 0,
             }),
       }}
