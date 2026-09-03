@@ -175,8 +175,24 @@ describe('the canonical list item shell', () => {
       }),
     );
 
-    expect(screen.getByText('Building')).toBeTruthy();
+    expect(screen.queryByText('Building')).toBeNull();
     expect(screen.queryByTestId('row-checkbox')).toBeNull();
+    expect(screen.getByTestId('row-leading-marker')).toBeTruthy();
+  });
+
+  it('gives checkbox rows a stable leading column and strong, roomy row typography', () => {
+    mount(item());
+
+    expect(getComputedStyle(screen.getByTestId('row')).minHeight).toBe('72px');
+    expect(getComputedStyle(screen.getByTestId('row-title')).fontWeight).toBe('600');
+  });
+
+  it('keeps a simple row clean without reserving an empty leading-control column', () => {
+    mount(item(), list({ itemStateMode: { mode: 'none' } }));
+
+    expect(screen.queryByTestId('row-checkbox')).toBeNull();
+    expect(screen.queryByTestId('row-leading-marker')).toBeNull();
+    expect(getComputedStyle(screen.getByTestId('row')).minHeight).toBe('72px');
   });
 
   it('renders only populated enabled typed feature summaries', () => {

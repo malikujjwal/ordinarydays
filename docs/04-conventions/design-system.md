@@ -914,18 +914,20 @@ hairline connector, content to the right:
 - Vertical: `space[5]` top and bottom per row → 56 pt minimum; separator is the connector
   line, not a horizontal rule.
 
-### 7.2 Lists — collection cards
+### 7.2 Lists — collection rows
 
-The Lists index is a 2-up grid of cards at every supported width, each list one card:
+> **Amended 2026-09-02 (founder).** The two-up collection-card shelf is replaced by the
+> supplied Lists reference: one full-width `Recent` stack. Pinned and shared groupings shown
+> in the reference are future capabilities and are not inferred or added here.
+
+The Lists index begins with the loaded List count above the serif title, keeps `+ New list` in
+the header, and renders active Lists newest-first beneath a `Recent` heading with a trailing
+count. Each List is one flat row:
 
 ```
- ┌──────────────────────────┐  radius.lg · e2 · collection-card surface
- │  [icon squircle 44]      │  neutral translucent IconTile
- │  Groceries               │  heading, textPrimary
- │  12 items · 5 checked    │  subhead, textSecondary
- │  ────────                │  ProgressBar (neutral) — only when the list is checkable
- │  Updated today           │  footnote, textDisabled
- └──────────────────────────┘
+ [icon tile 42]  Groceries
+                 12 items · today
+ ──────────────────────────────────────────────────────
 ```
 
 > **Corrected 2026-08-25 (founder), P3-25.** The count line was specified as "the list's
@@ -937,33 +939,22 @@ The Lists index is a 2-up grid of cards at every supported width, each list one 
 > also drift, since template values are frozen at creation: a list made a year ago would
 > describe itself differently from the same template today, on a line that is arithmetic.
 >
-> **One vocabulary, every list**: `n items`, with `· k checked` appended only in checkbox mode,
-> from `itemCount` and `doneCount` on the `META` row the index already batch-reads. The progress
-> bar is gated on the same mode. A future preset then renders correctly without catalogue copy.
+> **One vocabulary, every list**: `Empty` or `n items`, followed by the freshness phrase from
+> the row's own projection. A future preset then renders correctly without catalogue copy.
 
 The count line is computed from the List's own stored fields, never from template copy.
 
-> **Amended 2026-08-29 (founder).** The neutral-card treatment made every collection read as
-> the same object with a different icon. The whole card now uses §5.2a's soft collection
-> surface. Cards remain one common component and one common List model; colour is varied
-> presentation, not a category, state, priority or stored setting. The checkbox progress bar
-> remains the founder-approved exception: it reports `doneCount / itemCount` and never means
-> “scheduled”, “planned” or that the List itself is an obligation to finish.
+The stable presentation tone derived from `listId` belongs only to the icon tile. The row
+surface is neutral, has no elevation or rounded container, and ends in one subtle divider.
+There is no List-index progress bar or checked fraction.
 
 `Updated today` renders **`lastItemActivityAt`**, not `updatedAt`
 (`data-model.md` §4.6). `updatedAt` backs `If-Match` and moves on a rename or a settings
 change but not on checking an item, so a card using it would say `Updated 3 days ago`
 immediately after the list was used, and move when it was renamed — backwards from what the
 line means to a reader. `+ New list` is a `footnoteStrong` accent text action in the screen
-header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutates.
-
-**Variable-height shelf.** The two columns stack independently at `space[4]`; a progress bar,
-two-line title, restore action or extra metadata changes only its own card and never creates an
-equal-height row band beneath its neighbour. Source order is not height-balanced: within each
-active and archived group, the client first stably sorts newest-created by the time-sortable
-`listId`. That sorted sequence fills the first contiguous column and then the second, so visual
-reading order, keyboard order and screen-reader traversal agree. The horizontal gutter is also
-`space[4]`, and both outer edges stay aligned to the tab gutter.
+header, not a FAB. Tapping a row opens the list (U1); nothing on the row mutates. Source,
+visual, keyboard and screen-reader order are the same single newest-first sequence.
 
 The index scroll content uses the shared floating-chrome metric for its compact bottom padding.
 That metric owns the tab-bar height, global Add clearance and the safe-area-aware bar offset; a
@@ -1021,17 +1012,17 @@ An open List is a content surface, not a second collection card and not a sparse
 Content begins immediately after the standard header: no cover, oversized title block, empty
 spacer or duplicate List name may sit between the header and the first useful line.
 
-The header follows the Activity-detail two-line hierarchy. Its navigation line has one leading
+The header follows the Activity-detail hierarchy. Its navigation line has one leading
 44 pt Back slot and a trailing action group containing the fixed Share slot and one 44 pt More
-slot. The editable List title is a separate leading-aligned line immediately below. The pencil
-stays vertically aligned with the title inside the same editable control; the title may grow to
-two lines before clipping, while Back, Share, More and Pencil never shrink or leave the viewport.
-Rename still commits on Return or blur and adds no Save/Cancel pair.
+slot. A small uppercase `<kind> · <count>` line (`STAGED LIST`, `CHECKLIST`, or `SIMPLE LIST`)
+sits above the large serif editable title. The whole title remains the rename control without a
+separate pencil tile; it may grow to two lines before clipping, while Back, Share and More never
+shrink or leave the viewport. Rename still commits on Return or blur and adds no Save/Cancel pair.
 
 ```text
 ‹                                             Share  ⋯
-Groceries ✎
-4 items · 2 checked
+CHECKLIST · 4 ITEMS
+Groceries
 ──────────────────────────────────────────────────────
 ☐  Paper towels
    Large pack                                      ⋮⋮
@@ -1039,16 +1030,14 @@ Groceries ✎
    1 cup                                           ⋮⋮
 ──────────────────────────────────────────────────────
 ⊕  Add an item
-   to Groceries
+   Add to Groceries
 ```
 
-The compact overview bridges title and content using the same computed count grammar as the
-index card. It is muted information in `textSecondary`, never a button, progress bar, reorder
-instruction or sticky toolbar. Persistent visible row grips are the reorder discoverability
-mechanism. When the List is empty the approved compact empty state replaces the overview and
-rows.
+The header metadata is the one List count; the body does not repeat an overview line.
+Persistent visible row grips are the reorder discoverability mechanism. When the List is empty
+the approved compact empty state replaces the rows.
 
-Items use the common 56 pt-minimum `Row`: checkbox when exposed, body, populated typed-feature
+Items use a clean 72 pt-minimum `Row`: checkbox when exposed, body, populated typed-feature
 summary or disclosure, then a 44 pt trailing grip hit target. The grip stays visibly neutral
 and never becomes a menu or a decorative chevron. On touch layouts it is persistent; pointer
 layouts reveal it on hover and keyboard focus. The drag wrapper owns it so `ListItemRow` remains
@@ -1056,8 +1045,8 @@ one semantic item renderer. The body still opens item detail and whole-row long-
 starts the same drag (`interaction-contract.md` §3.2).
 
 The add control is the final row in the same measure, not a detached FAB, screen footer or
-Lists-index action. Its plus sits in a small dashed IconTile and the two-line copy reads
-`Add an item` / `to <list name>`. It opens the compact shared composer inline in the same
+Lists-index action. Its plus sits in a small dashed IconTile and its visible copy reads
+`Add to <list name>` (accessible action name `Add an item`). It opens the compact shared composer inline in the same
 scrolling List measure, so the standard header and current content remain visible and the
 rapid-entry row can scroll above the software keyboard even after the List grows. The current
 List fixes the destination; there is no chooser or `New list`. A single `underline` field is
@@ -1079,10 +1068,13 @@ body enters compact inline editing. More opens a content-sized action sheet cont
 Move up, Move down and Remove rows; those controls never expand the normal child row. `Delete
 item` closes the editor as a divider-separated danger menu row.
 
-Grouped staged Lists insert tinted populated section headers between the count and rows. Each
-header carries a stage icon, configured label and count; it never reads as another item, and
-each group keeps its own reorder bounds. At 200% text the count and trailing metadata
-may move below the title before any label truncates; the grip retains its 44 pt target.
+Grouped staged Lists place one full-width counted `SegmentedControl` between the title and
+rows: `All`, then the configured `open`, `active`, and `done` labels. The populated active
+stage is selected initially; if it is empty, `All` is selected. One flat list renders the
+selected stage, with a small accent dot in the leading-control column and no redundant state
+chip or section header. `All` retains the intrinsic rank order. Every drag remains bounded to
+the item's intrinsic state and never changes state. At 200% text labels reflow before they
+clip; the grip retains its 44 pt target.
 
 ### 7.3 Plans — event cards
 

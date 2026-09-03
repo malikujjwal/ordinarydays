@@ -171,7 +171,7 @@ describe('the configuration-driven List detail', () => {
     );
   });
 
-  it('groups only populated configured stages and keeps empty headings absent', () => {
+  it('renders every configured stage in the counted switcher and shows the active stage', () => {
     setView({
       list: {
         ...LIST,
@@ -186,9 +186,12 @@ describe('the configuration-driven List detail', () => {
     });
     mount();
 
-    expect(screen.getAllByText('Queued').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Building').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Shipped')).toBeNull();
+    expect(screen.getByRole('tab', { name: 'All, 2' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Queued, 1' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Building, 1' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Shipped, 0' })).toBeTruthy();
+    expect(screen.queryByText('Write tests')).toBeNull();
+    expect(screen.getByText('Review')).toBeTruthy();
   });
 
   it('offers both done-set actions for a fully loaded checkbox list', () => {
@@ -219,7 +222,9 @@ describe('the configuration-driven List detail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear checked (1)' }));
 
     expect(screen.queryByRole('button', { name: 'Ship' })).toBeNull();
-    expect(screen.getByTestId('list-overview').textContent).toBe('2 items · 0 checked');
+    expect(screen.getByTestId('list-header-caption').textContent).toBe(
+      'CHECKLIST · 2 ITEMS',
+    );
   });
 
   it('unchecks the checked rows immediately while Uncheck all is in flight', () => {
@@ -318,21 +323,21 @@ describe('the configuration-driven List detail', () => {
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 
-  it('puts the reorder overview above rows and the contextual Add row last', () => {
+  it('puts the list kind and count above the title and the contextual Add row last', () => {
     mount();
 
     const scrollContent = screen.getByTestId('list-detail-body').firstElementChild;
     expect(scrollContent).toBeInstanceOf(HTMLElement);
     expect(scrollContent?.getAttribute('style')).toContain('padding-top: 8px');
-    expect(screen.getByText('3 items · 1 checked')).toBeTruthy();
+    expect(screen.getByText('CHECKLIST · 3 ITEMS')).toBeTruthy();
     expect(screen.queryByText('Drag handles to reorder')).toBeNull();
-    expect(screen.getByTestId('list-overview').textContent).toBe('3 items · 1 checked');
+    expect(screen.queryByTestId('list-overview')).toBeNull();
     expect(
       getComputedStyle(screen.getByRole('button', { name: 'Reorder Write tests' }))
         .backgroundColor,
     ).toBe('rgba(0, 0, 0, 0)');
     expect(screen.getByRole('button', { name: 'Add an item' })).toBeTruthy();
-    expect(screen.getByText('to Launch')).toBeTruthy();
+    expect(screen.getByText('Add to Launch')).toBeTruthy();
   });
 
   it('opens item details on the first activation and coalesces a double tap', () => {

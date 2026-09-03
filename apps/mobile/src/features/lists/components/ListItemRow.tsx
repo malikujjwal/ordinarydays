@@ -43,6 +43,8 @@ export function ListItemRow({
 }: ListItemRowProps) {
   const theme = useTheme();
   const checkable = showsCheckbox(list);
+  const groupedStages =
+    list.itemStateMode.mode === 'stages' && list.itemStateMode.groupByState;
   const committedChecked = checkboxChecked(item);
   const [checked, setChecked] = useState(committedChecked);
   const committedCheckedRef = useRef(committedChecked);
@@ -95,7 +97,7 @@ export function ListItemRow({
       });
   };
   const place = shownPlace(list, item);
-  const stage = stateLabel(list, item);
+  const stage = groupedStages ? undefined : stateLabel(list, item);
   const progress = progressLabel(list, item);
   const subItems = subItemCount(list, item);
   const stateLine = mayShowPlanStateLine(viewerPlan) ? planStateLine : undefined;
@@ -106,6 +108,7 @@ export function ListItemRow({
     <View
       testID={testID}
       style={{
+        minHeight: theme.layout.rowMinHeight + theme.space[5],
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: theme.space[3],
@@ -122,6 +125,28 @@ export function ListItemRow({
           {...(onToggleChecked === undefined ? {} : { onChange: toggleChecked })}
           {...id('checkbox')}
         />
+      ) : groupedStages ? (
+        <View
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          {...id('leading-marker')}
+          style={{
+            width: theme.layout.hitTarget,
+            height: theme.layout.hitTarget,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <View
+            style={{
+              width: theme.space[4],
+              height: theme.space[4],
+              borderRadius: theme.radius.pill,
+              backgroundColor: theme.colors.accent,
+            }}
+          />
+        </View>
       ) : null}
       <View
         pointerEvents="box-none"
@@ -144,9 +169,10 @@ export function ListItemRow({
             }}
           >
             <Text
-              variant="body"
+              variant="bodyStrong"
               color={checkable && checked ? 'textSecondary' : 'textPrimary'}
               struck={checkable && checked}
+              {...id('title')}
             >
               {item.title}
             </Text>

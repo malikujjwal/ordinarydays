@@ -1,26 +1,19 @@
 import type { Instant, TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import {
-  Card,
   IconTile,
   interactionTiming,
-  ProgressBar,
   Text,
+  Touchable,
   templateIcon,
   useTheme,
 } from '@od/ui';
 import { View } from 'react-native';
-import {
-  cardCountPart,
-  checkedProgress,
-  listTint,
-  showsCheckedCount,
-  tileToneForListId,
-} from '../model/listCard';
+import { listTint, showsCheckedCount, tileToneForListId } from '../model/listCard';
 import { updatedPhrase } from '../model/updatedLine';
 
 /**
- * One Lists-index card (`design-system.md` §7.2).
+ * One Lists-index row (`design-system.md` §7.2).
  *
  * ```
  *  ┌──────────────────────────┐  radius.lg · e2 · surfaceRaised
@@ -78,17 +71,18 @@ export function ListIndexRow({
 }: ListIndexRowProps) {
   const theme = useTheme();
   const glyph = templateIcon(list.icon);
-  const count = cardCountPart(list);
-  const progress = checkedProgress(list);
+  const count =
+    list.itemCount === 0
+      ? 'Empty'
+      : `${String(list.itemCount)} ${list.itemCount === 1 ? 'item' : 'items'}`;
   const tileTone = tileToneForListId(list.listId);
   // `lastItemActivityAt`, never `updatedAt`. The distinction is the whole of P3-47 and the
   // reason the field exists; `model/updatedLine.ts` records why using the other reads backwards.
   const caption = `${count} · ${updatedPhrase(list.lastItemActivityAt, now, timezone)}`;
 
   return (
-    <Card
-      elevation="e2"
-      radius="lg"
+    <Touchable
+      accessibilityRole="button"
       onPress={onPress}
       {...(onLongPress === undefined
         ? {}
@@ -100,25 +94,33 @@ export function ListIndexRow({
        */
       accessibilityLabel={`${list.title}. ${caption}`}
       {...(testID === undefined ? {} : { testID })}
+      style={{
+        minHeight: theme.layout.rowMinHeight + theme.space[5],
+        paddingVertical: theme.space[4],
+        borderBottomWidth: 1,
+        borderBottomColor: theme.colors.borderSubtle,
+      }}
     >
-      <View style={{ gap: theme.space[2], opacity: dimmed ? 0.6 : 1 }}>
-        <IconTile icon={glyph} tint={listTint()} collectionTone={tileTone} />
-        <Text variant="heading" numberOfLines={2}>
-          {list.title}
-        </Text>
-        {progress === undefined ? null : (
-          <ProgressBar
-            value={progress}
-            tileTone={tileTone}
-            label={count}
-            {...(testID === undefined ? {} : { testID: `${testID}-progress` })}
-          />
-        )}
-        <Text variant="subhead" color="textSecondary">
-          {caption}
-        </Text>
+      <View
+        testID={testID === undefined ? undefined : `${testID}-row-content`}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: theme.space[5],
+          opacity: dimmed ? 0.6 : 1,
+        }}
+      >
+        <IconTile icon={glyph} tint={listTint()} collectionTone={tileTone} size={42} />
+        <View style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}>
+          <Text variant="heading" numberOfLines={2}>
+            {list.title}
+          </Text>
+          <Text variant="subhead" color="textSecondary" numberOfLines={1}>
+            {caption}
+          </Text>
+        </View>
       </View>
-    </Card>
+    </Touchable>
   );
 }
 

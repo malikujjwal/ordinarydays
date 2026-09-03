@@ -15,26 +15,20 @@ function mount(labels: readonly string[]) {
   );
 }
 
-describe('the variable-height Lists shelf', () => {
-  it('keeps canonical source and accessibility order while splitting contiguous columns', () => {
+describe('the full-width Lists stack', () => {
+  it('keeps canonical source and accessibility order in one vertical column', () => {
     mount(['One', 'Two', 'Three', 'Four', 'Five']);
 
     const grid = screen.getByTestId('list-card-grid');
     expect(grid.textContent).toBe('OneTwoThreeFourFive');
-    expect(screen.getByTestId('list-card-column-0').textContent).toBe('OneTwoThree');
-    expect(screen.getByTestId('list-card-column-1').textContent).toBe('FourFive');
+    expect(getComputedStyle(grid).flexDirection).toBe('column');
+    expect(screen.queryByTestId('list-card-column-0')).toBeNull();
+    expect(screen.queryByTestId('list-card-column-1')).toBeNull();
   });
 
-  it('uses independent columns rather than equal-height wrapped rows', () => {
+  it('lets row separators define the rhythm without card-grid gaps', () => {
     mount(['One', 'Two', 'Three', 'Four']);
 
-    expect(getComputedStyle(screen.getByTestId('list-card-grid')).flexWrap).not.toBe(
-      'wrap',
-    );
-    for (const column of [0, 1]) {
-      expect(
-        getComputedStyle(screen.getByTestId(`list-card-column-${String(column)}`)).gap,
-      ).toBe('12px');
-    }
+    expect(getComputedStyle(screen.getByTestId('list-card-grid')).gap).toBe('0px');
   });
 });

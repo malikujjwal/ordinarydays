@@ -101,7 +101,8 @@ const createStyles = (theme: Theme) =>
     rowQuiet: { backgroundColor: 'transparent' },
     handle: {
       position: 'absolute',
-      top: theme.space[2],
+      top: '50%',
+      marginTop: -theme.layout.hitTarget / 2,
       width: theme.layout.hitTarget,
       height: theme.layout.hitTarget,
       alignItems: 'center',

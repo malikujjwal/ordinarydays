@@ -110,39 +110,43 @@ test.describe('P3-33 production List contracts', () => {
     { width: 768, gutter: undefined },
     { width: 1200, gutter: undefined },
   ]) {
-    test(`list cards remain two-up without clipping at ${width}px`, async ({ page }) => {
+    test(`list rows remain full-width and ordered without clipping at ${width}px`, async ({
+      page,
+    }) => {
       await page.setViewportSize({ width, height: 900 });
       await openFrame(page, 'overview');
 
       const first = page.getByRole('button', { name: /^Untitled list\./ });
-      const nextInColumn = page.getByRole('button', { name: /^Checklist\./ });
-      const secondColumn = page.getByRole('button', { name: /^Places to Visit\./ });
-      const heading = page.getByText('Lists contract gallery');
+      const second = page.getByRole('button', { name: /^Checklist\./ });
+      const third = page.getByRole('button', { name: /^Groceries\./ });
+      const heading = page.getByRole('heading', { name: 'Recent, 9' });
       await expect(first).toBeVisible();
-      await expect(secondColumn).toBeVisible();
+      await expect(third).toBeVisible();
 
-      const [firstBox, nextBox, secondColumnBox, headingBox] = await Promise.all([
+      const [firstBox, secondBox, thirdBox, headingBox] = await Promise.all([
         first.boundingBox(),
-        nextInColumn.boundingBox(),
-        secondColumn.boundingBox(),
+        second.boundingBox(),
+        third.boundingBox(),
         heading.boundingBox(),
       ]);
       expect(firstBox).not.toBeNull();
-      expect(nextBox).not.toBeNull();
-      expect(secondColumnBox).not.toBeNull();
+      expect(secondBox).not.toBeNull();
+      expect(thirdBox).not.toBeNull();
       expect(headingBox).not.toBeNull();
       if (
         firstBox === null ||
-        nextBox === null ||
-        secondColumnBox === null ||
+        secondBox === null ||
+        thirdBox === null ||
         headingBox === null
       )
         return;
 
-      expect(Math.abs(firstBox.y - secondColumnBox.y)).toBeLessThan(1);
-      expect(Math.abs(firstBox.width - secondColumnBox.width)).toBeLessThan(1);
-      expect(secondColumnBox.x - (firstBox.x + firstBox.width)).toBeCloseTo(12, 0);
-      expect(nextBox.y - (firstBox.y + firstBox.height)).toBeCloseTo(12, 0);
+      expect(secondBox.x).toBeCloseTo(firstBox.x, 0);
+      expect(thirdBox.x).toBeCloseTo(firstBox.x, 0);
+      expect(secondBox.width).toBeCloseTo(firstBox.width, 0);
+      expect(thirdBox.width).toBeCloseTo(firstBox.width, 0);
+      expect(secondBox.y).toBeCloseTo(firstBox.y + firstBox.height, 0);
+      expect(thirdBox.y).toBeCloseTo(secondBox.y + secondBox.height, 0);
       expect(firstBox.x).toBeCloseTo(headingBox.x, 0);
       if (gutter !== undefined) expect(firstBox.x).toBeCloseTo(gutter, 0);
       expect(
@@ -157,7 +161,7 @@ test.describe('P3-33 production List contracts', () => {
     test(`coloured index compact ${scheme}`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'overview', scheme);
-      await expect(page.getByText('Lists contract gallery')).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Recent, 9' })).toBeVisible();
       await expect(page).toHaveScreenshot(`overview-compact-${scheme}.png`);
     });
 
@@ -419,7 +423,7 @@ test.describe('P3-33 production List contracts', () => {
     test(`checklist anatomy compact ${scheme}`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'checklist', scheme);
-      await expect(page.getByText('3 items · 1 checked')).toBeVisible();
+      await expect(page.getByText('CHECKLIST · 3 ITEMS')).toBeVisible();
       await expect(page.getByText('Drag handles to reorder')).toHaveCount(0);
       await expect(page.getByRole('button', { name: 'Add an item' })).toBeVisible();
       await expect(page).toHaveScreenshot(`checklist-compact-${scheme}.png`);
@@ -524,15 +528,21 @@ test.describe('P3-33 production List contracts', () => {
   });
 
   for (const scheme of ['light', 'dark'] as const) {
-    test(`generic stages hide no populated group and keep configured labels ${scheme}`, async ({
+    test(`staged Lists use counted tabs and one flat selected-stage list ${scheme}`, async ({
       page,
     }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openFrame(page, 'stages', scheme);
       await expect(page.getByTestId('list-state-sections')).toBeVisible();
-      await expect(page.getByText('Queued').first()).toBeVisible();
-      await expect(page.getByText('Building').first()).toBeVisible();
-      await expect(page.getByText('Shipped').first()).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'All, 8' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'Saved, 2' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'Watching, 3' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      await expect(page.getByRole('tab', { name: 'Done, 3' })).toBeVisible();
+      await expect(page.getByText('Severance')).toBeVisible();
+      await expect(page.getByText('The Diplomat')).toHaveCount(0);
       await expect(page.getByTestId('list-header')).toBeInViewport({ ratio: 1 });
       await expect(page).toHaveScreenshot(`stages-compact-${scheme}.png`);
     });
@@ -615,6 +625,37 @@ test.describe('P3-33 production List contracts', () => {
 
 test.describe('P3-33 compact touch capture', () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('staged List matches the counted-tab phone layout without truncation', async ({
+    page,
+  }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await openFrame(page, 'stages', 'dark');
+    await expect(page.locator('body')).not.toHaveText('');
+    await expect(
+      page.locator(
+        '[data-nextjs-dialog], .vite-error-overlay, #webpack-dev-server-client-overlay',
+      ),
+    ).toHaveCount(0);
+    const watching = page.getByText('Watching', { exact: true });
+    await expect(watching).toBeVisible();
+    expect(
+      await watching.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+    await expect(page.getByRole('button', { name: 'Reorder Severance' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reorder Slow Horses' })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Reorder Dune: Part Two' }),
+    ).toBeVisible();
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+    await expect(page).toHaveScreenshot('stages-touch-compact-dark.png');
+  });
 
   test('populated checkbox List keeps persistent mobile grips', async ({ page }) => {
     await openFrame(page, 'checklist', 'dark');

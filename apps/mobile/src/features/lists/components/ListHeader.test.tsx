@@ -63,9 +63,10 @@ describe('renaming is inline on the title', () => {
     const titleLine = screen.getByTestId('list-header-title-line');
     const titleControl = screen.getByRole('button', { name: 'Rename Groceries' });
     expect(screen.getByText('Groceries')).toBeDefined();
+    expect(screen.getByText('CHECKLIST · 3 ITEMS')).toBeDefined();
     expect(screen.queryByLabelText('List name')).toBeNull();
     expect(titleControl).toBeTruthy();
-    expect(screen.getByTestId('list-title-pencil')).toBeTruthy();
+    expect(screen.queryByTestId('list-title-pencil')).toBeNull();
     expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
     expect(navigation.contains(screen.getByRole('button', { name: 'Back' }))).toBe(true);
     expect(navigation.contains(screen.getByRole('button', { name: 'Share' }))).toBe(true);
@@ -77,6 +78,55 @@ describe('renaming is inline on the title', () => {
     );
     expect(screen.getByTestId('list-header-share-slot')).toBeTruthy();
     expect(screen.getByTestId('list-header-more-slot')).toBeTruthy();
+  });
+
+  it('names staged and simple Lists above the large title', () => {
+    const rendered = render(
+      <ThemeProvider scheme="light">
+        <ListHeader
+          list={list({
+            itemStateMode: {
+              mode: 'stages',
+              labels: { open: 'Saved', active: 'Watching', done: 'Done' },
+              groupByState: true,
+            },
+            itemCount: 8,
+          })}
+          onBack={vi.fn()}
+          onOpenMenu={vi.fn()}
+          onRename={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('STAGED LIST · 8 ITEMS')).toBeDefined();
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <ListHeader
+          list={list({ itemStateMode: { mode: 'none' }, itemCount: 1 })}
+          onBack={vi.fn()}
+          onOpenMenu={vi.fn()}
+          onRename={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+    expect(screen.getByText('SIMPLE LIST · 1 ITEM')).toBeDefined();
+  });
+
+  it('uses the authoritative detail count while the List projection is stale', () => {
+    render(
+      <ThemeProvider scheme="light">
+        <ListHeader
+          list={list({ itemStateMode: { mode: 'none' }, itemCount: 0 })}
+          itemCount={3}
+          onBack={vi.fn()}
+          onOpenMenu={vi.fn()}
+          onRename={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('SIMPLE LIST · 3 ITEMS')).toBeDefined();
   });
 
   it('lets a long title use two lines below fixed navigation actions', () => {

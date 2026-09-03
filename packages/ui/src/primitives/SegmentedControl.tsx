@@ -23,6 +23,8 @@ export interface SegmentedControlProps {
   segments: Segment[];
   selectedIndex: number;
   onChange?: (index: number) => void;
+  /** Reduces only horizontal inset when four counted labels must share a compact phone row. */
+  compact?: boolean;
   testID?: string;
 }
 
@@ -30,6 +32,7 @@ export function SegmentedControl({
   segments,
   selectedIndex,
   onChange,
+  compact = false,
   testID,
 }: SegmentedControlProps) {
   const theme = useTheme();
@@ -74,7 +77,7 @@ export function SegmentedControl({
                 justifyContent: 'center',
                 gap: theme.space[2],
                 borderRadius: theme.radius.md - 2,
-                paddingHorizontal: theme.space[4],
+                paddingHorizontal: compact ? theme.space[3] : theme.space[4],
                 backgroundColor: active ? theme.colors.surfaceRaised : 'transparent',
               },
               active ? theme.elevation('e1') : null,

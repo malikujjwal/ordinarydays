@@ -1,7 +1,16 @@
-import { ScreenShell, Text, useTheme } from '@od/ui';
+import {
+  IconButton,
+  MoreHorizontal,
+  SectionHeader,
+  Text,
+  Touchable,
+  useTheme,
+} from '@od/ui';
 import { View } from 'react-native';
+import { TabScreen } from '@/components/TabScreen';
 import { ListCardGrid } from '@/features/lists/components/ListCardGrid';
 import { ListIndexRow } from '@/features/lists/components/ListIndexRow';
+import { ListsIndexScroll } from '@/features/lists/components/ListsIndexScroll';
 import { LIST_ID, NOW, PRESET_LISTS, STAGED_LIST, TIMEZONE } from './fixtures';
 
 /** Coloured index collection used by the production visual gallery. */
@@ -26,23 +35,45 @@ export function OverviewFixture() {
       },
     },
   ];
+  const lists = [...PRESET_LISTS, ...generic];
   return (
-    <ScreenShell measure="standard">
-      <View style={{ gap: theme.space[6], paddingBottom: theme.space[10] }}>
-        <Text variant="title">Lists contract gallery</Text>
-        <ListCardGrid>
-          {[...PRESET_LISTS, ...generic].map((list) => (
-            <View key={list.title}>
-              <ListIndexRow
-                list={list}
-                now={NOW}
-                timezone={TIMEZONE}
-                onPress={() => {}}
-              />
-            </View>
-          ))}
-        </ListCardGrid>
-      </View>
-    </ScreenShell>
+    <TabScreen
+      title="Lists"
+      caption={`${String(lists.length)} LISTS`}
+      testID="lists-contract-overview"
+      bleedBody
+      headerAction={
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[3] }}>
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="New list"
+            onPress={() => {}}
+          >
+            <Text variant="footnoteStrong" color="textAction">
+              + New list
+            </Text>
+          </Touchable>
+          <IconButton icon={MoreHorizontal} label="More" onPress={() => {}} />
+        </View>
+      }
+    >
+      <ListsIndexScroll>
+        <View style={{ marginTop: theme.space[8] }}>
+          <SectionHeader title="Recent" count={lists.length} variant="sectionLabel" />
+          <ListCardGrid>
+            {lists.map((list) => (
+              <View key={list.title}>
+                <ListIndexRow
+                  list={list}
+                  now={NOW}
+                  timezone={TIMEZONE}
+                  onPress={() => {}}
+                />
+              </View>
+            ))}
+          </ListCardGrid>
+        </View>
+      </ListsIndexScroll>
+    </TabScreen>
   );
 }

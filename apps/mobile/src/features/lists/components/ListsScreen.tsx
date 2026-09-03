@@ -209,6 +209,7 @@ export function ListsScreen({
   return (
     <TabScreen
       title="Lists"
+      caption={`${String(active.length)} ${active.length === 1 ? 'LIST' : 'LISTS'}`}
       testID="lists-screen"
       bleedBody
       titleAccessory={<ConnectivityStatus />}
@@ -278,7 +279,10 @@ export function ListsScreen({
             testID="lists-empty"
           />
         ) : (
-          <ListCardGrid>{active.map((list) => renderCard(list, false))}</ListCardGrid>
+          <View style={{ marginTop: theme.space[8] }}>
+            <SectionHeader title="Recent" count={active.length} variant="sectionLabel" />
+            <ListCardGrid>{active.map((list) => renderCard(list, false))}</ListCardGrid>
+          </View>
         )}
 
         {showArchived && archived.length > 0 ? (

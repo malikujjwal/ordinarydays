@@ -1,6 +1,6 @@
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   StateSections,
@@ -41,29 +41,40 @@ describe('StateSections', () => {
     expect(stateGroupDropIndex(rows, rows[2]?.itemId ?? '', 0)).toBe(1);
   });
 
-  it('renders populated groups in intrinsic state order and hides empty groups', () => {
+  it('shows counted stage tabs and one clean active-stage list by default', () => {
     render(
       <ThemeProvider scheme="light">
         <StateSections
           list={list}
-          items={[item('1X5', 'active'), item('1X3', 'open')]}
+          items={[item('1X5', 'active'), item('1X3', 'open'), item('1X6', 'done')]}
           onOpen={vi.fn()}
           onDrop={vi.fn()}
         />
       </ThemeProvider>,
     );
 
-    expect(screen.getAllByText('Saved').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Reading').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Read')).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Saved, 1' })).toBeTruthy();
-    expect(screen.getByTestId('stage-heading-open-icon')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Reading, 1' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'All, 3' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Saved, 1' })).toBeTruthy();
     expect(
-      screen
-        .getByTestId('list-state-open')
-        .compareDocumentPosition(screen.getByTestId('list-state-active')) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      screen.getByRole('tab', { name: 'Reading, 1' }).getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(
+      getComputedStyle(screen.getByRole('tab', { name: 'Reading, 1' })).paddingLeft,
+    ).toBe('8px');
+    expect(screen.getByRole('tab', { name: 'Read, 1' })).toBeTruthy();
+    expect(screen.getByText('1X5')).toBeTruthy();
+    expect(screen.queryByText('1X3')).toBeNull();
+    expect(screen.queryByTestId(/stage-heading-/)).toBeNull();
+    expect(
+      screen.getByTestId('list-item-itm_01J8XKQ2M4N5P6R7S8T9V0W1X5-leading-marker'),
     ).toBeTruthy();
+    expect(
+      screen.queryByTestId('list-item-itm_01J8XKQ2M4N5P6R7S8T9V0W1X5-state'),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'All, 3' }));
+    expect(screen.getByText('1X3')).toBeTruthy();
+    expect(screen.getByText('1X5')).toBeTruthy();
+    expect(screen.getByText('1X6')).toBeTruthy();
   });
 });

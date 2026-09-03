@@ -27,10 +27,7 @@ export function ListAddRow({ listName, onPress }: ListAddRowProps) {
       <IconTile icon={Plus} tint="task" size={36} treatment="dashed" />
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text variant="bodyStrong" color="textAction">
-          Add an item
-        </Text>
-        <Text variant="footnote" color="textSecondary" numberOfLines={2}>
-          to {listName}
+          Add to {listName}
         </Text>
       </View>
     </Touchable>

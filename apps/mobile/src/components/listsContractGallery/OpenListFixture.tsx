@@ -31,12 +31,71 @@ export function OpenListFixture({ state }: OpenListFixtureProps) {
         ? 'Everything to remember before the long weekend away'
         : checklist.title;
   const list =
-    state === 'stages' ? { ...STAGED_LIST, itemCount: 3 } : { ...checklist, title };
+    state === 'stages'
+      ? {
+          ...STAGED_LIST,
+          title: 'Watchlist',
+          itemCount: 8,
+          itemStateMode: {
+            mode: 'stages' as const,
+            labels: { open: 'Saved', active: 'Watching', done: 'Done' },
+            groupByState: true,
+          },
+        }
+      : { ...checklist, title };
   const empty = state === 'empty';
   const stagedItems: readonly ListItemView[] = [
-    { ...checklistItem(0), state: 'open', title: 'Sketch the frame' },
-    { ...checklistItem(1), state: 'active', title: 'Build the switch' },
-    { ...checklistItem(2), state: 'done', title: 'Review the spacing' },
+    {
+      ...checklistItem(0),
+      itemId: `${checklistItem(0).itemId}1`,
+      state: 'open',
+      title: 'The Diplomat',
+    },
+    {
+      ...checklistItem(1),
+      itemId: `${checklistItem(1).itemId}1`,
+      state: 'open',
+      title: 'Tokyo Vice',
+    },
+    {
+      ...checklistItem(0),
+      itemId: `${checklistItem(0).itemId}2`,
+      state: 'active',
+      title: 'Severance',
+      note: 'S2 E4',
+    },
+    {
+      ...checklistItem(1),
+      itemId: `${checklistItem(1).itemId}2`,
+      state: 'active',
+      title: 'Slow Horses',
+      note: 'S4 E2 · Next Thursday · 8 PM',
+    },
+    {
+      ...checklistItem(2),
+      itemId: `${checklistItem(2).itemId}2`,
+      state: 'active',
+      title: 'Dune: Part Two',
+      note: 'Film · 1h 20m left',
+    },
+    {
+      ...checklistItem(0),
+      itemId: `${checklistItem(0).itemId}3`,
+      state: 'done',
+      title: 'Shōgun',
+    },
+    {
+      ...checklistItem(1),
+      itemId: `${checklistItem(1).itemId}3`,
+      state: 'done',
+      title: 'The Bear',
+    },
+    {
+      ...checklistItem(2),
+      itemId: `${checklistItem(2).itemId}3`,
+      state: 'done',
+      title: 'Past Lives',
+    },
   ];
   const [longItems, setLongItems] = useState<readonly ListItemView[]>(() =>
     Array.from({ length: 14 }, (_, index) => ({

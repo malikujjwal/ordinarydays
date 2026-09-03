@@ -753,9 +753,9 @@ imply that any of them is.
 
 Consequences a reviewer can check:
 
-- A checkbox-mode card may show the small `doneCount / itemCount` progress bar approved for the
-  Lists index. No other list-level completion percentage, and no “items still unscheduled”
-  nudge, exists anywhere in the product: the bar reports checkbox state, never commitment.
+- The Lists index shows `Empty` or `n items` plus freshness in a flat collection row. It has no
+  completion percentage or “items still unscheduled” nudge: intrinsic item state never turns
+  the List itself into an obligation to finish.
 - No copy describes a list as somewhere things sit *until* something else happens (§5.9).
 - `Plan this item` is one affordance on an item among several. It is never the primary action of
   the list screen, and never a list's empty-state call to action.
@@ -937,10 +937,10 @@ Two more rules:
 
 | Operation | Rule |
 | --- | --- |
-| **Add item** | Persistent `+ Add an item` at the foot opens a rapid-entry row inline in the List's scrolling measure. The header and current content remain visible, and the row can scroll above the software keyboard as the List grows. The current List fixes the destination; no chooser or `New list` appears. One underlined field is accessibly named `Add item to <list name>`, followed by `Add` and `Done adding`; Note and typed features stay in Item details. Return performs the same single `POST /v1/lists/:id/items`, then clears and re-focuses the title field on success; failure retains it. |
+| **Add item** | Persistent `+ Add to <list name>` at the foot (accessible action name `Add an item`) opens a rapid-entry row inline in the List's scrolling measure. The header and current content remain visible, and the row can scroll above the software keyboard as the List grows. The current List fixes the destination; no chooser or `New list` appears. One underlined field is accessibly named `Add item to <list name>`, followed by `Add` and `Done adding`; Note and typed features stay in Item details. Return performs the same single `POST /v1/lists/:id/items`, then clears and re-focuses the title field on success; failure retains it. |
 | **Check / uncheck** | Only in checkbox mode. Tapping writes intrinsic `done` or `open` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
-| **Reorder** | Every item shows a neutral trailing grip on touch layouts; long-pressing the row or grip starts the same drag. Pointer layouts reveal the grip on hover/focus. A grouped staged List has one drag surface per populated state; drag never changes state. Writes one item PATCH with `afterItemId`. |
+| **Reorder** | Every item shows a neutral trailing grip on touch layouts; long-pressing the row or grip starts the same drag. Pointer layouts reveal the grip on hover/focus. A grouped staged List's switcher exposes one state-filtered surface at a time (or `All`), but drag stays bounded to the item's intrinsic state and never changes it. Writes one item PATCH with `afterItemId`. |
 | **Clear checked** | In checkbox mode, deletes intrinsic `done` items immediately with no confirmation and offers the 10-second bulk Undo. |
 | **Uncheck all** | In checkbox mode, changes only `done → open`, records exactly those ids and offers bulk Undo. |
 | **Share** | Header `Share`, on every list. Opens the member sheet (§5.11.1). Owner only for adding and removing; a member sees the sheet read-only apart from `Leave list`. |
@@ -954,28 +954,26 @@ Two more rules:
 (Moving an item between lists is not in v1 — copy the text into the other list and delete
 the original.)
 
-On the Lists index, each card uses one soft full-card collection tone from the design-system
-palette. Tone is stable presentation derived from `listId`, not stored user data, a template
-lookup, a category or status. A hash collision may repeat a tone, but sorting never recolours a
-List. All card facts, actions and accessibility labels remain identical regardless of colour.
-
-Variable-height index cards keep their intrinsic height and a fixed per-column gap. The client
-sorts active and archived groups newest-created first using the stable time-sortable `listId`;
-it does not expose user reordering or height-balance Lists. Each sorted sequence fills one
-contiguous column and then the other. Every Lists-index state shares the same safe-area-aware
+On the Lists index, each full-width row has a neutral surface, a subtle bottom divider, and one
+small icon tile whose soft collection tone is stable presentation derived from `listId`, not
+stored user data, a template lookup, category, or status. A hash collision may repeat a tone,
+but sorting never recolours a List. The client sorts active and archived groups newest-created
+first using the stable time-sortable `listId`; visual and accessibility order are that same
+single column. The `Recent` heading carries the active count. Pinned and shared sections are not
+part of this phase. Every Lists-index state shares the same safe-area-aware
 floating-navigation clearance, including archived Restore actions and the empty, error and
 loading states.
 
-On mobile, long-pressing a Lists-index card opens a compact action sheet that duplicates the
+On mobile, long-pressing a Lists-index row opens a compact action sheet that duplicates the
 same Archive / Delete or Leave operations available through swipe and accessibility actions.
 The sheet changes no operation semantics: Archive remains immediate with Undo, Delete/Leave
 retain their confirmations, and the index remains non-reorderable. Active and archived groups
 are separated by the standard strong divider and spacing, so the archived heading never
 touches the final active card.
 
-The List header has fixed Back, Share and More action slots around one flexible leading-aligned
-title/edit slot. A long title may use two lines without moving those actions; a short title does
-not centre itself in the remaining asymmetrical space. Both the index and detail `⋯` sheets use
+The List header has fixed Back, Share and More action slots, then an uppercase kind-and-count
+line above one flexible leading-aligned serif title/edit slot. A long title may use two lines
+without moving those actions; a short title does not centre itself in the remaining asymmetrical space. Both the index and detail `⋯` sheets use
 full-width compact action rows with aligned icons and inline summaries. Only List settings has a
 chevron; Delete is a separated danger-ink row rather than a filled action.
 

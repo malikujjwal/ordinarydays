@@ -1,26 +1,13 @@
 import type { List, ListItemState, ListItemView } from '@od/shared/types';
-import {
-  Check,
-  type IconProps,
-  List as ListIcon,
-  PlayRect,
-  SectionHeader,
-  useTheme,
-} from '@od/ui';
+import { SegmentedControl, useTheme } from '@od/ui';
+import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import type { ListItemRow as ListItemRowData } from '@/lib/sqlite/listItemsRepository';
-import { orderedItems, type ReorderRange } from '../model/reorder';
+import { orderedItems, type ReorderRange, reorderRange } from '../model/reorder';
 import { ListItemRow, type ListItemRowProps } from './ListItemRow';
 import { ReorderableList } from './ReorderableList';
 
 const ORDER: readonly ListItemState[] = ['open', 'active', 'done'];
-const STAGE_ICONS: Readonly<
-  Record<ListItemState, (props: IconProps) => React.ReactElement>
-> = {
-  open: ListIcon,
-  active: PlayRect,
-  done: Check,
-};
 
 export type GroupedStageList = List & {
   itemStateMode: Extract<List['itemStateMode'], { mode: 'stages' }>;
@@ -80,47 +67,63 @@ export function StateSections({
   rowExtras,
 }: StateSectionsProps) {
   const theme = useTheme();
+  const sorted = useMemo(() => orderedItems(items), [items]);
+  const counts = ORDER.map(
+    (state) => sorted.filter((item) => item.state === state).length,
+  );
+  const [selectedIndex, setSelectedIndex] = useState(() =>
+    (counts[1] ?? 0) > 0 ? 2 : 0,
+  );
+  const selectedState = selectedIndex === 0 ? undefined : ORDER[selectedIndex - 1];
+  const visible =
+    selectedState === undefined
+      ? sorted
+      : sorted.filter((item) => item.state === selectedState);
+
   return (
-    <View style={{ gap: theme.space[4] }} testID="list-state-sections">
-      {ORDER.map((state) => {
-        const section = orderedItems(items).filter((item) => item.state === state);
-        if (section.length === 0) return null;
-        return (
-          <View
-            key={state}
-            style={{ gap: theme.space[2] }}
-            testID={`list-state-${state}`}
-          >
-            <SectionHeader
-              title={list.itemStateMode.labels[state]}
-              count={section.length}
-              icon={STAGE_ICONS[state]}
-              appearance="tinted"
-              testID={`stage-heading-${state}`}
-            />
-            <ReorderableList
-              items={section}
-              keyOf={(item) => item.itemId}
-              labelOf={(item) => item.title}
-              rangeOf={(itemId) => stateGroupReorderRange(items, itemId)}
-              handleAppearance="quiet"
-              onDrop={(itemId, within) => {
-                const flat = stateGroupDropIndex(items, itemId, within);
-                if (flat !== undefined) onDrop(itemId, flat);
-              }}
-              renderItem={(item) => (
-                <ListItemRow
-                  list={list}
-                  item={item}
-                  onOpen={() => onOpen(item)}
-                  {...rowExtras?.(item)}
-                  testID={`list-item-${item.itemId}`}
-                />
-              )}
-            />
-          </View>
-        );
-      })}
+    <View style={{ gap: theme.space[6] }} testID="list-state-sections">
+      <SegmentedControl
+        segments={[
+          { label: 'All', count: sorted.length },
+          ...ORDER.map((state, index) => ({
+            label: list.itemStateMode.labels[state],
+            count: counts[index] ?? 0,
+          })),
+        ]}
+        selectedIndex={selectedIndex}
+        onChange={setSelectedIndex}
+        compact
+        testID="list-stage-switcher"
+      />
+      <ReorderableList
+        items={visible}
+        keyOf={(item) => item.itemId}
+        labelOf={(item) => item.title}
+        rangeOf={(itemId) =>
+          selectedState === undefined
+            ? reorderRange(list, items, itemId)
+            : stateGroupReorderRange(items, itemId)
+        }
+        handleAppearance="quiet"
+        onDrop={(itemId, within) => {
+          if (selectedState === undefined) {
+            onDrop(itemId, within);
+            return;
+          }
+          const flat = stateGroupDropIndex(items, itemId, within);
+          if (flat !== undefined) onDrop(itemId, flat);
+        }}
+        testID="list-state-items"
+        renderItem={(item) => (
+          <ListItemRow
+            list={list}
+            item={item}
+            onOpen={() => onOpen(item)}
+            {...rowExtras?.(item)}
+            testID={`list-item-${item.itemId}`}
+          />
+        )}
+      />
     </View>
   );
 }
