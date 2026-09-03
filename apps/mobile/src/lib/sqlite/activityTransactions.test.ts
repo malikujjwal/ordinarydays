@@ -150,6 +150,82 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toEqual([OTHER]);
   });
 
+  it('removes deleted Tasks and Plans from mounted Plans without a refetch', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const plans = new PlansRepository(database, subscriptions);
+    await transactions.run((transaction) =>
+      plans.install(
+        transaction,
+        'America/New_York',
+        plansData.parse({
+          mode: 'initial',
+          needsDate: [
+            {
+              activityId: OTHER,
+              type: 'custom',
+              title: 'Plan without a date',
+              status: 'saved',
+              isRecurring: false,
+              isSnoozed: false,
+              hasCheckbox: false,
+              capabilities: { complete: true, skip: false, snooze: false },
+              participantAvatars: [],
+              participantCount: 0,
+              isPast: false,
+              lastActivityAt: '2026-08-18T12:00:00.000Z',
+              suggestionCount: 0,
+              rsvpSummary: {
+                interested: { count: 0, names: [] },
+                maybe: { count: 0, names: [] },
+                pass: { count: 0, names: [] },
+                pending: { count: 0, names: [] },
+              },
+            },
+          ],
+          upcoming: [
+            {
+              date: '2026-08-19',
+              items: [
+                {
+                  activityId: ACTIVITY,
+                  type: 'task',
+                  title: 'Dated Task',
+                  status: 'scheduled',
+                  isRecurring: false,
+                  isSnoozed: false,
+                  hasCheckbox: true,
+                  capabilities: { complete: true, skip: true, snooze: true },
+                  participantAvatars: [],
+                  participantCount: 0,
+                  isPast: false,
+                },
+              ],
+            },
+          ],
+          upcomingWindow: {
+            from: '2026-08-19',
+            through: '2026-10-19',
+            nextFrom: null,
+          },
+          past: [],
+          pastPage: {},
+          warnings: [],
+        }),
+      ),
+    );
+    const invalidated = vi.fn();
+    const stop = plans.subscribe(invalidated);
+
+    await coordinator.remove(ACTIVITY, 'delete-dated-task');
+    await coordinator.remove(OTHER, 'delete-undated-plan');
+    stop();
+
+    expect(invalidated).toHaveBeenCalledTimes(2);
+    const projected = await plans.read('America/New_York');
+    expect(projected?.needsDate).toEqual([]);
+    expect(projected?.store.byDate.get(parseWallDate('2026-08-19'))).toBeUndefined();
+  });
+
   it('arms an offline-created reminder exclusively from committed SQLite state', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     const sync: NativeSyncEngine = {
