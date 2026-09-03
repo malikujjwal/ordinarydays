@@ -323,7 +323,15 @@ the list's leading content inset, so hiding or showing the overlay never changes
 viewport or pulls the visible month/cards up and down. At the top, that inset keeps the first
 month below the calendar; after scrolling, content naturally passes behind it. Month headings
 remain sticky on the dated list. Reduced-motion settings collapse the transition duration, not
-the layout contract.
+the layout contract. The overlay paints the screen `surface` itself; it is never transparent over
+the rows passing beneath it.
+
+A day tap lands the exact matching day card below the currently visible calendar. Both Upcoming
+and Past use the same adapter: find the exact viewer-local `WallDate` first, apply the one
+`VirtualizedSectionList` header-index correction, then use the measured calendar height as the
+landing `viewOffset`. The directional neighbour is a fallback only after coverage proves the
+selected date empty. Moving the calendar out of layout must not reset the offset to viewport zero,
+which would place the correct row underneath the overlay and make the preceding day appear chosen.
 
 ### 1.4 Giving a needs-a-date plan a date
 

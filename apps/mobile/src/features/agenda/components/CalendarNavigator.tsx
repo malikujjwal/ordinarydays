@@ -134,6 +134,9 @@ export function CalendarNavigator({
         right: 0,
         zIndex: 1,
         overflow: 'hidden',
+        // The navigator floats above the dated list; without its own paper surface, rows
+        // show through while the calendar translates and make the header look clipped.
+        backgroundColor: theme.colors.surface,
         opacity: visibility,
         transform: [
           {

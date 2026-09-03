@@ -68,6 +68,15 @@ const settle = async () => {
 };
 
 describe('CalendarNavigator', () => {
+  it('paints an opaque surface while it overlays scrolling plan rows', async () => {
+    mount('upcoming', projection({}, [{ from: '2026-08-14', through: '2026-10-14' }]));
+    await settle();
+
+    expect(screen.getByTestId('plans-calendar').style.backgroundColor).toBe(
+      'rgb(241, 237, 229)',
+    );
+  });
+
   it('collapses to the rolling strip with the stage caption and today at the right edge', async () => {
     mount('upcoming', projection({}, [{ from: '2026-08-14', through: '2026-10-14' }]));
     await settle();

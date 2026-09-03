@@ -109,6 +109,7 @@ function scrollTo<Item, Section>(
   list: SectionList<Item, Section> | null,
   sectionIndex: number,
   itemIndex: number,
+  viewOffset: number,
 ): void {
   try {
     /**
@@ -121,7 +122,9 @@ function scrollTo<Item, Section>(
       itemIndex: itemIndex + 1,
       animated: true,
       viewPosition: 0,
-      viewOffset: 0,
+      // The calendar no longer participates in layout. Leave the selected card below the
+      // visible overlay instead of placing it at viewport zero underneath the calendar.
+      viewOffset,
     });
   } catch {
     // A list that has not laid out yet cannot scroll; the next landing will succeed.
@@ -339,7 +342,14 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
         isRangeCovered(plans.store, landing, landing),
       );
       if (target !== undefined) {
-        land(() => scrollTo(upcomingList.current, target.sectionIndex, target.itemIndex));
+        land(() =>
+          scrollTo(
+            upcomingList.current,
+            target.sectionIndex,
+            target.itemIndex,
+            calendarHeight,
+          ),
+        );
       }
     } else if (stage === 'past' && pastSections !== undefined) {
       const target = calendarLandingTarget(
@@ -350,10 +360,17 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
         isRangeCovered(plans.store, landing, landing),
       );
       if (target !== undefined) {
-        land(() => scrollTo(pastList.current, target.sectionIndex, target.itemIndex));
+        land(() =>
+          scrollTo(
+            pastList.current,
+            target.sectionIndex,
+            target.itemIndex,
+            calendarHeight,
+          ),
+        );
       }
     }
-  }, [landing, stage, upcomingSections, pastSections, plans.store]);
+  }, [landing, stage, upcomingSections, pastSections, plans.store, calendarHeight]);
 
   /**
    * The tap projects **synchronously and on both platforms** — native has no MutationCache

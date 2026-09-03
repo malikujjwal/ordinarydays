@@ -22,6 +22,25 @@ vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-plans-test' }));
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
+interface LayoutAwareElement extends Element {
+  __reactLayoutHandler?: (event: {
+    nativeEvent: {
+      layout: { x: number; y: number; width: number; height: number };
+    };
+  }) => void;
+}
+
+function reportCalendarHeight(height: number): void {
+  const content = screen.getByTestId('plans-calendar')
+    .firstElementChild as LayoutAwareElement;
+  expect(content.__reactLayoutHandler).toBeTypeOf('function');
+  act(() => {
+    content.__reactLayoutHandler?.({
+      nativeEvent: { layout: { x: 0, y: 0, width: 390, height } },
+    });
+  });
+}
+
 const row = (index: number, patch: Partial<AgendaItem> = {}): AgendaItem => ({
   activityId: `act_01J8SEED${'0'.repeat(16)}${CROCKFORD[index % CROCKFORD.length]}${CROCKFORD[(index * 7) % CROCKFORD.length]}`,
   type: 'event',
@@ -355,13 +374,14 @@ it('lands a calendar day on that exact Upcoming card', async () => {
   mount();
 
   await screen.findByText('September fourth');
+  reportCalendarHeight(144);
   fireEvent.click(screen.getByRole('button', { name: 'Expand calendar' }));
   fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
   fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
 
   await waitFor(() =>
     expect(scrollToLocation).toHaveBeenCalledWith(
-      expect.objectContaining({ sectionIndex: 0, itemIndex: 2 }),
+      expect.objectContaining({ sectionIndex: 0, itemIndex: 2, viewOffset: 144 }),
     ),
   );
 });
@@ -383,11 +403,12 @@ it('lands a calendar day on that exact Past card', async () => {
 
   await screen.findByTestId('plans-stage-switcher');
   openStage('Past');
+  reportCalendarHeight(136);
   fireEvent.click(screen.getByTestId('calendar-cell-2026-08-04'));
 
   await waitFor(() =>
     expect(scrollToLocation).toHaveBeenCalledWith(
-      expect.objectContaining({ sectionIndex: 0, itemIndex: 2 }),
+      expect.objectContaining({ sectionIndex: 0, itemIndex: 2, viewOffset: 136 }),
     ),
   );
 });
