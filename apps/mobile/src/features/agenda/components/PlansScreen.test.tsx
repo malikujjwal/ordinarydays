@@ -2,7 +2,7 @@ import { fixedClock, type Instant } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SectionList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -392,6 +392,82 @@ it('lands a calendar day on that exact Past card', async () => {
   );
 });
 
+it('waits for a cold Past date before landing instead of accepting an older loaded row', async () => {
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  let resolvePastWindow:
+    | ((value: {
+        ok: boolean;
+        status: number;
+        headers: { get: () => null };
+        json: () => Promise<unknown>;
+        text: () => Promise<string>;
+      }) => void)
+    | undefined;
+  vi.stubGlobal('fetch', (url: string) => {
+    const body = initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)])],
+      past: [plansDay('2026-08-03', [row(2, { title: 'August third', isPast: true })])],
+    });
+    if (!url.includes('mode=past_window')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    }
+    return new Promise((resolve) => {
+      resolvePastWindow = resolve;
+    });
+  });
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  openStage('Past');
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-08-04'));
+
+  // Aug 3 is present, but it is not the selected date. The selection remains pending while
+  // the navigator's bounded Past range is fetched.
+  expect(scrollToLocation).not.toHaveBeenCalled();
+  await waitFor(() => expect(resolvePastWindow).toBeTypeOf('function'));
+  await act(async () => {
+    const responseBody = {
+      data: {
+        mode: 'past_window',
+        past: [
+          plansDay('2026-08-04', [row(3, { title: 'August fourth', isPast: true })]),
+        ],
+        pastCoverage: {
+          requestedFrom: '2026-07-31',
+          requestedThrough: '2026-08-05',
+          coveredFrom: '2026-07-31',
+          coveredThrough: '2026-08-05',
+          complete: true,
+        },
+        warnings: [],
+      },
+      meta: { requestId: 'req_past_window' },
+    };
+    resolvePastWindow?.({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () => Promise.resolve(responseBody),
+      text: () => Promise.resolve(JSON.stringify(responseBody)),
+    });
+    await Promise.resolve();
+  });
+
+  await waitFor(() =>
+    expect(scrollToLocation).toHaveBeenCalledWith(
+      expect.objectContaining({ sectionIndex: 0, itemIndex: 1 }),
+    ),
+  );
+});
+
 it('auto-hides the calendar while advancing the list and restores it on reverse scroll', async () => {
   stubFetch(
     initialBody({
@@ -410,13 +486,16 @@ it('auto-hides the calendar while advancing the list and restores it on reverse 
 
   Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
   fireEvent.scroll(list);
-  expect(calendar.style.display).toBe('none');
+  // The calendar remains mounted while its height/opacity transition runs; an abrupt
+  // `display: none` cannot animate and used to make the list jump.
+  expect(calendar.style.display).not.toBe('none');
+  await waitFor(() => expect(Number(calendar.style.opacity)).toBeLessThan(1));
   // The section month remains the list's sticky header while the navigator is hidden.
   expect(screen.getByTestId('plans-month-2026-08')).toBeDefined();
 
   list.scrollTop = 20;
   fireEvent.scroll(list);
-  expect(calendar.style.display).not.toBe('none');
+  await waitFor(() => expect(Number(calendar.style.opacity)).toBeGreaterThan(0));
   expect(screen.getByRole('button', { name: 'Collapse calendar' })).toBeDefined();
 });
 

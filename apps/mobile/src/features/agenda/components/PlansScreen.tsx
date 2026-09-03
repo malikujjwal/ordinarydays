@@ -1,3 +1,4 @@
+import { isRangeCovered } from '@od/shared/client';
 import { toWallDate, toWallTime, type WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import {
@@ -130,6 +131,42 @@ function scrollTo<Item, Section>(
 interface SelectedAgendaItem {
   item: AgendaItem;
   date: WallDate;
+}
+
+interface CalendarLandingTarget {
+  readonly sectionIndex: number;
+  readonly itemIndex: number;
+}
+
+/**
+ * Both dated stages use the same landing rule: an exact loaded date wins; a directional
+ * neighbour is legal only after the selected date is covered and therefore known empty.
+ * Past's cold ranges used to take that fallback immediately and clear the pending selection
+ * before its exact row arrived.
+ */
+function calendarLandingTarget<Item>(
+  sections: readonly { readonly data: readonly Item[] }[],
+  selected: WallDate,
+  direction: 'forward' | 'backward',
+  dateOf: (item: Item) => WallDate | undefined,
+  allowFallback: boolean,
+): CalendarLandingTarget | undefined {
+  for (const [sectionIndex, section] of sections.entries()) {
+    const itemIndex = section.data.findIndex((item) => dateOf(item) === selected);
+    if (itemIndex !== -1) return { sectionIndex, itemIndex };
+  }
+  if (!allowFallback) return undefined;
+  for (const [sectionIndex, section] of sections.entries()) {
+    const itemIndex = section.data.findIndex((item) => {
+      const date = dateOf(item);
+      return (
+        date !== undefined &&
+        (direction === 'forward' ? date >= selected : date <= selected)
+      );
+    });
+    if (itemIndex !== -1) return { sectionIndex, itemIndex };
+  }
+  return undefined;
 }
 
 export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
@@ -293,23 +330,29 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
       setLanding(undefined);
     };
     if (stage === 'upcoming') {
-      for (const [sectionIndex, section] of upcomingSections.entries()) {
-        const itemIndex = section.data.findIndex(
-          (item) => item.kind === 'date' && item.date >= landing,
-        );
-        if (itemIndex === -1) continue;
-        land(() => scrollTo(upcomingList.current, sectionIndex, itemIndex));
-        return;
+      const target = calendarLandingTarget(
+        upcomingSections,
+        landing,
+        'forward',
+        (item) => (item.kind === 'date' ? (item.date as WallDate) : undefined),
+        isRangeCovered(plans.store, landing, landing),
+      );
+      if (target !== undefined) {
+        land(() => scrollTo(upcomingList.current, target.sectionIndex, target.itemIndex));
       }
     } else if (stage === 'past' && pastSections !== undefined) {
-      for (const [sectionIndex, section] of pastSections.entries()) {
-        const itemIndex = section.data.findIndex((day) => day.date <= landing);
-        if (itemIndex === -1) continue;
-        land(() => scrollTo(pastList.current, sectionIndex, itemIndex));
-        return;
+      const target = calendarLandingTarget(
+        pastSections,
+        landing,
+        'backward',
+        (day) => day.date,
+        isRangeCovered(plans.store, landing, landing),
+      );
+      if (target !== undefined) {
+        land(() => scrollTo(pastList.current, target.sectionIndex, target.itemIndex));
       }
     }
-  }, [landing, stage, upcomingSections, pastSections]);
+  }, [landing, stage, upcomingSections, pastSections, plans.store]);
 
   /**
    * The tap projects **synchronously and on both platforms** — native has no MutationCache
@@ -602,17 +645,23 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
               </Touchable>
             </View>
           )}
-          {stage === 'needsDate' ? null : (
-            <CalendarNavigator
-              stage={stage}
-              today={today}
-              projection={plans.store}
-              loadRange={plans.loadRange}
-              onSelectDate={setLanding}
-              hidden={calendarHidden}
-            />
+          {stage === 'needsDate' ? (
+            <View style={{ flex: 1 }}>{stageBody()}</View>
+          ) : (
+            // Calendar and list share one gapless stack so the animated height becomes real
+            // list space instead of leaving two static flex gaps behind while it collapses.
+            <View style={{ flex: 1 }}>
+              <CalendarNavigator
+                stage={stage}
+                today={today}
+                projection={plans.store}
+                loadRange={plans.loadRange}
+                onSelectDate={setLanding}
+                hidden={calendarHidden}
+              />
+              <View style={{ flex: 1 }}>{stageBody()}</View>
+            </View>
           )}
-          <View style={{ flex: 1 }}>{stageBody()}</View>
         </View>
       )}
 

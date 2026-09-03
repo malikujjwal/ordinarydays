@@ -9,10 +9,11 @@ import {
   Skeleton,
   Text,
   Touchable,
+  useMotion,
   useTheme,
 } from '@od/ui';
-import { useState } from 'react';
-import { View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, View } from 'react-native';
 import {
   type CalendarLoadRange,
   type CalendarStorage,
@@ -77,6 +78,9 @@ export function CalendarNavigator({
   hidden = false,
 }: CalendarNavigatorProps) {
   const theme = useTheme();
+  const motion = useMotion();
+  const visibility = useRef(new Animated.Value(hidden ? 0 : 1)).current;
+  const [contentHeight, setContentHeight] = useState(0);
   const navigator = useCalendarNavigator({
     stage,
     today,
@@ -87,6 +91,16 @@ export function CalendarNavigator({
   });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(() => Number(navigator.month.slice(0, 4)));
+
+  useEffect(() => {
+    const transition = Animated.timing(visibility, {
+      toValue: hidden ? 0 : 1,
+      duration: motion.duration.base,
+      useNativeDriver: false,
+    });
+    transition.start();
+    return () => transition.stop();
+  }, [hidden, motion.duration.base, visibility]);
 
   const select = (date: WallDate) => {
     if (navigator.expanded) navigator.setMonth(monthOf(date));
@@ -105,155 +119,182 @@ export function CalendarNavigator({
   );
 
   return (
-    <View
+    <Animated.View
       testID={testID}
       accessibilityState={{ expanded: navigator.expanded }}
       accessibilityElementsHidden={hidden}
       importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
-      style={hidden ? { display: 'none' } : undefined}
+      style={{
+        overflow: 'hidden',
+        opacity: visibility,
+        maxHeight:
+          contentHeight === 0
+            ? undefined
+            : visibility.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, contentHeight],
+              }),
+        transform: [
+          {
+            translateY: visibility.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-theme.space[2], 0],
+            }),
+          },
+        ],
+        pointerEvents: hidden ? 'none' : 'auto',
+      }}
     >
-      {navigator.expanded ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingBottom: theme.space[2],
-          }}
-        >
-          <IconButton
-            icon={ChevronLeft}
-            label="Previous month"
-            tone="accent"
-            disabled={!navigator.canGoBack}
-            onPress={() => navigator.shift(-1)}
-            testID={`${testID}-previous`}
-          />
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
-            onPress={() => {
-              setPickerYear(Number(navigator.month.slice(0, 4)));
-              setPickerOpen(true);
+      <View
+        onLayout={(event) => {
+          const height = event.nativeEvent.layout.height;
+          if (height > 0 && height !== contentHeight) setContentHeight(height);
+        }}
+        style={{ paddingBottom: theme.space[4] }}
+      >
+        {navigator.expanded ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingBottom: theme.space[2],
             }}
-            square={false}
-            testID={`${testID}-month`}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[2] }}
           >
-            <Text variant="subhead" color="textPrimary">
-              {monthTitle(navigator.month)}
-            </Text>
-            <Text variant="caption" color="textAction">
-              ▾
-            </Text>
-          </Touchable>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <IconButton
-              icon={ChevronRight}
-              label="Next month"
+              icon={ChevronLeft}
+              label="Previous month"
               tone="accent"
-              disabled={!navigator.canGoForward}
-              onPress={() => navigator.shift(1)}
-              testID={`${testID}-next`}
+              disabled={!navigator.canGoBack}
+              onPress={() => navigator.shift(-1)}
+              testID={`${testID}-previous`}
             />
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
+              onPress={() => {
+                setPickerYear(Number(navigator.month.slice(0, 4)));
+                setPickerOpen(true);
+              }}
+              square={false}
+              testID={`${testID}-month`}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[2] }}
+            >
+              <Text variant="subhead" color="textPrimary">
+                {monthTitle(navigator.month)}
+              </Text>
+              <Text variant="caption" color="textAction">
+                ▾
+              </Text>
+            </Touchable>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <IconButton
+                icon={ChevronRight}
+                label="Next month"
+                tone="accent"
+                disabled={!navigator.canGoForward}
+                onPress={() => navigator.shift(1)}
+                testID={`${testID}-next`}
+              />
+              {toggle}
+            </View>
+          </View>
+        ) : (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingBottom: theme.space[2],
+            }}
+          >
+            <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
+              {STRIP_CAPTION[stage]}
+            </Text>
             {toggle}
           </View>
-        </View>
-      ) : (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingBottom: theme.space[2],
-          }}
-        >
-          <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
-            {STRIP_CAPTION[stage]}
-          </Text>
-          {toggle}
-        </View>
-      )}
+        )}
 
-      {navigator.expanded ? (
-        <View style={{ flexDirection: 'row', gap: 3, marginBottom: theme.space[1] }}>
-          {WEEKDAY_LABELS.map((label, index) => (
-            <View key={WEEKDAY_KEYS[index]} style={{ flex: 1, alignItems: 'center' }}>
-              <Text variant="caption" color="textMuted">
-                {label}
-              </Text>
+        {navigator.expanded ? (
+          <View style={{ flexDirection: 'row', gap: 3, marginBottom: theme.space[1] }}>
+            {WEEKDAY_LABELS.map((label, index) => (
+              <View key={WEEKDAY_KEYS[index]} style={{ flex: 1, alignItems: 'center' }}>
+                <Text variant="caption" color="textMuted">
+                  {label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        <View style={{ gap: 4 }} testID={`${testID}-grid`}>
+          {weeks.map((week) => (
+            <View key={week[0]?.date ?? 'week'} style={{ flexDirection: 'row', gap: 3 }}>
+              {week.map((cell) => (
+                <DayCell
+                  key={cell.date}
+                  cell={cell}
+                  stage={stage}
+                  compact={navigator.expanded}
+                  loading={navigator.loading}
+                  {...(navigator.expanded
+                    ? {}
+                    : { weekday: WEEKDAY_LABELS[weekdayIndex(cell.date)] ?? '' })}
+                  onPress={select}
+                />
+              ))}
             </View>
           ))}
         </View>
-      ) : null}
 
-      <View style={{ gap: 4 }} testID={`${testID}-grid`}>
-        {weeks.map((week) => (
-          <View key={week[0]?.date ?? 'week'} style={{ flexDirection: 'row', gap: 3 }}>
-            {week.map((cell) => (
-              <DayCell
-                key={cell.date}
-                cell={cell}
-                stage={stage}
-                compact={navigator.expanded}
-                loading={navigator.loading}
-                {...(navigator.expanded
-                  ? {}
-                  : { weekday: WEEKDAY_LABELS[weekdayIndex(cell.date)] ?? '' })}
-                onPress={select}
-              />
-            ))}
+        {navigator.loading ? (
+          <View testID={`${testID}-loading`} style={{ paddingTop: theme.space[2] }}>
+            <Skeleton shape="text" count={1} />
           </View>
-        ))}
-      </View>
-
-      {navigator.loading ? (
-        <View testID={`${testID}-loading`} style={{ paddingTop: theme.space[2] }}>
-          <Skeleton shape="text" count={1} />
-        </View>
-      ) : navigator.failed ? (
-        <View
-          testID={`${testID}-error`}
-          accessibilityRole="alert"
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingTop: theme.space[2],
-          }}
-        >
-          <Text variant="footnote" color="textSecondary">
-            Couldn't load this month.
-          </Text>
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel="Try again"
-            onPress={navigator.retry}
-            square={false}
-            testID={`${testID}-retry`}
+        ) : navigator.failed ? (
+          <View
+            testID={`${testID}-error`}
+            accessibilityRole="alert"
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingTop: theme.space[2],
+            }}
           >
-            <Text variant="footnoteStrong" color="textAction">
-              Try again
+            <Text variant="footnote" color="textSecondary">
+              Couldn't load this month.
             </Text>
-          </Touchable>
-        </View>
-      ) : null}
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Try again"
+              onPress={navigator.retry}
+              square={false}
+              testID={`${testID}-retry`}
+            >
+              <Text variant="footnoteStrong" color="textAction">
+                Try again
+              </Text>
+            </Touchable>
+          </View>
+        ) : null}
 
-      <MonthYearSheet
-        open={pickerOpen}
-        stage={stage}
-        today={today}
-        year={pickerYear}
-        month={navigator.month}
-        onYear={setPickerYear}
-        onChoose={(month) => {
-          navigator.setMonth(month);
-          setPickerOpen(false);
-        }}
-        onClose={() => setPickerOpen(false)}
-        testID={`${testID}-picker`}
-      />
-    </View>
+        <MonthYearSheet
+          open={pickerOpen}
+          stage={stage}
+          today={today}
+          year={pickerYear}
+          month={navigator.month}
+          onYear={setPickerYear}
+          onChoose={(month) => {
+            navigator.setMonth(month);
+            setPickerOpen(false);
+          }}
+          onClose={() => setPickerOpen(false)}
+          testID={`${testID}-picker`}
+        />
+      </View>
+    </Animated.View>
   );
 }
 
