@@ -1058,11 +1058,14 @@ accessibly named `Add item to <list name>` and sits beside `Add`; `Done adding` 
 Note and typed features belong to Item details. Return performs the same single write, then
 clears and re-focuses the title field. The row has no duplicate Cancel or modal close control.
 
-Both Lists overflow sheets use the compact `SettingRow` grammar: a 56 pt minimum, aligned leading
-icon, label, optional wrapping subordinate summary, and a bottom divider. Only a row that opens
-another surface has a chevron. A toggle carries its state accessibly and visibly; destructive rows
-use danger ink and an icon on a transparent row, separated by a token gap, never a filled oversized
-button.
+Every top-level `More` or settings action sheet uses the Lists compact `SettingRow` grammar: a
+56 pt minimum, optional aligned leading icon, label, optional wrapping subordinate summary, and a
+bottom divider. This includes the Lists index/detail menus, Today's presentation preference, and
+Activity detail actions. Only a row that opens another surface has a chevron. A toggle carries its
+state accessibly and visibly; destructive rows use danger ink on a transparent row, separated by a
+token gap, never a filled oversized button. Focused editors such as Repeat keep their purpose-built
+controls inside the same `Sheet`; this rule is about the page-level action hierarchy, not replacing
+fields or pickers with rows.
 
 Item details uses the compact Title field, the labelled top-aligned optional Note, then exposed
 State and enabled typed-feature groups. A configured Sub-item section uses its own vocabulary,

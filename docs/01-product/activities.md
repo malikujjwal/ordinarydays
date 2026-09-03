@@ -717,7 +717,9 @@ The user-facing contract:
 
 - Delete is owner-only, in the overflow menu, and always confirms, in the §1a.1 shape
   ([`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants)). The
-  base confirmation names what is removed, with real counts wherever counts exist — notes,
+  overflow menu uses the same compact ruled `SettingRow` layout as the List page; conversion
+  blockers are subordinate copy on their disabled row and Delete is the separated danger row.
+  The base confirmation names what is removed, with real counts wherever counts exist — notes,
   attachments, reminders, occurrences — and carries a `Keeps:` line whenever anything
   survives:
 

@@ -398,6 +398,8 @@ describe('TodayScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     const toggle = screen.getByRole('checkbox', { name: 'Show skipped' });
     expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(toggle.style.minHeight).toBe('56px');
+    expect(toggle.style.borderBottomWidth).toBe('1px');
 
     fireEvent.click(toggle);
 
