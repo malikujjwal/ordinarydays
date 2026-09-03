@@ -158,16 +158,25 @@ has no end time, at the moment its start time is reached — see §6.1.
 Rows show: time on the left, affordance (checkbox for tasks, a non-interactive marker for
 everything else — §4), title, and a type-derived subtitle.
 
-### 2.3 ANYTIME
+### 2.3 UNTIMED WORK
 
-Three groups of items, in this order, under one heading with no sub-headings:
+Three explicit, open groups render beneath the timed day, in this order:
 
-> **The heading carries a plain count — added 2026-08-17 (founder, P2-44).** A bare number on the
-> trailing edge, and deliberately **not** `n of m done`: the 2026-08-12 amendment rejected a
-> second completion figure here because it dilutes the day bar, and the founder's instruction was
-> "just a count ... no need to track how many are complete". A count is not a progress figure, so
-> that guard is untouched. Its rows also reserve the time rail, so their checkboxes line up with
-> SCHEDULE's rather than sitting 56 pt further left.
+1. `Overdue`
+2. `Today · no time`
+3. `Anytime · no date`
+
+These groups are a scan list, not another timeline. They are separated by whitespace, not cards,
+horizontal dividers, or marker connectors. Every task uses the same flat row and the same checkbox
+alignment. Rows omit the empty time rail and show only metadata that helps identify or act on the
+task. Ordinary labels and metadata use the neutral text tokens; overdue date/age information is
+the only coloured text in this block.
+
+Each heading carries its own plain item count and deliberately does **not** report `n of m done`:
+the Today header remains the only completion figure for the day. Empty groups are absent. The
+overdue group keeps its existing bounded disclosure: the first three rows render initially and
+the existing expander reveals or hides the remainder. The `Anytime · no date` group remains capped
+at 20 rows with the existing `See all (47)` route.
 
 1. **Overdue tasks** rolled forward from previous days (§7), oldest original date first.
    Each carries a date chip showing its original date.
@@ -213,6 +222,12 @@ owns that distinction. The product statement of the rule is
 > tabs: the three-tabs-only rule governs tab destinations, not screens pushed from them.
 > P2-19 registers the route with the standard loading-state stub; P2-39 completes the
 > paginated screen after the shared AgendaRow, swipe and undo foundations land in P2-24.
+
+> **Presentation amendment — 2026-09-03 (founder).** The earlier single `ANYTIME` heading and
+> reserved empty time rail made the three different kinds of untimed work difficult to scan and
+> made them look like part of the clock. The three server/client buckets and all mutation rules
+> are unchanged; only their presentation is split into the explicit headings above. The scheduled
+> timeline is outside this amendment.
 
 ### 2.4 EARLIER TODAY
 

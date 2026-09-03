@@ -901,6 +901,11 @@ hairline connector, content to the right:
   > SCHEDULE, and the divider sits between the two — which is what this line has always described.
   > It is `accessibilityElementsHidden`: a screen reader hears the sections, and a decorative rule
   > announcing "now" between them adds a landmark that is not one.
+  >
+  > **Continuity amendment — 2026-09-03 (founder).** EARLIER TODAY, NOW, and SCHEDULE share one
+  > timed block with `space[5]` above and below NOW. The 1 px marker rail bridges those two gaps
+  > and the adjacent section furniture, stopping at the row markers as usual. This removes the
+  > larger dead band that previously appeared above NOW without changing scheduled-row layout.
 - EARLIER TODAY rows are `dimmed`; completed rows additionally `struck` with the olive
   check in the marker column. The section header carries `2 done ⌃` as its collapse
   affordance.
@@ -917,6 +922,14 @@ hairline connector, content to the right:
 - Overdue rows: a `warning` Chip in the time rail showing the original date.
 - Vertical: `space[5]` top and bottom per row → 56 pt minimum; separator is the connector
   line, not a horizontal rule.
+
+**Untimed task groups.** The block below the scheduled timeline is deliberately not part of the
+timeline. It renders `OVERDUE`, `TODAY · NO TIME`, and `ANYTIME · NO DATE` as open sections separated
+by whitespace. Rows are flat on `surface`, retain the standard 44 pt minimum target and checkbox
+size, and do not reserve a time rail, draw marker connectors, add horizontal dividers, or acquire
+card chrome. Title and useful metadata keep the normal row grammar; only overdue date/age copy uses
+`warning`. Empty groups disappear. The overdue group retains its three-row disclosure, and the
+no-date group retains the product's 20-row cap and `See all` destination.
 
 ### 7.2 Lists — collection rows
 

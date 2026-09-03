@@ -1984,9 +1984,13 @@ section arrays, unit-tested independently of React. The client re-partitions loc
 ticker and after every optimistic mutation; the server's partitioning is the initial paint.
 The two must agree — that is what the shared sort keys buy.
 
-ANYTIME has three groups under **one** heading with no sub-headings, in order: overdue
-rolled-forward (oldest original date first), dated-but-untimed today, then undated saved
-items newest-created first. Group 3 is capped at **20 rows** with a `See all (47)` footer
+The untimed block has three explicit open headings, in order: `Overdue` for rolled-forward
+items (oldest original date first), `Today · no time` for dated-but-untimed today, then
+`Anytime · no date` for undated saved items newest-created first. The headings are a
+presentation split over the same three partition groups; they do not add a fifth server bucket.
+Rows are flat, have no cards, marker rail, or horizontal separators, and show only useful
+metadata. Overdue text alone may use the warning colour. The existing overdue disclosure remains
+bounded to three initial rows, while group 3 remains capped at **20 rows** with a `See all (47)` footer
 that pushes the P2-39 **Anytime** route. P2-19 registers that route and stubs its screen with
 the standard five-row loading state; it does not fetch the saved list. The pushed screen,
 not an in-place expansion, owns `GET /v1/activities?filter=saved` when P2-39 completes it.
@@ -3548,6 +3552,15 @@ handler. Do not add a colour outside P2-40's tables.
 > the title rather than in the time rail §7.1 assigns it; and the body type scale moved to 16/21
 > with the row grammar `bodyStrong` over `footnote` (founder, 2026-08-17,
 > `design-system.md` §3).
+>
+> **Untimed presentation amendment — 2026-09-03 (founder).** `TodayScreen` now renders the
+> partition's three untimed groups as the explicit open sections specified by §2.3. This changes
+> neither partition membership nor task mutations. `AgendaSection` accepts a presentation-only
+> `timeline={false}` mode so these rows do not inherit a clock rail or connectors. The timed block
+> remains EARLIER TODAY → NOW → SCHEDULE, uses one `space[5]` gap on both sides of NOW, and bridges
+> its marker rail through the section furniture to preserve time continuity. Component coverage
+> pins all three headings, flat rows without connectors, the overdue disclosure, symmetric spacing,
+> and the timed bridge.
 >
 > **One known failure is not this task's.** `e2e/specs/recurrence-stabilization.spec.ts:6` fails
 > on this branch and fails identically with the branch stashed — verified, not assumed. It belongs
