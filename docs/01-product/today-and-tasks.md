@@ -42,7 +42,8 @@ request to render Today is rejected.
 
 > **Section order amended — 2026-08-17 (founder, P2-44).** EARLIER TODAY now renders **second**,
 > directly beneath the UP NEXT card and **above** SCHEDULE, with the NOW divider between it and
-> SCHEDULE. The order is UP NEXT → EARLIER TODAY → *NOW* → SCHEDULE → ANYTIME.
+> SCHEDULE. The timed order is UP NEXT → EARLIER TODAY → *NOW* → SCHEDULE. The three
+> untimed groups follow in the fixed order OVERDUE → TODAY · NO TIME → ANYTIME · NO DATE.
 >
 > The founder's report: *"The earlier today section makes more sense on the top so that it feels
 > like we have a timeline. The current section makes things a little confusing."* Reading down the
@@ -56,8 +57,8 @@ request to render Today is rejected.
 > (§2.4), and the section **collapses by default above four rows** (§2.4), because it now sits
 > between the user and the part of the day they can still act on.
 
-> **The Tomorrow preview — 2026-08-12 (founder ruling), built by P2-45.** Beneath the four
-> sections Today carries a short, **read-only** look-ahead at tomorrow. It appears in no earlier
+> **The Tomorrow preview — 2026-08-12 (founder ruling), built by P2-45.** Beneath today's work
+> sections, Today carries a short, **read-only** look-ahead at tomorrow. It appears in no earlier
 > version of this document because it is a new surface rather than catch-up, which is why it
 > arrives with its own amendment rather than inside P2-44's.
 >
@@ -71,14 +72,15 @@ request to render Today is rejected.
 >   look-ahead that says "nothing tomorrow" is a nag about an empty day (§8.3).
 > - **It changes no aggregate.** `2 of 6 done` and the progress bar count Today alone, and
 >   UP NEXT stays today's next timed item.
-> - Undated tasks never appear: they are already on Today under ANYTIME, and the server pins them
->   to the window's first day, so they cannot render twice.
+> - Undated tasks never appear: they are already on Today under ANYTIME · NO DATE, and the server
+>   pins them to the window's first day, so they cannot render twice.
 >
 > Today's request widens to **two days** to serve it — one request, one cache entry, one `ETag`.
 > The `include` tokens stay day-scoped by construction, so nothing attaches to both days.
 
-Today has exactly four sections, in this fixed order. A section with no items is not
-rendered at all except where §2.5 says otherwise. If the local date changes while Today is
+Today has one timed sequence followed by three explicit untimed groups, in the fixed order
+above. A section or group with no items is not rendered at all except where §2.5 says
+otherwise. If the local date changes while Today is
 open, the client re-issues the agenda request for the new date; the one-minute ticker only
 recomputes UP NEXT and EARLIER TODAY between fetches and never carries the screen across
 midnight.
@@ -103,9 +105,14 @@ SCHEDULE
   7:30 PM  ◇  Chicken tacos            Meal
   8:00 PM  ◇  Severance                Watch · S2 E4
 
-ANYTIME
+OVERDUE
+  □  Call apartment office                Due Tue
+
+TODAY · NO TIME
   □  Submit insurance form
-  □  Call apartment office                Tue
+
+ANYTIME · NO DATE
+  □  Water the plants
 
 TOMORROW                                             3
   9:00 AM  ◇  Coffee with Dan
@@ -152,7 +159,7 @@ effective start time.
 > SCHEDULE (§2), relocating on completion threw the row *upward* across the NOW divider — a task
 > finished early jumped backwards past "now", which reads as the screen rewriting the day rather
 > than recording it. An **untimed** item is the exception and has to be: it has no slot to stay
-> in, so completing it leaves ANYTIME immediately (§2.3). An item passes at the moment its **end time** is reached, or, if it
+> in, so completing it leaves its untimed group immediately (§2.3). An item passes at the moment its **end time** is reached, or, if it
 has no end time, at the moment its start time is reached — see §6.1.
 
 Rows show: time on the left, affordance (checkbox for tasks, a non-interactive marker for
@@ -186,31 +193,31 @@ at 20 rows with the existing `See all (47)` route.
    `schedule`. Tasks do not carry participants. These come from the
    `include=anytime_unscheduled` merge, newest-created first.
 
-Completed items never sit in ANYTIME. Completing an item in any of the three groups moves
+Completed items never sit in the untimed groups. Completing an item in any of the three groups moves
 it, on the spot, to EARLIER TODAY (§2.4).
 
-Group 3 is narrower than it reads. "No date" means two different things, and Today only
+ANYTIME · NO DATE is narrower than it reads. "No date" means two different things, and Today only
 holds one of them:
 
 | No date means | Example | Where it goes |
 | --- | --- | --- |
-| **Whenever — today is fine** | `Submit the insurance form` | ANYTIME, group 3 |
+| **Whenever — today is fine** | `Submit the insurance form` | ANYTIME · NO DATE |
 | **Not decided yet** | `Dinner at Zahav with Alice, date TBD`; a solo `Poconos trip` | **Plans → Needs a date.** Never Today. |
 
 The test is the pure rule in
 [`../02-architecture/data-model.md#35-gsi1-buckets`](../02-architecture/data-model.md#35-gsi1-buckets):
-an undated Activity goes to Needs a date when `objectKind: 'plan'` and to ANYTIME when
+an undated Activity goes to Needs a date when `objectKind: 'plan'` and to ANYTIME · NO DATE when
 `objectKind: 'task'`. The explicit object choice — not type, people, title, or capture —
 owns that distinction. The product statement of the rule is
 [`plans-and-lists.md`](plans-and-lists.md) §1.2.
 
 > **Decision — the two meanings are separated, and only the first reaches Today.** Putting
 > them in one place was the model's largest product error: it sent an undecided Plan to
-> Today's Anytime list next to a solo errand, which made Today a mixture of things to do and
+> Today’s ANYTIME · NO DATE group next to a solo errand, which made Today a mixture of things to do and
 > things to think about. An undecided plan is not something you have to do today, and a
 > screen that says it is becomes a list of things to feel bad about (§8.3).
 
-> **Decision:** group 3 is capped at **20 rows** on Today, with a `See all (47)` footer that
+> **Decision:** ANYTIME · NO DATE is capped at **20 rows** on Today, with a `See all (47)` footer that
 > pushes the **Anytime** screen. That screen pages through
 > `GET /v1/activities?filter=saved`; Today never expands the remaining rows in place.
 > Without a cap, a user with a large Inbox has a Today screen that is mostly not about
@@ -316,9 +323,9 @@ user.
 | Situation | Rendered |
 | --- | --- |
 | Nothing at all today, and no undated tasks | Full-screen state: heading `Nothing planned today`, body `Add something you want to do, or check your Lists.`, and one `Add` action. `Add` opens the same unselected **Task / Plan / Add list** chooser as global `+`. No section headings are rendered. This state is rendered even when Plans → Needs a date is full: an undecided plan is not a reason to say something is planned today, and Today never counts or mentions that stage (§3.2). |
-| Nothing at all today, but there are undated tasks | The ANYTIME section renders normally with them. Above it, a one-line note: `Nothing scheduled today.` No UP NEXT, SCHEDULE or EARLIER TODAY headings. |
-| SCHEDULE empty, ANYTIME non-empty, EARLIER TODAY non-empty | SCHEDULE heading is rendered with the single row `Nothing left scheduled today.` UP NEXT is not rendered. |
-| SCHEDULE non-empty, ANYTIME empty | ANYTIME is not rendered at all. The inline `+ Add a task` quick-add row (see [`activities.md`](activities.md#71-quick-add-behaviours)) still appears at the foot of the list. |
+| Nothing at all today, but there are undated tasks | ANYTIME · NO DATE renders normally with them. Above it, a one-line note: `Nothing scheduled today.` No UP NEXT, SCHEDULE or EARLIER TODAY headings. |
+| SCHEDULE empty, one or more untimed groups non-empty, EARLIER TODAY non-empty | SCHEDULE heading is rendered with the single row `Nothing left scheduled today.` UP NEXT is not rendered. |
+| SCHEDULE non-empty, every untimed group empty | No untimed heading is rendered. The inline `+ Add a task` quick-add row (see [`activities.md`](activities.md#71-quick-add-behaviours)) still appears at the foot of the list. |
 | EARLIER TODAY empty | Not rendered. There is no "nothing has happened yet" state. |
 | UP NEXT has no candidate (all timed items are past) | Not rendered. No "you're done" message. |
 | Everything today is completed | UP NEXT and SCHEDULE are not rendered; EARLIER TODAY carries the completed rows — timed, untimed and undated alike (§2.4); a single line above it reads `All done for today.` |
@@ -334,9 +341,9 @@ user.
 | --- | --- | --- | --- |
 | SCHEDULE | Effective start time, ascending | `activityId` ascending | `occurrenceDate` ascending |
 | EARLIER TODAY | Effective start time, **ascending** (completion time for rows with no clock time, §2.4) | `activityId` ascending | — |
-| ANYTIME group 1 (overdue) | `overdueFromDate` ascending | `activityId` ascending | — |
-| ANYTIME group 2 (untimed today) | `activityId` ascending | — | — |
-| ANYTIME group 3 (undated) | `createdAt` descending | `activityId` descending | — |
+| OVERDUE | `overdueFromDate` ascending | `activityId` ascending | — |
+| TODAY · NO TIME | `activityId` ascending | — | — |
+| ANYTIME · NO DATE | `createdAt` descending | `activityId` descending | — |
 
 `activityId` is a ULID, so it sorts **stably and identically on every client** — which is
 the property these rows need. Using it as the tie-break
@@ -357,9 +364,9 @@ local mutation produces the identical order.
 > `createdAt`, which stays server-set.
 >
 > One row of the table above uses `activityId` as a **primary** sort rather than a tie-break —
-> ANYTIME group 2, untimed-today items, which have no other ordering signal. It keeps that
+> TODAY · NO TIME, dated untimed items, which have no other ordering signal. It keeps that
 > sort: stable and identical on every client is what the group needs, and it never claimed to
-> be chronological. Group 3 already leads with `createdAt` and is unaffected.
+> be chronological. ANYTIME · NO DATE already leads with `createdAt` and is unaffected.
 
 ### 3.2 What is excluded from Today
 
@@ -451,11 +458,11 @@ a Plan or ListItem, and the final creation action is `Save task`. The client alw
 
 | State | `schedule` | Where it appears |
 | --- | --- | --- |
-| No schedule | absent | ANYTIME group 3, on every day, until dated or completed |
-| Date only | `{ date }` | ANYTIME group 2 on that date |
+| No schedule | absent | ANYTIME · NO DATE, on every day, until dated or completed |
+| Date only | `{ date }` | TODAY · NO TIME on that date |
 | Date + time | `{ date, time }` | SCHEDULE on that date, moving to EARLIER TODAY once passed |
 
-Clearing a date returns a Task to ANYTIME. Tasks never gain people; coordinated work is an
+Clearing a date returns a Task to ANYTIME · NO DATE. Tasks never gain people; coordinated work is an
 explicit **Plan → General** or another visible Plan kind. There is no "someday" flag:
 undated *is* someday for a Task.
 
@@ -906,7 +913,7 @@ states one.
 
 > **Decision — the overdue rule.** A **task** (`type === 'task'`) that is not part of a
 > recurring series, has `status: 'scheduled'`, and has `schedule.date` strictly before
-> today, is **rolled forward onto Today** as an ANYTIME item (group 1), retaining its
+> today, is **rolled forward onto Today** in OVERDUE, retaining its
 > original stored date. Nothing else rolls forward: not meals, not watch sessions, not
 > events, not custom activities, and not recurring occurrences.
 
@@ -1056,9 +1063,13 @@ SCHEDULE
   7:30 PM   ◇  Chicken tacos                       Meal · Dinner
   8:00 PM   ◇  Severance                    Watch · S2 E4    (A)
 
-ANYTIME                                                          3
-  Tue       □  Call apartment office
+OVERDUE                                                         1
+            □  Call apartment office                 Due Tue
+
+TODAY · NO TIME                                                 1
             □  Submit insurance form
+
+ANYTIME · NO DATE                                               1
             □  Book flights for New York          New York Trip
   + Add a task
 ```
@@ -1082,9 +1093,9 @@ EARLIER TODAY                                            1 done  ⌃
 | Gym | SCHEDULE | Series expansion emitted 18:00 for 6 Aug; no `Occurrence` row exists, so it is unresolved (§6.3). Checkbox because it is a `task` (§4). |
 | Chicken tacos | SCHEDULE | Timed, future. Diamond marker, not a checkbox, because `meal` (§4). |
 | Severance | SCHEDULE | Timed, future. Subtitle from `details` (§4). |
-| Call apartment office | ANYTIME, first | Overdue task from 4 Aug, inside the 30-day window, rolled forward with a `Tue` chip (§7). |
-| Submit insurance form | ANYTIME, second | Dated today, no time (§2.3 group 2). |
-| Book flights for New York | ANYTIME, third | Undated `saved` task, merged in by `include=anytime_unscheduled`. Subtitle is the parent plan (§5.5). |
+| Call apartment office | OVERDUE | Overdue task from 4 Aug, inside the 30-day window, rolled forward with overdue date metadata (§7). |
+| Submit insurance form | TODAY · NO TIME | Dated today, no time (§2.3). |
+| Book flights for New York | ANYTIME · NO DATE | Undated `saved` task, merged in by `include=anytime_unscheduled`. Subtitle is the parent plan (§5.5). |
 | Overnight oats | EARLIER TODAY, top | Passed and already completed; shows its outcome verb (§2.4). Ascending order puts it above the 2:30 PM item (§2.4, amended 2026-08-17). |
 | Dentist appointment | EARLIER TODAY, bottom | Passed at 14:30, no end time (§8.1). Still `scheduled`, so it carries the `event` prompt (§8.2). Nearest to NOW, so it sits last (§2.4). |
 

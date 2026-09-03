@@ -461,7 +461,7 @@ The three default checkpoints are where a human genuinely adds value:
 | After | Review |
 | --- | --- |
 | P2-02 | The recurrence engine and its test matrix — the highest-correctness-stakes code in the product. Read the segment-boundary tests yourself. |
-| P2-11 | `GET /v1/agenda` end to end — hit it against seeded data, eyeball the four sections in the JSON. |
+| P2-11 | `GET /v1/agenda` end to end — hit it against seeded data and inspect the schedule, anytime, and earlier arrays in the JSON. |
 | P2-22 | The Today screen with rows and gestures — run the app, compare against the design mock and `design-system.md` §7.1. |
 
 Resume after a checkpoint with the `--range` the script prints.

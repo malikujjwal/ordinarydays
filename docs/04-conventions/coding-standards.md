@@ -866,7 +866,7 @@ missing `memo` is visible: without it, the whole agenda re-renders every 60 seco
 
 | List | Component |
 | --- | --- |
-| Today's sections (bounded: ANYTIME capped at 20, EARLIER capped at 10) | `SectionList` |
+| Today's sections (bounded: ANYTIME · NO DATE capped at 20, OVERDUE initially shows 3, EARLIER capped at 10) | `SectionList` |
 | Plans, list items, notifications, search results, balance drill-down — anything paginated | `FlatList` with `keyExtractor`, `getItemLayout` where rows are fixed-height, `initialNumToRender={12}`, `windowSize={7}`, `removeClippedSubviews` on native only |
 | Anything under ~30 rows with a known ceiling | `map` inside a `ScrollView` is acceptable and simpler |
 

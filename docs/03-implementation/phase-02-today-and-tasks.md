@@ -7,14 +7,15 @@ today?* A pure recurrence engine in `packages/shared` expands a series into date
 touching I/O and without drifting across a daylight-saving boundary or a short month. One
 `GET /v1/agenda` call returns everything Today renders — timed items, untimed items, undated
 saved items, expanded recurring occurrences with their overrides applied, and tasks rolled
-forward from the last 30 days — and the client partitions it into UP NEXT, SCHEDULE, ANYTIME
-and EARLIER TODAY, advancing on a one-minute ticker without a refetch. Completing today's
+forward from the last 30 days. The client presents timed work as UP NEXT → EARLIER TODAY →
+NOW → SCHEDULE, followed by OVERDUE → TODAY · NO TIME → ANYTIME · NO DATE, advancing on a
+one-minute ticker without a refetch. Completing today's
 Gym completes today's Gym and leaves tomorrow's alone, provably. Tasks can be completed,
 un-completed, skipped, snoozed and rescheduled, optimistically, with a six-second undo, and
 those mutations survive a subway ride. Local reminders fire on device. Passed plans stop
 looking like unfinished work. One pure function decides which GSI1 bucket every activity's
 index entry lives in, so an undated plan with people on it goes to Plans and never to Today's
-Anytime list. This is the phase where the product becomes usable daily.
+no-date task group. This is the phase where the product becomes usable daily.
 
 > **Blocking stabilization gate — 2026-08-14.** The recurrence audit found that the pure
 > expansion engine was sound while optional scope, cache-derived occurrence targeting and
@@ -236,7 +237,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 > specifies a day header and a set of timeline furniture that **no phase task has ever
 > owned**: the date caption, the `2 of 6 done` day count, the one sanctioned progress bar, the
 > `NOW` divider, the marker connector hairline, and the UP NEXT card's text actions. P2-19 is
-> scoped to the four sections and their partitioning; P2-20 is scoped to the UP NEXT selector
+> scoped to the timed sequence, untimed groups, and their partitioning; P2-20 is scoped to the UP NEXT selector
 > and the ticker. Neither claims any of it, and nothing downstream does either. The tell is
 > that `ProgressBar` was built as a primitive in P1-22 and is referenced only by the token
 > gallery. **P2-44** closes that gap; it introduces no new design decision, because §7.1
@@ -301,8 +302,8 @@ Anytime list. This is the phase where the product becomes usable daily.
 - [ ] Per-user reminders: `GET`/`POST`/`DELETE /v1/activities/:id/reminders` operating on
       `REM#<userId>#` rows scoped to the caller by key construction, capped at 3 per user per
       activity.
-- [ ] The Today screen with all four sections, their fixed order, their sort keys, their
-      empty states, and the client-side UP NEXT ticker.
+- [ ] The Today screen with its timed sequence and three explicit untimed groups, their fixed
+      order, sort keys, empty states, and the client-side UP NEXT ticker.
 - [ ] Row affordances by type: a checkbox on `task` and nothing else; swipe actions per the
       gesture table; every swipe action also reachable as an `accessibilityAction`.
 - [ ] Overdue roll-forward with the 30-day window, the date chip, the cap-and-collapse at
@@ -340,7 +341,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-16 | Per-user reminders: items, endpoints, and the write paths | api | P2-08, P2-12 | yes | M |
 | P2-17 | Series limit and window warnings — **complete by absorption (2026-08-11)** | api | P2-08 | yes | S |
 | P2-18 | Agenda client hook, ETag transport cache and query policy | shared/mobile | P2-11, P1-20 | no | L |
-| P2-19 | Today screen shell and the four sections | mobile | P2-18, P1-22 | no | L |
+| P2-19 | Today screen shell, timed sequence, and untimed groups | mobile | P2-18, P1-22 | no | L |
 | P2-20 | The UP NEXT card and the one-minute ticker | shared/mobile | P2-19, P2-21 | no | M |
 | P2-21 | Agenda row components and affordances by type | mobile | P2-19 | no | L |
 | P2-22 | Swipe actions and the gesture table | mobile | P2-21 | no | L |
@@ -1096,7 +1097,7 @@ index migration. The shared definition remains the source consumed by local-tabl
 and the later CDK stack.
 
 **The agenda never touches `U#<u>#P`.** Three buckets feed it — `#S` for dated items, `#R`
-for series, and `#N` for the Anytime section when `include=anytime_unscheduled` is set. The
+for series, and `#N` for **ANYTIME · NO DATE** when `include=anytime_unscheduled` is set. The
 `#P` bucket holds undecided plans, which are not things to do today, and
 [`../02-architecture/api-contract.md#22-agenda--powers-today-and-plans`](../02-architecture/api-contract.md#22-agenda--powers-today-and-plans)
 states this as a property of the endpoint rather than a filter applied afterwards. Implement
@@ -1185,7 +1186,8 @@ nothing more:
 - Enabled only by `include=overdue`.
 - Query GSI1 `U#<u>#S` for the window `[today − 30 days, today − 1 day]`, filtered to
   `type === 'task'`, `status === 'scheduled'`, and **not** part of a recurring series.
-- Emit each as an ANYTIME group-1 item with `overdueFromDate` set to its original date.
+- Emit each into the API `anytime` array with `overdueFromDate` set to its original date; the
+  client presents those rows in OVERDUE.
 - **Nothing is mutated.** The activity keeps its `schedule.date`. This is a query rule, so
   the item is still on its own date in Plans and in any date-range view, which is what keeps
   "Today owns no data" true.
@@ -1970,17 +1972,17 @@ end-to-end single-request assertion is Playwright's, in P2-37.
 
 ---
 
-### P2-19 — Today screen shell and the four sections
+### P2-19 — Today screen shell, timed sequence, and untimed groups
 
 **Files.** `apps/mobile/app/(app)/(tabs)/index.tsx`,
 `apps/mobile/src/features/agenda/{hooks/useAgenda.ts, components/*, model/partition.ts}`.
 
-**Approach.** Four sections, fixed order, from
-[`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2. A section with no
-items is not rendered at all except where §2.5 says otherwise.
+**Approach.** One timed sequence followed by three explicit untimed groups, in the fixed order
+from [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2. A section or
+group with no items is not rendered at all except where §2.5 says otherwise.
 
-`model/partition.ts` is a pure function from `AgendaItem[]` + current minute to the four
-section arrays, unit-tested independently of React. The client re-partitions locally on the
+`model/partition.ts` is a pure function from `AgendaItem[]` + current minute to the API's
+schedule, anytime, and earlier arrays, unit-tested independently of React. The client re-partitions locally on the
 ticker and after every optimistic mutation; the server's partitioning is the initial paint.
 The two must agree — that is what the shared sort keys buy.
 
@@ -1990,13 +1992,13 @@ items (oldest original date first), `Today · no time` for dated-but-untimed tod
 presentation split over the same three partition groups; they do not add a fifth server bucket.
 Rows are flat, have no cards, marker rail, or horizontal separators, and show only useful
 metadata. Overdue text alone may use the warning colour. The existing overdue disclosure remains
-bounded to three initial rows, while group 3 remains capped at **20 rows** with a `See all (47)` footer
+bounded to three initial rows, while ANYTIME · NO DATE remains capped at **20 rows** with a `See all (47)` footer
 that pushes the P2-39 **Anytime** route. P2-19 registers that route and stubs its screen with
 the standard five-row loading state; it does not fetch the saved list. The pushed screen,
 not an in-place expansion, owns `GET /v1/activities?filter=saved` when P2-39 completes it.
 Three-tabs-only governs tab destinations, not pushed screens.
 
-**Group 3 is the `#N` bucket and nothing else** — explicitly chosen, undated Task
+**ANYTIME · NO DATE is the `#N` bucket and nothing else** — explicitly chosen, undated Task
 activities. An undated Plan is in `#P` and belongs to Plans → Needs a date, regardless of
 its presentation `type` or participants
 ([`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §1.2). The client
@@ -2069,7 +2071,7 @@ one updates the other in a single render pass.
 RowBadges.tsx}`, built from `packages/ui` primitives (P1-22).
 
 **What to build.** The one row component the whole product renders agenda items with —
-Today's four sections, the UP NEXT card's body (P2-20), and the Plans window (P2-32) all
+Today’s timed and untimed groups, the UP NEXT card's body (P2-20), and the Plans window (P2-32) all
 use it, so there is one row component in the product.
 
 **It renders the `AgendaItem` projection and re-derives nothing the server already
@@ -2252,9 +2254,9 @@ a task, press `Cmd+Z`, assert the row returns to its exact prior position.
 their tests. P2-19 already registers the route and provides the standard loading-state stub;
 this task replaces that stub with the completed screen.
 
-**What to build.** A pushed screen reached only from Today's `See all (n)` ANYTIME footer.
+**What to build.** A pushed screen reached only from Today's `See all (n)` **ANYTIME · NO DATE** footer.
 Its serif display title is `Anytime`. Render a paginated AgendaRow list backed by the
-existing `GET /v1/activities?filter=saved` client from P1-16, in §3.1 group-3 order
+existing `GET /v1/activities?filter=saved` client from P1-16, in §3.1 **ANYTIME · NO DATE** order
 (`createdAt` descending, then `activityId` descending). Fetch the next page automatically
 at 80% scroll depth and render the standard single skeleton row while paginating.
 
@@ -2485,7 +2487,7 @@ OverdueCollapse.tsx}`, `apps/mobile/src/features/agenda/model/formatOverdueChip.
 nothing; this task renders it per
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#7-overdue-tasks) §7.
 
-- Rolled-forward rows are ANYTIME group 1, oldest `overdueFromDate` first — the ordering
+- Rolled-forward rows render in OVERDUE, oldest `overdueFromDate` first — the ordering
   is `partition.ts`'s (P2-19); this task renders what it is given.
 - **The date chip** shows the shortest unambiguous form of the original date (§7.2):
   `Yesterday`; a weekday name for the last 6 days (`Tue`); otherwise `4 Aug`. The 30-day
@@ -2502,7 +2504,7 @@ nothing; this task renders it per
   (gesture table) commits `POST .../schedule` with today's date directly (P2-12, P2-22).
 - Overdue rows are never UP NEXT (§2.1 — they have no clock time today).
 - Completing a rolled-forward row completes the **original** activity and moves its Today
-  projection from ANYTIME to EARLIER TODAY. Its stored schedule date remains unchanged, but a
+  projection from OVERDUE to EARLIER TODAY. Its stored schedule date remains unchanged, but a
   row counted in Today's denominator must advance Today's numerator when completed today.
 - Accessibility: the chip's accessibility label is the full form — `Overdue from Tuesday
   4 August` — never the abbreviation; the collapse row announces the hidden count and its
@@ -2514,7 +2516,7 @@ Render: six overdue fixtures produce three rows plus `+3 more overdue`; expandin
 all six in place with no navigation event and no refetch (mock transport call count
 unchanged); chip tap opens the reschedule sheet pre-set to today; the chip carries the
 de-emphasis token, asserted against the design-system token rather than a hex literal.
-Completing a rolled-forward row removes it from ANYTIME and inserts it into EARLIER TODAY
+Completing a rolled-forward row removes it from **OVERDUE** and inserts it into **EARLIER TODAY**
 when `completedAt` falls on today in the viewer timezone. The no-mutation and 30-day-window
 guarantees are P2-09's integration tests.
 
@@ -3520,7 +3522,7 @@ last marker in a section and is hidden from the accessibility tree; the UP NEXT 
 match `agendaQuickActions` for that item and are announced with the same labels as the swipe
 actions. The existing P2-19 section-order and P2-20 ticker tests pass unmodified.
 
-**Scope guard.** Do not change the four sections, their order, their sort, or the partition
+**Scope guard.** Do not change the timed sequence or untimed groups, their order, their sort, or the partition
 function. Do not add a second progress figure anywhere on the screen. Do not build the maps
 handler. Do not add a colour outside P2-40's tables.
 
@@ -3582,7 +3584,7 @@ stale is incomplete.
 - **Check this before writing anything.** Today's request is `from: today, to: today` with
   `include=anytime_unscheduled,overdue` (`useAgenda.ts`, `keys.ts`). Establish against P2-08
   and P2-11 whether `include` is **request-scoped or day-scoped**. If undated and overdue items
-  would attach to both days once the window widens, the four Today sections must keep
+  would attach to both days once the window widens, Today's timed sequence and untimed groups must keep
   partitioning `days[0]` alone and the preview must read only `days[1]`'s dated items. If the
   endpoint cannot express that, **stop and raise it** — silently de-duplicating on the client
   would put a second copy of the server's bucket logic in the wrong place, which is the mistake
@@ -3600,20 +3602,20 @@ stale is incomplete.
 - **It changes no aggregate.** `2 of 6 done` and the progress bar count Today only. UP NEXT
   stays today's next timed item, and P2-20's rule that it is not rendered once every timed item
   today is past must not begin reaching into tomorrow.
-- Undated tasks never appear: they are already on Today under ANYTIME and would otherwise
+- Undated tasks never appear: they are already on Today under **ANYTIME · NO DATE** and would otherwise
   render twice.
 
 **Tests.** Component: the section is absent when tomorrow is empty; rows carry no checkbox and
 no swipe action and expose no completion accessibility action; tapping opens detail without a
-mutation; an undated saved task appears once, under ANYTIME, and never in the preview; the day
+mutation; an undated saved task appears once, under **ANYTIME · NO DATE**, and never in the preview; the day
 count and progress bar are unchanged by tomorrow's items; UP NEXT stays absent when today's
-timed items are all past even with items tomorrow. Unit: the partition still derives the four
-sections from `days[0]` with a two-day payload. The existing P2-18 query-key test is extended
+timed items are all past even with items tomorrow. Unit: the partition still derives the timed
+sequence and untimed groups from `days[0]` with a two-day payload. The existing P2-18 query-key test is extended
 rather than replaced.
 
 **Scope guard.** Do not make the preview interactive, do not extend it past tomorrow, do not
-add a per-day header beyond the section's own, and do not change what the four Today sections
-contain. Do not add a colour outside P2-40's tables.
+add a per-day header beyond the section's own, and do not change what the timed sequence or
+untimed groups contain. Do not add a colour outside P2-40's tables.
 
 ## Acceptance criteria
 
@@ -3649,7 +3651,8 @@ contain. Do not add a colour outside P2-40's tables.
    > plainly. The **original** `to=tomorrow` was retired in 2026-08-11 because it was left over
    > from a design in which Today hydrated reminders and read beyond the current day for its own
    > sections; the correction below is about that design and remains right. P2-45's `to=tomorrow`
-   > is a different thing: the four Today sections still partition `days[0]` alone, and the second
+   > is a different thing: Today's timed sequence and untimed groups still partition `days[0]`
+   > alone, and the second
    > day exists solely to feed the read-only Tomorrow preview
    > ([`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2). `include` is
    > unchanged and reminders are still P2-34's separate request. **The count of one is the part
@@ -3665,7 +3668,7 @@ contain. Do not add a colour outside P2-40's tables.
    sections, in the same order, with the same badges.
 8. At 17:30 on that fixture, without a refetch, `Pick up groceries` moves to EARLIER TODAY
    and UP NEXT becomes `Gym` at 6:00 PM.
-9. A task dated 4 August appears on 6 August in ANYTIME with a `Tue` chip, and its stored
+9. A task dated 4 August appears on 6 August in OVERDUE with a `Tue` chip, and its stored
    `schedule.date` is still `2026-08-04` after it is rendered and after it is completed.
 10. A task dated 40 days ago does not roll forward. An event dated yesterday does not roll
     forward. A missed recurring occurrence does not roll forward.
@@ -3705,7 +3708,7 @@ contain. Do not add a colour outside P2-40's tables.
     query against `U#<u>#P` occurs on any agenda path. Changing its presentation type leaves
     it in `#P`.
 23. An undated `{ objectKind: 'task', type: 'task' }` has a `U#<u>#N` index entry and appears
-    in Today's ANYTIME section. Changing title text or presentation fields leaves it there;
+    in Today’s ANYTIME · NO DATE group. Changing title text or presentation fields leaves it there;
     only an explicit `objectKind` change can move an undated Activity between `#N` and `#P`.
 24. Giving the Plan in criterion 22 a date through `POST .../schedule` moves its index entry
     to `U#<u>#S`; clearing the date through the same route returns it to `U#<u>#P`, not to

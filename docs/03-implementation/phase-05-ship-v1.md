@@ -1145,7 +1145,7 @@ Between three and ten screenshots per size. Capture them from the simulator at t
 device class with real seeded data — not lorem ipsum, and not an empty state. The five that
 tell the story:
 
-1. Today with all four sections populated (the worked example day is ideal).
+1. Today with the timed sequence and all three untimed groups populated (the worked example day is ideal).
 2. Global Add showing the three explicit destinations: **Task**, **Plan**, and **List item**.
 3. A plan detail with prep tasks and a list.
 4. A list with a scheduled item showing its state line.

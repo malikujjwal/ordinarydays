@@ -90,12 +90,12 @@ beforeEach(() => {
 
 function mount() {
   const onClose = vi.fn();
-  render(
+  const rendered = render(
     <ThemeProvider scheme="light">
       <AddListToPlanSheet open source={PLAN} onClose={onClose} />
     </ThemeProvider>,
   );
-  return { onClose };
+  return { onClose, ...rendered };
 }
 
 it('starts with exactly Create new list and Choose existing list, with nothing selected', () => {
@@ -125,6 +125,124 @@ it('shows active accessible Lists and explains every ineligible row', () => {
   expect(screen.getByText('Already connected to a plan')).toBeDefined();
   expect(screen.getByText('Only the owner can add this list')).toBeDefined();
   expect(screen.queryByText('Archived')).toBeNull();
+});
+
+it('keeps disabled rows inert and exposes the eligible selection state', () => {
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose existing list' }));
+
+  const add = screen.getByRole('button', { name: 'Add to plan' });
+  const unavailable = screen.getByRole('button', {
+    name: 'Another plan. Already connected to a plan',
+  });
+  expect(unavailable.hasAttribute('disabled')).toBe(true);
+  fireEvent.click(unavailable);
+  expect(add.hasAttribute('disabled')).toBe(true);
+
+  const packing = screen.getByRole('button', { name: 'Packing. 4 items' });
+  expect(packing.getAttribute('aria-pressed')).toBe('false');
+  fireEvent.click(packing);
+  expect(packing.getAttribute('aria-pressed')).toBe('true');
+  expect(add.hasAttribute('disabled')).toBe(false);
+});
+
+it('invalidates a selected List when a refresh links it elsewhere', () => {
+  const mounted = mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose existing list' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Packing. 4 items' }));
+  expect(
+    screen.getByRole('button', { name: 'Add to plan' }).hasAttribute('disabled'),
+  ).toBe(false);
+
+  listsHook.current = {
+    ...listsHook.current,
+    lists: listsHook.current.lists.map((current) =>
+      current.title === 'Packing'
+        ? { ...current, sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1ZZ' }
+        : current,
+    ),
+  };
+  mounted.rerender(
+    <ThemeProvider scheme="light">
+      <AddListToPlanSheet open source={PLAN} onClose={mounted.onClose} />
+    </ThemeProvider>,
+  );
+
+  expect(screen.getByLabelText('Packing. Already connected to a plan')).toBeDefined();
+  const add = screen.getByRole('button', { name: 'Add to plan' });
+  expect(add.hasAttribute('disabled')).toBe(true);
+  fireEvent.click(add);
+  expect(attachHook.current.attach).not.toHaveBeenCalled();
+});
+
+it('renders loading, first-page failure, request id, and retry without inventing an empty state', () => {
+  const refetch = vi.fn();
+  listsHook.current = {
+    ...listsHook.current,
+    status: 'error',
+    lists: [],
+    message: 'Something went wrong.',
+    requestId: 'req_lists_1',
+    refetch,
+  };
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose existing list' }));
+
+  expect(screen.getByRole('alert').textContent).toContain('Something went wrong.');
+  expect(screen.getByText('req_lists_1')).toBeDefined();
+  expect(screen.queryByText('No active lists yet.')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(refetch).toHaveBeenCalledOnce();
+});
+
+it('keeps the picker in a loading state until the first page settles', () => {
+  listsHook.current = {
+    ...listsHook.current,
+    status: 'pending',
+    lists: [],
+  };
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose existing list' }));
+
+  expect(screen.getByText('Loading lists…')).toBeDefined();
+  expect(screen.queryByText('No active lists yet.')).toBeNull();
+});
+
+it('keeps paging when a page contains only archived Lists', () => {
+  const loadMore = vi.fn();
+  listsHook.current = {
+    ...listsHook.current,
+    lists: [list({ archived: true })],
+    hasMore: true,
+    loadMore,
+  };
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose existing list' }));
+
+  expect(screen.getByText('Looking for active lists…')).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Load more lists' }));
+  expect(loadMore).toHaveBeenCalledOnce();
+  expect(screen.queryByText('No active lists yet.')).toBeNull();
+});
+
+it('shows a later-page failure and offers an explicit retry', () => {
+  const retry = vi.fn();
+  listsHook.current = {
+    ...listsHook.current,
+    hasMore: true,
+    loadMoreFailure: {
+      message: 'Something went wrong.',
+      requestId: 'req_page_2',
+      retry,
+    },
+  };
+  mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose existing list' }));
+
+  expect(screen.getByRole('alert').textContent).toContain('Something went wrong.');
+  expect(screen.getByText('req_page_2')).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading lists' }));
+  expect(retry).toHaveBeenCalledOnce();
 });
 
 it('confirms one eligible selection and closes only after it is projected', async () => {

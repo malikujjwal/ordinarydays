@@ -28,7 +28,7 @@ bucket unchanged.
 
 The Plans tab also becomes itself. One `GET /v1/plans` returns three stages — Needs a date,
 Upcoming, Past — so a plan that exists without a date has somewhere to live that is not
-Today's Anytime list and is not a backlog with a counter on it.
+Today’s ANYTIME · NO DATE group and is not a backlog with a counter on it.
 
 ## Prerequisites
 
@@ -1827,16 +1827,20 @@ frozen values copied from the chosen style.
   `lst_` identity, then atomically stores the visible row and queued create. Transport retry
   reuses both that id and the mutation id. `GET /v1/list-templates` exposes that same module to other
   clients and contract tests, not a second catalogue or a required mobile startup fetch.
-- Creating from a plan's `Add list` sheet (P3-39) enters the same full fixed-order catalogue
-  with **none selected**. Plan kind, title and participants do not group, rank, hide or select
-  styles. The title is pre-filled only after the user's explicit style tap.
+- A plan's `Add list` sheet (P3-39) first offers exactly `Create new list` and
+  `Choose existing list`, neither selected. Create enters the same full fixed-order catalogue
+  with **none selected**. Choose existing shows active accessible Lists, including disabled
+  rows with reasons, and attaches only after confirmation. Plan kind, title and participants
+  do not group, rank, hide or select styles. The title is pre-filled only after the user's
+  explicit style tap.
 
-**Tests.** Playwright: the sheet opens with the catalogue and no selection; there is no title
-field or enabled `Create list` yet. Choose Groceries, edit its visible title to `Costco run`,
-tap `Create list`, and assert the stored `templateKey` is still `groceries`. Choosing
-`Blank` explicitly creates `simple-list` with the visible title pre-filled as `Simple list`.
-A test asserts title changes never trigger a
-template or model request.
+**Tests.** Playwright: the sheet opens with exactly the two entry choices and no selection.
+Choose Create and assert the catalogue has no selected type, title field, or enabled
+`Create list` yet. Choose Groceries, edit its visible title to `Costco run`, tap `Create list`,
+and assert the stored `templateKey` is still `groceries`. Choosing `Blank` explicitly creates
+`simple-list` with the visible title pre-filled as `Simple list`. Choose Existing and assert
+eligible, already-attached, linked-elsewhere, and non-owner rows, then confirm one eligible
+selection. A test asserts title changes never trigger a template or model request.
 
 ---
 

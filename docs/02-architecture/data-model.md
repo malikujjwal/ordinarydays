@@ -289,7 +289,7 @@ forbidden — see `security-privacy.md`.
 | --- | --- | --- | --- |
 | Scheduled | `U#<userId>#S` | `<localDateTime>#<activityId>` — e.g. `2026-08-06T19:30#a_01H…` | Today, Plans → Upcoming, date ranges |
 | Needs a date | `U#<userId>#P` | `<lastActivityAt>#<activityId>` | Plans → Needs a date. **Never Today.** |
-| Anytime | `U#<userId>#N` | `<createdAt>#<activityId>` | Today's Anytime section |
+| Anytime | `U#<userId>#N` | `<createdAt>#<activityId>` | Today’s ANYTIME · NO DATE group |
 | Recurring series | `U#<userId>#R` | `<seriesStartDate>#<activityId>` | Recurrence expansion. `seriesStartDate` = the first segment's `effectiveFrom` (§4.2) — immutable, so the index key never rewrites on a segment append |
 | Archived | *(attribute removed)* | — | **Undated terminal items only** (decision 2026-08-07): the 60-day maintenance sweep strips the index attributes from `#N` and `#P` items 60 days after they reach `completed`, `skipped` or `cancelled`, and from nothing else. It never touches `#S` items — a past dated row is Plans → Past, which is permanent product history, not a rolling window |
 
@@ -312,12 +312,12 @@ Order matters. Do not reorder the conditions.
 **Why `#P` and `#N` are different buckets.** Both hold activities with no date, but they
 mean opposite things. `#N` means *today, whenever* — "Submit the insurance form". `#P` means
 *someday, undecided* — "Dinner at Zahav with Alice and Ben, date TBD". Putting them in one
-bucket was the model's largest product error: it sent an undecided group plan to Today's
-Anytime list next to a solo errand.
+bucket was the model's largest product error: it sent an undecided group plan to Today’s
+ANYTIME · NO DATE group next to a solo errand.
 
 **Why `objectKind` is the test.** The client already asked whether this is a Task or a Plan.
 Re-deriving that answer from `type`, people, or prose would erase the user's decision. A
-private, undated Plan belongs in Needs a date; a Task stays in Anytime. Adding people, setting
+private, undated Plan belongs in Needs a date; a Task stays in ANYTIME · NO DATE. Adding people, setting
 a date, or choosing a presentation type cannot silently change that identity.
 
 The bucket must be recomputed, and the index entry rewritten, whenever any input changes:
@@ -1308,9 +1308,9 @@ Constraints:
 - Removing or leaving deletes the owner and member `LLINK#` rows; deleting a list deletes
   every link for that list. Neither operation deletes a `Person`. Renaming remains one write
   because links contain ids and `addedAt`, not list titles.
-- A shared plan **suggests** sharing its generated lists with the same people. It never
-  does so automatically. For packing in particular, auto-sharing would be actively wrong —
-  each person packs their own bag.
+- A Plan/List relationship never widens List membership. Creating a List from a Plan or
+  attaching an existing List records provenance only. Sharing is a separate explicit action
+  on the List; Plan participants are never inferred as List members.
 - Scheduling an item never inherits list membership. The caller submits an explicit Plan
   target and either `just_me` or `selected_people`. Only the caller and selected Plan
   participants receive Activity access; only those who are also active list members receive
@@ -1631,8 +1631,9 @@ expandAgenda(userId, fromDate, toDate, tz):
   9. if include=reminders:
        query REM#<callerUserId># for each bounded distinct emitted Activity and attach rows
        to that Activity's AgendaItems in [from..to]
- 10. sort by effective viewer-local time, partition into
-       UP NEXT / SCHEDULE / ANYTIME / EARLIER TODAY
+  10. sort by effective viewer-local time; partition the API response into
+       UP NEXT / SCHEDULE / ANYTIME / EARLIER TODAY. The client presents the ANYTIME
+       array as OVERDUE / TODAY · NO TIME / ANYTIME · NO DATE from row metadata.
 ```
 
 Constraints:

@@ -72,7 +72,7 @@ in its label and skips only that already-answered choice.
 
 | Surface | Affordance |
 | --- | --- |
-| Today | Global `+`, bottom-right, above the tab bar. Opens **Task / Plan / Add list**. After a Task or Plan choice, today may pre-fill `schedule.date`; it never pre-selects the choice. The ANYTIME section also has contextual `+ Add a task`. |
+| Today | Global `+`, bottom-right, above the tab bar. Opens **Task / Plan / Add list**. After a Task or Plan choice, today may pre-fill `schedule.date`; it never pre-selects the choice. The untimed block also has contextual `+ Add a task`. |
 | Plans | Global `+`. Opens the same three choices. After Task or Plan is chosen, a date currently in view may pre-fill `schedule.date`. |
 | Lists (list detail) | Contextual `+ Add an item` at the bottom fixes **List item** and the current list as its destination. The global `+` still opens Task / Plan / Add list. |
 | Plan detail | Contextual `+ Add prep task` fixes **Task** and pre-fills `parentActivityId`. |
@@ -479,7 +479,7 @@ name was typed.
 
 | State | Meaning | How it is reached |
 | --- | --- | --- |
-| `saved` | Exists, no date committed. `objectKind: 'plan'` lives in **Plans → Needs a date**; `objectKind: 'task'` lives in Today's **Anytime** ([`plans-and-lists.md`](plans-and-lists.md) §1.2). | Created without `schedule.date`, or a date is cleared. |
+| `saved` | Exists, no date committed. `objectKind: 'plan'` lives in **Plans → Needs a date**; `objectKind: 'task'` lives in Today's **ANYTIME · NO DATE** ([`plans-and-lists.md`](plans-and-lists.md) §1.2). | Created without `schedule.date`, or a date is cleared. |
 | `scheduled` | Has a date, optionally a time. It appears in Plans → Upcoming and can reach Today. | `POST /v1/activities/:id/schedule` or created with a date. |
 | `completed` | The user says it happened. | `POST /v1/activities/:id/complete` |
 | `skipped` | Deliberately not done, no guilt attached. | `POST /v1/activities/:id/skip` |
@@ -807,7 +807,7 @@ The user-facing contract:
 
 | Behaviour | Rule |
 | --- | --- |
-| Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. The labelled action fixes `{ objectKind: 'task', type: 'task' }` before any words are accepted, opens the Task form directly with today's date and no time, and finishes with `Save task`. It never opens the global chooser or infers Task versus Plan from the title. |
+| Inline add on Today | The untimed block has a persistent `+ Add a task` row at its foot. The labelled action fixes `{ objectKind: 'task', type: 'task' }` before any words are accepted, opens the Task form directly with today's date and no time, and finishes with `Save task`; the saved row therefore lands in **TODAY · NO TIME**. It never opens the global chooser or infers Task versus Plan from the title. |
 | Inline add on a list | The list detail's `+ Add an item` opens a one-title rapid-entry row and creates a `ListItem` in that list, never an Activity. Its field is named `Add item to <list name>`; Return performs `Add`, clears, and re-focuses it. Note and typed features belong to Item details. |
 | Inline add of a prep task | The plan's `+ Add prep task` row creates a `task` with `parentActivityId` set. |
 | Global `+` from Today | Opens **Task / Plan / Add list**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |

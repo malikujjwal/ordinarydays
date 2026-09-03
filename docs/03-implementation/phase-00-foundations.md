@@ -1261,7 +1261,7 @@ a destroy that silently no-ops is exactly the failure this task must not miss.
 | Any DynamoDB repository, entity, or key construction beyond the health check's absence of one | Phase 1 |
 | The Activity model, the Add screen, any creation form, the seed script | Phase 1 |
 | The recurrence engine — including "just a little of it" in `packages/shared` | Phase 2 |
-| `GET /v1/agenda`, the Today screen, any of its four sections | Phase 2 |
+| `GET /v1/agenda`, the Today screen, or any timed/untimed presentation group | Phase 2 |
 | Lists, list items, the lists tab beyond an empty placeholder | Phase 3 |
 | Attachments, presigned uploads, the media distribution's cache tuning | Phase 3 |
 | Push notifications, EventBridge Scheduler, the reminder Lambda | Phase 5 |

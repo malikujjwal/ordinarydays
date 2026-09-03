@@ -1882,7 +1882,7 @@ in with Apple, token storage on iOS and web, the refresh flow with its single-fl
 | Onboarding: timezone confirmation and display name on first run | Phase 4 |
 | The first AWS deploy, `deploy-dev.yml`, the authenticated half of the smoke test | Phase 4 |
 | A development build of the app (Expo Go is sufficient for this phase) | Phase 4 |
-| `GET /v1/agenda`, the Today screen, the four sections, UP NEXT | Phase 2 |
+| `GET /v1/agenda`, the Today screen, its timed/untimed presentation groups, UP NEXT | Phase 2 |
 | The recurrence engine, `Occurrence` rows, the Repeat sheet beyond a disabled control | Phase 2 |
 | `complete`, `uncomplete`, `skip`, `snooze`, `schedule` endpoints, and the completion button | Phase 2 |
 | Reminder endpoints (`GET`/`POST`/`DELETE /v1/activities/:id/reminders`) — this phase writes the creator's `REM#` rows at create time and reads them back filtered, nothing manages them | Phase 2 (P2-16) |

@@ -122,7 +122,8 @@ Two canonical-document amendments this phase depends on are already recorded in
 - [ ] A joiner's own `REM#` row created only from their **own explicitly set**
       `defaultReminderOffset` when they are added to a shared plan (`0` is valid; unset is
       Off), with nobody inheriting anybody else's.
-- [ ] A shared plan **suggesting**, never performing, sharing of the lists it generates.
+- [ ] Plan/List provenance never changing List membership; List sharing remains a separate
+      explicit action with no sharing control in the Plan `Add list` flow.
 - [ ] Success criterion S4 (guest RSVP in under 30 s, three taps) and S8 (the public
       projection leaks nothing) verified in CI.
 
@@ -173,7 +174,7 @@ Two canonical-document amendments this phase depends on are already recorded in
 | P6-41 | Updates feed UI | mobile | P6-22 | yes | M |
 | P6-42 | Add-to-calendar affordance on plan detail | mobile | P6-20, P6-21 | yes | S |
 | P6-43 | List share, shared-item audience, MEMBERS and leave flows | mobile | P6-30, P6-31, P3-27 | no | L |
-| P6-44 | A shared plan suggests sharing its generated lists | mobile | P6-43, P3-39 | no | M |
+| P6-44 | Keep Plan/List provenance independent from sharing | mobile | P6-43, P3-39 | yes | S |
 | P6-45 | The public invite page | web | P6-18, P6-19, P6-20 | no | L |
 | P6-46 | E2E and projection-leak tests, S4 and S8 | ci | P6-45 | no | M |
 | P6-47 | Shared-list E2E, concurrency and access tests | ci | P6-43, P6-32 | no | M |
@@ -2601,59 +2602,37 @@ different private Plans from the same item and proves each row opens only its ow
 
 ---
 
-### P6-44 — A shared plan suggests sharing its generated lists
+### P6-44 — Keep Plan/List provenance independent from sharing
 
-**Files.** `apps/mobile/src/features/lists/NewListSheet.tsx` (extend, P3-26),
-`apps/mobile/src/features/plans/AddListSheet.tsx` (P3-39).
+> **Superseded contract — 2026-09-03.** The earlier proposal for an unticked
+> `Share with …` row in the Plan `Add list` flow is retired. This task id remains so roadmap
+> references stay stable; it now protects the replacement invariant.
 
-**What to build.** One unticked row on the sheet that creates a List from a Plan, after the
-user explicitly selects its List creation type, per
-[`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §4.1:
+**Files.** `apps/mobile/src/features/lists/components/AddListToPlanSheet.tsx` (P3-39), the List share
+surface from P6-43, and their contract tests.
 
-```
-  ☐  Share with Alice and Ben
-     They can add and edit items.
-```
+**What to build.** No new sharing UI in Plan detail. Creating a List from a Plan or attaching
+an existing List changes only `sourceActivityId`. The sheet never copies participants, never
+submits member writes, and never renders a Plan-derived sharing choice. Sharing is initiated
+later and independently from the List's own share affordance (P6-43).
 
-**Rules, all five of which are tests.**
+**Rules, all four of which are tests.**
 
-1. The sheet first shows P3-33's seven creation types in fixed order with nothing selected. The
-   source Plan's kind, title, participants, date, and generated-list suggestion never choose,
-   rank, or preselect a type. `POST /v1/lists` carries the exact user-selected
-   `templateKey`; there is no title matcher or simple-list fallback.
-2. **Unticked by default, on every creation type, with no exceptions.** Creating one thing never
-   shares another. This is the product-wide invariant in
-   [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#1a-product-wide-invariants)
-   §1a.2 applied to a second object.
-3. Ticking it adds every **app-user** participant of the plan as a `member`, in the same
-   confirmation, as one `POST .../members` per person.
-4. Guests are not added, and the row says so when the plan has any:
-   `Alice can be added. Chloe doesn't have the app.` List membership is app users only.
-5. The row is **not rendered at all** for a private plan, and declining is silent and final
-   for this creation — the plan never asks again. The list can be shared later from its own
-   share sheet (P6-43).
+1. `Add list` first shows P3-39's explicit `Create new list` and `Choose existing list`
+   choices. The source Plan's kind, title, participants, and date select neither a path nor a
+   List type.
+2. Both creation and attachment write provenance only. They create zero `MEMBER#` rows and
+   issue zero membership requests, whether the Plan is private or shared.
+3. No Plan participant, app user or guest, appears as an inferred List member. Later changes
+   to Plan participation do nothing to List membership.
+4. The List's own share flow remains available and explicit. Using it changes List membership
+   without changing the Plan/List source relationship.
 
-> **Decision — suggested, never automatic, and never pre-ticked.** For packing this is not a
-> nicety: each person packs their own bag, and a shared `Packing · New York Trip` where three
-> people mark one `Charger` row done is actively wrong. Groceries and `Places to visit` for
-> the same trip usually should be shared. The app cannot tell which is which from the creation type,
-> so it asks once, cheaply, and defaults to the answer that loses nothing.
-
-**Edge cases.** If the plan gains participants after the list was created, nothing happens —
-there is no watcher and no retroactive suggestion. If adding one member fails, the list still
-exists and the banner names the failure; a list that was not created because the fourth
-invite failed would be worse.
-
-**Tests.** The seven-type catalogue starts unselected for Meal, Watch, Event and General
-Plans; changing the proposed title does not change selection; save is unavailable until a
-creation type is tapped; the request carries that exact `templateKey`; a missing key is `400` and
-writes no list. The share row is absent for a private plan and unticked for a shared one, on
-every creation type in the catalogue — a table-driven render test, because "except for packing"
-is exactly the kind of exception that gets added later. Creating without ticking writes the
-list and **zero** `MEMBER#` rows, asserted by a table item count. Ticking with two app users
-and one guest writes two `MEMBER#` rows and renders the guest line. A second list created
-from the same plan shows the creation-type catalogue unselected and, after selection, the share row
-unticked again.
+**Tests.** Render the initial two-choice sheet for private and shared Plans and assert there is
+no sharing control. Create each List type from a shared Plan and attach an existing private
+List; assert the source relationship is written and zero membership writes occur. Then share
+the same List from its own detail surface and assert only the List membership projection
+changes. Adding or removing a Plan participant afterward leaves the List member set unchanged.
 
 ---
 
@@ -3160,10 +3139,10 @@ see the date and both see a pending RSVP.
     stored value — asserted against a checked-in literal array and a grep. The same
     participant renders `Interested` before a date exists and `Going` after, with the stored
     value byte-identical.
-41. Creating a List from a shared Plan begins with the seven creation types unselected and
-    requires the exact user-selected `templateKey`. The Plan's kind and title select nothing.
-    With the share row untouched it writes the list and **zero** `MEMBER#` rows; that row is
-    unticked on every creation type and absent for a private Plan.
+41. Creating or attaching a List from a shared Plan begins with the explicit two-choice
+    `Add list` sheet and renders no sharing control. Creation still requires the exact
+    user-selected `templateKey`; either path writes the source relationship and **zero**
+    `MEMBER#` rows. List sharing remains an independent action from List detail.
 42. `GET /public/v1/invites/:token` for an **undated** plan returns `dateStatus: 'undecided'`
     with null date fields, and the page renders `The date is being decided` with
     `Interested · Maybe · Pass` and no add-to-calendar affordance. The same token after the
@@ -3268,7 +3247,7 @@ Each of these is tempting here and belongs elsewhere.
 | 22 | **The RSVP reset is skipped, or applied to the owner**, or a new `interested` enum value is introduced so the label can be stored. | A date landing without a reset claims consent nobody gave; a stored `interested` forces a migration on the exact event that changes the word. P6-15 and P6-40, criteria 38 and 40, with the enum compared to a literal array. |
 | 23 | **The reset transaction exceeds 100 items** at the participant cap and is discovered at 50 people rather than in review. | The budget is computed in P6-15 (103 items at the cap), the threshold is a shared constant, and the two-phase path is tested at 45 and 46 with an assertion that the intermediate read never shows a stale response. |
 | 24 | **A denormalised field creeps onto the List pointer** — a title for the Lists tab, a count for a badge. | Renaming a shared List becomes 20 writes and an item-state change becomes a fan-out. The pointer's attribute set is compared to a literal list in Phase 3 (criterion 27) and the property is restated in criterion 30. |
-| 25 | **The Plan → List share row is pre-ticked** for "obviously shared" creation types like Groceries. | The exception grows, and the first time it is wrong it silently shares a packing List. Unticked for every creation type, asserted by a table-driven test over the whole catalogue (P6-44, criterion 41). |
+| 25 | **The Plan `Add list` flow exposes a sharing row or infers members** for "obviously shared" creation types like Groceries. | The first incorrect inference silently shares a private packing List. P6-44 and criterion 41 require no Plan-derived sharing control and zero membership writes; sharing is explicit from List detail. |
 | 26 | **Marking a suggestion as workable is treated as consent**, so the RSVP reset is skipped when the owner schedules from a suggestion everybody said worked. | It is the most tempting optimisation in the feature and it defeats the rule on the exact path that will be used most. `worksFor` says "I could do Thursday", not "I am coming on Thursday" — the second is a different question and it is asked separately. Criterion 48 schedules from a suggestion every participant marked and asserts every row reads `pending`. ADR-049. |
 | 27 | **An `LLINK#` is mistaken for list access or left dangling.** | `assertListAccess` accepts only the exact `USER#/LIST#` pointer; add/remove/delete tests assert both reciprocal link lifecycles and Person retention. |
 | 28 | **Removing one pending list invite deletes the Person-level `GUESTEMAIL#`.** | The invite removes only its `MEMBER#` and invited `LLINK#`; the locator survives until Person/email deletion or verified linking, with a test covering another relationship for the same guest. |
@@ -3277,4 +3256,4 @@ Each of these is tempting here and belongs elsewhere.
 | 31 | **The guest page keeps one vocabulary** because switching it looks like duplicated copy, or the undated invite is refused outright as "nothing to invite anyone to". | Asking a stranger "are you coming?" about a plan with no date is incoherent, and they are the person least able to work out what it means. An undated plan has a working invite page; what it lacks is an exportable event, which is a separate rule about `.ics`. The words come from `rsvpLabel` on both surfaces, asserted by a cross-surface test (P6-40, P6-45, criterion 42). |
 | 32 | **A joiner inherits the creator's reminder**, because the reminders are right there on the activity being copied from. | Alice, who lives next door, gets the owner's "leave in 15 minutes". `Activity` has no `reminders[]`; a joiner's row comes from **their own** `defaultReminderOffset` (P6-13) and `CreateActivityInput.reminders` wrote for the creator alone (P1-11). Criterion 44 asserts two rows, two users, two offsets. ADR-047. |
 | 33 | **A shared ListItem gets one `linkedActivityId`, or list membership is copied into Plan participation.** | One member's private schedule then leaks to everyone, and two members planning the same item overwrite each other. P6-11, P6-29, P6-43 and criteria 51–54 require an explicit `PlanType`, an explicit **Just me / Choose people** audience, and one `LNK#<viewer>#<item>` projection per authorised viewer. The list-detail repository filters by viewer before Activity lookup. |
-| 34 | **A new-list or Plan-this-item sheet infers a template, destination, type, or audience from words or context.** | The app silently answers the organising decision it is supposed to ask. The template catalogue and Plan-kind chooser start unselected, request schemas reject omission, and the same ambiguous title is table-tested through different explicit targets. P6-11, P6-43, P6-44. |
+| 34 | **A new-list, Plan `Add list`, or Plan-this-item sheet infers a template, destination, type, or audience from words or context.** | The app silently answers the organising decision it is supposed to ask. The Plan sheet starts with two explicit paths, the template catalogue and Plan-kind chooser start unselected, request schemas reject omission, and the same ambiguous title is table-tested through different explicit targets. P6-11, P6-43, P6-44. |

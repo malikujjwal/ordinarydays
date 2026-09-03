@@ -459,7 +459,7 @@ Also:
 | `upcoming` | `#S`, today forward | date ascending | Plans → Upcoming |
 | `past` | `#S`, before today | date descending | Plans → Past |
 | `needs_date` | `#P` | `lastActivityAt` descending | Plans → Needs a date |
-| `saved` | `#N` | newest first | Today's ANYTIME `See all` |
+| `saved` | `#N` | newest first | Today’s ANYTIME · NO DATE `See all` |
 
 > **Amended in P1-16 — `inbox` removed, `saved` split from `needs_date`.** The enum read
 > `inbox|upcoming|past|saved`, and two of those could not be built as written.
@@ -472,7 +472,7 @@ Also:
 >
 > **`saved` was aimed at two buckets by two product docs.**
 > [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2.3 points the
-> ANYTIME `See all` footer at it (`#N`, undated **tasks**), while
+> **ANYTIME · NO DATE** `See all` footer at it (`#N`, undated **tasks**), while
 > [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5 routes an undated
 > Meal Plan to it (`#P`, undated **plans**). Those are separate partitions: one filter cannot
 > page across both without a composite cursor no document defines, and merging them would put

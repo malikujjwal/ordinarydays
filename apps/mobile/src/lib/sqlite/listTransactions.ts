@@ -677,7 +677,7 @@ export class ListTransactionService {
 
   async setArchived(
     transaction: TransactionContext,
-    list: List,
+    list: Pick<List, 'listId'>,
     archived: boolean,
     intentId: string,
   ): Promise<OutboxIntent> {
@@ -703,7 +703,7 @@ export class ListTransactionService {
    */
   async patchSettings(
     transaction: TransactionContext,
-    list: List,
+    list: Pick<List, 'listId'>,
     patch: PatchListInput,
     intentId: string,
   ): Promise<OutboxIntent> {
@@ -843,7 +843,7 @@ export class ListTransactionService {
 
   async remove(
     transaction: TransactionContext,
-    list: List,
+    list: Pick<List, 'listId'>,
     intentId: string,
   ): Promise<void> {
     const variables: ListDeleteVariables = { listId: list.listId, intentId };

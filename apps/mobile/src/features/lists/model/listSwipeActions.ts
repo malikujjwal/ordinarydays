@@ -50,7 +50,10 @@ const MARK_WATCHED: ListSwipeAction = {
 };
 
 /** The row's own role, from the viewer. Phase 6 replaces the derivation, not the callers. */
-export function roleFor(list: List, viewerUserId: string | undefined): ListRowRole {
+export function roleFor(
+  list: Pick<List, 'ownerId'>,
+  viewerUserId: string | undefined,
+): ListRowRole {
   return viewerUserId !== undefined && list.ownerId === viewerUserId ? 'owner' : 'member';
 }
 

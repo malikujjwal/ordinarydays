@@ -7,7 +7,6 @@ import {
   patchList,
   undoListOperation,
 } from '@od/shared/client';
-import type { List } from '@od/shared/types';
 import {
   type InfiniteData,
   type QueryClient,
@@ -25,11 +24,12 @@ import { useClock } from '@/hooks/useClock';
 import { apiClient } from '@/lib/apiClient';
 import { type ToastMessage, useToast } from '@/stores/toast';
 import { LISTS_KEY } from './keys';
+import type { ListIndexEntry } from './useLists';
 
 export interface ListIndexMutations {
-  readonly onArchive: (list: List) => void;
-  readonly onRestore: (list: List) => void;
-  readonly onDelete: (list: List) => void;
+  readonly onArchive: (list: ListIndexEntry) => void;
+  readonly onRestore: (list: ListIndexEntry) => void;
+  readonly onDelete: (list: ListIndexEntry) => void;
 }
 
 type ListPages = InfiniteData<ListPage>;
@@ -154,7 +154,7 @@ export function useListIndexMutations(): ListIndexMutations {
       archived,
       idempotencyKey,
     }: {
-      list: List;
+      list: ListIndexEntry;
       archived: boolean;
       idempotencyKey: string;
     }) => patchList(apiClient, list.listId, { archived }, list.updatedAt, idempotencyKey),
@@ -177,7 +177,7 @@ export function useListIndexMutations(): ListIndexMutations {
     },
   });
   const remove = useMutation({
-    mutationFn: ({ list, replay }: { list: List; replay: boolean }) =>
+    mutationFn: ({ list, replay }: { list: ListIndexEntry; replay: boolean }) =>
       replay
         ? deleteListForReplay(apiClient, list.listId)
         : deleteList(apiClient, list.listId),
@@ -198,7 +198,12 @@ export function useListIndexMutations(): ListIndexMutations {
   });
 
   const mutateArchived = useCallback(
-    (list: List, archived: boolean, idempotencyKey: string, offerUndo: boolean) => {
+    (
+      list: ListIndexEntry,
+      archived: boolean,
+      idempotencyKey: string,
+      offerUndo: boolean,
+    ) => {
       // Acceptance owns the singleton slot synchronously, before this request can settle.
       dismissToast();
       setArchived.mutate(
@@ -280,7 +285,7 @@ export function useListIndexMutations(): ListIndexMutations {
   );
 
   const mutateDelete = useCallback(
-    (list: List, replay = false) => {
+    (list: ListIndexEntry, replay = false) => {
       // As with archive/restore, the accepted action commits any predecessor immediately.
       dismissToast();
       remove.mutate(
@@ -300,21 +305,21 @@ export function useListIndexMutations(): ListIndexMutations {
   );
 
   const onArchive = useCallback(
-    (list: List) => {
+    (list: ListIndexEntry) => {
       mutateArchived(list, true, randomUUID(), true);
     },
     [mutateArchived],
   );
 
   const onRestore = useCallback(
-    (list: List) => {
+    (list: ListIndexEntry) => {
       mutateArchived(list, false, randomUUID(), false);
     },
     [mutateArchived],
   );
 
   const onDelete = useCallback(
-    (list: List) => {
+    (list: ListIndexEntry) => {
       mutateDelete(list);
     },
     [mutateDelete],

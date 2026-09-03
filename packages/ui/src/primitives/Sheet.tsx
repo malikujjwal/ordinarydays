@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   PanResponder,
   Platform,
   Pressable,
@@ -32,6 +34,12 @@ import { Text } from './Text';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+export interface SheetVirtualizedBodyProps {
+  /** Keeps the sheet's pull-to-dismiss gesture honest while the caller-owned list scrolls. */
+  readonly onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  readonly scrollEventThrottle: number;
+}
+
 /**
  * A modal surface, and the behaviour that goes with it (`design-system.md` §6.1, §6.2).
  *
@@ -61,13 +69,12 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
  * unmounts with its route on `onClose` simply gets no exit, which it never had before P3-51
  * either.
  */
-export interface SheetProps {
+interface SheetBaseProps {
   open: boolean;
   onClose: () => void;
   /** Called after an owner-driven exit and, on iOS, its native modal dismissal have finished. */
   onClosed?: () => void;
   title?: string;
-  children: React.ReactNode;
   /**
    * §6.1's detent table, keyed to the task rather than to taste.
    *
@@ -100,12 +107,30 @@ export interface SheetProps {
   testID?: string;
 }
 
+export type SheetProps = SheetBaseProps &
+  (
+    | {
+        /** Ordinary content; the Sheet owns its ScrollView. */
+        children: React.ReactNode;
+        virtualizedBody?: never;
+      }
+    | {
+        children?: never;
+        /**
+         * A paginated body must own its FlatList rather than nest it inside the Sheet ScrollView.
+         * The supplied scroll props preserve the same top-of-body drag arbitration.
+         */
+        virtualizedBody: (props: SheetVirtualizedBodyProps) => React.ReactNode;
+      }
+  );
+
 export function Sheet({
   open,
   onClose,
   onClosed,
   title,
   children,
+  virtualizedBody,
   detent = 'fit',
   actions,
   dismissible = true,
@@ -136,6 +161,16 @@ export function Sheet({
    * it a pull-down inside a long choice list would fight the list.
    */
   const bodyAtTop = useRef(true);
+  const onBodyScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    bodyAtTop.current = event.nativeEvent.contentOffset.y <= 0;
+  }, []);
+  const hasVirtualizedBody = virtualizedBody !== undefined;
+  const previousBodyOwnership = useRef(hasVirtualizedBody);
+  useEffect(() => {
+    if (previousBodyOwnership.current === hasVirtualizedBody) return;
+    previousBodyOwnership.current = hasVirtualizedBody;
+    bodyAtTop.current = true;
+  }, [hasVirtualizedBody]);
 
   /**
    * The lifecycle the motion needs and `open` alone cannot express: the modal has to stay
@@ -166,6 +201,7 @@ export function Sheet({
   const present = useCallback(() => {
     cancelTransition.current();
     // A re-present mid-exit starts from rest, whatever the interrupted exit had left behind.
+    bodyAtTop.current = true;
     dragY.setValue(0);
     setExit('travel');
     pendingExit.current = 'travel';
@@ -511,27 +547,35 @@ export function Sheet({
            * reachable however long the content is. Keyboard handling lives here rather than in
            * each modal, for the same reason the height does.
            */}
-          <ScrollView
-            ref={bodyRef}
-            style={{ flexGrow: detent === 'fit' ? 0 : 1, flexShrink: 1 }}
-            contentContainerStyle={{ gap: theme.space[6] }}
-            automaticallyAdjustKeyboardInsets
-            keyboardDismissMode={
-              Platform.OS === 'ios'
-                ? 'interactive'
-                : Platform.OS === 'web'
-                  ? 'none'
-                  : 'on-drag'
-            }
-            keyboardShouldPersistTaps="handled"
-            scrollEventThrottle={16}
-            onScroll={(event) => {
-              bodyAtTop.current = event.nativeEvent.contentOffset.y <= 0;
-            }}
-            testID={testID === undefined ? undefined : `${testID}-body`}
-          >
-            {children}
-          </ScrollView>
+          {virtualizedBody === undefined ? (
+            <ScrollView
+              ref={bodyRef}
+              nativeID={testID === undefined ? undefined : `${testID}-owned-scroll-body`}
+              style={{ flexGrow: detent === 'fit' ? 0 : 1, flexShrink: 1 }}
+              contentContainerStyle={{ gap: theme.space[6] }}
+              automaticallyAdjustKeyboardInsets
+              keyboardDismissMode={
+                Platform.OS === 'ios'
+                  ? 'interactive'
+                  : Platform.OS === 'web'
+                    ? 'none'
+                    : 'on-drag'
+              }
+              keyboardShouldPersistTaps="handled"
+              scrollEventThrottle={16}
+              onScroll={onBodyScroll}
+              testID={testID === undefined ? undefined : `${testID}-body`}
+            >
+              {children}
+            </ScrollView>
+          ) : (
+            <View
+              style={{ flexGrow: detent === 'fit' ? 0 : 1, flexShrink: 1 }}
+              testID={testID === undefined ? undefined : `${testID}-body`}
+            >
+              {virtualizedBody({ onScroll: onBodyScroll, scrollEventThrottle: 16 })}
+            </View>
+          )}
 
           {actions === undefined ? null : (
             <View

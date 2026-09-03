@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { PanResponder } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../theme/ThemeProvider';
+import type { SheetVirtualizedBodyProps } from './Sheet';
 
 /**
  * The keyboard inset is the one thing here worth faking: jsdom has no `visualViewport`, so the
@@ -73,7 +75,10 @@ beforeEach(() => {
   motionState.breakpoint = 'compact';
 });
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe('Sheet — the keyboard contract (§20)', () => {
   it('sits on the safe-area inset while the keyboard is closed', () => {
@@ -106,6 +111,101 @@ describe('Sheet — the keyboard contract (§20)', () => {
 
     const body = screen.getByTestId('sheet-body');
     expect(body.contains(screen.getByTestId('sheet-actions'))).toBe(false);
+  });
+
+  it('lets a virtualized body own scrolling without nesting it in the default ScrollView', () => {
+    const panResponder = vi.spyOn(PanResponder, 'create');
+    let onScroll: SheetVirtualizedBodyProps['onScroll'] | undefined;
+    mount(
+      <Sheet
+        open
+        onClose={() => {}}
+        title="Choose existing list"
+        detent="large"
+        testID="virtualized"
+        virtualizedBody={(scroll) => {
+          expect(scroll.scrollEventThrottle).toBe(16);
+          onScroll = scroll.onScroll;
+          return <div data-testid="caller-list">virtual rows</div>;
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByTestId('virtualized-body').contains(screen.getByTestId('caller-list')),
+    ).toBe(true);
+    expect(document.getElementById('virtualized-owned-scroll-body')).toBeNull();
+
+    const responderConfig = panResponder.mock.calls.at(-1)?.[0];
+    const capture = responderConfig?.onMoveShouldSetPanResponderCapture;
+    if (onScroll === undefined || capture === undefined) {
+      throw new Error('Virtualized Sheet did not wire scroll-aware drag capture.');
+    }
+
+    Reflect.apply(onScroll, undefined, [{ nativeEvent: { contentOffset: { y: 24 } } }]);
+    expect(Reflect.apply(capture, undefined, [{}, { dx: 0, dy: 12 }])).toBe(false);
+
+    Reflect.apply(onScroll, undefined, [{ nativeEvent: { contentOffset: { y: 0 } } }]);
+    expect(Reflect.apply(capture, undefined, [{}, { dx: 0, dy: 12 }])).toBe(true);
+  });
+
+  it('resets drag arbitration when the body owner changes and when the sheet reopens', () => {
+    const panResponder = vi.spyOn(PanResponder, 'create');
+    let virtualizedScroll: SheetVirtualizedBodyProps['onScroll'] | undefined;
+    const rendered = render(
+      <ThemeProvider scheme="light">
+        <Sheet
+          open
+          onClose={() => {}}
+          title="Choose existing list"
+          testID="owner-reset"
+          virtualizedBody={(scroll) => {
+            virtualizedScroll = scroll.onScroll;
+            return <div>virtual rows</div>;
+          }}
+        />
+      </ThemeProvider>,
+    );
+    const capture =
+      panResponder.mock.calls.at(-1)?.[0].onMoveShouldSetPanResponderCapture;
+    if (virtualizedScroll === undefined || capture === undefined) {
+      throw new Error('Sheet did not install scroll-aware drag capture.');
+    }
+
+    Reflect.apply(virtualizedScroll, undefined, [
+      { nativeEvent: { contentOffset: { y: 24 } } },
+    ]);
+    expect(Reflect.apply(capture, undefined, [{}, { dx: 0, dy: 12 }])).toBe(false);
+
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <Sheet open onClose={() => {}} title="Add list" testID="owner-reset">
+          <div>ordinary body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+    expect(Reflect.apply(capture, undefined, [{}, { dx: 0, dy: 12 }])).toBe(true);
+
+    Reflect.apply(virtualizedScroll, undefined, [
+      { nativeEvent: { contentOffset: { y: 24 } } },
+    ]);
+    expect(Reflect.apply(capture, undefined, [{}, { dx: 0, dy: 12 }])).toBe(false);
+
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <Sheet open={false} onClose={() => {}} title="Add list" testID="owner-reset">
+          <div>ordinary body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <Sheet open onClose={() => {}} title="Add list" testID="owner-reset">
+          <div>ordinary body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+    expect(Reflect.apply(capture, undefined, [{}, { dx: 0, dy: 12 }])).toBe(true);
   });
 });
 

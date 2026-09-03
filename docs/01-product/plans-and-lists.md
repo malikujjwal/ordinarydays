@@ -27,8 +27,8 @@ reach Today.
 | Property | Consequence |
 | --- | --- |
 | `schedule.date` present | `status` becomes `scheduled`. The Activity appears in Plans → Upcoming, in the agenda for that date, and on Today when that date is today. |
-| `schedule.date` absent | A Plan is `saved` in Plans → Needs a date. A Task is `saved` in Today's ANYTIME (§1.2). |
-| `schedule.time` present | It occupies a slot in Today's SCHEDULE rather than ANYTIME. |
+| `schedule.date` absent | A Plan is `saved` in Plans → Needs a date. A Task is `saved` in Today’s ANYTIME · NO DATE (§1.2). |
+| `schedule.time` present | It occupies a slot in Today's SCHEDULE rather than an untimed group. |
 | `participants.length > 0` | Valid on `objectKind: 'plan'` only. `visibility` becomes `shared` after the user uses the People picker or another explicit sharing action. Tasks do not gain participants; coordinated work is **Plan → General** or another visible Plan kind. Typed names and capture never add participants. |
 | `type` | The explicit creation choice sets it: Task → `task`; Plan kinds General / Meal / Watch / Event → `custom` / `meal` / `watch` / `event`. It changes which fields and completion verb render, while `objectKind` preserves Task versus Plan. |
 
@@ -64,7 +64,7 @@ It does not decide what object the user meant to create.
 | Condition | Destination |
 | --- | --- |
 | `objectKind: 'plan'` | **Plans → Needs a date.** Never Today. |
-| `objectKind: 'task'` | **Today → ANYTIME.** Never Plans. |
+| `objectKind: 'task'` | **Today → ANYTIME · NO DATE.** Never Plans. |
 
 For a Task, no date means "whenever" — `Submit the insurance form` is an errand you do at
 some point. For a Plan, no date means *not decided yet*, including General. A solo,
@@ -80,7 +80,7 @@ they were entered:
 | Global `+` → **Plan** → **Event** | `Try Zahav` | One undated Event Plan in **Needs a date**; no ListItem. |
 | `Movies to watch` → **Add an item** | `Watch Severance` | One ListItem in `Movies to watch`; no Activity. |
 | Global `+` → **Plan** → **Watch** | `Watch Severance` | One undated Watch Plan in **Needs a date**; no ListItem. |
-| Global `+` → **Task** | `Watch Severance` | One Task in **ANYTIME**. The verb does not override the Task choice. |
+| Global `+` → **Task** | `Watch Severance` | One undated Task in **ANYTIME · NO DATE**. The verb does not override the Task choice. |
 | **Plan** → **Watch**, then People picker → Alice | `Watch Severance Friday 8 PM` | One Friday Watch Plan shared with Alice. Typing `with Alice` alone would not add her. |
 
 Nothing promotes one object into another. A user may explicitly use `Plan this item` to
@@ -489,7 +489,7 @@ Sections render in this fixed order and a section with nothing in it collapses t
 | 2 | **When / where** | One date, the time range within that day, timezone if it differs from the profile, location label and address, and **your own** reminders | The date row and the address row are separate tap targets: the first opens the reschedule sheet ([`interaction-contract.md`](interaction-contract.md#3-gesture-table)), the second opens the platform maps app. Never inline-editable. There is one date, never a range (§2.4). The reminder row is described below. |
 | 3 | **People** | Participants with RSVP state, guest badge, invite links | Owner-only add and remove. Each row opens that Person's view. See [`sharing-and-people.md`](sharing-and-people.md#2-adding-people-to-a-plan). |
 | 4 | **Prep** | Child activities (`parentActivityId` = this plan) | §3. The default view lists **incomplete** prep tasks only. The `3 of 5 done` counter is tappable and expands the section to the full list, completed items included. |
-| 5 | **Lists** | Lists whose `sourceActivityId` is this plan, plus any list explicitly attached | §4. `Add list` opens the same full, fixed-order catalogue as New List, with nothing selected; it creates nothing until the user explicitly picks a style and confirms. |
+| 5 | **Lists** | Lists whose `sourceActivityId` is this plan, whether created there or explicitly attached | §4. `Add list` first offers exactly `Create new list` and `Choose existing list`. Creation opens the unchanged preset catalogue; attachment shows every active accessible List, with ineligible rows visible and explained. Nothing is written until the user confirms the chosen path. |
 | 6 | **Expenses** | Expense lines and the plan-level owes summary | Only rendered when the plan has ≥ 2 participants **or** ≥ 1 expense. See [`expenses.md`](expenses.md). Every number drills down. |
 | 7 | **Notes** | `activity.notes`, private to the owner's view | Distinct from `details.description` on an `event`, which *is* shown publicly. Notes never appear on the invite page. |
 | 8 | **Attachments** | Images linked to the activity | Tap opens a viewer; long-press offers Set as cover / Delete. Owner-only add and delete. |
@@ -715,39 +715,12 @@ Hard rule: **no list is created without that confirmation.** Creating a trip pla
 silently produce three lists. See
 [`overview.md`](overview.md#44-suggest-never-auto-create).
 
-#### Sharing the list the plan just made
+#### Sharing stays independent
 
-When the plan is shared, the same sheet that creates the list carries one unticked row:
-
-```
-  ☐  Share with Alice and Ben
-     They can add and check items.
-```
-
-Rules:
-
-- **Unticked by default, on every template.** The list is created private unless the user
-  ticks it. This is §1a.2 applied to a second object: creating one thing never shares
-  another.
-- Ticking it adds every **app-user** participant of the plan as a `member` in the same
-  confirmation. Guests are not added and the row says so when the plan has any:
-  `Alice can be added. Chloe doesn't have the app.` List membership is app users only
-  (§5.11).
-- The row is not rendered at all for a private plan.
-- Declining is silent and final for this creation. The list can be shared later from its own
-  share sheet (§5.11.1), and the plan never asks again.
-
-Attaching an existing List follows the same independence rule: it never inherits the Plan's
-participants automatically. Once Phase 6 supplies Plan participants, the final attachment
-confirmation may show the same unticked `Share with …` row. Leaving it unticked changes only
-the Plan back-link; ticking it performs the separately confirmed membership writes as well.
-Until that sharing capability exists, the row is absent rather than a non-functional promise.
-
-> **Decision — suggested, never automatic, and never pre-ticked.** For a packing checklist this is not a
-> nicety: each person packs their own bag, and a shared `Packing · New York Trip` where three
-> people tick one `Charger` row is actively wrong. Groceries and `Places to visit` for the
-> same trip usually should be shared. The app cannot tell which is which from the template,
-> so it asks once, cheaply, and defaults to the answer that loses nothing.
+Creating or attaching a List from a Plan changes only the List's `sourceActivityId`. It does
+not copy Plan participants into List membership and this flow presents no sharing control.
+List sharing remains a separate, explicit capability on the List itself (§5.11); the Plan
+relationship must never imply or silently widen access.
 
 ### 4.2 The link
 
@@ -1488,7 +1461,7 @@ the explicit creation action:
   not `task`, it routes to **Plans → Needs a date** (§1.2) and to
   `GET /v1/activities?filter=needs_date`. It does **not** appear on Today: an undecided meal
   is not something to do today. (**Corrected in P1-16**: this said `filter=saved`, which
-  `today-and-tasks.md` §2.3 uses for the ANYTIME `See all` — a different bucket. `saved` is
+  `today-and-tasks.md` §2.3 uses for the **ANYTIME · NO DATE** `See all` — a different bucket. `saved` is
   undated *tasks*; `needs_date` is undated *plans*. See
   [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2.2.)
 - **Meals list → `+ Add an item`** creates a `ListItem`. Nothing is scheduled and no Activity
@@ -1776,12 +1749,12 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 | --- | --- | --- |
 | 1 | Global `+` → **Plan** → **Event** → `New York Trip`, **14 Aug**, location `Manhattan`; People picker → Alice + Ben; `Save plan` | `POST /v1/activities` → `act_20`, `objectKind: 'plan'`, `type: 'event'`, `visibility: 'shared'`, two `PART#` rows, two invitee `IDX#` rows. The trip runs to the 16th; the activity carries its start date only (§2.4), so it is on Today on the 14th and not on the 15th or 16th. |
 | 2 | Plan detail → PREP → `+ Add prep task` ×2: `Book hotel` (2 Aug), `Buy tickets` (8 Aug) | Two `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`, `parentActivityId: act_20`. `act_20.childCount` = 2. |
-| 3 | Plan detail → LISTS → `Add list` | The full fixed-order style catalogue opens with nothing selected (§4.1). |
-| 4 | Picks **Checklist**, changes the title to `Packing · New York Trip` | `POST /v1/lists { title: 'Packing · New York Trip', templateKey: 'checklist', sourceActivityId: 'act_20' }` copies checkbox presentation and forces `slot: null` for a plan-created list (§4.1). |
+| 3 | Plan detail → LISTS → `Add list` | A sheet opens with exactly `Create new list` and `Choose existing list`, neither selected (§4.1). |
+| 4 | Chooses `Create new list`, picks **Checklist**, changes the title to `Packing · New York Trip` | The ordinary unselected catalogue handles creation. `POST /v1/lists { title: 'Packing · New York Trip', templateKey: 'checklist', sourceActivityId: 'act_20' }` copies checkbox presentation and forces `slot: null` for a plan-created list (§4.1). |
 | 5 | Adds `Charger`, `Jacket`, `Passport` | Three `POST /v1/lists/lst_p/items` |
 | 6 | Back on the plan, LISTS reads | `Packing · New York Trip — 3 items` |
 | 7 | Picks `Places to Visit` too, adds `Central Park`, `Museum` | A second list with the same `sourceActivityId`. Its Place feature is enabled, so each item can carry an address. |
-| 8 | 2 Aug, Today | `☐ Book hotel   New York Trip` in ANYTIME — a prep task on its own date with the plan as subtitle (§3) |
+| 8 | 2 Aug, Today | `☐ Book hotel   New York Trip` in TODAY · NO TIME — a prep task on its own date with the plan as subtitle (§3) |
 | 9 | 13 Aug: packs, checks all three | `state: 'done'` ×3 |
 | 9a | 15 and 16 Aug, Today | The trip is **not** on either day; it was on Today on the 14th (§2.4). The plan is one tap away in Plans → Upcoming, and anything dated on those days is an ordinary prep task or a separate activity. |
 | 10 | 16 Aug: opens the plan from Plans and taps `Done` | `act_20` completed, by the owner — a participant has no completion control (§2.1). **Both lists survive, unarchived, with their items, and nothing on them is checked or changed.** Alice and Ben see the completion in the updates feed. |

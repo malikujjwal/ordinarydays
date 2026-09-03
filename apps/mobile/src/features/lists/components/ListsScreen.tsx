@@ -1,5 +1,4 @@
 import type { Instant } from '@od/shared/time';
-import type { List } from '@od/shared/types';
 import {
   EmptyState,
   IconButton,
@@ -16,7 +15,7 @@ import { StyleSheet, View } from 'react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ConnectivityStatus } from '@/components/ConnectivityStatus';
 import { TabScreen } from '@/components/TabScreen';
-import { useLists } from '../hooks/useLists';
+import { type ListIndexEntry, useLists } from '../hooks/useLists';
 import { useSettledNavigation } from '../hooks/useSettledNavigation';
 import { archivedListToast } from '../model/archiveUndoToast';
 import { deleteListConfirmation } from '../model/deleteConfirmation';
@@ -71,11 +70,11 @@ export interface ListsScreenProps {
   onOpenList: (listId: string) => void;
   /** Opens P3-26's creation sheet. This screen creates nothing. */
   onNewList: () => void;
-  onArchive: (list: List) => void;
-  onRestore: (list: List) => void;
-  onDelete: (list: List) => void;
+  onArchive: (list: ListIndexEntry) => void;
+  onRestore: (list: ListIndexEntry) => void;
+  onDelete: (list: ListIndexEntry) => void;
   /** Phase 6 supplies the self-membership DELETE. Until then member actions stay hidden. */
-  onLeave?: (list: List) => void;
+  onLeave?: (list: ListIndexEntry) => void;
 }
 
 export function ListsScreen({
@@ -95,7 +94,7 @@ export function ListsScreen({
   const [showArchived, setShowArchived] = useState(false);
   const openList = useSettledNavigation(onOpenList);
   const [pendingDestructive, setPendingDestructive] = useState<
-    { readonly list: List; readonly action: 'delete' | 'leave' } | undefined
+    { readonly list: ListIndexEntry; readonly action: 'delete' | 'leave' } | undefined
   >(undefined);
 
   const { active, archived } = useMemo(
@@ -150,7 +149,7 @@ export function ListsScreen({
   );
 
   const dispatch = useCallback(
-    (list: List, action: ListSwipeAction) => {
+    (list: ListIndexEntry, action: ListSwipeAction) => {
       if (action.name === 'archive') onArchive(list);
       // Destructive actions never act from the gesture: §1a.1's dialog is the commit point.
       if (
@@ -171,7 +170,7 @@ export function ListsScreen({
       hasLoadedOnce: view.status !== 'pending',
     }) && view.status !== 'error';
 
-  const renderCard = (list: List, dimmed: boolean) => (
+  const renderCard = (list: ListIndexEntry, dimmed: boolean) => (
     <View key={list.listId}>
       <SwipeableListCard
         list={list}

@@ -1245,9 +1245,9 @@ milestone is not written as though it contains it.
 
 **Context.** The model had three GSI1 buckets: `#S` for dated activities, `#N` for undated
 ones, and `#R` for recurring series. That put every undated activity in one place, and the
-Today screen read `#N` into its ANYTIME section. The consequence, which nobody noticed until
+  Today screen read `#N` into its undated-task group. The consequence, which nobody noticed until
 the Plans tab was written out in full: `Dinner at Zahav with Alice and Ben, date TBD` — an
-agreed, shared, undecided plan — appeared on Today's Anytime list, immediately below
+ agreed, shared, undecided plan — appeared in Today’s ANYTIME · NO DATE group, immediately below
 `Submit the insurance form`.
 
 Those two things are not the same kind of thing. One is an errand you will do at some point
@@ -1268,7 +1268,7 @@ of the endpoint rather than a filter applied afterwards.
   decide later" is a supported path rather than a gap.
 - One more bucket to keep correct on every write that changes a date, recurrence, or explicit
   `objectKind`. That risk is contained by ADR-038.
-- Today's ANYTIME section gets narrower and more honest. It holds errands.
+- Today’s ANYTIME · NO DATE group gets narrower and more honest. It holds undated errands.
 - **Needs a date never nudges**: no badge, no count, no notification, no aging. It is a place
   to look, not a backlog to clear — the same rule that keeps Today from becoming a guilt
   list. The endpoint returns no count for a client to badge, which is the cheapest possible
@@ -1313,7 +1313,7 @@ or removed. Participant and `type` writes are not inputs.
 
 **The `objectKind` branch is the load-bearing part.** A private, undated Plan belongs in
 Needs a date because the user called it a Plan, not because a classifier noticed its type.
-An undated Task belongs in Anytime. People, dates, and model output cannot silently move it
+ An undated Task belongs in ANYTIME · NO DATE. People, dates, and model output cannot silently move it
 between those meanings.
 
 **Consequences.**
@@ -1474,8 +1474,8 @@ merged.
 - One new email template, because an invitee with no account has to be told.
   `01-product/notifications.md` §6.3 carries it as `list_invitation_email`, so SES now sends
   **four** messages, not three.
-- A shared plan **suggests** sharing the lists it generates and never does it automatically.
-  For packing this is not a nicety: each person packs their own bag.
+- A Plan/List relationship never changes List membership. Creation and attachment from Plan
+  detail record provenance only; sharing stays an explicit, independent action on the List.
 
 **Alternatives rejected.**
 - *A separate list-sharing mechanism with its own tokens and links.* Two authorisation

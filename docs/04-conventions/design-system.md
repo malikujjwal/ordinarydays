@@ -599,7 +599,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `IconTile` | `icon`, `tint` (a type or template accent), `size` (44) | The squircle on plan and list cards. Non-interactive; `accessibilityElementsHidden`. |
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
-| `Sheet` | `open`, `onClose`, `title?`, `detent` (`fit` \| `medium` \| `large`), `actions?`, `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. **Behaviour is fixed by §6.1, not by the screen.** |
+| `Sheet` | `open`, `onClose`, `title?`, `detent` (`fit` \| `medium` \| `large`), `actions?`, `dismissible`, and exactly one body owner: ordinary `children` or `virtualizedBody` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. A paginated choice list supplies its own `FlatList` through `virtualizedBody`; the Sheet forwards scroll position for pull-to-dismiss and never nests that list in a `ScrollView`. **Behaviour is fixed by §6.1, not by the screen.** |
 | `AlertDialog` | `open`, `label`, `onRequestClose`, `initialFocusTestID?`, `children` | Always centred and scrim-modal. The scrim never dismisses it. The safe action receives initial focus; focus is trapped and returns to the trigger on close. Reduce Motion removes the native fade. Geometry and focus behaviour belong to the primitive, not a feature screen. |
 | `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength`, `appearance` (`boxed` \| `bare` \| `underline`) | default, focused, filled, error, disabled. `boxed` uses `surfaceInput`, `radius.lg`, **`borderStrong` at rest** and the accessible `focusRing` on focus. `bare` is content-like inline editing. `underline` is the persistent-boundary rapid-entry treatment. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
 | `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderStrong` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
@@ -660,6 +660,11 @@ does not extend to the bottom of the device because the room is there.
 | A choice list — reminder offsets, people, lists | `medium`, scrolling internally, expanding to `large` when content needs it |
 | An editor or keyboard-heavy form — notes, complex recurrence | `large` when necessary |
 | A long flow that is really a screen | **Not a sheet.** Navigate to a screen rather than disguising one as a tall modal |
+
+A bounded body uses the Sheet-owned `ScrollView`. A paginated choice list uses the
+`virtualizedBody` slot so its `FlatList` owns scrolling and pagination while the Sheet keeps the
+header, fixed actions, detent and top-of-scroll drag arbitration. Supplying both body forms is
+invalid; feature code does not nest a virtualized list inside the ordinary body.
 
 **Anatomy, and the actions slot belongs to `Sheet`.**
 

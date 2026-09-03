@@ -11,7 +11,13 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { instant } from '@od/shared/schemas';
-import type { Activity, List, ListItem } from '@od/shared/types';
+import type {
+  Activity,
+  List,
+  ListItem,
+  PlanActivity,
+  TaskActivity,
+} from '@od/shared/types';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
 
@@ -87,7 +93,7 @@ const linkedActivity = (
   ownerId: string,
   listId: string,
   itemId: string,
-): Activity => ({
+): PlanActivity => ({
   activityId,
   ownerId,
   objectKind: 'plan',
@@ -243,6 +249,92 @@ describe('canonical list storage and list index', () => {
         expectedUpdatedAt: LATER,
       }),
     ).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('existing List attachment transaction', () => {
+  const SOURCE = 'act_01J8XKQ2M4N5P6R7S8T9V0W1AB';
+
+  async function storeSource(
+    ownerId: string,
+    objectKind: 'plan' | 'task',
+  ): Promise<void> {
+    const {
+      listId: _provenanceListId,
+      listItemId: _provenanceItemId,
+      ...source
+    } = linkedActivity(SOURCE, ownerId, 'ignored', 'ignored');
+    const typedSource =
+      objectKind === 'plan'
+        ? ({
+            ...source,
+            objectKind: 'plan',
+            type: 'custom',
+            details: { kind: 'custom' },
+          } satisfies PlanActivity)
+        : ({
+            ...source,
+            objectKind: 'task',
+            type: 'task',
+            details: { kind: 'task' },
+          } satisfies TaskActivity);
+    await activityRepository.createActivity(ownerId, typedSource);
+  }
+
+  it('atomically adds the META back-link and the Plan detail projection', async () => {
+    await storeSource(ALICE, 'plan');
+    const list = await createSubject();
+
+    await repository.patchListMeta(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      { sourceActivityId: SOURCE },
+      NOW,
+      LATER,
+      { sourceActivityId: SOURCE },
+    );
+
+    await expect(
+      repository.getListMeta(ALICE, list.listId, accessFor(list)),
+    ).resolves.toMatchObject({ sourceActivityId: SOURCE, updatedAt: LATER });
+    await expect(
+      base.getItem(keys.sourceList(SOURCE, list.listId)),
+    ).resolves.toMatchObject({
+      activityId: SOURCE,
+      listId: list.listId,
+      entity: 'SourceList',
+    });
+  });
+
+  it.each([
+    ['a Task', ALICE, 'task' as const],
+    ["another owner's Plan", BEN, 'plan' as const],
+  ])('rolls back every write when the source is %s', async (_label, ownerId, kind) => {
+    await storeSource(ownerId, kind);
+    const list = await createSubject();
+
+    await expect(
+      repository.patchListMeta(
+        ALICE,
+        list.listId,
+        accessFor(list),
+        { sourceActivityId: SOURCE },
+        NOW,
+        LATER,
+        { sourceActivityId: SOURCE },
+      ),
+    ).rejects.toBeDefined();
+
+    await expect(
+      repository.getListMeta(ALICE, list.listId, accessFor(list)),
+    ).resolves.toMatchObject({ updatedAt: NOW });
+    await expect(
+      repository.getListMeta(ALICE, list.listId, accessFor(list)),
+    ).resolves.not.toHaveProperty('sourceActivityId');
+    await expect(
+      base.getItem(keys.sourceList(SOURCE, list.listId)),
+    ).resolves.toBeUndefined();
   });
 });
 

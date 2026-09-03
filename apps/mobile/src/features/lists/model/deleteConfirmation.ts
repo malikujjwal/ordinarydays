@@ -28,7 +28,9 @@ import type { Confirmation } from '@/components/ConfirmDialog';
 const plural = (count: number, one: string, many: string) =>
   `${String(count)} ${count === 1 ? one : many}`;
 
-export function deleteListConfirmation(list: List): Confirmation {
+export function deleteListConfirmation(
+  list: Pick<List, 'title' | 'itemCount' | 'memberCount'>,
+): Confirmation {
   const items = `${plural(list.itemCount, 'List item', 'List items')} will be removed`;
   const removes = [items];
 

@@ -1,5 +1,4 @@
 import type { Instant, TimeZone } from '@od/shared/time';
-import type { List } from '@od/shared/types';
 import {
   IconTile,
   interactionTiming,
@@ -9,6 +8,7 @@ import {
   useTheme,
 } from '@od/ui';
 import { View } from 'react-native';
+import type { ListIndexEntry } from '../hooks/useLists';
 import { listTint, showsCheckedCount, tileToneForListId } from '../model/listCard';
 import { updatedPhrase } from '../model/updatedLine';
 
@@ -48,7 +48,7 @@ import { updatedPhrase } from '../model/updatedLine';
  * long-press and accessibility actions belong to the wrapper, not to the card renderer.
  */
 export interface ListIndexRowProps {
-  list: List;
+  list: ListIndexEntry;
   /** The clock, from the screen. Pure by rule — §4.3 keeps clock reads at the edge. */
   now: Instant;
   timezone: TimeZone;

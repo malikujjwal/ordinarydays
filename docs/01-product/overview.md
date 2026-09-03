@@ -148,8 +148,8 @@ Three optional edges, and that is all of them:
 - **Share.** Plans and Lists are both shareable, through **one** People layer — one contact
   model, one picker, one `Share` affordance. What differs is the meaning: a plan asks "are
   you coming?" and stores an RSVP; a list asks nothing and membership is binary
-  ([`sharing-and-people.md`](sharing-and-people.md) §1). A shared plan **suggests** sharing
-  the lists it generates and never does so automatically.
+  ([`sharing-and-people.md`](sharing-and-people.md) §1). Creating or attaching a List from
+  a Plan never changes membership; sharing remains a separate explicit action on the List.
 
 An undated plan and an undated list item are not the same thing waiting at different stages.
 The words `Try Zahav` can title either one: choosing **Plan → Event** creates an undated

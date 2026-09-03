@@ -1,6 +1,6 @@
 import { ApiError, getLists, getMe } from '@od/shared/client';
-import type { TimeZone } from '@od/shared/time';
-import type { List } from '@od/shared/types';
+import type { Instant, TimeZone } from '@od/shared/time';
+import type { ItemStateMode } from '@od/shared/types';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { LISTS_KEY } from './keys';
@@ -24,11 +24,27 @@ import { LISTS_KEY } from './keys';
 const ME_QUERY_KEY = ['me'] as const;
 type ListPage = Awaited<ReturnType<typeof getLists>>;
 
+/** The list-index and Plan-picker projection shared by web responses and native SQLite. */
+export interface ListIndexEntry {
+  readonly listId: string;
+  readonly ownerId: string;
+  readonly title: string;
+  readonly icon: string;
+  readonly itemStateMode: ItemStateMode;
+  readonly sourceActivityId?: string | undefined;
+  readonly itemCount: number;
+  readonly doneCount: number;
+  readonly memberCount: number;
+  readonly archived: boolean;
+  readonly updatedAt: Instant;
+  readonly lastItemActivityAt: Instant;
+}
+
 /** The shape both platforms return. Stated once so the two files cannot drift apart. */
 export interface ListsView {
   readonly status: 'pending' | 'success' | 'error';
   /** Every pointer loaded so far, in server order, unfiltered. */
-  readonly lists: readonly List[];
+  readonly lists: readonly ListIndexEntry[];
   readonly timezone: TimeZone;
   readonly viewerUserId?: string;
   readonly refetch: () => void;
@@ -38,6 +54,12 @@ export interface ListsView {
   /** A cursor remains. `No lists yet` is illegal while this is true. */
   readonly hasMore: boolean;
   readonly loadMore: () => void;
+  /** A later page failed while already-loaded rows remain usable. */
+  readonly loadMoreFailure?: {
+    readonly message: string;
+    readonly requestId?: string;
+    readonly retry: () => void;
+  };
   readonly message?: string;
   readonly requestId?: string;
 }
@@ -68,24 +90,53 @@ export function useLists(): ListsView {
     retry: false,
   });
 
-  const failure = query.error === null ? undefined : describe(query.error);
+  const pageFailure =
+    query.isFetchNextPageError && query.error !== null
+      ? describe(query.error)
+      : undefined;
+  const listFailure =
+    query.error === null || query.isFetchNextPageError
+      ? undefined
+      : describe(query.error);
+  const identityFailure = me.error === null ? undefined : describe(me.error);
+  const failure = listFailure ?? identityFailure;
+  const status =
+    query.status === 'error' || me.status === 'error'
+      ? 'error'
+      : query.status === 'pending' || me.status === 'pending'
+        ? 'pending'
+        : 'success';
 
   return {
-    status: query.status,
+    status,
     // Pages concatenated in arrival order, which is the server's pointer order. No sort:
     // `ListIndex` stores no rank (ADR-042), so there is nothing a client order could be
     // faithful to, and §3.2 makes the index explicitly non-reorderable.
-    lists: (query.data?.pages ?? []).flatMap((page) => page.data) as List[],
+    lists: (query.data?.pages ?? []).flatMap((page) => page.data),
     timezone: (me.data?.timezone ??
       Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone,
     ...(me.data?.userId === undefined ? {} : { viewerUserId: me.data.userId }),
-    refetch: () => void query.refetch(),
+    refetch: () => {
+      void query.refetch();
+      void me.refetch();
+    },
     isLoadingMore: query.isFetchingNextPage,
     isOffline: query.fetchStatus === 'paused',
     hasMore: query.hasNextPage,
     loadMore: () => {
       if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage();
     },
+    ...(pageFailure === undefined
+      ? {}
+      : {
+          loadMoreFailure: {
+            message: pageFailure.message,
+            ...(pageFailure.requestId === undefined
+              ? {}
+              : { requestId: pageFailure.requestId }),
+            retry: () => void query.fetchNextPage(),
+          },
+        }),
     ...(failure === undefined
       ? {}
       : {

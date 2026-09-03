@@ -220,7 +220,7 @@ product spec defines settings. They do not create or specify an app-wide Setting
 | `⋯` | 44 × 44 pt | |
 | Swipe action button | Full row height, ≥ 72 pt wide | |
 | Global `+` | 56 × 56 pt | Accessible label `Add`; always opens Task / Plan / Add list, never a preselected form |
-| Today's `See all (n)` ANYTIME footer | Full row width, min height 44 pt | Pushes the **Anytime** screen; never expands rows in place. This is a pushed route, not a fourth tab. |
+| Today's `See all (n)` **ANYTIME · NO DATE** footer | Full row width, min height 44 pt | Pushes the **Anytime** screen; never expands rows in place. This is a pushed route, not a fourth tab. |
 
 Adjacent hit targets are separated by at least 8 pt of non-interactive space.
 
@@ -573,7 +573,7 @@ disagree, this wins; a string changed anywhere else is changed here in the same 
 | Surface | String | Why this wording |
 | --- | --- | --- |
 | Reschedule, each date option | `Today` · `Wed, Aug 12` — the relative label, its resolved date on the trailing edge | `Saturday` meant at least two different days depending on who read it. The row commits to a date it has already shown. Named weekdays replace `This weekend` and `Next week` for the same reason |
-| Reschedule, removal action on a **one-off task** | `Move to Anytime`, `Keeps the task, drops the date` | The task is not deleted and does not stop existing; it goes to Today's ANYTIME section ([`today-and-tasks.md`](today-and-tasks.md) §2) |
+| Reschedule, removal action on a **one-off task** | `Move to Anytime`, `Keeps the task, drops the date` | The task is not deleted and does not stop existing; it goes to Today’s ANYTIME · NO DATE group ([`today-and-tasks.md`](today-and-tasks.md) §2) |
 | Reschedule, removal action on a **plan** | `Remove date`, `Moves this plan to “Needs a date”` | An undated plan is a plan (`plans-and-lists.md` §1.2), and the hint names the stage it lands in |
 | Reschedule, removal action on a **recurring occurrence** | `Skip this occurrence`, `Keeps the series, drops this day` | One day of a series has no date to remove; dropping it is a skip (§5.4 of [`today-and-tasks.md`](today-and-tasks.md)), and the hint says the series survives |
 | Reschedule, series scope step | Heading `Apply changes to`, then `6:00 PM → 7:00 PM`, then `This occurrence only` / `All future occurrences` | The two options and what each writes are unchanged ([`activities.md`](activities.md#62-editing-schedule) §6.2). The heading and the before→after line exist because the question is asked **after** the edit, so the edit has to be visible while it is answered |
@@ -646,7 +646,7 @@ appends the `Reorder <item title>` grip defined in §3.2. `accessibilityRole` is
 | Expense row | 1. Row body | `Hotel, 340 dollars, you paid, split 3 ways` | `button` | `Edit`, `Delete` |
 | Participant row | 1. Row body | `Alice, going` / `Chloe, invited, guest` | `button` | `Resend invite`, `Copy link`, `Remove` |
 | Notification row | 1. Row body | `Alice invited you. Dinner at Zahav, Saturday 9 August 7:00 PM. Unread.` | `button` | `Mark read`, `Delete` |
-| Section header | 1. Header | `Up next`, `Schedule`, `Anytime`, `Earlier today` | `header` | — |
+| Section header | 1. Header | `Up next`, `Earlier today`, `Schedule`, `Overdue`, `Today · no time`, `Anytime · no date` | `header` | — |
 
 > **The linked Plan state line is its own element** — corrected 2026-08-28 (founder), on the
 > discrepancy raised in P3-28's PR. That row used to fold `next session Friday 8:00 PM` into the

@@ -60,7 +60,11 @@ export {
   type SelectOption,
 } from './primitives/SelectField';
 export { SettingRow, type SettingRowProps } from './primitives/SettingRow';
-export { Sheet, type SheetProps } from './primitives/Sheet';
+export {
+  Sheet,
+  type SheetProps,
+  type SheetVirtualizedBodyProps,
+} from './primitives/Sheet';
 export { Text, type TextColor, type TextProps } from './primitives/Text';
 export { TimePicker, type TimePickerProps } from './primitives/TimePicker';
 export { Touchable, type TouchableProps } from './primitives/Touchable';

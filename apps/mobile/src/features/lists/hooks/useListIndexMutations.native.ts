@@ -1,4 +1,3 @@
-import type { List } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useMemo, useRef } from 'react';
 import { archivedListToast } from '@/features/lists/model/archiveUndoToast';
@@ -6,6 +5,7 @@ import { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 import type { ListIndexMutations } from './useListIndexMutations';
+import type { ListIndexEntry } from './useLists';
 
 export function useListIndexMutations(): ListIndexMutations {
   const state = requireActiveNativeState();
@@ -21,7 +21,7 @@ export function useListIndexMutations(): ListIndexMutations {
   const latestPublication = useRef(0);
 
   const queueArchive = useCallback(
-    async (list: List, archived: boolean, intentId: string) => {
+    async (list: ListIndexEntry, archived: boolean, intentId: string) => {
       await state.account.transactions.run(
         (transaction) => service.setArchived(transaction, list, archived, intentId),
         'interactive',
@@ -33,7 +33,7 @@ export function useListIndexMutations(): ListIndexMutations {
   );
 
   const runArchive = useCallback(
-    (list: List, archived: boolean, intentId: string, offerUndo: boolean) => {
+    (list: ListIndexEntry, archived: boolean, intentId: string, offerUndo: boolean) => {
       const publication = ++latestPublication.current;
       // The accepted action takes the singleton slot before durable append can settle.
       dismissToast();
@@ -109,7 +109,7 @@ export function useListIndexMutations(): ListIndexMutations {
   );
 
   const runDelete = useCallback(
-    (list: List, intentId: string) => {
+    (list: ListIndexEntry, intentId: string) => {
       const publication = ++latestPublication.current;
       dismissToast();
       void state.account.transactions
@@ -131,21 +131,21 @@ export function useListIndexMutations(): ListIndexMutations {
   );
 
   const onArchive = useCallback(
-    (list: List) => {
+    (list: ListIndexEntry) => {
       runArchive(list, true, randomUUID(), true);
     },
     [runArchive],
   );
 
   const onRestore = useCallback(
-    (list: List) => {
+    (list: ListIndexEntry) => {
       runArchive(list, false, randomUUID(), false);
     },
     [runArchive],
   );
 
   const onDelete = useCallback(
-    (list: List) => {
+    (list: ListIndexEntry) => {
       runDelete(list, randomUUID());
     },
     [runDelete],

@@ -24,7 +24,7 @@ fourth is what lets a plan exist before anybody has picked a day.
 | Product surface | Query | Bucket |
 | --- | --- | --- |
 | **Today**, timed and dated-untimed | `GSI1` `gsi1pk = U#<uid>#S`, `gsi1sk BETWEEN <today>T00:00 AND <today>T23:59` | `#S` |
-| **Today → ANYTIME**, undated | `GSI1` `gsi1pk = U#<uid>#N` — explicit undated Task only | `#N` |
+| **Today → ANYTIME · NO DATE**, undated | `GSI1` `gsi1pk = U#<uid>#N` — explicit undated Task only | `#N` |
 | **Today**, recurring | `GSI1` `gsi1pk = U#<uid>#R`, expanded at read time | `#R` |
 | **Plans → Upcoming / Past** | The *same* `#S` query, wider date bounds, either side of today | `#S` |
 | **Plans → Needs a date** | `GSI1` `gsi1pk = U#<uid>#P`, `ScanIndexForward=false` | `#P` |
@@ -39,7 +39,7 @@ whenever* — `Submit the insurance form`. `#P` is *someday, undecided* — `Din
 with Alice, date TBD`. One attribute decides which, computed by one pure function
 (`deriveGsi1Bucket`, [`data-model.md`](data-model.md#bucket-derivation)): recurrence and a
 date win, then the stored `objectKind` chooses `#P` or `#N`. Collapsing the two would send an
-undecided group plan to Today's Anytime list next to a solo errand, which is the error the
+undecided group plan to Today’s ANYTIME · NO DATE group next to a solo errand, which is the error the
 split exists to prevent.
 
 **Two timestamps, two jobs.** `#P` sorts on `lastActivityAt`, which an RSVP, a posted update
@@ -77,7 +77,7 @@ The index entry decides where the thing shows up, and it is a single attribute:
 
 | The user did this | `gsi1pk` on the index entry | Where it appears |
 | --- | --- | --- |
-| Saved an explicit Task with no date | `U#usr_u#N` | Today's **ANYTIME** section |
+| Saved an explicit Task with no date | `U#usr_u#N` | Today's **ANYTIME · NO DATE** section |
 | Saved an explicit Plan with no date, private or shared | `U#usr_u#P` | Plans → **Needs a date**. Never Today. |
 | Gave it a date | `U#usr_u#S` | Today, or Plans → Upcoming / Past, at that date |
 | Made it repeat | `U#usr_u#R` | Expanded per date at read time (§6) |
@@ -304,10 +304,11 @@ both, which is why it is rejected in `data-model.md` §4.6.
 
 ## 5. Plans can create related lists, after explicit choices
 
-**A user adds a Packing checklist to a trip.** Plan detail's named `Add list` action opens the
-fixed-order preset catalogue with nothing selected. Only after the user explicitly chooses
-Checklist, changes the title to Packing, and activates `Create list` does the ordinary List gain a
-back-pointer:
+**A user adds a Packing checklist to a trip.** Plan detail's named `Add list` action first
+offers exactly `Create new list` and `Choose existing list`, neither selected. Choosing Create
+opens the fixed-order preset catalogue with nothing selected. Only after the user explicitly
+chooses Checklist, changes the title to Packing, and activates `Create list` does the ordinary
+List gain a back-pointer:
 
 ```
 LIST#lst_pack | META   { schemaVersion: 2, templateKey: "checklist",
