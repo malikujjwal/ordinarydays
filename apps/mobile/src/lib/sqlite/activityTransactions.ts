@@ -492,6 +492,14 @@ export class ActivityTransactionService {
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
       variables.activityId,
     ]);
+    await transaction.database.run(
+      'DELETE FROM native_plans_date_rows WHERE activity_id = ?;',
+      [variables.activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM native_plans_needs_date WHERE activity_id = ?;',
+      [variables.activityId],
+    );
     await this.agenda.clearProjectionFence(transaction, variables.activityId);
     await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
       variables.activityId,
