@@ -230,6 +230,18 @@ export function targetedAgendaDependencies(
 }
 
 /** Hydrates, expands and assembles the agenda without performing public projection. */
+function completedOnViewerDate(
+  activity: Activity,
+  date: string,
+  timezone: string,
+): boolean {
+  return (
+    activity.status === 'completed' &&
+    activity.completedAt !== undefined &&
+    formatInTimeZone(new Date(activity.completedAt), timezone, WALL_DATE) === date
+  );
+}
+
 export async function assembleAgenda(
   input: AssembleAgendaInput,
   dependencies: AgendaDependencies = DEFAULT_DEPENDENCIES,
@@ -306,12 +318,21 @@ export async function assembleAgenda(
     raw.push(oneOffCandidate(activity, index?.timezone));
   }
   for (const activity of anytime) {
-    if (activity.status === 'cancelled' || activity.status === 'skipped') continue;
+    if (
+      activity.status === 'cancelled' ||
+      activity.status === 'skipped' ||
+      (activity.status === 'completed' &&
+        !completedOnViewerDate(activity, today, input.timezone))
+    )
+      continue;
     raw.push({
       activity,
       effectiveDate: input.from,
       status: activity.status,
       isSnoozed: false,
+      ...(activity.completedAt === undefined
+        ? {}
+        : { completedAt: activity.completedAt }),
     });
   }
   for (const entry of nominal) {
@@ -417,10 +438,7 @@ async function overdueProjection(
   const hydrated = await hydrateSelected(index, dependencies, 'overdue');
 
   const candidates = hydrated.flatMap((activity) => {
-    const completedToday =
-      activity.status === 'completed' &&
-      activity.completedAt !== undefined &&
-      formatInTimeZone(new Date(activity.completedAt), timezone, WALL_DATE) === today;
+    const completedToday = completedOnViewerDate(activity, today, timezone);
     if (
       activity.type !== 'task' ||
       (activity.status !== 'scheduled' && !completedToday) ||
