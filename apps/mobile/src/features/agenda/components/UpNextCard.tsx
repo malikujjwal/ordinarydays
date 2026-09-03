@@ -49,7 +49,7 @@ const CARD_ACTIONS = new Set(['complete', 'snooze']);
  *
  * ```
  *  2:30 ║ UP NEXT · IN 2H 15M               time rail: heading + caption meridiem · double rule
- *   PM  ║ Dentist appointment               bodyStrong — no marker, no checkbox
+ *   PM  ║ Dentist appointment               title — no marker, no checkbox
  *       ║ ───────────────────────           1 px border rules under each band
  *       ║ Jefferson Dental Center           subhead — the metadata band, ruled below
  *       ║ ───────────────────────
@@ -110,9 +110,8 @@ export function UpNextCardWithState({
   // `2:30 PM` splits into the rail's two lines; a 24-hour locale simply has no second line.
   const [railTime, ...railMeridiem] = formattedTime.split(' ');
   /*
-   * The metadata band, in `AgendaRow`'s own grammar: the projected subtitle, then the
-   * snooze remap or the `↻`-prefixed recurrence description, `·`-joined. Same derivation
-   * as the row so the card and the timeline never describe one item two ways.
+   * The metadata band uses only the trimmed Agenda projection: location, note excerpt,
+   * type subtitle, then the snooze/recurrence description, de-duplicated and `·`-joined.
    */
   const recurrenceMeta =
     selection.item.isSnoozed &&
@@ -122,8 +121,14 @@ export function UpNextCardWithState({
       : selection.item.isRecurring && selection.item.recurrenceDescription !== undefined
         ? `↻ ${selection.item.recurrenceDescription}`
         : undefined;
-  const metaParts = [selection.item.subtitle, recurrenceMeta].filter(
-    (part): part is string => part !== undefined,
+  const metaParts = [
+    selection.item.locationLabel,
+    selection.item.noteExcerpt,
+    selection.item.subtitle,
+    recurrenceMeta,
+  ].filter(
+    (part, index, parts): part is string =>
+      part !== undefined && part.trim() !== '' && parts.indexOf(part) === index,
   );
   const metaLine = metaParts.length === 0 ? undefined : metaParts.join(' · ');
 
@@ -258,7 +263,7 @@ export function UpNextCardWithState({
              */}
             <View pointerEvents="none" style={{ marginTop: theme.space[4] }}>
               <Text
-                variant="bodyStrong"
+                variant="title"
                 color="textPrimary"
                 numberOfLines={2}
                 testID="up-next-title"
