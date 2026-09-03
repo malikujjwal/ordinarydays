@@ -4,6 +4,10 @@ import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ActivityDetailRoute from '../../../app/(app)/activity/[id]';
 
+// The route also mounts the Plan → existing List mutation hook, whose production identity is
+// supplied by Expo. This attachment-focused test keeps that native boundary deterministic.
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-attachment-route-test' }));
+
 const harness = vi.hoisted(() => ({
   detailProps: undefined as { onAddAttachment?: () => void } | undefined,
   pickerProps: undefined as
