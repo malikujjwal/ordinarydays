@@ -1,4 +1,4 @@
-import { Checkbox, Sheet, Text, useTheme } from '@od/ui';
+import { SettingRow, Sheet } from '@od/ui';
 import { View } from 'react-native';
 
 export interface TodayOverflowMenuProps {
@@ -15,24 +15,17 @@ export function TodayOverflowMenu({
   onShowSkippedChange,
   onClose,
 }: TodayOverflowMenuProps) {
-  const theme = useTheme();
-
   return (
     <Sheet open={open} onClose={onClose} title="More" testID="today-overflow-menu">
-      <View
-        style={{
-          minHeight: theme.layout.hitTarget,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: theme.space[4],
-        }}
-      >
-        <Text>Show skipped</Text>
-        <Checkbox
-          checked={showSkipped}
+      <View>
+        <SettingRow
           label="Show skipped"
-          onChange={onShowSkippedChange}
+          summary="Include skipped occurrences in Earlier today"
+          accessibilityLabel="Show skipped"
+          density="compact"
+          role="checkbox"
+          selected={showSkipped}
+          onPress={() => onShowSkippedChange(!showSkipped)}
           testID="today-show-skipped"
         />
       </View>

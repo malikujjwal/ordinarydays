@@ -1,5 +1,5 @@
 import type { Activity } from '@od/shared/types';
-import { Button, Sheet, Text, useTheme } from '@od/ui';
+import { SettingRow, Sheet } from '@od/ui';
 import { View } from 'react-native';
 import {
   planToTaskBlockedMessage,
@@ -50,10 +50,10 @@ export function OverflowMenu({
   onDuplicate,
   onDelete,
 }: OverflowMenuProps) {
-  const theme = useTheme();
   const isTask = activity.objectKind === 'task';
   const blockers = isTask ? [] : planToTaskBlockers(activity);
   const blocked = planToTaskBlockedMessage(blockers);
+  const changeObjectLabel = isTask ? 'Change to Plan' : 'Change to Task';
 
   return (
     <Sheet
@@ -63,12 +63,12 @@ export function OverflowMenu({
       title="More"
       testID="overflow-menu"
     >
-      <View style={{ gap: theme.space[4], alignItems: 'stretch' }}>
+      <View>
         {isTask ? null : (
-          <Button
+          <SettingRow
             label="Change Plan kind"
-            variant="secondary"
-            fullWidth
+            density="compact"
+            opens
             onPress={() => {
               onClose();
               onChangePlanKind();
@@ -77,29 +77,24 @@ export function OverflowMenu({
           />
         )}
 
-        <View style={{ gap: theme.space[2] }}>
-          <Button
-            label={isTask ? 'Change to Plan' : 'Change to Task'}
-            variant="secondary"
-            fullWidth
-            disabled={blocked !== undefined}
-            onPress={() => {
-              onClose();
-              onChangeObject();
-            }}
-            testID="overflow-change-object"
-          />
-          {blocked === undefined ? null : (
-            <Text variant="footnote" color="textSecondary" testID="overflow-blocked">
-              {blocked}
-            </Text>
-          )}
-        </View>
+        <SettingRow
+          label={changeObjectLabel}
+          {...(blocked === undefined ? {} : { summary: blocked })}
+          accessibilityLabel={changeObjectLabel}
+          {...(blocked === undefined ? {} : { accessibilityHint: blocked })}
+          density="compact"
+          opens
+          disabled={blocked !== undefined}
+          onPress={() => {
+            onClose();
+            onChangeObject();
+          }}
+          testID="overflow-change-object"
+        />
 
-        <Button
+        <SettingRow
           label="Duplicate"
-          variant="secondary"
-          fullWidth
+          density="compact"
           onPress={() => {
             onClose();
             onDuplicate();
@@ -112,10 +107,11 @@ export function OverflowMenu({
          * and §6.4 gives it its own confirmation naming what is removed — the button opens
          * that dialog rather than deleting.
          */}
-        <Button
+        <SettingRow
           label="Delete"
-          variant="danger"
-          fullWidth
+          density="compact"
+          danger
+          separated
           onPress={() => {
             onClose();
             onDelete();

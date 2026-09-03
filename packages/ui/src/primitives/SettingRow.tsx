@@ -97,6 +97,8 @@ interface SettingRowBaseProps {
   onPress?: () => void;
   disabled?: boolean;
   accessibilityLabel?: string;
+  /** Extra spoken consequence/context that must not change the control's short name. */
+  accessibilityHint?: string;
   testID?: string;
 }
 
@@ -133,6 +135,7 @@ export function SettingRow({
   separated = false,
   onPress,
   accessibilityLabel,
+  accessibilityHint,
   testID,
 }: SettingRowProps) {
   const theme = useTheme();
@@ -316,6 +319,7 @@ export function SettingRow({
       square={false}
       accessibilityRole={effectiveRole}
       accessibilityLabel={accessibilityLabel ?? spoken(label, summary, value, note)}
+      {...(accessibilityHint === undefined ? {} : { accessibilityHint })}
       /**
        * `selected` is deliberately **not** put in `accessibilityState` for a button: React
        * Native Web maps it straight to `aria-selected`, which ARIA does not allow there and axe
