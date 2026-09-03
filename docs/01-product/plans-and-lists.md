@@ -675,19 +675,28 @@ is an ordinary list from the moment it exists — it is not owned by the plan an
 when the plan does (§4.2). This is one of three ways a list comes into existence (§5.1), and
 it is not the important one.
 
-### 4.1 The explicit style choice
+### 4.1 The explicit list choice
 
-When a plan is created or opened, the LISTS section shows `Add list`. Tapping it opens the
-same full, fixed-order preset catalogue as `New list` (§5.4), with nothing selected. Plan
-kind, title, participants, dates, and AI never rank, recommend, or hide a preset. The user
-explicitly chooses Blank, Checklist, Groceries, Watch Later, Books to Read, Places to Visit,
-or Meal Ideas.
+When a plan is created or opened, the LISTS section shows `Add list`. Tapping it first offers
+exactly two unselected actions: `Create new list` and `Choose existing list`.
+
+`Create new list` opens the same full, fixed-order preset catalogue as `New list` (§5.4),
+with nothing selected. Plan kind, title, participants, dates, and AI never rank, recommend,
+or hide a preset. The user explicitly chooses Blank, Checklist, Groceries, Watch Later,
+Books to Read, Places to Visit, or Meal Ideas.
 
 Selecting a preset creates a local List draft with `sourceActivityId` set to the Plan.
 Item state presentation, optional feature configuration, icon and slot are previewed from
 the selected preset in the usual way (§5.3). The title is pre-filled as
 `<Preset title> · <Plan title>` — `Checklist · New York Trip` — and is editable. Only
 `Create list` writes the List and copies those values.
+
+`Choose existing list` shows every active List the caller can access. An owned List with no
+`sourceActivityId` can be selected and confirmed with `Add to plan`. The other rows stay
+visible but disabled with the reason: `Already added` for this Plan, `Already connected to a
+plan` for another Plan, or `Only the owner can add this list` for a membership. Archived
+Lists are absent. Confirmation sets the existing List's one `sourceActivityId`; it preserves
+the List's title, contents, presentation, features and standing destination slot.
 
 > **Decision:** a list created from a plan seeds `slot: null` whatever its template says.
 > `Groceries · Sunday dinner` is a per-occasion list, and promoting it to the household
@@ -719,6 +728,12 @@ Rules:
 - The row is not rendered at all for a private plan.
 - Declining is silent and final for this creation. The list can be shared later from its own
   share sheet (§5.11.1), and the plan never asks again.
+
+Attaching an existing List follows the same independence rule: it never inherits the Plan's
+participants automatically. Once Phase 6 supplies Plan participants, the final attachment
+confirmation may show the same unticked `Share with …` row. Leaving it unticked changes only
+the Plan back-link; ticking it performs the separately confirmed membership writes as well.
+Until that sharing capability exists, the row is absent rather than a non-functional promise.
 
 > **Decision — suggested, never automatic, and never pre-ticked.** For a packing checklist this is not a
 > nicety: each person packs their own bag, and a shared `Packing · New York Trip` where three

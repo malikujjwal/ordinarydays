@@ -5,8 +5,8 @@ import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
 import { AttachmentPickerSheet } from '@/features/attachments/components/AttachmentPickerSheet';
+import { AddListToPlanSheet } from '@/features/lists/components/AddListToPlanSheet';
 import { DestinationSheet } from '@/features/lists/components/DestinationSheet';
-import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useViewer } from '@/hooks/useViewer';
 import { followUpNavigation } from '@/lib/followUpNavigation';
 import { activityKey } from '@/lib/queryKeys';
@@ -96,11 +96,13 @@ export default function ActivityDetailRoute() {
       />
       {/* The parent detail's refresh rides the process-wide MutationCache seam
           (`refreshActivityDetails` on the sourced `['list','create']`), not this route. */}
-      <NewListSheet
-        open={listSource !== undefined}
-        {...(listSource === undefined ? {} : { source: listSource })}
-        onClose={() => setListSource(undefined)}
-      />
+      {listSource === undefined ? null : (
+        <AddListToPlanSheet
+          open
+          source={listSource}
+          onClose={() => setListSource(undefined)}
+        />
+      )}
       {/* Each confirmed photo reconciles through the detail owner for this platform. */}
       <AttachmentPickerSheet
         open={attachmentSheetOpen}

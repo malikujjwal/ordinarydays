@@ -178,17 +178,24 @@ export function refreshActivityDetails(
    * agenda's `refetchType: 'none'` exists for. One rule, one seam — P3-41's attachment
    * confirm belongs here too, not in a route.
    */
-  const isCreate = (scope === 'activity' || scope === 'list') && name === 'create';
-  if (isCreate) {
+  const isRelationshipWrite =
+    ((scope === 'activity' || scope === 'list') && name === 'create') ||
+    (scope === 'list' && name === 'patch');
+  if (isRelationshipWrite) {
     const fields = variables as
-      | { sourceActivityId?: unknown; input?: { parentActivityId?: unknown } }
+      | {
+          sourceActivityId?: unknown;
+          input?: { parentActivityId?: unknown; sourceActivityId?: unknown };
+        }
       | undefined;
     const related =
       typeof fields?.input?.parentActivityId === 'string'
         ? fields.input.parentActivityId
-        : typeof fields?.sourceActivityId === 'string'
-          ? fields.sourceActivityId
-          : undefined;
+        : typeof fields?.input?.sourceActivityId === 'string'
+          ? fields.input.sourceActivityId
+          : typeof fields?.sourceActivityId === 'string'
+            ? fields.sourceActivityId
+            : undefined;
     if (related !== undefined) {
       void client.invalidateQueries({ queryKey: activityKey(related) });
       return true;

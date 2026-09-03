@@ -16,7 +16,11 @@ import {
   refreshActivityDetails,
   registerActivityMutationDefaults,
 } from '@/lib/mutationDefaults';
-import { activityMutationKeys, activityUpdateMutationKeys } from '@/lib/mutationKeys';
+import {
+  activityMutationKeys,
+  activityUpdateMutationKeys,
+  listMutationKeys,
+} from '@/lib/mutationKeys';
 import { shouldWarnBeforeUnload } from '@/lib/onlineManager';
 import { dehydratePersistedClient } from '@/lib/persister';
 import { createOfflineQueryClient } from '@/lib/queryClient';
@@ -339,6 +343,20 @@ describe('the query client defaults', () => {
     ).toBe(true);
 
     expect(client.getQueryState(['activity', PARENT_ID])?.isInvalidated).toBe(true);
+  });
+
+  it('refreshes the open Plan after an existing List is attached', () => {
+    const client = createOfflineQueryClient();
+    client.setQueryData(['activity', ACTIVITY_ID], { activity });
+
+    expect(
+      refreshActivityDetails(client, listMutationKeys.patch, {
+        list: { listId: 'lst_01J0000000000000000000000L' },
+        input: { sourceActivityId: ACTIVITY_ID },
+      }),
+    ).toBe(true);
+
+    expect(client.getQueryState(['activity', ACTIVITY_ID])?.isInvalidated).toBe(true);
   });
 
   it.each([activityMutationKeys.create, activityMutationKeys.duplicate])(

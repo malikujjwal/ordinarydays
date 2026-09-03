@@ -1049,7 +1049,12 @@ list stores `slot: null` even when the selected template normally seeds a standi
 relationship is per-occasion; promoting that list to a standing destination is a later,
 explicit settings change.
 
-That creation transaction also writes `ACT#<sourceActivityId>` /
+An existing owned List with no source may acquire the same relationship through the
+attach-only List PATCH. That operation preserves its slot and all other fields: attaching an
+existing household Groceries list must not silently stop it being the household destination.
+A List that already has a different source cannot be moved by this operation.
+
+The creation or existing-List attachment transaction also writes `ACT#<sourceActivityId>` /
 `SOURCE_LIST#<listId>`. This row contains ids only: it is a reverse access projection for Plan
 detail and Plan deletion, while `List.sourceActivityId` remains the only domain link. Keeping
 title and counts off the projection preserves one-write List renames and item mutations. Plan
@@ -1681,7 +1686,7 @@ status/body.
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and — when `parentActivityId` is set — `ACT#<parent>/SUB#<child>` with schedule-derived `restoredStatus` and `isRecurring` plus the parent's `ACT#<parent>/META` `childCount` increment, conditioned on the parent existing and being under `MAX_PREP_TASKS_PER_PLAN` (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two; **amended in P3-18**: the counter joins the same transaction, so the cap is a condition rather than a precheck and the pointer can never outlive the count) |
 | Create reminder | Put the caller-owned `ACT#/REM#<userId>#<reminderId>`, condition-check `ACT#/META` still exists without `deletingAt`, and store the POST receipt in the same transaction. |
 | Create list | Conditional `LIST#/META`, owner `USER#/LIST#` pointer and list-tombstone absence check, plus `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` when sourced from a live Plan whose META has no `deletingAt`; the POST receipt joins the same transaction |
-| Change List settings | Under `If-Match`, update `LIST#/META`, write `UNDO#<operationId>` when an additive field actually moved, conditionally clear the prior profile default when the slot changed, and store the exact response receipt — including its opaque Undo token — in the same transaction. |
+| Change List settings | Under `If-Match`, update `LIST#/META`, write `UNDO#<operationId>` when an additive field actually moved, conditionally clear the prior profile default when the slot changed, and store the exact response receipt — including its opaque Undo token — in the same transaction. The attach-only `{ sourceActivityId }` variant instead condition-checks the owned live Plan and atomically adds `ACT#/SOURCE_LIST#`; it has no Undo row and never changes another List field. |
 | Create list item | Read neighbours and `rankVersion`; conditionally write `LIST#/ITEM#<rank>#<itemId>` and `LIST#/ITEMID#<itemId>` locator with the same initial `itemRevision`, condition-check item-tombstone and both migration/repair gates absent, and advance META counters, `rankVersion` and `itemVersion`. On version conflict re-read and retry. Bulk allocates an ordered sequence under one version advance per receipt-aware chunk. |
 | Patch list item fields | Resolve the locator/ranked row, update only supplied fields while conditionally advancing the row and locator's matching `itemRevision`, atomically advance `META.itemVersion`, and require both migration/repair gates absent. A condition conflict is retried internally against current truth; no client `If-Match` and no unrelated field replacement. |
 | Reorder list item | Delete the old ranked row only at the revision read, put that freshly read row at the new rank with the next revision, conditionally move the locator from the same rank/revision, and conditionally advance `META.rankVersion` plus `META.itemVersion` with both gates absent. On any conflict re-read the row/neighbours and retry. No other ListItem changes during normal reorder. |

@@ -964,6 +964,38 @@ describe('identity and list storage', () => {
     const [writes] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
     expect(writes?.at(-1)).toEqual({ Put: { Item: { receipt: true } } });
   });
+
+  it('attaches an existing List and its source projection under the same Plan guards', async () => {
+    const sourceActivityId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA';
+
+    await repository.patchListMeta(
+      ALICE,
+      LIST_ID,
+      access,
+      { sourceActivityId },
+      NOW,
+      LATER,
+      { sourceActivityId },
+    );
+
+    const [writes] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(writes?.[1]?.Update?.UpdateExpression).toContain(
+      '#sourceActivityId = :sourceActivityId',
+    );
+    expect(writes?.[2]?.Put?.Item).toMatchObject({
+      ...keys.sourceList(sourceActivityId, LIST_ID),
+      activityId: sourceActivityId,
+      listId: LIST_ID,
+    });
+    expect(writes?.[3]?.ConditionCheck?.Key).toEqual(keys.activityMeta(sourceActivityId));
+    expect(writes?.[3]?.ConditionCheck?.ExpressionAttributeValues).toMatchObject({
+      ':sourceOwner': ALICE,
+      ':plan': 'plan',
+    });
+    expect(writes?.[4]?.ConditionCheck?.Key).toEqual(
+      keys.activityTombstone(sourceActivityId),
+    );
+  });
 });
 
 describe('fenced reads', () => {

@@ -247,6 +247,16 @@ export const patchListInput = z
     featureConfig: partialFeatureConfig.optional(),
     slot: defaultSlot.nullable().optional(),
     archived: z.boolean().optional(),
+    /** Attach-only Plan provenance. A List can acquire this relationship once. */
+    sourceActivityId: ulidId('act').optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.sourceActivityId === undefined || Object.keys(value).length === 1) return;
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceActivityId'],
+      message: 'Attaching a list to a plan must be its own change',
+    });
   })
   .meta({ id: 'PatchListInput' });
 export type PatchListInput = z.infer<typeof patchListInput>;

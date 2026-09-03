@@ -21,6 +21,7 @@ let createApp: typeof CreateApp;
 const USER = 'usr_local_dev';
 const OWNER = 'usr_list_owner';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const PLAN = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
 const NOW = '2026-08-23T00:00:00.000Z';
 
 const pointerRow = (role: 'owner' | 'member' = 'owner') => ({
@@ -69,6 +70,38 @@ const listRow = (overrides: Record<string, unknown> = {}) => ({
 
 function seed(role: 'owner' | 'member' = 'owner', overrides = {}) {
   const rows = [pointerRow(role), listRow(overrides)];
+  const byKey = new Map(rows.map((row) => [`${row.pk}|${row.sk}`, row]));
+  ddbMock.on(GetCommand).callsFake((input) => ({
+    Item: byKey.get(`${String(input.Key?.pk)}|${String(input.Key?.sk)}`),
+  }));
+}
+
+function seedWithPlan(role: 'owner' | 'member' = 'owner', overrides = {}) {
+  const rows = [
+    pointerRow(role),
+    listRow(overrides),
+    {
+      pk: `ACT#${PLAN}`,
+      sk: 'META',
+      entity: 'Activity',
+      activityId: PLAN,
+      ownerId: USER,
+      objectKind: 'plan',
+      type: 'custom',
+      status: 'saved',
+      title: 'New York Trip',
+      participantCount: 0,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      details: { kind: 'custom' },
+      icsSequence: 0,
+      createdAt: NOW,
+      lastActivityAt: NOW,
+      updatedAt: NOW,
+      schemaVersion: 1,
+    },
+  ];
   const byKey = new Map(rows.map((row) => [`${row.pk}|${row.sk}`, row]));
   ddbMock.on(GetCommand).callsFake((input) => ({
     Item: byKey.get(`${String(input.Key?.pk)}|${String(input.Key?.sk)}`),
@@ -157,6 +190,33 @@ describe('PATCH /v1/lists/:id', () => {
     expect(res.status).toBe(200);
     expect(body.data.list.title).toBe('Shared queue');
     expect(body.data.undoToken).toEqual(expect.any(String));
+  });
+
+  it('attaches an existing owned List to an owned Plan without an Undo offer', async () => {
+    seedWithPlan();
+
+    const res = await patch({ sourceActivityId: PLAN });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual({
+      list: expect.objectContaining({ listId: LIST, sourceActivityId: PLAN }),
+    });
+    const writes =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
+    expect(
+      writes?.some(
+        (entry) =>
+          entry.Put?.Item?.pk === `ACT#${PLAN}` &&
+          entry.Put?.Item?.sk === `SOURCE_LIST#${LIST}`,
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps Plan attachment owner-only and separate from ordinary settings', async () => {
+    seedWithPlan('member');
+    expect((await patch({ sourceActivityId: PLAN })).status).toBe(403);
+    expect((await patch({ sourceActivityId: PLAN, title: 'Packing' })).status).toBe(400);
   });
 
   it('rejects an empty or no-op update', async () => {

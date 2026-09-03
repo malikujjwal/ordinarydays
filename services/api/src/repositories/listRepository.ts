@@ -1303,6 +1303,7 @@ export interface ListMetaPatch {
   readonly featureConfig?: ListFeatureConfig;
   readonly slot?: List['slot'];
   readonly archived?: boolean;
+  readonly sourceActivityId?: string;
 }
 
 /** The exact profile default a forward settings change removed, for its inverse. */
@@ -1502,6 +1503,12 @@ function settingsUndoItem(
 
 export interface PatchListMetaOptions {
   /**
+   * Installs the Plan's reverse projection in the same transaction as the List META field.
+   * This is explicit so a future generic META caller cannot author provenance without its
+   * companion row and Plan ownership/deletion guards.
+   */
+  readonly sourceActivityId?: string;
+  /**
    * Removes `defaultLists[slot]` from the **caller's** profile in the same transaction,
    * conditioned on that slot still naming this list — the identical conditional nested
    * removal list deletion uses, and deliberately the same helper (P3-05, P3-12). The caller
@@ -1561,6 +1568,7 @@ export async function patchListMeta(
     'featureConfig',
     'slot',
     'archived',
+    'sourceActivityId',
   ] as const) {
     if (!(field in patch)) continue;
     names[`#${field}`] = field;
@@ -1584,6 +1592,41 @@ export async function patchListMeta(
         ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
       },
     });
+    if (options.sourceActivityId !== undefined) {
+      if (patch.sourceActivityId !== options.sourceActivityId) {
+        throw new Error('A List source projection must match its META source.');
+      }
+      builder.add(
+        {
+          Put: {
+            Item: stamp(ENTITY.sourceList, updatedAt, updatedAt, {
+              ...sourceList(options.sourceActivityId, listId),
+              activityId: options.sourceActivityId,
+              listId,
+            }),
+          },
+        },
+        {
+          ConditionCheck: {
+            Key: activityMeta(options.sourceActivityId),
+            ConditionExpression:
+              'attribute_exists(pk) AND #ownerId = :sourceOwner AND #objectKind = :plan AND attribute_not_exists(#deletingAt)',
+            ExpressionAttributeNames: {
+              '#ownerId': 'ownerId',
+              '#objectKind': 'objectKind',
+              '#deletingAt': 'deletingAt',
+            },
+            ExpressionAttributeValues: { ':sourceOwner': userId, ':plan': 'plan' },
+          },
+        },
+        {
+          ConditionCheck: {
+            Key: activityTombstone(options.sourceActivityId),
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        },
+      );
+    }
     if (options.undoFor !== undefined) {
       builder.add({
         Put: {
