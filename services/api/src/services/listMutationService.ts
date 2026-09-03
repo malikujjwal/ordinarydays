@@ -15,7 +15,7 @@ import {
   patchListMeta,
   type RemovedListDefault,
 } from '../repositories/listRepository.js';
-import { assertListAccess, type ListAccess } from './authz.js';
+import { assertActivityAccess, assertListAccess, type ListAccess } from './authz.js';
 import { drainRankRepair } from './listRankRepairService.js';
 import { profileDefaultToClear } from './listSlotService.js';
 
@@ -28,6 +28,8 @@ const LIST_NOT_FOUND = 'List not found.';
 const MEMBER_CANNOT = 'Only the list owner can make this change.';
 const NOTHING_TO_CHANGE = 'This update changes nothing.';
 const STALE = 'This changed while you were editing it. Review the update.';
+const NOT_A_PLAN = 'A list can only be added to a plan.';
+const ALREADY_CONNECTED = 'This list is already connected to another plan.';
 
 function staleEdit(currentUpdatedAt: string): AppError {
   return new AppError('conflict', STALE, [
@@ -80,7 +82,7 @@ export async function withListWorkDrain<T>(
 function assertMayPatch(access: ListAccess, input: PatchListInput): void {
   if (access.isOwner) return;
   const restricted = (
-    ['itemStateMode', 'featureConfig', 'slot', 'archived'] as const
+    ['itemStateMode', 'featureConfig', 'slot', 'archived', 'sourceActivityId'] as const
   ).filter((field) => field in input);
   if (restricted.length === 0) return;
   throw new AppError(
@@ -111,6 +113,27 @@ export async function patchListSettings(
   const list = await requireList(userId, listId, access.index);
   if (list.updatedAt !== ifMatch) throw staleEdit(list.updatedAt);
 
+  if (input.sourceActivityId !== undefined) {
+    if (
+      list.sourceActivityId !== undefined &&
+      list.sourceActivityId !== input.sourceActivityId
+    ) {
+      throw new AppError('conflict', ALREADY_CONNECTED, [
+        { path: 'sourceActivityId', message: ALREADY_CONNECTED },
+      ]);
+    }
+    const { activity } = await assertActivityAccess(
+      userId,
+      input.sourceActivityId,
+      'owner',
+    );
+    if (activity.objectKind !== 'plan') {
+      throw new AppError('validation_failed', NOT_A_PLAN, [
+        { path: 'sourceActivityId', message: NOT_A_PLAN },
+      ]);
+    }
+  }
+
   const featureConfig: ListFeatureConfig =
     input.featureConfig === undefined
       ? list.featureConfig
@@ -133,6 +156,10 @@ export async function patchListSettings(
     ...(input.archived !== undefined && input.archived !== list.archived
       ? { archived: input.archived }
       : {}),
+    ...(input.sourceActivityId !== undefined &&
+    input.sourceActivityId !== list.sourceActivityId
+      ? { sourceActivityId: input.sourceActivityId }
+      : {}),
   };
   if (Object.keys(changed).length === 0) {
     throw new AppError('validation_failed', NOTHING_TO_CHANGE, [
@@ -141,44 +168,54 @@ export async function patchListSettings(
   }
 
   const clearsDefault = 'slot' in changed ? profileDefaultToClear(list) : undefined;
-  const operationId = newListOperationId();
-  const { token } = mintUndoToken(operationId);
-  const expiresAt = instant.parse(
-    new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
-  );
-  const undo = { token, expiresAt };
-  const undoFor = (removedDefault?: RemovedListDefault): ListSettingsUndo => ({
-    operationId,
-    kind: 'settings',
-    tokenHash: hashUndoToken(token),
-    undoExpiresAt: expiresAt,
-    inverse: {
-      ...('title' in changed ? { title: list.title } : {}),
-      ...('itemStateMode' in changed ? { itemStateMode: list.itemStateMode } : {}),
-      ...('featureConfig' in changed ? { featureConfig: list.featureConfig } : {}),
-      ...('slot' in changed ? { slot: list.slot } : {}),
-      ...('archived' in changed ? { archived: list.archived } : {}),
-      ...(removedDefault === undefined ? {} : { removedDefault }),
-    },
-    preconditions: {
-      ...('title' in changed ? { title: changed.title } : {}),
-      ...('itemStateMode' in changed ? { itemStateMode: changed.itemStateMode } : {}),
-      ...('featureConfig' in changed ? { featureConfig: changed.featureConfig } : {}),
-      ...('slot' in changed ? { slot: changed.slot ?? null } : {}),
-      ...('archived' in changed ? { archived: changed.archived } : {}),
-      ...(removedDefault === undefined ? {} : { defaultSlotAbsent: removedDefault.slot }),
-    },
-  });
+  const reversible = input.sourceActivityId === undefined;
+  let undo: ListSettingsResult['undo'];
+  let undoFor: ((removedDefault?: RemovedListDefault) => ListSettingsUndo) | undefined;
+  if (reversible) {
+    const operationId = newListOperationId();
+    const { token } = mintUndoToken(operationId);
+    const expiresAt = instant.parse(
+      new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
+    );
+    undo = { token, expiresAt };
+    undoFor = (removedDefault) => ({
+      operationId,
+      kind: 'settings',
+      tokenHash: hashUndoToken(token),
+      undoExpiresAt: expiresAt,
+      inverse: {
+        ...('title' in changed ? { title: list.title } : {}),
+        ...('itemStateMode' in changed ? { itemStateMode: list.itemStateMode } : {}),
+        ...('featureConfig' in changed ? { featureConfig: list.featureConfig } : {}),
+        ...('slot' in changed ? { slot: list.slot } : {}),
+        ...('archived' in changed ? { archived: list.archived } : {}),
+        ...(removedDefault === undefined ? {} : { removedDefault }),
+      },
+      preconditions: {
+        ...('title' in changed ? { title: changed.title } : {}),
+        ...('itemStateMode' in changed ? { itemStateMode: changed.itemStateMode } : {}),
+        ...('featureConfig' in changed ? { featureConfig: changed.featureConfig } : {}),
+        ...('slot' in changed ? { slot: changed.slot ?? null } : {}),
+        ...('archived' in changed ? { archived: changed.archived } : {}),
+        ...(removedDefault === undefined
+          ? {}
+          : { defaultSlotAbsent: removedDefault.slot }),
+      },
+    });
+  }
 
   const result: ListSettingsResult = {
     list: { ...list, ...changed, updatedAt: instant.parse(now) },
-    undo,
+    ...(undo === undefined ? {} : { undo }),
   };
 
   try {
     await patchListMeta(userId, listId, access.index, changed, list.updatedAt, now, {
       ...(clearsDefault === undefined ? {} : { clearProfileDefault: clearsDefault }),
-      undoFor,
+      ...(undoFor === undefined ? {} : { undoFor }),
+      ...(input.sourceActivityId === undefined
+        ? {}
+        : { sourceActivityId: input.sourceActivityId }),
       ...(options.receiptFor === undefined
         ? {}
         : { idempotencyReceipt: options.receiptFor(result) }),

@@ -441,6 +441,42 @@ describe('native canonical List transactional outbox', () => {
     expect((await outbox.all())[0]?.mutationKey).toEqual(['list', 'patch']);
   });
 
+  it('attaches an existing List to the open Plan projection in the outbox transaction', async () => {
+    const { activities, lists, outbox, service, transactions } = await install();
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, {
+        ...sourceDetail(LIST),
+        sourceLists: [],
+      }),
+    );
+
+    await transactions.run((transaction) =>
+      service.patchSettings(
+        transaction,
+        LIST,
+        { sourceActivityId: SOURCE_ACTIVITY },
+        'intent_attach_list',
+      ),
+    );
+
+    expect((await lists.read())[0]?.sourceActivityId).toBe(SOURCE_ACTIVITY);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: SOURCE_ACTIVITY }))
+        ?.sourceLists,
+    ).toEqual([
+      expect.objectContaining({
+        listId: LIST.listId,
+        title: LIST.title,
+        itemCount: LIST.itemCount,
+        doneCount: LIST.doneCount,
+      }),
+    ]);
+    expect((await outbox.all())[0]).toMatchObject({
+      mutationKey: ['list', 'patch'],
+      variables: { input: { sourceActivityId: SOURCE_ACTIVITY } },
+    });
+  });
+
   it('cancels an unsent setting intent on Undo and restores its recorded local fields', async () => {
     const { lists, outbox, service, transactions } = await install();
     await transactions.run((transaction) =>

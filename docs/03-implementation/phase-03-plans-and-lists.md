@@ -2949,16 +2949,26 @@ reads `Save task`.
 
 ---
 
-### P3-39 — The `Add list` catalogue sheet
+### P3-39 — The `Add list` choice and catalogue sheet
 
-**Approach.** The LISTS section's `Add list` opens P3-33's same explicit seven-type creation
-catalogue, in the same stable order and with no selection. A small context line names the
-Plan the eventual list will relate to; Plan type, title, duration and participants do not
-rank, hide, select or pre-select a type.
+**Approach.** The LISTS section's `Add list` first offers `Create new list` and
+`Choose existing list`, with neither preselected. Create opens P3-33's same explicit
+seven-type creation catalogue, in the same stable order and with no selection. A small
+context line names the Plan the eventual list will relate to; Plan type, title, duration and
+participants do not rank, hide, select or pre-select a type.
 
 After the user taps a template, the next step shows a title pre-filled as
 `<Default title> · <Plan title>`, visibly editable before `Create list`. Confirmation
 creates one `List` with `sourceActivityId` set.
+
+Choose existing renders active accessible Lists. Only an owned List with no source can be
+selected. Rows already attached to this Plan, attached to another Plan, or owned by another
+member remain visible and disabled with an exact reason; archived rows are omitted. The final
+`Add to plan` writes the singular relationship through the ordinary durable List patch lane,
+projects the row into the open Plan detail in the same SQLite transaction, and closes only
+after that local commit. The server rechecks List ownership and the owned live Plan and writes
+META plus `SOURCE_LIST#` atomically. It never changes title, items, presentation, features or
+slot and returns no settings Undo.
 
 **Hard rule: no list is created without that confirmation.** Creating a trip plan does not
 silently produce three lists.
@@ -2974,13 +2984,18 @@ created this way forces `slot: null` regardless of the selected template, so one
 never becomes a standing destination without a later explicit settings change.
 
 **Tests.** Integration: creating an `event` writes zero lists; `Add list` initially shows the
-same seven unselected types as general `New list`; explicitly choosing and confirming
+two entry choices with nothing selected; `Create new list` then shows the same seven
+unselected types as general `New list`; explicitly choosing and confirming
 `Checklist` writes exactly one with `sourceActivityId` set, the Checklist's resolved
 `itemStateMode` and feature configuration copied, no `behaviour` field, `slot: null`, and one
 matching `SOURCE_LIST#` projection; deleting the plan leaves the list with its items and
 `sourceActivityId` cleared and removes the projection (the clear itself is §P3-50's; this
 asserts the sourced List this task creates is one it correctly reaches). A test runs
 every Plan type through the entry point and asserts catalogue order and selection are identical.
+An existing-List matrix asserts selectable owner/unlinked, disabled same-Plan, disabled
+other-Plan, disabled member-owned and absent archived rows; confirmation asserts one durable
+PATCH, immediate List and Plan-detail projections, the guarded atomic reverse pointer, and no
+Undo offer.
 
 ---
 

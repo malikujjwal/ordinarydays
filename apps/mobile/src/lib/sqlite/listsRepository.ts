@@ -118,6 +118,8 @@ export interface LocalListSettings {
   readonly featureConfig?: ListFeatureConfig;
   readonly slot?: List['slot'];
   readonly archived?: boolean;
+  /** `null` is the rollback representation of a previously unlinked List. */
+  readonly sourceActivityId?: string | null;
 }
 
 export interface LocalListItemDelta {
@@ -289,12 +291,61 @@ export class ListsRepository {
       ...(settings.slot === undefined ? {} : { slot: settings.slot }),
       ...(settings.archived === undefined ? {} : { archived: settings.archived }),
     };
+    if (settings.sourceActivityId === null) delete next.sourceActivityId;
+    else if (settings.sourceActivityId !== undefined) {
+      next.sourceActivityId = settings.sourceActivityId;
+    }
     await writeListRow(
       transaction.database,
       next,
       await this.positionOf(transaction.database, listId),
     );
     transaction.changed(this.scope);
+    if (settings.sourceActivityId !== undefined) {
+      const previousSources = await transaction.database.all(
+        'SELECT activity_id FROM activity_source_lists WHERE list_id = ?;',
+        [listId],
+      );
+      await transaction.database.run(
+        'DELETE FROM activity_source_lists WHERE list_id = ?;',
+        [listId],
+      );
+      for (const row of previousSources) {
+        const activityId = text(row, 'activity_id');
+        if (activityId !== undefined)
+          transaction.changed(activitySubscriptionScope(activityId));
+      }
+      if (settings.sourceActivityId !== null) {
+        const activityId = settings.sourceActivityId;
+        await transaction.database.run(
+          `INSERT INTO activity_detail_projection_state
+             (activity_id, source_lists_installed)
+           VALUES (?, 1)
+           ON CONFLICT(activity_id) DO UPDATE SET source_lists_installed = 1;`,
+          [activityId],
+        );
+        await transaction.database.run(
+          `INSERT INTO activity_source_lists
+             (activity_id, list_id, ordinal, title, icon, item_count, done_count)
+           VALUES (
+             ?, ?,
+             COALESCE((SELECT MAX(ordinal) + 1 FROM activity_source_lists
+                       WHERE activity_id = ?), 0),
+             ?, ?, ?, ?
+           );`,
+          [
+            activityId,
+            listId,
+            activityId,
+            next.title,
+            next.icon,
+            next.itemCount,
+            next.doneCount,
+          ],
+        );
+        transaction.changed(activitySubscriptionScope(activityId));
+      }
+    }
   }
 
   async applyLocalItemDelta(

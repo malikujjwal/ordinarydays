@@ -277,6 +277,9 @@ function localSettingsFrom(patch: PatchListInput): LocalListSettings {
     ...(patch.featureConfig === undefined
       ? {}
       : { featureConfig: patch.featureConfig as List['featureConfig'] }),
+    ...(patch.sourceActivityId === undefined
+      ? {}
+      : { sourceActivityId: patch.sourceActivityId }),
   };
 }
 
@@ -299,6 +302,9 @@ function previousSettingsFor(current: List, patch: PatchListInput): LocalListSet
     ...(patch.featureConfig === undefined
       ? {}
       : { featureConfig: current.featureConfig }),
+    ...(patch.sourceActivityId === undefined
+      ? {}
+      : { sourceActivityId: current.sourceActivityId ?? null }),
   };
 }
 
@@ -340,6 +346,7 @@ function previousSettingsOf(intent: OutboxIntent | undefined): LocalListSettings
   const title = Reflect.get(previous, 'title');
   const slot = Reflect.get(previous, 'slot');
   const archived = Reflect.get(previous, 'archived');
+  const sourceActivityId = Reflect.get(previous, 'sourceActivityId');
   return {
     ...(typeof title === 'string' ? { title } : {}),
     ...(slot === null || typeof slot === 'string' ? { slot: slot as List['slot'] } : {}),
@@ -349,6 +356,9 @@ function previousSettingsOf(intent: OutboxIntent | undefined): LocalListSettings
       : {}),
     ...(typeof featureConfig === 'object' && featureConfig !== null
       ? { featureConfig: featureConfig as List['featureConfig'] }
+      : {}),
+    ...(sourceActivityId === null || typeof sourceActivityId === 'string'
+      ? { sourceActivityId }
       : {}),
   };
 }

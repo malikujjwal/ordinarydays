@@ -1093,7 +1093,7 @@ registry.registerPath({
 registry.registerPath({
   method: 'patch',
   path: '/v1/lists/{id}',
-  summary: 'Change a list’s title, item states, features, default slot or archived state',
+  summary: 'Change list settings or attach an existing list to a plan',
   description:
     'Requires `If-Match` carrying the `updatedAt` the client read and an ' +
     '`Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque ' +
@@ -1110,9 +1110,12 @@ registry.registerPath({
     'only while that slot still names this list, so a newer destination chosen on ' +
     'another device survives. The body is strict: legacy `behaviour` and `capabilities` ' +
     'do not exist, and `templateKey` is immutable provenance, so any is a `400` naming it. ' +
-    'Every effective settings change answers with a 6-second Undo offer. A member may ' +
-    'rename; only the owner may change item states, features, slot ' +
-    'or archived state.',
+    'Every effective ordinary settings change answers with a 6-second Undo offer. ' +
+    'The attach-only `{ sourceActivityId }` form accepts no other field, is owner-only, ' +
+    'requires an owned live Plan and an unlinked List, preserves every other List field, ' +
+    'and writes the Plan reverse projection atomically without an Undo offer. A member may ' +
+    'rename; only the owner may change item states, features, slot, archived state or the ' +
+    'Plan attachment.',
   tags: ['lists'],
   request: {
     params: z.object({ id: listId }),
@@ -1131,7 +1134,8 @@ registry.registerPath({
       content: { 'application/json': { schema: errorResponse } },
     },
     403: {
-      description: 'A member reaching for item states, features, slot or archived state.',
+      description:
+        'A member reaching for item states, features, slot, archived state or Plan attachment.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
@@ -1140,8 +1144,8 @@ registry.registerPath({
     },
     409: {
       description:
-        'The `If-Match` version has moved on. `details[0]` carries the current ' +
-        '`updatedAt` so the client can refetch and re-apply rather than guess.',
+        'The `If-Match` version has moved on, or this List is already connected to another ' +
+        'Plan. A stale edit carries the current `updatedAt` in `details[0]`.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

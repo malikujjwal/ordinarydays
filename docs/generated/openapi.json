@@ -4979,6 +4979,10 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "sourceActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
           }
         },
         "additionalProperties": false
@@ -9876,8 +9880,8 @@
         }
       },
       "patch": {
-        "summary": "Change a list’s title, item states, features, default slot or archived state",
-        "description": "Requires `If-Match` carrying the `updatedAt` the client read and an `Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque Undo token if a successful response is lost. A response carrying that token is retained through `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching durable client replay; a tokenless response keeps the ordinary 24-hour receipt window. `If-Match` omission is `400`, not `428`, because the error union is closed. Everything this route changes applies immediately with no confirmation: changing `itemStateMode` retains every item’s state, and disabling a `featureConfig` key retains that feature’s stored value byte-for-byte, so re-enabling it restores exactly what was there. `featureConfig` is a keyed partial patch, preserving omitted siblings. `slot` is nullable — `null` clears it — and changing or clearing it removes the caller’s `defaultLists[oldSlot]` in the same transaction, but only while that slot still names this list, so a newer destination chosen on another device survives. The body is strict: legacy `behaviour` and `capabilities` do not exist, and `templateKey` is immutable provenance, so any is a `400` naming it. Every effective settings change answers with a 6-second Undo offer. A member may rename; only the owner may change item states, features, slot or archived state.",
+        "summary": "Change list settings or attach an existing list to a plan",
+        "description": "Requires `If-Match` carrying the `updatedAt` the client read and an `Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque Undo token if a successful response is lost. A response carrying that token is retained through `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching durable client replay; a tokenless response keeps the ordinary 24-hour receipt window. `If-Match` omission is `400`, not `428`, because the error union is closed. Everything this route changes applies immediately with no confirmation: changing `itemStateMode` retains every item’s state, and disabling a `featureConfig` key retains that feature’s stored value byte-for-byte, so re-enabling it restores exactly what was there. `featureConfig` is a keyed partial patch, preserving omitted siblings. `slot` is nullable — `null` clears it — and changing or clearing it removes the caller’s `defaultLists[oldSlot]` in the same transaction, but only while that slot still names this list, so a newer destination chosen on another device survives. The body is strict: legacy `behaviour` and `capabilities` do not exist, and `templateKey` is immutable provenance, so any is a `400` naming it. Every effective ordinary settings change answers with a 6-second Undo offer. The attach-only `{ sourceActivityId }` form accepts no other field, is owner-only, requires an owned live Plan and an unlinked List, preserves every other List field, and writes the Plan reverse projection atomically without an Undo offer. A member may rename; only the owner may change item states, features, slot, archived state or the Plan attachment.",
         "tags": [
           "lists"
         ],
@@ -9972,7 +9976,7 @@
             }
           },
           "403": {
-            "description": "A member reaching for item states, features, slot or archived state.",
+            "description": "A member reaching for item states, features, slot, archived state or Plan attachment.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9992,7 +9996,7 @@
             }
           },
           "409": {
-            "description": "The `If-Match` version has moved on. `details[0]` carries the current `updatedAt` so the client can refetch and re-apply rather than guess.",
+            "description": "The `If-Match` version has moved on, or this List is already connected to another Plan. A stale edit carries the current `updatedAt` in `details[0]`.",
             "content": {
               "application/json": {
                 "schema": {

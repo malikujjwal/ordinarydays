@@ -162,6 +162,13 @@ describe('strict public inputs', () => {
     expect(patchListItemInput.safeParse({ state: 'done' }).success).toBe(true);
     expect(patchListItemInput.safeParse({ checked: true }).success).toBe(false);
   });
+
+  it('accepts one Plan attachment as its own settings operation', () => {
+    expect(patchListInput.safeParse({ sourceActivityId: ACT }).success).toBe(true);
+    expect(
+      patchListInput.safeParse({ sourceActivityId: ACT, title: 'Packing' }).success,
+    ).toBe(false);
+  });
 });
 
 describe('Plan bridge and ingredient destination contracts', () => {
