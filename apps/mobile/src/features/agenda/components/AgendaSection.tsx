@@ -1,5 +1,5 @@
 import type { AgendaItem } from '@od/shared/types';
-import { SectionHeader, useTheme } from '@od/ui';
+import { SectionHeader, type as typeScale, useTheme } from '@od/ui';
 import { Fragment, type ReactNode } from 'react';
 import { View } from 'react-native';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
@@ -25,6 +25,12 @@ export interface AgendaSectionProps {
   interstitialAfterIndex?: number;
   testID: string;
   showTime?: boolean;
+  /** Untimed work is a flat list, not part of the day timeline. */
+  timeline?: boolean;
+  /** Continue the marker rail from the preceding block through this section header. */
+  connectFromPrevious?: boolean;
+  /** Continue the final row to the following block instead of ending at its node. */
+  connectToNext?: boolean;
   today?: string;
   onOpen: (item: AgendaItem) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
@@ -51,6 +57,9 @@ export function AgendaSection({
   interstitialAfterIndex,
   testID,
   showTime = false,
+  timeline = true,
+  connectFromPrevious = false,
+  connectToNext = false,
   today,
   onOpen,
   onOpenReschedule,
@@ -69,8 +78,27 @@ export function AgendaSection({
    * at its own bottom edge and the next row's upper segment began at its top, so the thread
    * showed a hairline gap at every boundary. The rows abut now and the spine runs unbroken.
    */
+  const headerLineHeight = typeScale[headerVariant ?? 'caption'].lineHeight;
+
   return (
-    <View testID={testID} style={{ gap: theme.space[0] }}>
+    <View testID={testID} style={{ gap: theme.space[0], position: 'relative' }}>
+      {timeline && connectFromPrevious && items.length > 0 ? (
+        <View
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          pointerEvents="none"
+          testID={`${testID}-timeline-entry`}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: (showTime ? theme.space[11] : 0) + theme.layout.hitTarget / 2,
+            height: headerLineHeight + theme.space[2],
+            width: 1,
+            backgroundColor: theme.colors.border,
+          }}
+        />
+      ) : null}
       <SectionHeader
         title={title}
         {...(headerVariant === undefined ? {} : { variant: headerVariant })}
@@ -96,8 +124,8 @@ export function AgendaSection({
              */
             divider={false}
             showTime={showTime}
-            connectorAbove={index > 0}
-            connectorBelow={index < items.length - 1}
+            connectorAbove={timeline && (index > 0 || connectFromPrevious)}
+            connectorBelow={timeline && (index < items.length - 1 || connectToNext)}
             {...(today === undefined ? {} : { today })}
             onOpen={onOpen}
             {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}

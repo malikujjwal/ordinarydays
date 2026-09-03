@@ -268,9 +268,11 @@ describe('TodayScreen', () => {
      * The UP NEXT card's eyebrow is no longer a `SectionHeader`, so it is not a heading here.
      */
     const headings = screen.getAllByRole('heading').map((heading) => heading.textContent);
-    expect(headings).toEqual(['Today', 'Earlier today', 'Schedule', 'Anytime']);
+    expect(headings).toEqual(['Today', 'Earlier today', 'Schedule', 'Today · no time']);
     expect(screen.getByRole('heading', { name: 'Schedule' }).style.fontSize).toBe('12px');
-    expect(screen.getByRole('heading', { name: /^Anytime/ }).style.fontSize).toBe('12px');
+    expect(
+      screen.getByRole('heading', { name: 'Today · no time, 1' }).style.fontSize,
+    ).toBe('12px');
 
     first.unmount();
     stubFetch(response([row(4, { title: 'Only anytime' })]));
@@ -527,6 +529,71 @@ describe('TodayScreen', () => {
     expect(screen.getByRole('heading', { name: /^Anytime/ })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Earlier today' })).toBeDefined();
     expect(screen.queryByText('Nothing scheduled today.')).toBeNull();
+  });
+
+  it('renders untimed work as three open flat groups without timeline connectors', async () => {
+    stubFetch(
+      response([
+        row(1, {
+          title: 'Old paperwork',
+          overdueFromDate: '2026-08-04',
+        }),
+        row(2, { title: 'For this date' }),
+        row(3, { title: 'Whenever', status: 'saved' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    const untimed = await screen.findByTestId('today-untimed');
+    expect(screen.getByRole('heading', { name: 'Overdue, 1' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Today · no time, 1' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Anytime · no date, 1' })).toBeDefined();
+    expect(
+      within(screen.getByTestId('today-overdue')).getByText('Old paperwork'),
+    ).toBeDefined();
+    expect(
+      within(screen.getByTestId('today-no-time')).getByText('For this date'),
+    ).toBeDefined();
+    expect(
+      within(screen.getByTestId('today-anytime-no-date')).getByText('Whenever'),
+    ).toBeDefined();
+    expect(within(screen.getByTestId('today-overdue')).getByText('1')).toBeDefined();
+    expect(within(screen.getByTestId('today-no-time')).getByText('1')).toBeDefined();
+    expect(
+      within(screen.getByTestId('today-anytime-no-date')).getByText('1'),
+    ).toBeDefined();
+    expect(within(untimed).queryAllByTestId(/agenda-row-connector/)).toHaveLength(0);
+  });
+
+  it('uses equal compact spacing around Now and bridges the timed marker rail', async () => {
+    stubFetch(
+      response([
+        row(1, { title: 'Morning', time: '10:00', isPast: true }),
+        row(2, { title: 'Evening', time: '18:00' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    const timeline = await screen.findByTestId('today-timed-continuity');
+    expect(timeline.style.gap).toBe('16px');
+    const bridge = screen.getByTestId('today-now-timeline-bridge');
+    expect(bridge.style.top).toBe('-16px');
+    expect(bridge.style.bottom).toBe('-16px');
+    expect(screen.getByTestId('today-schedule-timeline-entry')).toBeDefined();
   });
 
   it('shows the all-completed note above Earlier today', async () => {

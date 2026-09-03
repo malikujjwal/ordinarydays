@@ -4,6 +4,8 @@ import { View } from 'react-native';
 export interface NowDividerProps {
   /** The current wall minute, from the screen's existing one-minute ticker. */
   currentMinute: string;
+  /** Symmetric space to bridge above and below this divider's marker rail. */
+  bridgeGap?: number;
 }
 
 /**
@@ -27,7 +29,7 @@ export interface NowDividerProps {
  * screen reader hears the sections and their rows, and a decorative rule announcing "now" between
  * them adds a landmark that is not one.
  */
-export function NowDivider({ currentMinute }: NowDividerProps) {
+export function NowDivider({ currentMinute, bridgeGap = 0 }: NowDividerProps) {
   const theme = useTheme();
 
   return (
@@ -40,10 +42,28 @@ export function NowDivider({ currentMinute }: NowDividerProps) {
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space[4],
+        position: 'relative',
         // No padding of its own: the screen's own section gap spaces it, like every other block.
         paddingVertical: theme.space[0],
       }}
     >
+      {bridgeGap > 0 ? (
+        <View
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          pointerEvents="none"
+          testID="today-now-timeline-bridge"
+          style={{
+            position: 'absolute',
+            left: theme.space[11] + theme.layout.hitTarget / 2,
+            top: -bridgeGap,
+            bottom: -bridgeGap,
+            width: 1,
+            backgroundColor: theme.colors.border,
+          }}
+        />
+      ) : null}
       {/**
        * **The two labels are `textAction`, the rule is `accent`** — corrected 2026-08-17 after
        * the axe gate caught it.

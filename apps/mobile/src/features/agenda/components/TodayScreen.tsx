@@ -377,15 +377,18 @@ export function TodayScreen({
   );
   const anytime = cappedAnytime(projectedAnytime);
   const overdue = anytime.items.filter((item) => item.overdueFromDate !== undefined);
-  const currentAnytime = anytime.items.filter(
-    (item) => item.overdueFromDate === undefined,
+  const todayNoTime = anytime.items.filter(
+    (item) => item.overdueFromDate === undefined && item.status !== 'saved',
+  );
+  const anytimeNoDate = anytime.items.filter(
+    (item) => item.overdueFromDate === undefined && item.status === 'saved',
   );
   const collapsesOverdue = overdue.length > TODAY_OVERDUE_COLLAPSE_THRESHOLD;
   const visibleOverdue =
     collapsesOverdue && !showAllOverdue
       ? overdue.slice(0, TODAY_OVERDUE_COLLAPSED_LIMIT)
       : overdue;
-  const visibleAnytime = [...visibleOverdue, ...currentAnytime];
+  const visibleAnytime = [...visibleOverdue, ...todayNoTime, ...anytimeNoDate];
   const hiddenOverdueCount = Math.max(overdue.length - TODAY_OVERDUE_COLLAPSED_LIMIT, 0);
   const projectedEarlier = sections.earlier.filter(
     (item) => !completionTransitionKeys.has(agendaItemKey(item)),
@@ -446,7 +449,7 @@ export function TodayScreen({
       testID="today-anytime-actions"
       style={{
         gap: theme.space[2],
-        paddingLeft: theme.space[11] + theme.space[2] + theme.layout.hitTarget,
+        paddingLeft: theme.space[2] + theme.layout.hitTarget,
         alignItems: 'flex-start',
       }}
     >
@@ -560,112 +563,153 @@ export function TodayScreen({
          * the morning, the present, then what is still coming — and §2 and §2.4 are amended to
          * it in this pull request.
          */}
-        {earlier.length === 0 ? null : (
-          <AgendaSection
-            title="Earlier today"
-            items={earlierVisible}
-            testID="today-earlier"
-            showTime
-            headerAction={
-              <Button
-                label={`${earlierDoneCount} done`}
-                accessibilityLabel={
-                  earlierCollapsed
-                    ? `Show ${projectedEarlier.length} earlier items`
-                    : 'Hide earlier items'
+        {earlier.length === 0 && schedule.length === 0 && !showEmptySchedule ? null : (
+          <View testID="today-timed-continuity" style={{ gap: theme.space[5] }}>
+            {earlier.length === 0 ? null : (
+              <AgendaSection
+                title="Earlier today"
+                items={earlierVisible}
+                testID="today-earlier"
+                showTime
+                connectToNext={earlierVisible.length > 0 && schedule.length > 0}
+                headerAction={
+                  <Button
+                    label={`${earlierDoneCount} done`}
+                    accessibilityLabel={
+                      earlierCollapsed
+                        ? `Show ${projectedEarlier.length} earlier items`
+                        : 'Hide earlier items'
+                    }
+                    variant="ghost"
+                    size="sm"
+                    flush
+                    icon={earlierCollapsed ? ChevronDown : ChevronUp}
+                    iconPosition="trailing"
+                    onPress={() => setCollapseEarlier(!earlierCollapsed)}
+                    testID="today-earlier-toggle"
+                  />
                 }
-                variant="ghost"
-                size="sm"
-                flush
-                icon={earlierCollapsed ? ChevronDown : ChevronUp}
-                iconPosition="trailing"
-                onPress={() => setCollapseEarlier(!earlierCollapsed)}
-                testID="today-earlier-toggle"
+                onOpen={onOpenAgendaItem}
+                onOpenReschedule={setRescheduleItem}
+                onToggleComplete={handleToggleComplete}
+                onAction={effectiveAgendaAction}
+                onOpenResolution={setResolutionItem}
+                footer={
+                  !earlierCollapsed &&
+                  !showAllEarlier &&
+                  projectedEarlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (
+                    <Button
+                      label="Show all"
+                      variant="ghost"
+                      fullWidth
+                      onPress={() => setShowAllEarlier(true)}
+                      testID="today-earlier-show-all"
+                    />
+                  ) : null
+                }
               />
-            }
-            onOpen={onOpenAgendaItem}
-            onOpenReschedule={setRescheduleItem}
-            onToggleComplete={handleToggleComplete}
-            onAction={effectiveAgendaAction}
-            onOpenResolution={setResolutionItem}
-            footer={
-              !earlierCollapsed &&
-              !showAllEarlier &&
-              projectedEarlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (
-                <Button
-                  label="Show all"
-                  variant="ghost"
-                  fullWidth
-                  onPress={() => setShowAllEarlier(true)}
-                  testID="today-earlier-show-all"
-                />
-              ) : null
-            }
-          />
-        )}
-        {earlier.length === 0 || schedule.length === 0 ? null : (
-          <NowDivider currentMinute={currentMinute} />
-        )}
-        {schedule.length === 0 && showEmptySchedule ? (
-          <View testID="today-schedule" style={{ gap: theme.space[2] }}>
-            <SectionHeader title="Schedule" variant="sectionLabel" />
-            <View
-              style={{ minHeight: theme.layout.rowMinHeight, justifyContent: 'center' }}
-            >
-              <Text variant="body" color="textSecondary">
-                Nothing left scheduled today.
-              </Text>
-            </View>
+            )}
+            {earlier.length === 0 || schedule.length === 0 ? null : (
+              <NowDivider currentMinute={currentMinute} bridgeGap={theme.space[5]} />
+            )}
+            {schedule.length === 0 && showEmptySchedule ? (
+              <View testID="today-schedule" style={{ gap: theme.space[2] }}>
+                <SectionHeader title="Schedule" variant="sectionLabel" />
+                <View
+                  style={{
+                    minHeight: theme.layout.rowMinHeight,
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text variant="body" color="textSecondary">
+                    Nothing left scheduled today.
+                  </Text>
+                </View>
+              </View>
+            ) : schedule.length === 0 ? null : (
+              <AgendaSection
+                title="Schedule"
+                headerVariant="sectionLabel"
+                items={schedule}
+                testID="today-schedule"
+                showTime
+                connectFromPrevious={earlier.length > 0}
+                onOpen={onOpenAgendaItem}
+                onOpenReschedule={setRescheduleItem}
+                onToggleComplete={handleToggleComplete}
+                onAction={effectiveAgendaAction}
+                completionTransitionKeys={completionTransitionKeys}
+                onCompletionTransitionFinished={finishCompletionTransition}
+              />
+            )}
           </View>
-        ) : schedule.length === 0 ? null : (
-          <AgendaSection
-            title="Schedule"
-            headerVariant="sectionLabel"
-            items={schedule}
-            testID="today-schedule"
-            showTime
-            onOpen={onOpenAgendaItem}
-            onOpenReschedule={setRescheduleItem}
-            onToggleComplete={handleToggleComplete}
-            onAction={effectiveAgendaAction}
-            completionTransitionKeys={completionTransitionKeys}
-            onCompletionTransitionFinished={finishCompletionTransition}
-          />
         )}
         {visibleAnytime.length === 0 ? null : (
-          <AgendaSection
-            title="Anytime"
-            headerVariant="sectionLabel"
-            /**
-             * **Everything the section holds**, not what is currently on screen — a count that
-             * moved when the overdue collapse opened would be reporting the viewport rather than
-             * the day. `anytime.items` is the capped set the section owns; the `See all (n)`
-             * footer already states the figure beyond the cap.
-             */
-            headerCount={anytime.items.length}
-            showTime
-            items={visibleAnytime}
-            testID="today-anytime"
-            onOpen={onOpenAgendaItem}
-            onOpenReschedule={setRescheduleItem}
-            onOpenOverdue={setRescheduleItem}
-            onToggleComplete={handleToggleComplete}
-            onAction={effectiveAgendaAction}
-            completionTransitionKeys={completionTransitionKeys}
-            onCompletionTransitionFinished={finishCompletionTransition}
-            interstitialAfterIndex={visibleOverdue.length - 1}
-            interstitial={
-              collapsesOverdue ? (
-                <OverdueCollapse
-                  hiddenCount={hiddenOverdueCount}
-                  expanded={showAllOverdue}
-                  onToggle={() => setShowAllOverdue((expanded) => !expanded)}
+          <View testID="today-anytime" style={{ gap: theme.space[7] }}>
+            <View testID="today-untimed" style={{ gap: theme.space[7] }}>
+              {visibleOverdue.length === 0 ? null : (
+                <AgendaSection
+                  title="Overdue"
+                  headerVariant="sectionLabel"
+                  headerCount={overdue.length}
+                  timeline={false}
+                  items={visibleOverdue}
+                  testID="today-overdue"
+                  onOpen={onOpenAgendaItem}
+                  onOpenReschedule={setRescheduleItem}
+                  onOpenOverdue={setRescheduleItem}
+                  onToggleComplete={handleToggleComplete}
+                  onAction={effectiveAgendaAction}
+                  completionTransitionKeys={completionTransitionKeys}
+                  onCompletionTransitionFinished={finishCompletionTransition}
+                  interstitialAfterIndex={visibleOverdue.length - 1}
+                  interstitial={
+                    collapsesOverdue ? (
+                      <OverdueCollapse
+                        hiddenCount={hiddenOverdueCount}
+                        expanded={showAllOverdue}
+                        onToggle={() => setShowAllOverdue((expanded) => !expanded)}
+                      />
+                    ) : null
+                  }
+                  today={today}
                 />
-              ) : null
-            }
-            today={today}
-            footer={anytimeFooter}
-          />
+              )}
+              {todayNoTime.length === 0 ? null : (
+                <AgendaSection
+                  title="Today · no time"
+                  headerVariant="sectionLabel"
+                  headerCount={todayNoTime.length}
+                  timeline={false}
+                  items={todayNoTime}
+                  testID="today-no-time"
+                  onOpen={onOpenAgendaItem}
+                  onOpenReschedule={setRescheduleItem}
+                  onToggleComplete={handleToggleComplete}
+                  onAction={effectiveAgendaAction}
+                  completionTransitionKeys={completionTransitionKeys}
+                  onCompletionTransitionFinished={finishCompletionTransition}
+                />
+              )}
+              {anytimeNoDate.length === 0 ? null : (
+                <AgendaSection
+                  title="Anytime · no date"
+                  headerVariant="sectionLabel"
+                  headerCount={anytimeNoDate.length}
+                  timeline={false}
+                  items={anytimeNoDate}
+                  testID="today-anytime-no-date"
+                  onOpen={onOpenAgendaItem}
+                  onOpenReschedule={setRescheduleItem}
+                  onToggleComplete={handleToggleComplete}
+                  onAction={effectiveAgendaAction}
+                  completionTransitionKeys={completionTransitionKeys}
+                  onCompletionTransitionFinished={finishCompletionTransition}
+                />
+              )}
+            </View>
+            {anytimeFooter}
+          </View>
         )}
         {visibleAnytime.length === 0 ? anytimeFooter : null}
         <TomorrowPreview items={tomorrowItems} />
