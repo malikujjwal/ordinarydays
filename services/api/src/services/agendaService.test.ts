@@ -427,6 +427,58 @@ describe('today-and-tasks section 3.1 ordering', () => {
   });
 });
 
+describe('undated Task completion day', () => {
+  it('keeps a completed undated Task in Earlier Today only on its viewer-local completion day', async () => {
+    const completedLater = activity({
+      status: 'completed',
+      title: 'Completed later',
+      completedAt: '2026-08-06T14:00:00.000Z',
+    });
+    const completedMorning = activity({
+      status: 'completed',
+      title: 'Completed this morning',
+      completedAt: '2026-08-06T13:00:00.000Z',
+    });
+    const completedYesterday = activity({
+      status: 'completed',
+      title: 'Completed last night',
+      completedAt: '2026-08-06T03:30:00.000Z',
+    });
+    const saved = activity({ status: 'saved', title: 'Still anytime' });
+    const subject = fixture({
+      activities: [completedLater, completedMorning, completedYesterday, saved],
+      buckets: {
+        N: [
+          index(completedLater),
+          index(completedMorning),
+          index(completedYesterday),
+          index(saved),
+        ],
+      },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'America/New_York',
+        now: '2026-08-06T15:00:00.000Z',
+        includeAnytimeUnscheduled: true,
+      },
+      subject.dependencies,
+    );
+
+    expect(result.days[0]?.earlier.map((row) => row.activity.title)).toEqual([
+      'Completed later',
+      'Completed this morning',
+    ]);
+    expect(result.days[0]?.anytime.map((row) => row.activity.title)).toEqual([
+      'Still anytime',
+    ]);
+  });
+});
+
 describe('occurrence merge matrix', () => {
   it('applies snoozed, completed, skipped and moved-in rows without changing the series', async () => {
     const series = activity({
