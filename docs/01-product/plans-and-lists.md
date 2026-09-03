@@ -317,6 +317,14 @@ disagree with the list at every midnight boundary.
 Collapsed or expanded is remembered **locally** on each platform. It is view state, not
 profile data.
 
+**Scroll visibility is a non-reflowing overlay.** Once dated content advances, the calendar
+translates and fades out; reversing direction brings it back. Its measured open height remains
+the list's leading content inset, so hiding or showing the overlay never changes the list
+viewport or pulls the visible month/cards up and down. At the top, that inset keeps the first
+month below the calendar; after scrolling, content naturally passes behind it. Month headings
+remain sticky on the dated list. Reduced-motion settings collapse the transition duration, not
+the layout contract.
+
 ### 1.4 Giving a needs-a-date plan a date
 
 This is the one transition the stage exists for, and it is destructive: it discards
