@@ -55,6 +55,8 @@ export const DayCell = memo(function DayCell({
   const inert = cell.state === 'inert';
   const barSlot = compact ? BAR_SLOT_COMPACT : BAR_SLOT;
   const barHeight = planLoadHeight(cell.plans);
+  /** Weekday + numeral + two density slots + gaps/padding at the default type scale. */
+  const stripCellMinHeight = theme.layout.hitTarget + theme.space[7] + theme.space[2];
 
   const marks =
     stage === 'upcoming' ? (
@@ -162,7 +164,11 @@ export const DayCell = memo(function DayCell({
   if (inert || onPress === undefined) {
     return (
       <View
-        style={{ flex: 1, minWidth: 0 }}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          ...(compact ? {} : { minHeight: stripCellMinHeight }),
+        }}
         testID={`calendar-cell-${cell.date}`}
         accessibilityLabel={label}
         accessibilityState={{ disabled: true }}
@@ -179,7 +185,11 @@ export const DayCell = memo(function DayCell({
       onPress={() => onPress(cell.date)}
       testID={`calendar-cell-${cell.date}`}
       dataSet={{ state: cell.state }}
-      style={{ flex: 1, minWidth: 0 }}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        ...(compact ? {} : { minHeight: stripCellMinHeight }),
+      }}
     >
       {body}
     </Touchable>

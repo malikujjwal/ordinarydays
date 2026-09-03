@@ -2,7 +2,8 @@ import { fixedClock, type Instant } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { SectionList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
@@ -337,6 +338,86 @@ it('groups Upcoming into day cards with gap lines and sticky month sections', as
   ).toBeDefined();
   expect(screen.getByRole('heading', { name: 'August 2026' })).toBeDefined();
   expect(screen.getByRole('heading', { name: 'September 2026' })).toBeDefined();
+});
+
+it('lands a calendar day on that exact Upcoming card', async () => {
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  stubFetch(
+    initialBody({
+      upcoming: [
+        plansDay('2026-09-03', [row(1, { title: 'September third' })]),
+        plansDay('2026-09-04', [row(2, { title: 'September fourth' })]),
+      ],
+    }),
+  );
+  mount();
+
+  await screen.findByText('September fourth');
+  fireEvent.click(screen.getByRole('button', { name: 'Expand calendar' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
+
+  await waitFor(() =>
+    expect(scrollToLocation).toHaveBeenCalledWith(
+      expect.objectContaining({ sectionIndex: 0, itemIndex: 2 }),
+    ),
+  );
+});
+
+it('lands a calendar day on that exact Past card', async () => {
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)])],
+      past: [
+        plansDay('2026-08-05', [row(2, { title: 'August fifth', isPast: true })]),
+        plansDay('2026-08-04', [row(3, { title: 'August fourth', isPast: true })]),
+      ],
+    }),
+  );
+  mount();
+
+  await screen.findByTestId('plans-stage-switcher');
+  openStage('Past');
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-08-04'));
+
+  await waitFor(() =>
+    expect(scrollToLocation).toHaveBeenCalledWith(
+      expect.objectContaining({ sectionIndex: 0, itemIndex: 2 }),
+    ),
+  );
+});
+
+it('auto-hides the calendar while advancing the list and restores it on reverse scroll', async () => {
+  stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)]), plansDay('2026-08-09', [row(2)])],
+    }),
+  );
+  mount();
+
+  const list = await screen.findByTestId('plans-list');
+  const calendar = screen.getByTestId('plans-calendar');
+  if (screen.queryByRole('button', { name: 'Collapse calendar' }) === null) {
+    fireEvent.click(screen.getByRole('button', { name: 'Expand calendar' }));
+  }
+  expect(screen.getByRole('button', { name: 'Collapse calendar' })).toBeDefined();
+  expect(calendar.style.display).not.toBe('none');
+
+  Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
+  fireEvent.scroll(list);
+  expect(calendar.style.display).toBe('none');
+  // The section month remains the list's sticky header while the navigator is hidden.
+  expect(screen.getByTestId('plans-month-2026-08')).toBeDefined();
+
+  list.scrollTop = 20;
+  fireEvent.scroll(list);
+  expect(calendar.style.display).not.toBe('none');
+  expect(screen.getByRole('button', { name: 'Collapse calendar' })).toBeDefined();
 });
 
 it('opens the gap date picker pre-set to the first day without writing anything', async () => {

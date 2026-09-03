@@ -80,6 +80,22 @@ describe('CalendarNavigator', () => {
     expect(screen.getByTestId('calendar-cell-2026-08-17').textContent).toMatch(/^M17/);
   });
 
+  it('gives the collapsed strip enough height for both labels and density marks', async () => {
+    mount(
+      'upcoming',
+      projection({ '2026-08-14': ['event', 'task'] }, [
+        { from: '2026-08-14', through: '2026-10-14' },
+      ]),
+    );
+    await settle();
+
+    expect(
+      Number.parseFloat(screen.getByTestId('calendar-cell-2026-08-14').style.minHeight),
+    ).toBeGreaterThanOrEqual(71);
+    expect(screen.getByTestId('calendar-bar-2026-08-14')).toBeDefined();
+    expect(screen.getByTestId('calendar-dot-2026-08-14')).toBeDefined();
+  });
+
   it('expands to the month grid without issuing a request when the grid is covered', async () => {
     const { loadRange } = mount(
       'upcoming',
