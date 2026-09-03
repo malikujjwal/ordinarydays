@@ -53,6 +53,8 @@ export interface CalendarNavigatorProps {
   settleMs?: number;
   storage?: CalendarStorage;
   testID?: string;
+  /** Preserve navigator state while the list temporarily reclaims its vertical space. */
+  hidden?: boolean;
 }
 
 /** Stable keys for the Monday-first header; two labels read `T` and two read `S`. */
@@ -72,6 +74,7 @@ export function CalendarNavigator({
   settleMs,
   storage,
   testID = 'plans-calendar',
+  hidden = false,
 }: CalendarNavigatorProps) {
   const theme = useTheme();
   const navigator = useCalendarNavigator({
@@ -102,7 +105,13 @@ export function CalendarNavigator({
   );
 
   return (
-    <View testID={testID} accessibilityState={{ expanded: navigator.expanded }}>
+    <View
+      testID={testID}
+      accessibilityState={{ expanded: navigator.expanded }}
+      accessibilityElementsHidden={hidden}
+      importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
+      style={hidden ? { display: 'none' } : undefined}
+    >
       {navigator.expanded ? (
         <View
           style={{

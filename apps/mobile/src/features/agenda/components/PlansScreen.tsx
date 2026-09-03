@@ -14,7 +14,14 @@ import {
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshControl, ScrollView, SectionList, View } from 'react-native';
+import {
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  RefreshControl,
+  ScrollView,
+  SectionList,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
 import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
@@ -103,9 +110,14 @@ function scrollTo<Item, Section>(
   itemIndex: number,
 ): void {
   try {
+    /**
+     * RN 0.81's VirtualizedSectionList flattens the current section header at index zero
+     * but does not add that header inside `scrollToLocation`. Passing the data index lands
+     * on the preceding row (Sep 4 -> Sep 3); offset it once at this adapter boundary.
+     */
     list?.scrollToLocation({
       sectionIndex,
-      itemIndex,
+      itemIndex: itemIndex + 1,
       animated: true,
       viewPosition: 0,
       viewOffset: 0,
@@ -143,6 +155,11 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const [stage, setStage] = useState<Stage>('upcoming');
   const [selectedGap, setSelectedGap] = useState<SelectedGap>();
   const [reschedule, setReschedule] = useState<SelectedAgendaItem>();
+  const [calendarHidden, setCalendarHidden] = useState(false);
+  const calendarHiddenRef = useRef(false);
+  const calendarScrollAnchor = useRef(0);
+  const calendarScrollDirection = useRef<-1 | 0 | 1>(0);
+  const lastCalendarScrollY = useRef(0);
   /**
    * The calendar's day tap (P3-48): land the list on that date, within the stage. Held as
    * state so the landing can wait for the sections that a just-fetched window produces; a
@@ -154,6 +171,39 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   /** The last landing, retried while the list's own offset estimate walks the target in. */
   const pendingScroll = useRef<() => void>(() => {});
   const landingAttempts = useRef(0);
+
+  const resetCalendarVisibility = useCallback(() => {
+    calendarHiddenRef.current = false;
+    setCalendarHidden(false);
+    calendarScrollAnchor.current = 0;
+    calendarScrollDirection.current = 0;
+    lastCalendarScrollY.current = 0;
+  }, []);
+  const calendarScrollThreshold = theme.space[4];
+  const handlePlansScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = Math.max(0, event.nativeEvent.contentOffset.y);
+      const previous = lastCalendarScrollY.current;
+      lastCalendarScrollY.current = y;
+      if (y <= theme.space[2]) {
+        resetCalendarVisibility();
+        return;
+      }
+      const direction = y === previous ? 0 : y > previous ? 1 : -1;
+      if (direction === 0) return;
+      if (direction !== calendarScrollDirection.current) {
+        calendarScrollDirection.current = direction;
+        calendarScrollAnchor.current = previous;
+      }
+      if (Math.abs(y - calendarScrollAnchor.current) < calendarScrollThreshold) return;
+      const nextHidden = direction === 1;
+      calendarScrollAnchor.current = y;
+      if (nextHidden === calendarHiddenRef.current) return;
+      calendarHiddenRef.current = nextHidden;
+      setCalendarHidden(nextHidden);
+    },
+    [calendarScrollThreshold, resetCalendarVisibility, theme.space],
+  );
 
   const upcomingSections = useMemo(
     () =>
@@ -416,6 +466,8 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             item.kind === 'date' ? `date:${item.date}` : `gap:${item.from}:${item.to}`
           }
           stickySectionHeadersEnabled
+          onScroll={handlePlansScroll}
+          scrollEventThrottle={16}
           refreshControl={refresh}
           onEndReached={plans.loadMoreUpcoming}
           onEndReachedThreshold={0.4}
@@ -457,6 +509,8 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
         sections={pastSections}
         keyExtractor={(day) => `past:${day.date}`}
         stickySectionHeadersEnabled
+        onScroll={handlePlansScroll}
+        scrollEventThrottle={16}
         refreshControl={refresh}
         onEndReached={plans.loadMorePast}
         onEndReachedThreshold={0.4}
@@ -507,7 +561,10 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             selectedIndex={STAGES.findIndex(({ key }) => key === stage)}
             onChange={(index) => {
               const next = STAGES[index];
-              if (next !== undefined) setStage(next.key);
+              if (next !== undefined) {
+                resetCalendarVisibility();
+                setStage(next.key);
+              }
             }}
             testID="plans-stage-switcher"
           />
@@ -552,6 +609,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
               projection={plans.store}
               loadRange={plans.loadRange}
               onSelectDate={setLanding}
+              hidden={calendarHidden}
             />
           )}
           <View style={{ flex: 1 }}>{stageBody()}</View>
