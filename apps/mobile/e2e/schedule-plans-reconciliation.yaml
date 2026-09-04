@@ -15,7 +15,7 @@ onFlowComplete:
 ---
 - launchApp:
     clearState: true
-- tapOn: Plans
+- tapOn: "Plans, tab, .*"
 - assertVisible:
     id: ${'plans-date-' + output.today}
 - assertVisible: ${output.planTitle}
@@ -28,6 +28,10 @@ onFlowComplete:
 - assertVisible:
     id: reschedule-sheet
 - tapOn: Set a time
+- scrollUntilVisible:
+    element:
+      text: Done
+    direction: DOWN
 - tapOn: Done
 - assertNotVisible:
     id: reschedule-sheet

@@ -38,6 +38,15 @@ function timeLabel(time) {
   return `${hour}:${String(fields[1]).padStart(2, '0')} ${period}`;
 }
 
+// Maestro scripts do not expose Node's crypto module. These UUIDs identify test
+// writes only; they are not credentials or capability tokens.
+function fixtureUuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (kind) => {
+    const value = Math.floor(Math.random() * 16);
+    return (kind === 'x' ? value : (value & 3) | 8).toString(16);
+  });
+}
+
 function headers(idempotent) {
   const result = {
     'Content-Type': 'application/json',
@@ -45,8 +54,7 @@ function headers(idempotent) {
     'X-Client-Timezone': ZONE,
     'X-Client-Version': 'ios/maestro',
   };
-  if (idempotent)
-    result['Idempotency-Key'] = `idem_maestro_${Date.now()}_${Math.random()}`;
+  if (idempotent) result['Idempotency-Key'] = fixtureUuid();
   return result;
 }
 

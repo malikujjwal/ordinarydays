@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 function runProxyScript(script: string, networkMode = 'proxy'): string[] {
   const requests: string[] = [];
@@ -41,4 +41,57 @@ describe('Maestro network-control scripts', () => {
       expect(runProxyScript(script, 'physical')).toEqual([]);
     },
   );
+});
+
+describe('Maestro fixture creation', () => {
+  it.each([
+    ['offline-queue-relaunch', 3],
+    ['source-list-reconciliation', 2],
+    ['recurring-past-history', 2],
+  ] as const)('uses distinct UUID keys for %s fixture writes', (flow, count) => {
+    const keys: string[] = [];
+    let seed = 1;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-04T16:00:00Z'));
+    try {
+      runInNewContext(readFileSync(resolve('e2e/scripts/setup.js'), 'utf8'), {
+        Date,
+        Math: {
+          floor: Math.floor,
+          random: () => {
+            seed = (seed * 16807) % 2147483647;
+            return seed / 2147483647;
+          },
+        },
+        API_BASE_URL: 'http://127.0.0.1:3000',
+        PROXY_CONTROL_URL: 'http://127.0.0.1:8474',
+        FLOW: flow,
+        output: {},
+        http: {
+          post(url: string, options: { headers?: Record<string, string>; body: string }) {
+            if (new URL(url).pathname.startsWith('/v1/')) {
+              const key = options.headers?.['Idempotency-Key'];
+              expect(key).toMatch(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+              );
+              if (key !== undefined) keys.push(key);
+              return {
+                body: JSON.stringify({
+                  data: {
+                    activityId: `fixture-${keys.length}`,
+                    listId: `list-${keys.length}`,
+                  },
+                }),
+              };
+            }
+            return { body: '{}' };
+          },
+        },
+      });
+      expect(keys).toHaveLength(count);
+      expect(new Set(keys).size).toBe(count);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

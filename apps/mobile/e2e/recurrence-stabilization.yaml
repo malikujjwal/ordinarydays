@@ -16,15 +16,16 @@ onFlowComplete:
 - launchApp:
     clearState: true
 - assertVisible: ${output.title}
-- assertVisible: Daily
-- tapOn: Plans
+- assertVisible: ${output.title + ", .*Daily"}
+- tapOn: "Plans, tab, .*"
 - assertVisible:
-    id: ${'plans-card-' + output.activityId + ':' + output.today}
+    id: ${'plans-date-' + output.today}
 - assertVisible:
-    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
+    id: ${'plans-date-' + output.tomorrow}
 - tapOn:
     text: ${output.title}
-    index: 0
+    above:
+      id: ${'plans-date-' + output.tomorrow}
 - assertVisible:
     id: detail-complete
 - tapOn:
@@ -34,5 +35,10 @@ onFlowComplete:
 - tapOn:
     id: detail-back
 - assertVisible:
-    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
-- assertVisible: ${output.title + ', not completed'}
+    id: ${'plans-date-' + output.tomorrow}
+- assertVisible:
+    text: ${output.title + ', not completed'}
+    below:
+      text: ${'[A-Z]{3}, [A-Z]{3} ' + Number(output.tomorrow.slice(8))}
+    above:
+      id: ${'plans-date-' + new Date(Date.parse(output.tomorrow) + 86400000).toISOString().slice(0, 10)}

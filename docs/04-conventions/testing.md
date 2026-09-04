@@ -501,6 +501,12 @@ would inherit them from. `turbo.json` takes no comments, which is why that note 
 Flows in `apps/mobile/e2e/*.yaml`, run against a simulator build in `mobile.yml`, and on a
 device before a TestFlight submission.
 
+Run `maestro test . --config .maestro/config.yaml` from the repository root after starting
+the API and network proxy described in `mobile.yml`. The repository-wide workspace includes
+the attachment flow's image fixture under `e2e/`; selecting only `apps/mobile/e2e` omits it.
+Fixture writes use a fresh UUID Idempotency-Key, matching the API contract. Creation flows
+use global Add and explicitly select Task so they work with an empty Today too.
+
 | Flow | File |
 | --- | --- |
 | Sign in with email and reach Today | `sign-in.yaml` |

@@ -86,8 +86,8 @@ jobs:
           EXPO_PUBLIC_PROFILE: local
         run: pnpm --filter @od/mobile exec expo run:ios --device "$DEVICE_ID" --configuration Release --no-bundler
 
-      - name: Run the fixed P2-37 Maestro catalogue
-        run: '"$HOME/.maestro/bin/maestro" test apps/mobile/e2e'
+      - name: Run the Maestro catalogue
+        run: '"$HOME/.maestro/bin/maestro" test . --config .maestro/config.yaml'
 
       - name: Upload native diagnostics
         if: failure()

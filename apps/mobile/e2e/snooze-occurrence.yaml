@@ -40,7 +40,7 @@ onFlowComplete:
 - assertVisible: Daily
 - tapOn:
     id: detail-back
-- tapOn: Plans
+- tapOn: "Plans, tab, .*"
 - assertVisible:
     id: ${'plans-card-' + output.activityId + ':' + output.today}
 - assertVisible: ${output.snoozeTimeLabel + ', change time'}

@@ -43,6 +43,8 @@ onFlowComplete:
 - tapOn: ${output.offlineTitle1 + ', not completed'}
 - tapOn: ${output.offlineTitle2 + ', not completed'}
 - tapOn: ${output.offlineTitle3 + ', not completed'}
+- tapOn:
+    id: today-earlier-toggle
 - assertVisible: ${output.offlineTitle1 + ', completed'}
 - assertVisible: ${output.offlineTitle2 + ', completed'}
 - assertVisible: ${output.offlineTitle3 + ', completed'}
@@ -51,6 +53,12 @@ onFlowComplete:
 - killApp
 - launchApp:
     stopApp: false
+- runFlow:
+    when:
+      visible: "Show .* earlier items"
+    commands:
+      - tapOn:
+          id: today-earlier-toggle
 - assertVisible: ${output.offlineTitle1 + ', completed'}
 - assertVisible: ${output.offlineTitle2 + ', completed'}
 - assertVisible: ${output.offlineTitle3 + ', completed'}

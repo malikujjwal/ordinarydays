@@ -15,7 +15,7 @@ onFlowComplete:
 ---
 - launchApp:
     clearState: true
-- tapOn: Plans
+- tapOn: "Plans, tab, .*"
 - tapOn: Past
 - assertVisible:
     id: ${'plans-date-' + output.yesterday}

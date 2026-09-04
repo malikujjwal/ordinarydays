@@ -18,16 +18,22 @@ onFlowComplete:
 - assertVisible:
     id: today-screen
 - tapOn:
-    id: today-add-task
+    id: global-add
+- assertVisible:
+    id: object-chooser
+- tapOn:
+    id: object-choice-task
 - assertVisible:
     id: compose-form
 - tapOn:
     id: compose-title
 - inputText: ${output.title}
 - tapOn:
+    text: Today
+- tapOn:
     id: compose-save
 - assertVisible: ${output.title}
-- tapOn: Plans
+- tapOn: "Plans, tab, .*"
 - assertVisible: ${output.title + ', not completed'}
 - tapOn: ${output.title + ', not completed'}
 - assertVisible: ${output.title + ', completed'}

@@ -1,20 +1,17 @@
 # Maestro's workspace config (`testing.md` §6.2, P1-29).
 #
-# Flows live with the app they drive — `apps/mobile/e2e/*.yaml` — and this file is at the
-# repository root because that is where Maestro looks for workspace settings.
+# Flows live with the app they drive — `apps/mobile/e2e/*.yaml`. Use the repository as
+# the workspace so referenced media under `e2e/` is included as well.
 #
-# P2-37's four Phase 2 flows run against a simulator build in `mobile.yml`:
+# Run the whole catalogue against a simulator build, as in `mobile.yml`:
 #
-#   maestro test apps/mobile/e2e
+#   maestro test . --config .maestro/config.yaml
 #
 # The workflow is manual and release-tag only. It never gates a PR; its successful run is a
 # prerequisite for the TestFlight submission path that P5-11 later extends.
 
 flows:
-  - ../apps/mobile/e2e/add-and-complete.yaml
-  - ../apps/mobile/e2e/snooze-occurrence.yaml
-  - ../apps/mobile/e2e/up-next-ticker.yaml
-  - ../apps/mobile/e2e/offline-queue-relaunch.yaml
+  - apps/mobile/e2e/*
 
 # No `--continuous`, no retries. A flaky E2E flow is worse than no E2E flow (P1-29): a flow
 # that only passes on the second attempt is quarantined and fixed, never retried into green.

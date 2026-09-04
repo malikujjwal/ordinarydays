@@ -17,10 +17,10 @@ onFlowComplete:
     clearState: true
 - assertVisible:
     id: today-screen
-- tapOn: Lists
+- tapOn: "Lists, tab, .*"
 - assertVisible:
     id: lists-screen
-- assertVisible: ${output.indexListTitle}
+- assertVisible: ${output.indexListTitle + '.*'}
 - swipe:
     from:
       id: ${'swipeable-list-' + output.indexListId}
@@ -31,8 +31,8 @@ onFlowComplete:
     id: list-delete-confirm
 - tapOn:
     id: confirm-accept
-- assertNotVisible: ${output.indexListTitle}
-- tapOn: Today
+- assertNotVisible: ${output.indexListTitle + '.*'}
+- tapOn: "Today, tab, .*"
 - assertVisible:
     id: today-screen
 - assertVisible: ${output.planTitle}
