@@ -847,4 +847,23 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toEqual({ name: 'activity_attachments_activity_order' });
   });
+
+  it('keeps existing source Lists visible when adding optimistic-delete visibility', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 27));
+    await database.run(
+      `INSERT INTO activity_source_lists
+         (activity_id, list_id, ordinal, title, icon, item_count, done_count)
+       VALUES ('act_existing_source', 'lst_existing_source', 0, 'Packing', 'list', 2, 1);`,
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT visibility_hidden FROM activity_source_lists
+         WHERE activity_id = 'act_existing_source';`,
+      ),
+    ).toEqual({ visibility_hidden: 0 });
+  });
 });

@@ -2,6 +2,7 @@ import { listView } from '@od/shared/schemas';
 import type { List, ListFeatureConfig } from '@od/shared/types';
 import { activitySubscriptionScope } from '@/lib/sqlite/activityRepository';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
+import { listItemsSubscriptionScope } from '@/lib/sqlite/listItemsRepository';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {
   RepositoryInvalidationMetadata,
@@ -211,7 +212,12 @@ export class ListsRepository {
     position: number,
   ): Promise<void> {
     await writeListRow(transaction.database, list, position);
+    await transaction.database.run(
+      'UPDATE activity_source_lists SET visibility_hidden = 0 WHERE list_id = ?;',
+      [list.listId],
+    );
     transaction.changed(this.scope);
+    await this.invalidateDependentReaders(transaction, list.listId);
   }
 
   async insertPendingCreate(transaction: TransactionContext, list: List): Promise<void> {
@@ -378,8 +384,62 @@ export class ListsRepository {
   }
 
   async removeCanonical(transaction: TransactionContext, listId: string): Promise<void> {
+    const sources = await transaction.database.all(
+      'SELECT activity_id FROM activity_source_lists WHERE list_id = ?;',
+      [listId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_source_lists WHERE list_id = ?;',
+      [listId],
+    );
     await transaction.database.run('DELETE FROM list_rows WHERE list_id = ?;', [listId]);
     transaction.changed(this.scope);
+    transaction.changed(listItemsSubscriptionScope(listId));
+    for (const source of sources) {
+      const activityId = text(source, 'activity_id');
+      if (activityId !== undefined)
+        transaction.changed(activitySubscriptionScope(activityId));
+    }
+  }
+
+  /**
+   * Hides an optimistic delete without destroying the rows needed for an exact rejection
+   * rollback. Dependent item/source rows are unreachable while the root is absent and are
+   * purged only after the server acknowledges the delete.
+   */
+  async hideCanonical(transaction: TransactionContext, listId: string): Promise<void> {
+    const sources = await transaction.database.all(
+      'SELECT activity_id FROM activity_source_lists WHERE list_id = ?;',
+      [listId],
+    );
+    await transaction.database.run(
+      'UPDATE activity_source_lists SET visibility_hidden = 1 WHERE list_id = ?;',
+      [listId],
+    );
+    await transaction.database.run('DELETE FROM list_rows WHERE list_id = ?;', [listId]);
+    transaction.changed(this.scope);
+    transaction.changed(listItemsSubscriptionScope(listId));
+    for (const source of sources) {
+      const activityId = text(source, 'activity_id');
+      if (activityId !== undefined)
+        transaction.changed(activitySubscriptionScope(activityId));
+    }
+  }
+
+  private async invalidateDependentReaders(
+    transaction: TransactionContext,
+    listId: string,
+  ): Promise<void> {
+    transaction.changed(listItemsSubscriptionScope(listId));
+    const sources = await transaction.database.all(
+      'SELECT activity_id FROM activity_source_lists WHERE list_id = ?;',
+      [listId],
+    );
+    for (const source of sources) {
+      const activityId = text(source, 'activity_id');
+      if (activityId !== undefined)
+        transaction.changed(activitySubscriptionScope(activityId));
+    }
   }
 
   private async positionOf(reader: SqliteReader, listId: string): Promise<number> {

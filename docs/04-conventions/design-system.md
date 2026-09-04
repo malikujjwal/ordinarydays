@@ -1187,11 +1187,14 @@ clip; the grip retains its 44 pt target.
   full-calendar button — while Needs a date keeps only the switcher. Reverse scrolling away from
   the top retains compact chrome; only the top tolerance restores the complete header. No compact
   duplicate title renders. The full measured header height remains the list's leading inset, and
-  all state changes happen in an opaque absolute overlay using compositor opacity/translation,
-  so no transition changes scroll offset or pulls cards. Reduced motion makes the same state
+  all state changes happen in an opaque absolute overlay using compositor opacity/translation;
+  its safe-area cap is always opaque and its full grid remains mounted, inert, non-focusable and
+  hidden while compact, so restoring at the top cannot flash an empty surface or rebuild the grid during scroll.
+  No transition changes scroll offset or pulls cards. Reduced motion makes the same state
   transition immediate. A selected day lands below the currently visible full or compact overlay
-  using that measured visible height as `viewOffset`; Upcoming and Past use the same rule. The
-  list's month headings remain sticky.
+  using that measured visible height as `viewOffset`; Upcoming and Past use the same rule. Far
+  loaded days jump without animation; an unmeasured target gets one stable estimated offset and at
+  most two layout retries, never a progressive retry walk. The list's month headings remain sticky.
   Three cell treatments, and the middle one is the one to get right: a live date in the
   displayed month is normal, a live date spilling in from an adjacent month is subordinate
   but plainly readable and tappable, and an out-of-stage date is inert. Behaviour, eligibility

@@ -1429,6 +1429,21 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ON activity_attachments (activity_id, ordinal);
       `),
   },
+  {
+    version: 28,
+    name: 'source-list-visibility',
+    /**
+     * An optimistic List delete must hide the retained source-Plan link without teaching a
+     * read repository about outbox payloads. The flag is rollback state on the domain
+     * projection itself; existing links remain visible by default.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE activity_source_lists
+          ADD COLUMN visibility_hidden INTEGER NOT NULL DEFAULT 0
+            CHECK (visibility_hidden IN (0, 1));
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

@@ -1,4 +1,5 @@
 import { Archive, SettingRow, Sheet, Trash } from '@od/ui';
+import { useRef } from 'react';
 import { View } from 'react-native';
 import type { ListSwipeAction } from '../model/listSwipeActions';
 
@@ -18,10 +19,17 @@ export function ListCardActionsSheet({
   onClose,
   onAction,
 }: ListCardActionsSheetProps) {
+  const pendingAction = useRef<ListSwipeAction | undefined>(undefined);
+
   return (
     <Sheet
       open={open}
       onClose={onClose}
+      onClosed={() => {
+        const action = pendingAction.current;
+        pendingAction.current = undefined;
+        if (action !== undefined) onAction(action);
+      }}
       title={`${listTitle} actions`}
       testID="list-card-actions"
     >
@@ -39,8 +47,9 @@ export function ListCardActionsSheet({
             danger={action.destructive}
             separated={action.destructive && index > 0}
             onPress={() => {
+              if (action.destructive) pendingAction.current = action;
+              else onAction(action);
               onClose();
-              onAction(action);
             }}
             testID={`list-card-action-${action.name}`}
           />

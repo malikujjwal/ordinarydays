@@ -461,21 +461,26 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByRole('dialog', { name: 'List settings' })).toBeTruthy();
   });
 
-  it('confirms list deletion from the detail menu before deleting and leaving', () => {
+  it('waits for the More sheet to close before confirming list deletion', () => {
+    vi.useFakeTimers();
     mount();
 
     fireEvent.click(screen.getByTestId('list-detail-menu'));
+    act(() => vi.advanceTimersByTime(400));
     fireEvent.click(screen.getByRole('button', { name: 'Delete list' }));
 
     expect(mocks.removeList).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog', { name: 'Delete "Launch"?' })).toBeNull();
+    expect(screen.getByTestId('list-header-menu')).toBeTruthy();
+
+    act(() => vi.advanceTimersByTime(400));
+    expect(screen.queryByRole('dialog', { name: 'More' })).toBeNull();
     expect(screen.getByText('Delete "Launch"?')).toBeTruthy();
     expect(screen.getByRole('alertdialog', { name: 'Delete "Launch"?' })).toBeTruthy();
     expect(screen.getByText('3 List items will be removed')).toBeTruthy();
     expect(screen.getByText('Linked Plans will remain')).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
 
-    // The settings sheet is still animating out (P3-51) while the alert is up, so the
-    // confirming control is the alert's own, not the sheet's row of the same name.
     fireEvent.click(
       within(screen.getByRole('alertdialog')).getByRole('button', {
         name: 'Delete list',

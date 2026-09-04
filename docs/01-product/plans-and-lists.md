@@ -337,11 +337,14 @@ calendar. Only reaching the top tolerance restores the complete header. The user
 open the full calendar at any scroll position. The complete header's measured height remains the
 list's leading inset, so state transitions never alter scroll offset or pull visible month/cards.
 The changing chrome floats above that stable inset on an opaque `surface`; scrolling rows never
-show through it. Month headings remain sticky. The compact dated chrome is approximately the two
-44 pt control rows, excluding safe area. The transition crossfades controls and uses only opacity
-and vertical translation over the existing base motion duration (approximately 180–240 ms), with
-native/compositor animation where supported. Reduced-motion collapses the duration to zero while
-preserving the same two final states.
+show through it. The system safe-area cap remains opaque in both states. The full calendar grid
+stays mounted but inert, non-focusable and visually hidden while compact, so arriving at the top
+reveals already laid-out calendar content rather than a blank surface followed by a delayed mount. Month headings
+remain sticky. The compact dated chrome is approximately the two 44 pt control rows, excluding
+safe area. The transition crossfades controls and uses only opacity and vertical translation over
+the existing base motion duration (approximately 180–240 ms), with native/compositor animation
+where supported. Reduced-motion collapses the duration to zero while preserving the same two final
+states.
 
 A day tap lands the exact matching day card below the currently visible overlay. Both Upcoming
 and Past use the same adapter: find the exact viewer-local `WallDate` first, apply the one
@@ -351,6 +354,9 @@ coverage proves the selected date empty. Moving the header out of layout must no
 to viewport zero, which would place the correct row underneath the overlay and make the preceding
 day appear chosen. Moving into a month outside the initial response loads that bounded window from
 the same projection before landing; the initial response boundary is never a navigation clamp.
+A distant loaded day is an immediate positional jump, not an animated traversal through every
+intervening row. If the virtualized target is not measured, recovery uses the list's one stable
+average-offset estimate and at most two layout retries; it never walks or animates repeated guesses.
 
 ### 1.4 Giving a needs-a-date plan a date
 
@@ -998,6 +1004,21 @@ The sheet changes no operation semantics: Archive remains immediate with Undo, D
 retain their confirmations, and the index remains non-reorderable. Active and archived groups
 are separated by the standard strong divider and spacing, so the archived heading never
 touches the final active card.
+
+An action sheet or header overflow must finish its native dismissal before a destructive
+confirmation is presented; a swipe row likewise reaches its closed callback before presenting
+the confirmation. Archive remains immediate and closes its presenting surface while its Undo
+appears. Native List deletion durably queues the delete and removes the List root in one local
+transaction. That root is the visibility tombstone: the index, detail and source-Plan readers
+all stop projecting the List immediately, while its item pages and source links remain
+unreachable rollback material. The source link carries a projection-owned hidden bit while the
+root is absent; ordinary readers never infer visibility by inspecting the outbox. A server
+acknowledgement purges those dependent rows; a permanent rejection restores the root and therefore
+the exact pre-delete local projection.
+Hide, retry and restoration publish both the List-detail scope and every linked source-Activity
+scope, so mounted screens re-read at the same transaction boundary. Retry hides the same root
+again. No visible projection waits for a refresh, no rejected delete loses loaded items, and the
+Plans themselves survive unchanged.
 
 The List header has fixed Back, Share and More action slots, then an uppercase kind-and-count
 line above one flexible leading-aligned serif title/edit slot. A long title may use two lines

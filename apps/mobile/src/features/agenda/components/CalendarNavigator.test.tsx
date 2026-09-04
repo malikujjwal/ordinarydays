@@ -14,6 +14,14 @@ import { CalendarNavigator } from './CalendarNavigator';
  */
 
 const TODAY = '2026-08-14' as WallDate;
+interface LayoutAwareElement extends Element {
+  __reactLayoutHandler?: (event: {
+    nativeEvent: {
+      layout: { x: number; y: number; width: number; height: number };
+    };
+  }) => void;
+}
+
 const memoryStorage = () => ({
   get: vi.fn(async () => null),
   set: vi.fn(async () => undefined),
@@ -43,6 +51,7 @@ function mount(
   loadRange: CalendarLoadRange = vi.fn(async () => undefined),
   onSelectDate = vi.fn(),
   compact = false,
+  onHeightChange?: (height: number) => void,
 ) {
   render(
     <ThemeProvider scheme="light">
@@ -55,6 +64,7 @@ function mount(
         settleMs={10}
         storage={memoryStorage()}
         compact={compact}
+        {...(onHeightChange === undefined ? {} : { onHeightChange })}
       />
     </ThemeProvider>,
   );
@@ -240,7 +250,13 @@ describe('CalendarNavigator', () => {
       await settle();
       timing.mockClear();
 
-      expect(screen.queryByTestId('plans-calendar-grid')).toBeNull();
+      const retainedGrid = screen.getByTestId('plans-calendar-grid');
+      const focusableDate = stage === 'upcoming' ? TODAY : '2026-08-13';
+      const retainedToday = screen.getByTestId(`calendar-cell-${focusableDate}`);
+      expect(
+        screen.getByTestId('plans-calendar-compact-grid').getAttribute('aria-hidden'),
+      ).toBe('true');
+      expect(retainedToday.getAttribute('role')).toBeNull();
       expect(
         screen.getByRole('button', { name: clamped }).getAttribute('aria-disabled'),
       ).toBe('true');
@@ -256,7 +272,10 @@ describe('CalendarNavigator', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(300);
       });
-      expect(screen.getByTestId('plans-calendar-grid')).toBeDefined();
+      expect(screen.getByTestId('plans-calendar-grid')).toBe(retainedGrid);
+      expect(
+        screen.getByTestId(`calendar-cell-${focusableDate}`).getAttribute('role'),
+      ).toBe('button');
       expect(screen.getByRole('button', { name: 'Close full calendar' })).toBeDefined();
       timing.mockClear();
       fireEvent.click(screen.getByRole('button', { name: 'Close full calendar' }));
@@ -264,7 +283,35 @@ describe('CalendarNavigator', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(300);
       });
-      expect(screen.queryByTestId('plans-calendar-grid')).toBeNull();
+      expect(screen.getByTestId('plans-calendar-grid')).toBe(retainedGrid);
+      expect(
+        screen.getByTestId('plans-calendar-compact-grid').getAttribute('aria-hidden'),
+      ).toBe('true');
     },
   );
+
+  it('reuses the retained grid measurement when compact calendar controls open it', async () => {
+    const onHeightChange = vi.fn();
+    mount(
+      'upcoming',
+      projection({}, [{ from: '2026-06-01', through: '2026-10-31' }]),
+      vi.fn(async () => undefined),
+      vi.fn(),
+      true,
+      onHeightChange,
+    );
+    await settle();
+    const grid = screen.getByTestId('plans-calendar-compact-grid') as LayoutAwareElement;
+    expect(grid.__reactLayoutHandler).toBeTypeOf('function');
+    act(() => {
+      grid.__reactLayoutHandler?.({
+        nativeEvent: { layout: { x: 0, y: 44, width: 390, height: 180 } },
+      });
+    });
+    onHeightChange.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open full calendar' }));
+
+    expect(onHeightChange).toHaveBeenCalledWith(224);
+  });
 });

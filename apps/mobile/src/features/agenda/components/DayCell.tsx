@@ -28,6 +28,8 @@ export interface DayCellProps {
   compact?: boolean;
   /** While the visible range loads, uncovered Upcoming cells show a quiet placeholder. */
   loading?: boolean;
+  /** A retained off-screen calendar stays mounted but must not expose keyboard targets. */
+  disabled?: boolean;
   onPress?: (date: CalendarCell['date']) => void;
 }
 
@@ -49,6 +51,7 @@ export const DayCell = memo(function DayCell({
   weekday,
   compact = false,
   loading = false,
+  disabled = false,
   onPress,
 }: DayCellProps) {
   const theme = useTheme();
@@ -161,7 +164,7 @@ export const DayCell = memo(function DayCell({
 
   const label = `${cellDateLabel(cell.date)}${densityLabel(cell, stage)}`;
 
-  if (inert || onPress === undefined) {
+  if (inert || disabled || onPress === undefined) {
     return (
       <View
         style={{

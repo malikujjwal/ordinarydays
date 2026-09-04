@@ -35,6 +35,7 @@ import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import { type NeedsDateRowData, usePlans } from '../hooks/usePlans';
+import { calendarListLandingRecovery } from '../model/calendarListLanding';
 import {
   type PastDay,
   type PastMonthSection,
@@ -89,22 +90,23 @@ interface SelectedGap {
 
 /**
  * A virtualized list cannot measure an offscreen date. When it says so, scroll to its own
- * estimate of the offset — a little further on each failure, so a short estimate still
- * walks the target into the mounted window — and land exactly once it is measurable.
+ * estimate of the offset once, then retry across two layout frames. Repeatedly walking past
+ * that estimate makes a distant day oscillate through the virtualized window and stalls the
+ * JS thread precisely while the user is waiting for the landing.
  */
-const LANDING_ATTEMPTS = 40;
 function onScrollToIndexFailed<Item, Section>(
   list: SectionList<Item, Section> | null,
   info: { index: number; averageItemLength: number },
   attempt: number,
   retry: () => void,
 ): void {
-  if (attempt >= LANDING_ATTEMPTS) return;
+  const recovery = calendarListLandingRecovery(info, attempt);
+  if (recovery === undefined) return;
   list?.getScrollResponder()?.scrollTo({
-    y: info.averageItemLength * info.index + attempt * info.averageItemLength * 4,
+    y: recovery.offset,
     animated: false,
   });
-  setTimeout(retry, 60);
+  setTimeout(retry, recovery.retryAfterMs);
 }
 
 /** A landing is best effort: a list that cannot measure yet simply stays where it is. */
@@ -123,7 +125,9 @@ function scrollTo<Item, Section>(
     list?.scrollToLocation({
       sectionIndex,
       itemIndex: itemIndex + 1,
-      animated: true,
+      // Calendar navigation is a positional jump, not a tour through every intervening day.
+      // Native animated traversal over distant virtualized sections is both slow and janky.
+      animated: false,
       viewPosition: 0,
       // The calendar no longer participates in layout. Leave the selected card below the
       // visible overlay instead of placing it at viewport zero underneath the calendar.
@@ -667,6 +671,18 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
               zIndex: 2,
             }}
           >
+            <View
+              pointerEvents="none"
+              testID="plans-safe-area-backdrop"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: insets.top + theme.space[2],
+                backgroundColor: theme.colors.surface,
+              }}
+            />
             <Animated.View
               testID="plans-title-block"
               aria-hidden={compactHeader}

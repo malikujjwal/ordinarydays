@@ -1917,6 +1917,12 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           transaction.database,
           originalIntentId,
         );
+      } else if (intent.mutationKey[1] === 'delete') {
+        // The optimistic root tombstone made the aggregate unreachable. Only a server
+        // acknowledgement may now discard the retained item pages and source-Plan links;
+        // permanent rejection can restore them by reinstalling the root row.
+        await this.requireItems().removeList(transaction, intent.entityId);
+        await lists.removeCanonical(transaction, intent.entityId);
       }
       if (sourceActivityDetail !== undefined) {
         await this.activities.putCanonical(transaction, sourceActivityDetail);

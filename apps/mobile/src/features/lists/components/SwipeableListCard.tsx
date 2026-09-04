@@ -1,5 +1,5 @@
 import { Text, Touchable, useTheme } from '@od/ui';
-import { Fragment, useCallback, useState } from 'react';
+import { Fragment, useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
 import ReanimatedSwipeable, {
   type SwipeableMethods,
@@ -10,6 +10,7 @@ import {
   type ListSwipeAction,
   listAccessibilityActions,
 } from '../model/listSwipeActions';
+import { closeSwipeAction, selectSwipeAction } from '../model/swipeActionDismissal';
 import { ListCardActionsSheet } from './ListCardActionsSheet';
 import { ListIndexRow, type ListIndexRowProps } from './ListIndexRow';
 
@@ -42,20 +43,24 @@ function ActionPanel({
   actions,
   methods,
   onAction,
+  pendingAction,
 }: {
   actions: readonly ListSwipeAction[];
   methods: SwipeableMethods;
   onAction: (action: ListSwipeAction) => void;
+  pendingAction: { current: ListSwipeAction | undefined };
 }) {
   const theme = useTheme();
   const commit = useCallback(
     (selected: ListSwipeAction) => {
       // Closed before dispatch, so a confirmation dialog does not open over an open row that
       // is still holding its translation.
+      const transition = selectSwipeAction(selected);
+      pendingAction.current = transition.pending;
+      if (transition.dispatch !== undefined) onAction(transition.dispatch);
       methods.close();
-      onAction(selected);
     },
-    [methods, onAction],
+    [methods, onAction, pendingAction],
   );
 
   return (
@@ -100,6 +105,7 @@ export function SwipeableListCard({
 }: SwipeableListCardProps) {
   const accessibilityActions = listAccessibilityActions(actions);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const pendingSwipeAction = useRef<ListSwipeAction | undefined>(undefined);
   const activation = useLongPressActivation(rowProps.onPress);
 
   const openActions =
@@ -120,6 +126,11 @@ export function SwipeableListCard({
         // No overshoot on either side: nothing here commits on a full swipe.
         overshootRight={false}
         animationOptions={{ reduceMotion: ReduceMotion.System }}
+        onSwipeableClose={() => {
+          const transition = closeSwipeAction(pendingSwipeAction.current);
+          pendingSwipeAction.current = transition.pending;
+          if (transition.dispatch !== undefined) onAction(transition.dispatch);
+        }}
         {...(actions.length === 0
           ? {}
           : {
@@ -128,7 +139,12 @@ export function SwipeableListCard({
                 _translation: SharedValue<number>,
                 methods: SwipeableMethods,
               ) => (
-                <ActionPanel actions={actions} methods={methods} onAction={onAction} />
+                <ActionPanel
+                  actions={actions}
+                  methods={methods}
+                  onAction={onAction}
+                  pendingAction={pendingSwipeAction}
+                />
               ),
             })}
       >

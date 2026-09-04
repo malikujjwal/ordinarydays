@@ -1350,7 +1350,8 @@ export class ActivityRepository {
                       l.item_count AS live_item_count, l.done_count AS live_done_count
                FROM activity_source_lists s
                LEFT JOIN list_rows l ON l.list_id = s.list_id
-               WHERE s.activity_id = ? ORDER BY s.ordinal;`,
+               WHERE s.activity_id = ? AND s.visibility_hidden = 0
+               ORDER BY s.ordinal;`,
               [activityId],
             )
           ).map((row) => ({
@@ -1406,14 +1407,26 @@ export class ActivityRepository {
       }
     }
     if (detail.sourceLists !== undefined) {
+      const hiddenListIds = new Set(
+        (
+          await database.all(
+            `SELECT list_id FROM activity_source_lists
+             WHERE activity_id = ? AND visibility_hidden = 1;`,
+            [activityId],
+          )
+        )
+          .map((row) => text(row, 'list_id'))
+          .filter((listId): listId is string => listId !== undefined),
+      );
       await database.run('DELETE FROM activity_source_lists WHERE activity_id = ?;', [
         activityId,
       ]);
       for (const [ordinal, source] of detail.sourceLists.entries()) {
         await database.run(
           `INSERT INTO activity_source_lists
-             (activity_id, list_id, ordinal, title, icon, item_count, done_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?);`,
+             (activity_id, list_id, ordinal, title, icon, item_count, done_count,
+              visibility_hidden)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
           [
             activityId,
             source.listId,
@@ -1422,6 +1435,7 @@ export class ActivityRepository {
             source.icon,
             source.itemCount,
             source.doneCount,
+            hiddenListIds.has(source.listId) ? 1 : 0,
           ],
         );
       }

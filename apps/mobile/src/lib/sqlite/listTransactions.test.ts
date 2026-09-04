@@ -334,6 +334,74 @@ describe('native canonical List transactional outbox', () => {
     ]);
   });
 
+  it('hides every visible List projection while retaining rollback rows until acknowledgement', async () => {
+    if (database === undefined) throw new Error('test database not open');
+    const { activities, items, lists, outbox, service, transactions } = await install();
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, sourceDetail(LIST)),
+    );
+    const detailInvalidated = vi.fn();
+    const sourceInvalidated = vi.fn();
+    const stopDetail = items.subscribe(LIST.listId, detailInvalidated);
+    const stopSource = activities.subscribe(SOURCE_ACTIVITY, sourceInvalidated);
+
+    await transactions.run((transaction) =>
+      service.remove(transaction, LIST, 'intent_list_delete'),
+    );
+
+    expect(detailInvalidated).toHaveBeenCalledOnce();
+    expect(sourceInvalidated).toHaveBeenCalledOnce();
+    expect(await lists.read()).toEqual([]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: SOURCE_ACTIVITY }))
+        ?.sourceLists,
+    ).toEqual([]);
+    expect(await items.read(LIST.listId)).toEqual([ITEM]);
+
+    // A canonical Plan refresh may replace source rows while the delete is pending. The
+    // projection-owned hidden bit survives that refresh without coupling this read to outbox.
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, sourceDetail(LIST)),
+    );
+    expect(
+      (await activities.read({ kind: 'activity', activityId: SOURCE_ACTIVITY }))
+        ?.sourceLists,
+    ).toEqual([]);
+
+    detailInvalidated.mockClear();
+    sourceInvalidated.mockClear();
+    await transactions.run((transaction) => lists.upsertCanonical(transaction, LIST, 0));
+    expect(detailInvalidated).toHaveBeenCalledOnce();
+    expect(sourceInvalidated).toHaveBeenCalledOnce();
+    expect(await items.read(LIST.listId)).toEqual([ITEM]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: SOURCE_ACTIVITY }))
+        ?.sourceLists,
+    ).toEqual([expect.objectContaining({ listId: LIST.listId, title: LIST.title })]);
+
+    const deleteIntent = await outbox.get(database, 'intent_list_delete');
+    if (deleteIntent === undefined) throw new Error('missing List delete intent');
+    await transactions.run((transaction) =>
+      service.reprojectRetry(transaction, LIST.ownerId, deleteIntent),
+    );
+    expect(await lists.read()).toEqual([]);
+    expect(await items.read(LIST.listId)).toEqual([ITEM]);
+
+    await transactions.run((transaction) => lists.upsertCanonical(transaction, LIST, 0));
+    expect(
+      (await activities.read({ kind: 'activity', activityId: SOURCE_ACTIVITY }))
+        ?.sourceLists,
+    ).toEqual([expect.objectContaining({ listId: LIST.listId, title: LIST.title })]);
+    expect(await outbox.all()).toEqual([
+      expect.objectContaining({
+        mutationKey: ['list', 'delete'],
+        entityId: LIST.listId,
+      }),
+    ]);
+    stopDetail();
+    stopSource();
+  });
+
   it('cancels an unsent delete and restores its exact row when Undo is accepted offline', async () => {
     const { items, lists, outbox, service, transactions } = await install();
     await transactions.run((transaction) =>

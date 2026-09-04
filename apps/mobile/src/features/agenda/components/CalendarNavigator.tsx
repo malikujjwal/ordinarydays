@@ -13,7 +13,7 @@ import {
   useMotion,
   useTheme,
 } from '@od/ui';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, View } from 'react-native';
 import {
   type CalendarLoadRange,
@@ -86,8 +86,8 @@ export function CalendarNavigator({
   const presentation = useRef(new Animated.Value(compact ? 1 : 0)).current;
   const compactGridProgress = useRef(new Animated.Value(0)).current;
   const [contentHeight, setContentHeight] = useState(0);
+  const [calendarBodyHeight, setCalendarBodyHeight] = useState(0);
   const [compactOpen, setCompactOpen] = useState(false);
-  const [compactGridMounted, setCompactGridMounted] = useState(false);
   const navigator = useCalendarNavigator({
     stage,
     today,
@@ -115,30 +115,37 @@ export function CalendarNavigator({
   }, [compact]);
 
   useEffect(() => {
-    if (compactOpen) setCompactGridMounted(true);
-    if (compact && !compactOpen) onHeightChange?.(theme.layout.hitTarget);
+    if (compact) {
+      onHeightChange?.(
+        compactOpen
+          ? theme.layout.hitTarget + calendarBodyHeight
+          : theme.layout.hitTarget,
+      );
+    }
     const transition = Animated.timing(compactGridProgress, {
       toValue: compactOpen ? 1 : 0,
       duration: motion.duration.base,
       useNativeDriver: true,
     });
-    transition.start(({ finished }) => {
-      if (finished && !compactOpen) setCompactGridMounted(false);
-    });
+    transition.start();
     return () => transition.stop();
   }, [
     compact,
     compactGridProgress,
     compactOpen,
+    calendarBodyHeight,
     motion.duration.base,
     onHeightChange,
     theme.layout.hitTarget,
   ]);
 
-  const select = (date: WallDate) => {
-    if (navigator.expanded) navigator.setMonth(monthOf(date));
-    onSelectDate(date);
-  };
+  const select = useCallback(
+    (date: WallDate) => {
+      if (navigator.expanded) navigator.setMonth(monthOf(date));
+      onSelectDate(date);
+    },
+    [navigator.expanded, navigator.setMonth, onSelectDate],
+  );
 
   const weeks = chunkWeeks(navigator.cells);
   const gridExpanded = compact || navigator.expanded;
@@ -147,6 +154,7 @@ export function CalendarNavigator({
       icon={navigator.expanded ? ChevronUp : ChevronDown}
       label={navigator.expanded ? 'Collapse calendar' : 'Expand calendar'}
       tone="accent"
+      disabled={compact}
       onPress={() => navigator.setExpanded(!navigator.expanded)}
       testID={`${testID}-toggle`}
     />
@@ -169,13 +177,14 @@ export function CalendarNavigator({
         icon={ChevronLeft}
         label="Previous month"
         tone="accent"
-        disabled={!navigator.canGoBack}
+        disabled={compact || !navigator.canGoBack}
         onPress={() => navigator.shift(-1)}
         testID={`${testID}-previous`}
       />
       <Touchable
         accessibilityRole="button"
         accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
+        disabled={compact}
         onPress={openPicker}
         square={false}
         testID={`${testID}-month`}
@@ -193,7 +202,7 @@ export function CalendarNavigator({
           icon={ChevronRight}
           label="Next month"
           tone="accent"
-          disabled={!navigator.canGoForward}
+          disabled={compact || !navigator.canGoForward}
           onPress={() => navigator.shift(1)}
           testID={`${testID}-next`}
         />
@@ -227,13 +236,14 @@ export function CalendarNavigator({
         icon={ChevronLeft}
         label="Previous month"
         tone="accent"
-        disabled={!navigator.canGoBack}
+        disabled={!compact || !navigator.canGoBack}
         onPress={() => navigator.shift(-1)}
         testID={`${testID}-compact-previous`}
       />
       <Touchable
         accessibilityRole="button"
         accessibilityLabel={`${monthTitle(navigator.month)}. Choose a month`}
+        disabled={!compact}
         onPress={openPicker}
         square={false}
         testID={`${testID}-compact-month`}
@@ -247,7 +257,7 @@ export function CalendarNavigator({
         icon={ChevronRight}
         label="Next month"
         tone="accent"
-        disabled={!navigator.canGoForward}
+        disabled={!compact || !navigator.canGoForward}
         onPress={() => navigator.shift(1)}
         testID={`${testID}-compact-next`}
       />
@@ -255,6 +265,7 @@ export function CalendarNavigator({
         icon={Calendar}
         label={compactOpen ? 'Close full calendar' : 'Open full calendar'}
         tone="accent"
+        disabled={!compact}
         onPress={() => setCompactOpen((open) => !open)}
         testID={`${testID}-compact-toggle`}
       />
@@ -285,6 +296,7 @@ export function CalendarNavigator({
                 stage={stage}
                 compact={gridExpanded}
                 loading={navigator.loading}
+                disabled={compact && !compactOpen}
                 {...(gridExpanded
                   ? {}
                   : { weekday: WEEKDAY_LABELS[weekdayIndex(cell.date)] ?? '' })}
@@ -316,6 +328,7 @@ export function CalendarNavigator({
           <Touchable
             accessibilityRole="button"
             accessibilityLabel="Try again"
+            disabled={compact && !compactOpen}
             onPress={navigator.retry}
             square={false}
             testID={`${testID}-retry`}
@@ -405,40 +418,44 @@ export function CalendarNavigator({
             {compactControls}
           </Animated.View>
         </View>
-        {compact ? null : calendarBody}
-
-        {!compact || !compactGridMounted ? null : (
-          <Animated.View
-            testID={`${testID}-compact-grid`}
-            aria-hidden={!compactOpen}
-            accessibilityElementsHidden={!compactOpen}
-            importantForAccessibility={compactOpen ? 'auto' : 'no-hide-descendants'}
-            pointerEvents={compactOpen ? 'auto' : 'none'}
-            onLayout={(event) => {
-              const bodyHeight = event.nativeEvent.layout.height;
-              if (bodyHeight > 0) onHeightChange?.(theme.layout.hitTarget + bodyHeight);
-            }}
-            style={{
-              position: 'absolute',
-              top: theme.layout.hitTarget,
-              left: 0,
-              right: 0,
-              paddingBottom: theme.space[4],
-              backgroundColor: theme.colors.surface,
-              opacity: compactGridProgress,
-              transform: [
-                {
-                  translateY: compactGridProgress.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [-theme.space[3], 0],
-                  }),
-                },
-              ],
-            }}
-          >
-            {calendarBody}
-          </Animated.View>
-        )}
+        <Animated.View
+          testID={`${testID}-compact-grid`}
+          aria-hidden={compact && !compactOpen}
+          accessibilityElementsHidden={compact && !compactOpen}
+          importantForAccessibility={
+            compact && !compactOpen ? 'no-hide-descendants' : 'auto'
+          }
+          pointerEvents={compact && !compactOpen ? 'none' : 'auto'}
+          onLayout={(event) => {
+            const bodyHeight = event.nativeEvent.layout.height;
+            if (bodyHeight > 0 && bodyHeight !== calendarBodyHeight) {
+              setCalendarBodyHeight(bodyHeight);
+            }
+          }}
+          style={{
+            ...(compact
+              ? {
+                  position: 'absolute' as const,
+                  top: theme.layout.hitTarget,
+                  left: 0,
+                  right: 0,
+                  paddingBottom: theme.space[4],
+                  backgroundColor: theme.colors.surface,
+                  opacity: compactGridProgress,
+                  transform: [
+                    {
+                      translateY: compactGridProgress.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-theme.space[3], 0],
+                      }),
+                    },
+                  ],
+                }
+              : { opacity: 1 }),
+          }}
+        >
+          {calendarBody}
+        </Animated.View>
 
         <MonthYearSheet
           open={pickerOpen}

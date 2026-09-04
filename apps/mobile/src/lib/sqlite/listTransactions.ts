@@ -855,7 +855,10 @@ export class ListTransactionService {
       orderingKey: `list:${list.listId}`,
     });
     if (appended.kind === 'inserted') {
-      await this.lists.removeCanonical(transaction, list.listId);
+      // The missing root is the local tombstone: index, detail and source-Plan readers all
+      // hide the aggregate immediately. Retain its dependants until acknowledgement so a
+      // rejected delete can restore the exact local page without a lossy refetch.
+      await this.lists.hideCanonical(transaction, list.listId);
     }
     transaction.changed('outbox');
   }
@@ -993,7 +996,7 @@ export class ListTransactionService {
       return rebased;
     }
     if (intent.mutationKey[1] === 'delete') {
-      await this.lists.removeCanonical(transaction, intent.entityId);
+      await this.lists.hideCanonical(transaction, intent.entityId);
       return intent;
     }
     throw new Error(

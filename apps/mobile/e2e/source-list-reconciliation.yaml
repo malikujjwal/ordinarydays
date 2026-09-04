@@ -17,6 +17,24 @@ onFlowComplete:
     clearState: true
 - assertVisible:
     id: today-screen
+- tapOn: Lists
+- assertVisible:
+    id: lists-screen
+- assertVisible: ${output.indexListTitle}
+- swipe:
+    from:
+      id: ${'swipeable-list-' + output.indexListId}
+    direction: LEFT
+- tapOn:
+    id: list-swipe-delete
+- assertVisible:
+    id: list-delete-confirm
+- tapOn:
+    id: confirm-accept
+- assertNotVisible: ${output.indexListTitle}
+- tapOn: Today
+- assertVisible:
+    id: today-screen
 - assertVisible: ${output.planTitle}
 - tapOn:
     id: ${'agenda-row-' + output.activityId}
@@ -63,3 +81,19 @@ onFlowComplete:
     id: list-settings-open
 - assertVisible:
     id: list-settings
+- tapOn: Close
+- assertNotVisible:
+    id: list-settings
+- tapOn:
+    id: list-detail-menu
+- assertVisible:
+    id: list-header-menu
+- tapOn:
+    id: list-delete
+- assertVisible:
+    id: list-delete-confirm
+- tapOn:
+    id: confirm-accept
+- assertVisible:
+    id: detail-content
+- assertNotVisible: ${output.listTitle}

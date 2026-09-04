@@ -2476,3 +2476,11 @@ detail pulls remain the only installer, and upload confirmation reuses the exist
 targeted-detail pull. This amendment does not reopen native projections generally and does not
 permit media URLs, image bytes, thumbnails, cache state, another upload queue or another
 reconciliation mechanism.
+
+**Amendment (2026-09-03 — source-List delete visibility).** Migration 28 is a corrective
+compliance migration for the existing bounded source-List projection. It adds one default-visible
+bit to an existing source link so an optimistic List delete can retain exact rollback data while
+hiding that link from a mounted Plan. The delete, retry and rejection transactions write the bit;
+canonical detail replacement preserves a hidden bit until the List root is restored. Ordinary
+projection readers remain independent of outbox tables and payload JSON. This does not add a new
+projection, collection, queue or reconciliation owner.

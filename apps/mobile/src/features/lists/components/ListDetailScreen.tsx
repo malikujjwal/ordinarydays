@@ -119,6 +119,7 @@ export function ListDetailScreen({
   const bulk = useListBulkActions(view.refetch);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsRequested, setSettingsRequested] = useState(false);
+  const [deleteRequested, setDeleteRequested] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -314,9 +315,13 @@ export function ListDetailScreen({
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
           onClosed={() => {
-            if (!settingsRequested) return;
-            setSettingsRequested(false);
-            setSettingsOpen(true);
+            if (settingsRequested) {
+              setSettingsRequested(false);
+              setSettingsOpen(true);
+            } else if (deleteRequested) {
+              setDeleteRequested(false);
+              setDeleteOpen(true);
+            }
           }}
           list={list}
           /*
@@ -334,8 +339,8 @@ export function ListDetailScreen({
             onBack();
           }}
           onDelete={() => {
+            setDeleteRequested(true);
             setMenuOpen(false);
-            setDeleteOpen(true);
           }}
           onOpenSettings={() => {
             setSettingsRequested(true);

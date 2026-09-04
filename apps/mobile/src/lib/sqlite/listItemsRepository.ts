@@ -297,6 +297,11 @@ export interface ListItemsSnapshot {
   readonly commitRevision: number;
 }
 
+/** Shared by repositories that change whether a List-detail projection is reachable. */
+export function listItemsSubscriptionScope(listId: string): string {
+  return `listItems:${listId}`;
+}
+
 export class ListItemsRepository {
   constructor(
     private readonly reader: SqliteReader,
@@ -306,7 +311,7 @@ export class ListItemsRepository {
 
   /** Scoped per list: opening one list must not wake a subscriber reading another. */
   scope(listId: string): string {
-    return `listItems:${listId}`;
+    return listItemsSubscriptionScope(listId);
   }
 
   subscribe(

@@ -5373,6 +5373,48 @@ describe('serialized native convergence guard', () => {
       expect(await outbox.all()).toEqual([]);
     });
 
+    it('purges retained List delete rollback rows only after server acknowledgement', async () => {
+      if (database === undefined) throw new Error('missing List delete database');
+      const { lists, items, listService } = listHarness(database);
+      const row = canonical();
+      const item = {
+        listId: row.listId,
+        itemId: 'itm_01J000000000000000000000DD',
+        rank: 'm',
+        title: 'Olive oil',
+        state: 'open' as const,
+      };
+      await transactions.run(async (transaction) => {
+        await lists.replaceCanonical(transaction, [row]);
+        await items.replaceFirstPage(transaction, row.listId, [item], {
+          rankVersion: row.rankVersion,
+          complete: true,
+        });
+        await listService.remove(transaction, row, 'delete-costco-run');
+      });
+      expect(await items.read(row.listId)).toEqual([item]);
+
+      const remove = vi.fn(async () => ({}));
+      const sync = engine(
+        lists,
+        {
+          ...listPushTransport(async () => {
+            throw new Error('unexpected List POST');
+          }),
+          remove,
+        },
+        {},
+        items,
+      );
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(remove).toHaveBeenCalledWith(row.listId, expect.anything());
+      expect(await items.read(row.listId)).toEqual([]);
+      expect(await outbox.all()).toEqual([]);
+    });
+
     it('pulls and publishes the source Activity after accepting a sourced List create', async () => {
       if (database === undefined) throw new Error('missing sourced List database');
       const source = await activities.read({

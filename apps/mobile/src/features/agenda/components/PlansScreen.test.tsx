@@ -627,7 +627,7 @@ it('reaches the same full and compact states immediately when reduced motion is 
   expect(screen.queryByRole('button', { name: 'Open full calendar' })).toBeNull();
 });
 
-it('loads and lands an Upcoming day beyond the initial window boundary', async () => {
+it('loads and lands an Upcoming day after November beyond the initial window boundary', async () => {
   const scrollToLocation = vi
     .spyOn(SectionList.prototype, 'scrollToLocation')
     .mockImplementation(() => undefined);
@@ -643,11 +643,20 @@ it('loads and lands an Upcoming day beyond the initial window boundary', async (
     {
       data: {
         mode: 'upcoming_window',
-        upcoming: [plansDay('2026-11-05', [row(2, { title: 'November fifth' })])],
-        upcomingWindow: { from: '2026-10-07', through: '2026-12-06', nextFrom: null },
+        upcoming: [plansDay('2026-12-02', [row(2, { title: 'December second' })])],
+        upcomingWindow: { from: '2026-10-07', through: '2026-12-07', nextFrom: null },
         warnings: [],
       },
-      meta: { requestId: 'req_november_window' },
+      meta: { requestId: 'req_december_window_first_chunk' },
+    },
+    {
+      data: {
+        mode: 'upcoming_window',
+        upcoming: [],
+        upcomingWindow: { from: '2026-12-08', through: '2027-01-10', nextFrom: null },
+        warnings: [],
+      },
+      meta: { requestId: 'req_december_window_second_chunk' },
     },
   );
   mount();
@@ -658,16 +667,63 @@ it('loads and lands an Upcoming day beyond the initial window boundary', async (
   fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
   fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
   fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
-  fireEvent.click(screen.getByTestId('calendar-cell-2026-11-05'));
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-12-02'));
 
-  await screen.findByText('November fifth');
+  await screen.findByText('December second');
   await waitFor(() =>
     expect(scrollToLocation).toHaveBeenCalledWith(
-      expect.objectContaining({ itemIndex: 1 }),
+      expect.objectContaining({ itemIndex: 1, animated: false }),
     ),
   );
   expect(calls.some(({ url }) => url.includes('upcomingFrom=2026-10-07'))).toBe(true);
-  expect(calls.some(({ url }) => url.includes('upcomingTo=2026-12-06'))).toBe(true);
+  expect(calls.some(({ url }) => url.includes('upcomingTo=2026-12-07'))).toBe(true);
+  expect(calls.some(({ url }) => url.includes('upcomingFrom=2026-12-08'))).toBe(true);
+});
+
+it('keeps an opaque safe-area surface while the Plans header compacts and restores', async () => {
+  stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)]), plansDay('2026-12-02', [row(2)])],
+    }),
+  );
+  mount();
+
+  const list = await screen.findByTestId('plans-list');
+  const backdrop = screen.getByTestId('plans-safe-area-backdrop');
+  expect(backdrop).toBeTruthy();
+
+  Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
+  fireEvent.scroll(list);
+  await screen.findByRole('button', { name: 'Open full calendar' });
+  expect(screen.getByTestId('plans-safe-area-backdrop')).toBe(backdrop);
+
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+  await screen.findByRole('heading', { name: 'Plans' });
+  expect(screen.getByTestId('plans-safe-area-backdrop')).toBe(backdrop);
+});
+
+it('keeps the full calendar grid mounted while compact so restoring at the top cannot flash blank', async () => {
+  stubFetch(
+    initialBody({
+      upcoming: [plansDay('2026-08-08', [row(1)]), plansDay('2026-12-02', [row(2)])],
+    }),
+  );
+  mount();
+
+  const list = await screen.findByTestId('plans-list');
+  const grid = screen.getByTestId('plans-calendar-grid');
+  Object.defineProperty(list, 'scrollTop', { value: 40, writable: true });
+  fireEvent.scroll(list);
+  await screen.findByRole('button', { name: 'Open full calendar' });
+
+  expect(screen.getByTestId('plans-calendar-grid')).toBe(grid);
+
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+  await screen.findByRole('heading', { name: 'Plans' });
+  expect(screen.getByTestId('plans-calendar-grid')).toBe(grid);
 });
 
 it('opens the gap date picker pre-set to the first day without writing anything', async () => {

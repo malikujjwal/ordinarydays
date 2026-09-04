@@ -90,6 +90,18 @@ function createPlan(title, date) {
   return envelope.data.activityId;
 }
 
+function createList(title) {
+  const response = http.post(`${API}/v1/lists`, {
+    headers: headers(true),
+    body: JSON.stringify({ title, templateKey: 'blank' }),
+  });
+  const envelope = JSON.parse(response.body);
+  if (!envelope.data?.listId) {
+    throw new Error(`Fixture List create failed: ${response.body}`);
+  }
+  return envelope.data.listId;
+}
+
 http.post(`${CONTROL}/online`);
 const stamp = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
 const now = new Date();
@@ -109,9 +121,11 @@ if (FLOW === 'add-and-complete') {
 } else if (FLOW === 'source-list-reconciliation') {
   output.planTitle = `P3 native List source ${stamp}`;
   output.listTitle = `Packing ${stamp}`;
+  output.indexListTitle = `Errands ${stamp}`;
   output.activityId = createPlan(output.planTitle, wall.date);
+  output.indexListId = createList(output.indexListTitle);
   output.activityIds.push(output.activityId);
-  output.cleanupListTitles = [output.listTitle];
+  output.cleanupListTitles = [output.listTitle, output.indexListTitle];
 } else if (FLOW === 'schedule-plans-reconciliation') {
   output.planTitle = `P3 native Plans schedule ${stamp}`;
   output.activityId = createPlan(output.planTitle, wall.date);

@@ -105,7 +105,40 @@ describe('the web List-card long press', () => {
     expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByTestId('list-card-actions')).toBeTruthy();
+
+    act(() => vi.advanceTimersByTime(400));
+    expect(screen.queryByRole('dialog', { name: 'Groceries actions' })).toBeNull();
+    expect(onAction).toHaveBeenCalledExactlyOnceWith({
+      name: 'delete',
+      label: 'Delete',
+      destructive: true,
+    });
+  });
+
+  it('keeps Archive immediate while only destructive confirmation waits for dismissal', () => {
+    const onAction = vi.fn();
+    render(
+      <ThemeProvider scheme="light">
+        <SwipeableListCard
+          list={list}
+          now={NOW}
+          timezone={UTC}
+          onPress={vi.fn()}
+          actions={[
+            { name: 'archive', label: 'Archive', destructive: false },
+            { name: 'delete', label: 'Delete', destructive: true },
+          ]}
+          onAction={onAction}
+        />
+      </ThemeProvider>,
+    );
+
+    act(() => row.onLongPress?.());
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+
     expect(onAction).toHaveBeenCalledExactlyOnceWith({
       name: 'archive',
       label: 'Archive',
