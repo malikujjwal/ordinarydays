@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { Stack } from 'expo-router';
 import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
+import { Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { HydrationGate } from '@/components/HydrationGate';
@@ -57,7 +58,8 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       {/*
-        The document title, on web only — `expo-router/head` is a no-op on native.
+        The document title, on web only. On iOS, Expo Head enables Handoff and requires
+        a hosted origin, so do not mount it for a native app that only needs a web title.
 
         Without it the static export writes a **present but empty** `<title></title>` on every
         page, which `axe-core` reports as a `serious` `document-title` violation and which
@@ -69,9 +71,11 @@ export default function RootLayout() {
         decision this task does not own — the web surface is Phase 5. A screen that wants its
         own renders its own `<Head>`, and this stays the fallback.
       */}
-      <Head>
-        <title>{APP_NAME}</title>
-      </Head>
+      {Platform.OS === 'web' && (
+        <Head>
+          <title>{APP_NAME}</title>
+        </Head>
+      )}
       <SafeAreaProvider>
         <ClockProvider>
           <ThemeProvider {...(serifFamily === undefined ? {} : { serifFamily })}>

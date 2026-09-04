@@ -11,7 +11,7 @@ function headers() {
   };
 }
 
-http.post(`${CONTROL}/online`);
+http.post(`${CONTROL}/online`, { body: '' });
 const cleanupListTitles = output.cleanupListTitles || [];
 if (cleanupListTitles.length > 0) {
   const response = http.get(`${API}/v1/lists`, { headers: headers() });

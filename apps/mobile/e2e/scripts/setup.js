@@ -102,7 +102,7 @@ function createList(title) {
   return envelope.data.listId;
 }
 
-http.post(`${CONTROL}/online`);
+http.post(`${CONTROL}/online`, { body: '' });
 const stamp = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
 const now = new Date();
 const wall = parts(now);
@@ -217,4 +217,4 @@ if (FLOW === 'add-and-complete') {
   throw new Error(`Unknown P2-37 flow: ${FLOW}`);
 }
 
-http.post(`${CONTROL}/reset`);
+http.post(`${CONTROL}/reset`, { body: '' });
