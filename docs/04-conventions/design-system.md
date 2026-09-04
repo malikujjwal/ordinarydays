@@ -1194,7 +1194,9 @@ clip; the grip retains its 44 pt target.
   transition immediate. A selected day lands below the currently visible full or compact overlay
   using that measured visible height as `viewOffset`; Upcoming and Past use the same rule. Far
   loaded days jump without animation; an unmeasured target gets one stable estimated offset and at
-  most two layout retries, never a progressive retry walk. The list's month headings remain sticky.
+  a bounded 256 ms retry window across native render batches, never a progressive retry walk.
+  A cold calendar range uses the standard accessible loading wheel below the grid rather than
+  a skeleton line. The list's month headings remain sticky.
   Three cell treatments, and the middle one is the one to get right: a live date in the
   displayed month is normal, a live date spilling in from an adjacent month is subordinate
   but plainly readable and tappable, and an out-of-stage date is inert. Behaviour, eligibility

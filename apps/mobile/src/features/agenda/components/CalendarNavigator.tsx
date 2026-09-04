@@ -7,14 +7,13 @@ import {
   ChevronUp,
   IconButton,
   Sheet,
-  Skeleton,
   Text,
   Touchable,
   useMotion,
   useTheme,
 } from '@od/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, View } from 'react-native';
+import { ActivityIndicator, Animated, View } from 'react-native';
 import {
   type CalendarLoadRange,
   type CalendarStorage,
@@ -308,8 +307,16 @@ export function CalendarNavigator({
       </View>
 
       {navigator.loading ? (
-        <View testID={`${testID}-loading`} style={{ paddingTop: theme.space[2] }}>
-          <Skeleton shape="text" count={1} />
+        <View
+          testID={`${testID}-loading`}
+          style={{ alignItems: 'center', paddingTop: theme.space[2] }}
+        >
+          <ActivityIndicator
+            accessibilityRole="progressbar"
+            accessibilityLabel="Loading calendar"
+            size="small"
+            color={theme.colors.accent}
+          />
         </View>
       ) : navigator.failed ? (
         <View

@@ -10,14 +10,16 @@ export interface CalendarListLandingRecovery {
 
 /**
  * A distant SectionList target may not be measured yet. Move once to the list's own stable
- * estimate and give layout two frames to mount the target; walking the estimate farther on
- * every failure overshoots the row and turns one tap into seconds of JS-thread work.
+ * estimate and give the native list several render batches to mount the target. React Native
+ * batches distant cells every 50 ms by default, so the former two 32 ms retries could both
+ * expire around the first batch and strand a far-month landing at its rough estimate. The
+ * retries remain bounded and never walk the estimate farther.
  */
 export function calendarListLandingRecovery(
   info: FailedCalendarListLanding,
   attempt: number,
 ): CalendarListLandingRecovery | undefined {
-  if (attempt >= 2) return undefined;
+  if (attempt >= 8) return undefined;
   return {
     offset: info.averageItemLength * info.index,
     retryAfterMs: 32,

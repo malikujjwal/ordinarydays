@@ -356,7 +356,9 @@ day appear chosen. Moving into a month outside the initial response loads that b
 the same projection before landing; the initial response boundary is never a navigation clamp.
 A distant loaded day is an immediate positional jump, not an animated traversal through every
 intervening row. If the virtualized target is not measured, recovery uses the list's one stable
-average-offset estimate and at most two layout retries; it never walks or animates repeated guesses.
+average-offset estimate and a bounded 256 ms retry window across native render batches; it
+never walks or animates repeated guesses. Loading an uncovered calendar window shows the
+standard accessible loading wheel beneath the calendar rather than a skeleton line.
 
 ### 1.4 Giving a needs-a-date plan a date
 

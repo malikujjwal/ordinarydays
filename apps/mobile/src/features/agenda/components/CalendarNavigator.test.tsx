@@ -213,6 +213,21 @@ describe('CalendarNavigator', () => {
     expect(screen.queryAllByTestId(/calendar-dot-/)).toHaveLength(0);
   });
 
+  it('shows an accessible loading wheel while a cold calendar month is loading', async () => {
+    mount(
+      'upcoming',
+      projection({}, [{ from: '2026-08-14', through: '2026-08-20' }]),
+      vi.fn(() => new Promise<void>(() => undefined)),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Expand calendar' }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15);
+    });
+
+    expect(screen.getByRole('progressbar', { name: 'Loading calendar' })).toBeDefined();
+  });
+
   it('offers only the stage-reachable months in the header sheet', async () => {
     mount('upcoming', projection({}, [{ from: '2026-08-14', through: '2026-10-14' }]));
     await settle();
