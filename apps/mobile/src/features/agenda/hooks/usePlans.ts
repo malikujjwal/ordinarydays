@@ -21,6 +21,7 @@ import {
 } from '../model/plansApply';
 import { describePlansFailure, PLANS_WINDOW_DAYS } from '../model/plansFeed';
 import { fetchStageRange } from '../model/plansRangeFetch';
+import { mergeWindowProgress } from '../model/plansWindowProgress';
 import { plansProjectionKey } from './keys';
 
 export type { NeedsDateRowData } from '../model/plansApply';
@@ -74,8 +75,7 @@ export interface PlansView {
   readonly loadMorePast: () => void;
   /**
    * The calendar navigator's window fetch (P3-48): loads whatever part of `range` the store
-   * has not exhausted, clipped by the caller to the stage. Upcoming also fills the gap between
-   * the rendered window and the range so the list's gap lines never claim an unloaded date;
+   * has not exhausted, clipped by the caller to the stage;
    * Past follows the bounded window's cursor until coverage is complete. Never a second
    * pagination model — ordinary scrolling keeps its own arms above.
    */
@@ -564,18 +564,11 @@ export function usePlans(
             return {
               ...previous,
               store,
-              // Monotonic, like `loadMoreUpcoming`: the rendered window only ever grows, and
-              // the sentinel follows the furthest window because it names the row after it.
-              upcomingWindow:
-                window === undefined
-                  ? {
-                      from: data.upcomingWindow.from as WallDate,
-                      through: responseThrough,
-                      nextFrom,
-                    }
-                  : window.through > responseThrough
-                    ? window
-                    : { from: window.from, through: responseThrough, nextFrom },
+              upcomingWindow: mergeWindowProgress(window, {
+                from: data.upcomingWindow.from as WallDate,
+                through: responseThrough,
+                nextFrom,
+              }),
               failure: undefined,
             };
           });

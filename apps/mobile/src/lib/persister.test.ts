@@ -15,6 +15,40 @@ afterEach(() => {
 });
 
 describe('the query-cache persister', () => {
+  it.each([
+    ['activity', ACTIVITY],
+    ['activity', ACTIVITY, 'occurrence', '2026-09-05'],
+  ])(
+    'revalidates restored detail %j even when its snapshot was recently fresh',
+    async (...key) => {
+      const previous = new QueryClient();
+      const cached = { sourceLists: [] };
+      previous.setQueryData(key, cached);
+      previous.setQueryData(['list-templates'], { templates: [] });
+      vi.spyOn(queryPersister, 'restoreClient').mockResolvedValue({
+        timestamp: Date.now(),
+        buster: 'p2-33-v1',
+        clientState: dehydratePersistedClient(previous, 'web'),
+      });
+      const restored = new QueryClient({
+        defaultOptions: { queries: { staleTime: 60_000, retry: false } },
+      });
+      await restorePersistedClient(restored, 'web');
+      expect(restored.getQueryData(key)).toEqual(cached);
+      const current = {
+        sourceLists: [{ listId: 'packing', title: 'Packing', itemCount: 3 }],
+      };
+      const read = vi.fn().mockResolvedValue(current);
+      expect(await restored.fetchQuery({ queryKey: key, queryFn: read })).toEqual(
+        current,
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(restored.getQueryState(['list-templates'])?.isInvalidated).toBe(false);
+      previous.clear();
+      restored.clear();
+    },
+  );
+
   /**
    * The third of the three data-loss paths the 2026-08-13 review found.
    *

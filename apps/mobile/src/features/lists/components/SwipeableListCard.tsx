@@ -1,4 +1,4 @@
-import { Text, Touchable, useTheme } from '@od/ui';
+import { Text, Touchable, useMotion, useTheme } from '@od/ui';
 import { Fragment, useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
 import ReanimatedSwipeable, {
@@ -103,6 +103,7 @@ export function SwipeableListCard({
   onAction,
   ...rowProps
 }: SwipeableListCardProps) {
+  const motion = useMotion();
   const accessibilityActions = listAccessibilityActions(actions);
   const [actionsOpen, setActionsOpen] = useState(false);
   const pendingSwipeAction = useRef<ListSwipeAction | undefined>(undefined);
@@ -125,7 +126,7 @@ export function SwipeableListCard({
         overshootFriction={1}
         // No overshoot on either side: nothing here commits on a full swipe.
         overshootRight={false}
-        animationOptions={{ reduceMotion: ReduceMotion.System }}
+        animationOptions={{ ...motion.spring, reduceMotion: ReduceMotion.System }}
         onSwipeableClose={() => {
           const transition = closeSwipeAction(pendingSwipeAction.current);
           pendingSwipeAction.current = transition.pending;

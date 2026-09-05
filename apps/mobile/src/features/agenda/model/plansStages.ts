@@ -1,10 +1,11 @@
-import type { PlansDateStore } from '@od/shared/client';
+import { missingRanges, type PlansDateStore } from '@od/shared/client';
 import type { WallDate } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import { format, getYear, parseISO } from 'date-fns';
 import {
   type OccupiedDay,
   sectionsFromOccupiedDays,
+  type UpcomingListItem,
   type UpcomingMonthSection,
 } from './plansWindow';
 
@@ -40,7 +41,22 @@ export function upcomingSectionsFromStore(
     // absence — the same boundary cast every store reader makes.
     .map(([date, items]) => ({ date, items: [...items] as AgendaItem[] }))
     .sort((left, right) => left.date.localeCompare(right.date));
-  return sectionsFromOccupiedDays(occupied);
+  // Disjoint calendar windows do not establish that the dates between them are empty.
+  return sectionsFromOccupiedDays(occupied)
+    .map((section) => ({
+      ...section,
+      data: section.data.flatMap((row): UpcomingListItem[] => {
+        if (row.kind !== 'gap') return [row];
+        const unknown = missingRanges(store, row.from as WallDate, row.to as WallDate);
+        if (unknown.length === 0) return [row];
+        return unknown.map((range) => ({
+          kind: 'unloaded',
+          from: range.from,
+          to: range.through,
+        }));
+      }),
+    }))
+    .filter((section) => section.data.length > 0);
 }
 
 export interface PastDay {

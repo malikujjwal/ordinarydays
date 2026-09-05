@@ -49,7 +49,7 @@ onFlowComplete:
     id: detail-undo
 - tapOn:
     id: detail-back
-- assertVisible: ${output.planTitle + ', completed'}
+- assertVisible: ${output.planTitle + ', Done, .*'}
 - tapOn: ${output.planTitle}
 - assertVisible:
     id: detail-undo
@@ -59,4 +59,5 @@ onFlowComplete:
     id: detail-complete
 - tapOn:
     id: detail-back
-- assertVisible: ${output.planTitle + ', not completed'}
+- assertNotVisible: ${output.planTitle + ', Done, .*'}
+- assertVisible: ${output.planTitle}

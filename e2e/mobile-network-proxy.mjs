@@ -6,6 +6,16 @@ const upstream = new URL('http://127.0.0.1:3001');
 
 let online = true;
 let requests = [];
+let plansRequests = [];
+let holdPlans = false;
+let heldPlans = [];
+
+function releasePlans() {
+  holdPlans = false;
+  const pending = heldPlans;
+  heldPlans = [];
+  for (const forward of pending) forward();
+}
 
 function json(response, status, body) {
   response.writeHead(status, { 'Content-Type': 'application/json' });
@@ -18,7 +28,7 @@ function stats() {
     const key = `${request.method} ${request.pathname}`;
     byRoute[key] = (byRoute[key] ?? 0) + 1;
   }
-  return { online, total: requests.length, byRoute };
+  return { online, total: requests.length, byRoute, plansRequests };
 }
 
 const proxy = http.createServer((request, response) => {
@@ -32,22 +42,36 @@ const proxy = http.createServer((request, response) => {
     `http://${request.headers.host ?? 'localhost'}`,
   );
   requests.push({ method: request.method ?? 'GET', pathname: incoming.pathname });
+  if (incoming.pathname === '/v1/plans') {
+    // Retain only navigation bounds: never headers, credentials or arbitrary query fields.
+    const query = incoming.searchParams;
+    const mode = query.get('mode');
+    plansRequests.push({
+      mode,
+      from: query.get(mode === 'past_window' ? 'pastFrom' : 'upcomingFrom'),
+      through: query.get(mode === 'past_window' ? 'pastBefore' : 'upcomingTo'),
+    });
+  }
   const headers = { ...request.headers, host: upstream.host };
   delete headers.connection;
 
-  const forwarded = http.request(
-    new URL(`${incoming.pathname}${incoming.search}`, upstream),
-    { method: request.method, headers },
-    (upstreamResponse) => {
-      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-      upstreamResponse.pipe(response);
-    },
-  );
-  forwarded.on('error', () => {
-    if (!response.headersSent) json(response, 502, { error: 'upstream unavailable' });
-    else response.destroy();
-  });
-  request.pipe(forwarded);
+  const forward = () => {
+    const forwarded = http.request(
+      new URL(`${incoming.pathname}${incoming.search}`, upstream),
+      { method: request.method, headers },
+      (upstreamResponse) => {
+        response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        upstreamResponse.pipe(response);
+      },
+    );
+    forwarded.on('error', () => {
+      if (!response.headersSent) json(response, 502, { error: 'upstream unavailable' });
+      else response.destroy();
+    });
+    request.pipe(forwarded);
+  };
+  if (holdPlans && incoming.pathname === '/v1/plans') heldPlans.push(forward);
+  else forward();
 });
 
 const control = http.createServer((request, response) => {
@@ -57,6 +81,17 @@ const control = http.createServer((request, response) => {
   );
   if (request.method === 'POST' && url.pathname === '/online') {
     online = true;
+    releasePlans();
+    json(response, 200, stats());
+    return;
+  }
+  if (request.method === 'POST' && url.pathname === '/hold-plans') {
+    holdPlans = true;
+    json(response, 200, stats());
+    return;
+  }
+  if (request.method === 'POST' && url.pathname === '/release-plans') {
+    releasePlans();
     json(response, 200, stats());
     return;
   }
@@ -67,6 +102,7 @@ const control = http.createServer((request, response) => {
   }
   if (request.method === 'POST' && url.pathname === '/reset') {
     requests = [];
+    plansRequests = [];
     json(response, 200, stats());
     return;
   }

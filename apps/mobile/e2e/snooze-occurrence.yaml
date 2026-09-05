@@ -11,6 +11,7 @@ onFlowStart:
       env:
         FLOW: snooze-occurrence
 onFlowComplete:
+  - runScript: scripts/capture-snooze.js
   - runScript: scripts/cleanup.js
 ---
 - launchApp:
@@ -20,31 +21,42 @@ onFlowComplete:
     from:
       id: ${'swipeable-row-' + output.activityId}
     direction: LEFT
+- waitForAnimationToEnd
 - tapOn:
     id: agenda-swipe-snooze
 - assertVisible:
     id: snooze-sheet
 - tapOn:
     id: snooze-minutes15
-- assertVisible:
-    id: agenda-badge-snooze
-- assertVisible: ${'Snoozed from ' + output.originalTimeLabel + ' to ' + output.snoozeTimeLabel}
+- assertVisible: ${output.title + ', .*Snoozed from ' + output.originalTimeLabel + ' to ' + output.snoozeTimeLabel}
+- assertVisible: ${output.title + ', not completed'}
 - tapOn: ${output.title}
 - assertVisible:
     id: detail-title
 - assertVisible:
     id: when-where-date
-- assertVisible: ${'.*' + output.originalTimeLabel + '.*'}
+- assertVisible: ${'.*' + output.snoozeTimeLabel + '.*'}
 - assertVisible:
-    id: when-where-repeat
-- assertVisible: Daily
+    id: detail-edit-recurrence
+- assertVisible: Repeat, Daily
 - tapOn:
     id: detail-back
 - tapOn: "Plans, tab, .*"
 - assertVisible:
-    id: ${'plans-card-' + output.activityId + ':' + output.today}
-- assertVisible: ${output.snoozeTimeLabel + ', change time'}
+    id: ${'plans-date-' + output.today}
 - assertVisible:
-    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
-- assertVisible: ${output.title}
-- assertVisible: ${output.originalTimeLabel + ', change time'}
+    text: ${output.snoozeTimeLabel + ', change time'}
+    above:
+      id: ${'plans-date-' + output.tomorrow}
+- tapOn:
+    id: ${'calendar-cell-' + output.tomorrow}
+- scrollUntilVisible:
+    element:
+      text: ${output.title + ', ' + output.originalTimeLabel + ', Daily'}
+      childOf:
+        id: ${'plans-day-' + output.tomorrow}
+    direction: DOWN
+- assertVisible:
+    text: ${output.title + ', ' + output.originalTimeLabel + ', Daily'}
+    childOf:
+      id: ${'plans-day-' + output.tomorrow}

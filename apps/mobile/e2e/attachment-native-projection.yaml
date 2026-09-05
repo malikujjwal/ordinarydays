@@ -30,10 +30,10 @@ onFlowComplete:
     id: attachment-sheet
 - tapOn:
     id: attachment-picker-photos
-# The native PHPicker has no stable identifier for the first imported asset.
+# Single-selection PHPicker returns immediately after choosing the imported image.
 - tapOn:
-    point: 17%,22%
-- tapOn: "Add.*"
+    text: "Photo, [^,]+, [^,]+"
+    index: 0
 - assertVisible: Added
 - tapOn:
     id: attachment-sheet-done
@@ -42,11 +42,21 @@ onFlowComplete:
 - assertVisible: Photo 1 of 1
 - tapOn: Photo 1 of 1
 - assertVisible:
-    id: attachment-viewer
+    id: attachment-viewer-pager
 - tapOn:
     id: attachment-viewer-close
 - assertNotVisible:
-    id: attachment-viewer
+    id: attachment-viewer-pager
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- assertVisible: ${output.planTitle}
+- tapOn:
+    id: ${'agenda-row-' + output.activityId}
+- assertVisible:
+    id: section-attachments
+- assertVisible: Photo 1 of 1
 - longPressOn:
     text: Photo 1 of 1
 - assertVisible:
@@ -66,5 +76,7 @@ onFlowComplete:
 - tapOn:
     id: ${'agenda-row-' + output.activityId}
 - assertVisible:
-    id: section-attachments
-- assertVisible: Photo 1 of 1
+    id: detail-content
+- assertVisible:
+    id: add-to-plan-photo
+- assertNotVisible: Photo 1 of 1

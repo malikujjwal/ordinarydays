@@ -87,7 +87,7 @@ jobs:
         run: pnpm --filter @od/mobile exec expo run:ios --device "$DEVICE_ID" --configuration Release --no-bundler
 
       - name: Run the Maestro catalogue
-        run: '"$HOME/.maestro/bin/maestro" test . --config .maestro/config.yaml'
+        run: '"$HOME/.maestro/bin/maestro" test --driver-host-port 22087 . --config .maestro/config.yaml'
 
       - name: Upload native diagnostics
         if: failure()

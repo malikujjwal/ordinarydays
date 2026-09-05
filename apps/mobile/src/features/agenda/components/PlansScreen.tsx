@@ -21,10 +21,12 @@ import {
   Animated,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  Platform,
   RefreshControl,
   ScrollView,
   SectionList,
   View,
+  type ViewToken,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
@@ -35,7 +37,9 @@ import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import { type NeedsDateRowData, usePlans } from '../hooks/usePlans';
+import { usePlansBoundaryNavigation } from '../hooks/usePlansBoundaryNavigation';
 import { calendarListLandingRecovery } from '../model/calendarListLanding';
+import { calendarListWindow } from '../model/calendarListWindow';
 import {
   type PastDay,
   type PastMonthSection,
@@ -102,10 +106,12 @@ function onScrollToIndexFailed<Item, Section>(
 ): void {
   const recovery = calendarListLandingRecovery(info, attempt);
   if (recovery === undefined) return;
-  list?.getScrollResponder()?.scrollTo({
-    y: recovery.offset,
-    animated: false,
-  });
+  if (attempt === 0) {
+    list?.getScrollResponder()?.scrollTo({
+      y: recovery.offset,
+      animated: false,
+    });
+  }
   setTimeout(retry, recovery.retryAfterMs);
 }
 
@@ -208,6 +214,8 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const [fullHeaderHeight, setFullHeaderHeight] = useState(0);
   const [titleBlockHeight, setTitleBlockHeight] = useState(0);
   const [chromeHeight, setChromeHeight] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [lastDayLayout, setLastDayLayout] = useState({ key: '', height: 0 });
   const compactHeaderRef = useRef(false);
   const headerProgress = useRef(new Animated.Value(0)).current;
   /**
@@ -221,6 +229,18 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   /** The last landing, retried while the list's own offset estimate walks the target in. */
   const pendingScroll = useRef<() => void>(() => {});
   const landingAttempts = useRef(0);
+  const landingDeadline = useRef(0);
+  const scrollOffset = useRef(0);
+  const userScrolling = useRef(false);
+  const nearWindowStart = useRef(false);
+  const [calendarWindow, setCalendarWindow] = useState<{
+    stage: Stage;
+    date: WallDate;
+    precedingRows: number;
+  }>();
+  const retryLanding = useCallback(() => {
+    if (performance.now() < landingDeadline.current) pendingScroll.current();
+  }, []);
 
   const resetHeaderVisibility = useCallback(() => {
     compactHeaderRef.current = false;
@@ -237,21 +257,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     return () => transition.stop();
   }, [compactHeader, headerProgress, motion.duration.base]);
 
-  const handlePlansScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const y = Math.max(0, event.nativeEvent.contentOffset.y);
-      if (y <= theme.space[2]) {
-        resetHeaderVisibility();
-        return;
-      }
-      if (compactHeaderRef.current) return;
-      compactHeaderRef.current = true;
-      setCompactHeader(true);
-    },
-    [resetHeaderVisibility, theme.space],
-  );
-
-  const upcomingSections = useMemo(
+  const allUpcomingSections = useMemo(
     () =>
       plans.upcomingWindow === undefined
         ? []
@@ -268,11 +274,77 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           ),
     [plans.store, plans.upcomingWindow, today],
   );
+  const boundary = usePlansBoundaryNavigation(plans.loadRange);
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1 }).current;
+  const onUpcomingViewable = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken<UpcomingListItem>[] }) => {
+      const item = viewableItems.find((entry) => entry.item.kind === 'unloaded')?.item;
+      boundary.visible(item?.kind === 'unloaded' ? item : undefined);
+    },
+    [boundary.visible],
+  );
+  const hasUnknownBoundary = allUpcomingSections.some((section) =>
+    section.data.some((item) => item.kind === 'unloaded'),
+  );
   /** Projected only while its stage shows — Past can hold months of paged history. */
-  const pastSections = useMemo(
+  const allPastSections = useMemo(
     () => (stage === 'past' ? pastSectionsFromStore(plans.store, today) : undefined),
     [stage, plans.store, today],
   );
+  const upcomingView = useMemo(() => {
+    const whole = { sections: allUpcomingSections, key: 'upcoming' };
+    if (Platform.OS === 'web' || calendarWindow?.stage !== 'upcoming') return whole;
+    const target = calendarLandingTarget(
+      allUpcomingSections,
+      calendarWindow.date,
+      'forward',
+      (item) => (item.kind === 'date' ? (item.date as WallDate) : undefined),
+      isRangeCovered(plans.store, calendarWindow.date, calendarWindow.date),
+    );
+    return target === undefined
+      ? whole
+      : {
+          sections: calendarListWindow(
+            allUpcomingSections,
+            target,
+            calendarWindow.precedingRows,
+          ),
+          key: `upcoming:${calendarWindow.date}`,
+        };
+  }, [allUpcomingSections, calendarWindow, plans.store]);
+  const pastView = useMemo(() => {
+    const whole = { sections: allPastSections, key: 'past' };
+    if (Platform.OS === 'web' || calendarWindow?.stage !== 'past' || !allPastSections)
+      return whole;
+    const target = calendarLandingTarget(
+      allPastSections,
+      calendarWindow.date,
+      'backward',
+      (day) => day.date,
+      isRangeCovered(plans.store, calendarWindow.date, calendarWindow.date),
+    );
+    return target === undefined
+      ? whole
+      : {
+          sections: calendarListWindow(
+            allPastSections,
+            target,
+            calendarWindow.precedingRows,
+          ),
+          key: `past:${calendarWindow.date}`,
+        };
+  }, [allPastSections, calendarWindow, plans.store]);
+  const upcomingSections = upcomingView.sections;
+  const pastSections = pastView.sections;
+  const stageHasRows =
+    stage === 'upcoming'
+      ? allUpcomingSections.length > 0
+      : stage === 'past'
+        ? (allPastSections?.length ?? 0) > 0
+        : false;
+  useEffect(() => {
+    if (!stageHasRows) setCalendarWindow(undefined);
+  }, [stageHasRows]);
   /** Whether the store holds any row at all — a loop with an early exit, no allocation. */
   const hasAnyRows = useMemo(() => {
     for (const rows of plans.store.byDate.values()) {
@@ -336,6 +408,45 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const visibleHeaderOffset = compactHeader
     ? insets.top + theme.space[2] + chromeHeight + compactCalendarExtension
     : stableHeaderInset;
+  const restoreCalendarPrefix = useCallback(() => {
+    setCalendarWindow((window) =>
+      window === undefined
+        ? window
+        : { ...window, precedingRows: window.precedingRows + 10 },
+    );
+  }, []);
+  const handlePlansScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = Math.max(0, event.nativeEvent.contentOffset.y);
+      scrollOffset.current = y;
+      const near = y <= viewportHeight + visibleHeaderOffset;
+      if (userScrolling.current && near && !nearWindowStart.current)
+        restoreCalendarPrefix();
+      nearWindowStart.current = near;
+      if (y <= theme.space[2]) {
+        resetHeaderVisibility();
+        return;
+      }
+      if (compactHeaderRef.current) return;
+      compactHeaderRef.current = true;
+      setCompactHeader(true);
+    },
+    [
+      resetHeaderVisibility,
+      theme.space,
+      viewportHeight,
+      visibleHeaderOffset,
+      restoreCalendarPrefix,
+    ],
+  );
+
+  const currentHeaderOffset = useRef(visibleHeaderOffset);
+  useEffect(() => {
+    currentHeaderOffset.current = visibleHeaderOffset;
+    // Native scrolling compacts/re-measures the overlay after the first jump. Do not
+    // keep the expanded header's captured offset during the contract's recovery window.
+    retryLanding();
+  }, [visibleHeaderOffset, retryLanding]);
 
   useEffect(() => {
     if (landing === undefined) return;
@@ -343,6 +454,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     const land = (scroll: () => void) => {
       pendingScroll.current = scroll;
       landingAttempts.current = 0;
+      landingDeadline.current = performance.now() + 256;
       scroll();
       setLanding(undefined);
     };
@@ -360,7 +472,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             upcomingList.current,
             target.sectionIndex,
             target.itemIndex,
-            visibleHeaderOffset,
+            currentHeaderOffset.current,
           ),
         );
       }
@@ -378,12 +490,12 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             pastList.current,
             target.sectionIndex,
             target.itemIndex,
-            visibleHeaderOffset,
+            currentHeaderOffset.current,
           ),
         );
       }
     }
-  }, [landing, stage, upcomingSections, pastSections, plans.store, visibleHeaderOffset]);
+  }, [landing, stage, upcomingSections, pastSections, plans.store]);
 
   /**
    * The tap projects **synchronously and on both platforms** — native has no MutationCache
@@ -431,9 +543,63 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     // The final row scrolls above the global Add button without shrinking the viewport.
     paddingBottom: bottomChromeScrollPadding(insets.bottom),
   };
+  const beginCalendarScroll = () => {
+    landingDeadline.current = 0;
+    userScrolling.current = true;
+    // Prepend once on entry, then once per return to the start during an active gesture.
+    const near = scrollOffset.current <= viewportHeight + visibleHeaderOffset;
+    nearWindowStart.current = near;
+    if (near) restoreCalendarPrefix();
+  };
+  const calendarScrollLifecycle = {
+    onScrollEndDrag: () => {
+      userScrolling.current = false;
+    },
+    onMomentumScrollBegin: () => {
+      userScrolling.current = true;
+    },
+    onMomentumScrollEnd: () => {
+      userScrolling.current = false;
+    },
+  };
+
+  const lastUpcomingItem = upcomingSections.at(-1)?.data.at(-1);
+  const lastDate =
+    stage === 'past'
+      ? pastSections?.at(-1)?.data.at(-1)?.date
+      : lastUpcomingItem?.kind === 'date'
+        ? lastUpcomingItem.date
+        : undefined;
+  const lastDayKey = `${stage}:${lastDate}`;
+  // A short final day still needs enough scroll range to land below the overlay (§1.3.4).
+  // Reserve only the missing viewport space, without loading more dates to manufacture it.
+  const datedListPadding = {
+    ...listPadding,
+    paddingBottom: Math.max(
+      listPadding.paddingBottom,
+      viewportHeight -
+        visibleHeaderOffset -
+        (lastDayLayout.key === lastDayKey ? lastDayLayout.height : 0),
+    ),
+  };
 
   const dayCard = (date: string, label: string, items: AgendaItem[]) => (
-    <View testID={`plans-date-${date}`} style={{ gap: theme.space[3] }}>
+    <View
+      testID={`plans-date-${date}`}
+      style={{ gap: theme.space[3] }}
+      onLayout={
+        date === lastDate
+          ? (event) => {
+              const height = event.nativeEvent.layout.height;
+              setLastDayLayout((previous) =>
+                previous.key === lastDayKey && previous.height === height
+                  ? previous
+                  : { key: lastDayKey, height },
+              );
+            }
+          : undefined
+      }
+    >
       <SectionHeader title={label} />
       <Card padding={5} testID={`plans-day-${date}`}>
         {items.map((agendaItem, index) => (
@@ -456,6 +622,32 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   );
 
   const renderUpcomingItem = ({ item }: { item: UpcomingListItem }) => {
+    if (item.kind === 'unloaded') {
+      return (
+        <Touchable
+          testID={`plans-unloaded-${item.from}`}
+          accessibilityRole="button"
+          accessibilityLabel={
+            boundary.failed === item.from
+              ? 'Try loading these dates again'
+              : 'Load more dates'
+          }
+          onPress={() => boundary.load(item)}
+          disabled={boundary.pending === item.from}
+          style={{ padding: theme.space[3] }}
+        >
+          {boundary.pending === item.from ? (
+            <ActivityIndicator accessibilityLabel="Loading dates" />
+          ) : (
+            <Text variant="footnote" color="textSecondary">
+              {boundary.failed === item.from
+                ? "Couldn't load these dates. Try again."
+                : 'Load more dates'}
+            </Text>
+          )}
+        </Touchable>
+      );
+    }
     if (item.kind === 'gap') {
       return (
         <Touchable
@@ -533,15 +725,21 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
       }
       return (
         <SectionList<UpcomingListItem, UpcomingMonthSection>
+          key={upcomingView.key}
+          {...calendarScrollLifecycle}
+          {...(calendarWindow?.stage === 'upcoming' && Platform.OS !== 'web'
+            ? { maintainVisibleContentPosition: { minIndexForVisible: 0 } }
+            : {})}
           ref={upcomingList}
-          onScrollToIndexFailed={(info) =>
+          onScrollToIndexFailed={(info) => {
+            if (performance.now() >= landingDeadline.current) return;
             onScrollToIndexFailed(
               upcomingList.current,
               info,
               landingAttempts.current++,
-              () => pendingScroll.current(),
-            )
-          }
+              retryLanding,
+            );
+          }}
           testID="plans-list"
           sections={upcomingSections}
           keyExtractor={(item) =>
@@ -551,7 +749,17 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           onScroll={handlePlansScroll}
           scrollEventThrottle={16}
           refreshControl={refresh}
-          onEndReached={plans.loadMoreUpcoming}
+          onScrollBeginDrag={() => {
+            beginCalendarScroll();
+            boundary.beginScroll();
+          }}
+          onContentSizeChange={retryLanding}
+          onViewableItemsChanged={onUpcomingViewable}
+          viewabilityConfig={viewabilityConfig}
+          onEndReached={() => {
+            // An unrelated unloaded middle interval is not evidence of later activity.
+            if (!hasUnknownBoundary) plans.loadMoreUpcoming();
+          }}
           onEndReachedThreshold={0.4}
           renderSectionHeader={({ section }) => (
             <View
@@ -565,7 +773,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             </View>
           )}
           renderItem={renderUpcomingItem}
-          contentContainerStyle={listPadding}
+          contentContainerStyle={datedListPadding}
         />
       );
     }
@@ -581,17 +789,28 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     }
     return (
       <SectionList<PastDay, PastMonthSection>
+        key={pastView.key}
+        {...calendarScrollLifecycle}
+        {...(calendarWindow?.stage === 'past' && Platform.OS !== 'web'
+          ? { maintainVisibleContentPosition: { minIndexForVisible: 0 } }
+          : {})}
         ref={pastList}
-        onScrollToIndexFailed={(info) =>
-          onScrollToIndexFailed(pastList.current, info, landingAttempts.current++, () =>
-            pendingScroll.current(),
-          )
-        }
+        onScrollToIndexFailed={(info) => {
+          if (performance.now() >= landingDeadline.current) return;
+          onScrollToIndexFailed(
+            pastList.current,
+            info,
+            landingAttempts.current++,
+            retryLanding,
+          );
+        }}
         testID="plans-past-list"
         sections={pastSections}
         keyExtractor={(day) => `past:${day.date}`}
         stickySectionHeadersEnabled
         onScroll={handlePlansScroll}
+        onScrollBeginDrag={beginCalendarScroll}
+        onContentSizeChange={retryLanding}
         scrollEventThrottle={16}
         refreshControl={refresh}
         onEndReached={plans.loadMorePast}
@@ -608,7 +827,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           </View>
         )}
         renderItem={({ item }) => dayCard(item.date, item.label, item.items)}
-        contentContainerStyle={listPadding}
+        contentContainerStyle={datedListPadding}
       />
     );
   };
@@ -649,7 +868,11 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           />,
         )
       ) : (
-        <View style={{ flex: 1 }}>
+        <View
+          testID="plans-viewport"
+          style={{ flex: 1 }}
+          onLayout={(event) => setViewportHeight(event.nativeEvent.layout.height)}
+        >
           {/**
            * One non-reflowing header owns the title, stage switcher and calendar. The list
            * retains the full header's measured inset while compositor-only transforms replace
@@ -746,7 +969,12 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
                 selectedIndex={STAGES.findIndex(({ key }) => key === stage)}
                 onChange={(index) => {
                   const next = STAGES[index];
-                  if (next !== undefined) setStage(next.key);
+                  if (next !== undefined) {
+                    landingDeadline.current = 0;
+                    userScrolling.current = false;
+                    setCalendarWindow(undefined);
+                    setStage(next.key);
+                  }
                 }}
                 testID="plans-stage-switcher"
               />
@@ -756,7 +984,14 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
                   today={today}
                   projection={plans.store}
                   loadRange={plans.loadRange}
-                  onSelectDate={setLanding}
+                  onSelectDate={(date) => {
+                    landingDeadline.current = 0;
+                    userScrolling.current = false;
+                    if (Platform.OS !== 'web')
+                      setCalendarWindow({ stage, date, precedingRows: 1 });
+                    boundary.selectDate();
+                    setLanding(date);
+                  }}
                   compact={compactHeader}
                   onHeightChange={setCalendarHeight}
                 />

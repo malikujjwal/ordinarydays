@@ -34,11 +34,15 @@ onFlowComplete:
     id: detail-undo
 - tapOn:
     id: detail-back
-- assertVisible:
-    id: ${'plans-date-' + output.tomorrow}
+- tapOn:
+    id: ${'calendar-cell-' + output.tomorrow}
+- scrollUntilVisible:
+    element:
+      text: ${output.title + ', not completed'}
+      childOf:
+        id: ${'plans-day-' + output.tomorrow}
+    direction: DOWN
 - assertVisible:
     text: ${output.title + ', not completed'}
-    below:
-      text: ${'[A-Z]{3}, [A-Z]{3} ' + Number(output.tomorrow.slice(8))}
-    above:
-      id: ${'plans-date-' + new Date(Date.parse(output.tomorrow) + 86400000).toISOString().slice(0, 10)}
+    childOf:
+      id: ${'plans-day-' + output.tomorrow}

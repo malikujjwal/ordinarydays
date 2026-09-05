@@ -24,6 +24,7 @@
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "seed:local": "pnpm --filter @od/api run seed:local",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
+    "e2e:native": "node e2e/run-native.mjs",
     "e2e:web": "node e2e/run-web.mjs",
     "e2e:lists-visual:build": "node e2e/build-lists-visual-app.mjs",
     "e2e:lists-visual": "pnpm e2e:lists-visual:build && playwright test --config e2e/playwright.lists-visual.config.ts",

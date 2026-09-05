@@ -48,6 +48,23 @@ describe('needsDateLine', () => {
 });
 
 describe('upcomingSectionsFromStore', () => {
+  it('does not label an unfetched year between loaded windows as empty', () => {
+    const initial = storeWith([{ date: '2026-08-19', items: [item('AA', 'Nearby')] }]);
+    const store = mergePlansResponse(initial, {
+      mode: 'upcoming_window',
+      upcoming: [{ date: '2027-09-10', items: [item('AB', 'Distant')] }],
+      upcomingWindow: { from: '2027-09-01', through: '2027-09-30', nextFrom: null },
+      warnings: [],
+    });
+    const rows = upcomingSectionsFromStore(
+      store,
+      '2026-08-06' as WallDate,
+      '2027-09-30' as WallDate,
+    ).flatMap((section) => section.data);
+    expect(rows.map((row) => row.kind)).toEqual(['date', 'unloaded', 'date']);
+    expect(rows[1]).toMatchObject({ from: '2026-10-07', to: '2027-08-31' });
+  });
+
   it('groups covered dates ascending with interior gaps, ignoring dates outside the window', () => {
     const store = storeWith([
       { date: '2026-08-19', items: [item('AA', 'First')] },

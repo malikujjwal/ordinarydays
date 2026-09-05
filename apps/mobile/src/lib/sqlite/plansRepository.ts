@@ -1,5 +1,4 @@
 import {
-  emptyPlansStore,
   mergePlansResponse,
   type PlansData,
   type PlansDateStore,
@@ -17,6 +16,7 @@ import {
 import { toWallDate, type WallDate } from '@od/shared/time';
 import type { Activity, AgendaItem, OccurrenceDetailProjection } from '@od/shared/types';
 import type { NeedsDateRowData } from '@/features/agenda/model/plansApply';
+import { mergeWindowProgress } from '@/features/agenda/model/plansWindowProgress';
 import {
   numberColumn,
   type SqliteDatabase,
@@ -259,43 +259,81 @@ export class PlansRepository {
     timezone: string,
     data: PlansData,
   ): Promise<void> {
-    const current = await this.readFrom(transaction.database, timezone);
-    if (data.mode !== 'initial' && current === undefined) {
+    // Installing a page needs metadata and overlapping partial dates, never the entire
+    // rendered projection. Preserve untouched rows in SQLite instead of round-tripping them.
+    const state = await transaction.database.first(
+      'SELECT upcoming_from, upcoming_through, upcoming_next_from, past_cursor FROM native_plans_state WHERE timezone = ?;',
+      [timezone],
+    );
+    if (data.mode !== 'initial' && state === undefined) {
       throw new Error('Native Plans continuation arrived before its initial projection.');
     }
-
-    const store = mergePlansResponse(current?.store ?? emptyPlansStore, data);
-    /**
-     * `initial` is the whole window. A later `upcoming_window` chunk — a scroll page or the
-     * calendar's jump — only ever **extends** it: `from` stays where the list starts, `through`
-     * is monotonic, and the sentinel follows the furthest window because it names the row
-     * after it. Installing the chunk's own bounds would hide every plan between today and the
-     * chunk from Upcoming, which is what the web hook's merge already guards against.
-     */
-    const held = current?.upcomingWindow;
+    const held =
+      state === undefined
+        ? undefined
+        : {
+            from: parseWallDate(textColumn(state, 'upcoming_from') ?? ''),
+            through: parseWallDate(textColumn(state, 'upcoming_through') ?? ''),
+            nextFrom:
+              (textColumn(state, 'upcoming_next_from') as WallDate | undefined) ?? null,
+          };
+    const coverage = await transaction.database.all(
+      'SELECT covered_from, covered_through FROM native_plans_coverage WHERE timezone = ? ORDER BY ordinal;',
+      [timezone],
+    );
+    const byDate = new Map<WallDate, AgendaItem[]>();
+    const authoritative =
+      data.mode === 'initial' || data.mode === 'upcoming_window'
+        ? { from: data.upcomingWindow.from, through: data.upcomingWindow.through }
+        : data.mode === 'past_window'
+          ? {
+              from: data.pastCoverage.coveredFrom,
+              through: data.pastCoverage.coveredThrough,
+            }
+          : undefined;
+    if (data.mode !== 'upcoming_window') {
+      for (const date of new Set(data.past.map((day) => day.date))) {
+        if (
+          authoritative !== undefined &&
+          date >= authoritative.from &&
+          date <= authoritative.through
+        )
+          continue;
+        const rows = await transaction.database.all(
+          'SELECT item_json FROM native_plans_date_rows WHERE timezone = ? AND date = ? ORDER BY ordinal;',
+          [timezone, date],
+        );
+        byDate.set(
+          parseWallDate(date),
+          rows.map((row) => readAgendaItem(textColumn(row, 'item_json'))),
+        );
+      }
+    }
+    const store = mergePlansResponse(
+      {
+        byDate,
+        covered: coverage.map((row) => ({
+          from: parseWallDate(textColumn(row, 'covered_from') ?? ''),
+          through: parseWallDate(textColumn(row, 'covered_through') ?? ''),
+        })),
+      },
+      data,
+    );
     const upcomingWindow =
-      data.mode === 'initial' || (data.mode === 'upcoming_window' && held === undefined)
-        ? {
+      data.mode === 'initial' || data.mode === 'upcoming_window'
+        ? mergeWindowProgress(data.mode === 'initial' ? undefined : held, {
             from: data.upcomingWindow.from as WallDate,
             through: data.upcomingWindow.through as WallDate,
             nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
-          }
-        : data.mode === 'upcoming_window' && held !== undefined
-          ? held.through > (data.upcomingWindow.through as WallDate)
-            ? held
-            : {
-                from: held.from,
-                through: data.upcomingWindow.through as WallDate,
-                nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
-              }
-          : held;
+          })
+        : held;
     if (upcomingWindow === undefined) {
       throw new Error('Native Plans projection has no upcoming window.');
     }
     const pastCursor =
       data.mode === 'initial' || data.mode === 'past_cursor'
         ? data.pastPage.nextCursor
-        : current?.pastCursor;
+        : textColumn(state, 'past_cursor');
 
     await transaction.database.run(
       `INSERT INTO native_plans_state (
@@ -330,11 +368,23 @@ export class PlansRepository {
       }
     }
 
-    await transaction.database.run(
-      'DELETE FROM native_plans_date_rows WHERE timezone = ?;',
-      [timezone],
-    );
+    if (authoritative !== undefined) {
+      await transaction.database.run(
+        'DELETE FROM native_plans_date_rows WHERE timezone = ? AND date BETWEEN ? AND ?;',
+        [timezone, authoritative.from, authoritative.through],
+      );
+    }
     for (const [date, rows] of store.byDate) {
+      if (
+        authoritative === undefined ||
+        date < authoritative.from ||
+        date > authoritative.through
+      ) {
+        await transaction.database.run(
+          'DELETE FROM native_plans_date_rows WHERE timezone = ? AND date = ?;',
+          [timezone, date],
+        );
+      }
       for (const [ordinal, row] of rows.entries()) {
         await transaction.database.run(
           `INSERT INTO native_plans_date_rows (

@@ -346,13 +346,7 @@ export class ActivityTransactionService {
       };
     });
     await this.activities.putLocal(transaction, activity, reminders);
-    const current = await this.agenda.readMaterializedWindow(transaction.database);
-    const projected = applyCreate(current, {
-      activity,
-      ...clock,
-      undatedDestinationDate: clock.today,
-    });
-    await this.agenda.replaceLocalActivityRows(transaction, activityId, projected);
+    await this.projectCreate(transaction, activity, clock);
     transaction.changed('outbox');
     return appended;
   }
@@ -414,15 +408,31 @@ export class ActivityTransactionService {
       channel: 'push',
     }));
     await this.activities.putLocal(transaction, activity, reminders);
-    const current = await this.agenda.readMaterializedWindow(transaction.database);
-    const projected = applyCreate(current, {
-      activity,
-      ...clock,
-      undatedDestinationDate: clock.today,
-    });
-    await this.agenda.replaceLocalActivityRows(transaction, activityId, projected);
+    await this.projectCreate(transaction, activity, clock);
     transaction.changed('outbox');
     return appended;
+  }
+
+  private async projectCreate(
+    transaction: TransactionContext,
+    activity: Activity,
+    clock: ProjectionClock,
+  ): Promise<void> {
+    const windows =
+      activity.recurrence === undefined
+        ? [await this.agenda.readMaterializedWindow(transaction.database)]
+        : await this.agenda.readCreateWindows(transaction.database);
+    const projected = windows.map((current) =>
+      applyCreate(current, {
+        activity,
+        ...clock,
+        undatedDestinationDate: clock.today,
+      }),
+    );
+    await this.agenda.replaceLocalActivityRows(transaction, activity.activityId, {
+      days: projected.flatMap((window) => window.days),
+      warnings: projected.flatMap((window) => window.warnings),
+    });
   }
 
   async appendOnly(

@@ -118,7 +118,55 @@ output.today = wall.date;
 output.tomorrow = addWallDay(wall.date);
 output.activityIds = [];
 
-if (FLOW === 'add-and-complete') {
+if (FLOW.startsWith('calendar-')) {
+  const fields = wall.date.split('-').map(Number);
+  const offset =
+    FLOW === 'calendar-year-boundary' ? 13 - fields[1] : Number(CALENDAR_MONTH_OFFSET);
+  const target = new Date(
+    Date.UTC(
+      fields[0],
+      fields[1] - 1 + offset,
+      FLOW === 'calendar-year-boundary' ? 1 : 15,
+    ),
+  );
+  output.targetDate = target.toISOString().slice(0, 10);
+  output.neighborDate = addWallDays(output.targetDate, 1);
+  output.targetMonth = output.targetDate.slice(0, 7);
+  const first = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0));
+  output.gridFrom = addWallDays(
+    first.toISOString().slice(0, 10),
+    -((first.getUTCDay() + 6) % 7),
+  );
+  output.gridThrough = addWallDays(
+    last.toISOString().slice(0, 10),
+    6 - ((last.getUTCDay() + 6) % 7),
+  );
+  output.yearSteps = Math.abs(target.getUTCFullYear() - fields[0]);
+  output.calendarPast = offset < 0;
+  output.targetTitle = `Calendar target ${output.targetDate} ${stamp}`;
+  output.neighborTitle = `Calendar neighbor ${stamp}`;
+  output.todayTitle = `Calendar Today ${stamp}`;
+  output.activityIds.push(create(output.targetTitle, output.targetDate, '12:00'));
+  output.activityIds.push(
+    create(output.neighborTitle, addWallDays(output.targetDate, 1), '12:00'),
+  );
+  output.activityIds.push(create(output.todayTitle, wall.date));
+  if (FLOW === 'calendar-dense-year') {
+    output.backwardDate = addWallDays(output.targetDate, -2);
+    output.backwardTitle = `Calendar backward ${output.backwardDate} ${stamp}`;
+    output.activityIds.push(create(output.backwardTitle, output.backwardDate, '12:00'));
+    output.activityIds.push(
+      create(`Calendar daily density ${stamp}`, wall.date, '09:00', {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: wall.date }],
+      }),
+    );
+  }
+} else if (FLOW === 'recurring-create-window') {
+  output.title = `Native new daily ${stamp}`;
+  output.afterWeek = addWallDays(wall.date, 8);
+} else if (FLOW === 'add-and-complete') {
   output.title = `P2-37 iOS add ${stamp}`;
 } else if (FLOW === 'prep-parent-reconciliation') {
   output.planTitle = `P3 native Prep parent ${stamp}`;
@@ -150,9 +198,9 @@ if (FLOW === 'add-and-complete') {
 } else if (FLOW === 'snooze-occurrence') {
   output.title = `P2-37 iOS snooze ${stamp}`;
   const originalWall = parts(new Date(now.getTime() + 5 * 60 * 1000));
-  const snoozeWall = parts(new Date(now.getTime() + 15 * 60 * 1000));
+  const snoozeWall = parts(new Date(now.getTime() + 20 * 60 * 1000));
   if (originalWall.date !== wall.date || snoozeWall.date !== wall.date) {
-    throw new Error('Run the snooze flow before the final 15 minutes of the local day.');
+    throw new Error('Run the snooze flow before the final 20 minutes of the local day.');
   }
   output.originalTime = originalWall.time;
   output.originalTimeLabel = timeLabel(originalWall.time);
@@ -194,16 +242,22 @@ if (FLOW === 'add-and-complete') {
     throw new Error(`Fixture occurrence completion failed: ${response.body}`);
   }
 } else if (FLOW === 'up-next-ticker') {
+  // The current minute can end during launch. Seed future minute boundaries;
+  // the flow waits for the second boundary before checking foreground recomputation.
   const nextMinute = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
+  const secondMinute = new Date(nextMinute.getTime() + 60000);
   const nextWall = parts(nextMinute);
-  if (nextWall.date !== wall.date)
-    throw new Error('Run the ticker flow outside the final minute of the local day.');
+  const secondWall = parts(secondMinute);
+  if (secondWall.date !== wall.date)
+    throw new Error(
+      'Run the ticker flow outside the final two minutes of the local day.',
+    );
   output.firstTitle = `P2-37 iOS ticker first ${stamp}`;
   output.secondTitle = `P2-37 iOS ticker second ${stamp}`;
-  output.firstId = create(output.firstTitle, wall.date, wall.time);
-  output.secondId = create(output.secondTitle, wall.date, nextWall.time);
+  output.firstId = create(output.firstTitle, wall.date, nextWall.time);
+  output.secondId = create(output.secondTitle, wall.date, secondWall.time);
   output.activityIds.push(output.firstId, output.secondId);
-  output.advanceAfterEpoch = nextMinute.getTime() + 1000;
+  output.advanceAfterEpoch = secondMinute.getTime() + 1000;
 } else if (FLOW === 'offline-queue-relaunch') {
   output.titles = [];
   for (let index = 1; index <= 3; index += 1) {

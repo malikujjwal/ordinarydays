@@ -25,6 +25,7 @@ onFlowComplete:
     from:
       id: ${'swipeable-list-' + output.indexListId}
     direction: LEFT
+- waitForAnimationToEnd
 - tapOn:
     id: list-swipe-delete
 - assertVisible:
@@ -43,15 +44,18 @@ onFlowComplete:
 - tapOn:
     id: add-to-plan-list
 - assertVisible:
+    id: add-list-to-plan-sheet
+- tapOn: Create new list
+- assertVisible:
     id: list-style-chooser
 - tapOn:
     id: list-style-checklist
 - assertVisible:
     id: new-list-title-step
-- tapOn:
-    id: new-list-title
-- eraseText
+# The field autofocuses at the end of its prefilled title; tapping its middle moves the caret.
+- eraseText: 100
 - inputText: ${output.listTitle}
+- assertVisible: ${output.listTitle}
 - tapOn:
     id: new-list-create
 - assertVisible:
@@ -69,7 +73,7 @@ onFlowComplete:
 - assertVisible: Passport
 - tapOn:
     id: list-detail-back
-- assertVisible: 1 item
+- assertVisible: ${output.listTitle + ', 1 item'}
 - tapOn: ${output.listTitle}
 - assertVisible:
     id: list-detail

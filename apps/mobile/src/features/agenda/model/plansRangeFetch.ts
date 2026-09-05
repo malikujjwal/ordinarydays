@@ -17,9 +17,8 @@ import { PLANS_WINDOW_DAYS } from './plansFeed';
  * second pagination model.
  *
  * - **Upcoming** asks for the part of the range the store has not exhausted, in bounded
- *   `upcoming_window` chunks of at most `PLANS_WINDOW_DAYS`. It also fills from the rendered
- *   window's edge up to the range, so the list — which draws a gap line across any empty
- *   run between two loaded dates — never claims a date nobody has fetched.
+ *   `upcoming_window` chunks of at most `PLANS_WINDOW_DAYS`. The requested window is independent of distance;
+ *   unknown intervening dates must not be presented as known-empty gaps.
  * - **Past** asks for each unknown run as a bounded `past_window` and follows the window's
  *   own cursor until `pastCoverage.complete`; only then may the grid read an unmarked date
  *   as loaded-and-empty.
@@ -44,12 +43,7 @@ export interface StageRangeFetch {
 export async function fetchStageRange(fetch: StageRangeFetch): Promise<void> {
   const { stage, range, tz, store, signal } = fetch;
   if (stage === 'upcoming') {
-    const held = fetch.upcomingThrough;
-    const fillFrom =
-      held !== undefined && held < range.from
-        ? (addWallDays(held, 1) as WallDate)
-        : range.from;
-    for (const gap of missingRanges(store, fillFrom, range.through)) {
+    for (const gap of missingRanges(store, range.from, range.through)) {
       for (
         let from = gap.from;
         from <= gap.through;

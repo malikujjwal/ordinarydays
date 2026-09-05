@@ -374,3 +374,70 @@ it('drains a dense Past grid to completion before any date may read as loaded-an
     ]),
   );
 });
+
+it('keeps ordinary pagination at the first unknown dates after a distant calendar jump', async () => {
+  const { client, wrapper } = harness();
+  const calls: URL[] = [];
+  vi.stubGlobal('fetch', (url: string) => {
+    const request = new URL(url, 'http://localhost');
+    calls.push(request);
+    const from =
+      request.searchParams.get('mode') === 'upcoming_window'
+        ? request.searchParams.get('upcomingFrom')
+        : null;
+    const distant = from === '2027-09-01';
+    const payload = body();
+    const data = {
+      ...(from === null ? payload.data : { warnings: [] }),
+      mode: from === null ? 'initial' : 'upcoming_window',
+      upcoming:
+        from === '2026-10-07'
+          ? [{ date: '2026-11-02', items: [upcomingRow(A, 'scheduled')] }]
+          : [],
+      upcomingWindow: distant
+        ? { from, through: '2027-09-30', nextFrom: null }
+        : from === null
+          ? { from: '2026-08-06', through: '2026-10-06', nextFrom: '2026-10-07' }
+          : { from, through: '2026-12-07', nextFrom: '2026-12-08' },
+    };
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ ...payload, data }),
+      text: () => Promise.resolve(JSON.stringify({ ...payload, data })),
+    });
+  });
+  client.setQueryData(['me'], { timezone: 'UTC' });
+  const { result } = renderHook(() => usePlans('UTC', TODAY, '10:00'), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('success'));
+  await act(async () => {
+    await result.current.loadRange(
+      'upcoming',
+      {
+        from: '2027-09-01' as WallDate,
+        through: '2027-09-30' as WallDate,
+      },
+      new AbortController().signal,
+    );
+  });
+  await waitFor(() => expect(result.current.upcomingWindow?.through).toBe('2027-09-30'));
+  expect(result.current.upcomingWindow?.nextFrom).toBe('2026-10-07');
+  act(() => result.current.loadMoreUpcoming());
+  await waitFor(() =>
+    expect(
+      result.current.store.byDate.get('2026-11-02' as WallDate)?.[0]?.activityId,
+    ).toBe(A),
+  );
+  expect(result.current.upcomingWindow).toMatchObject({
+    through: '2027-09-30',
+    nextFrom: '2026-12-08',
+  });
+  expect(
+    calls.map((url) =>
+      url.searchParams.get('mode') === 'upcoming_window'
+        ? url.searchParams.get('upcomingFrom')
+        : null,
+    ),
+  ).toEqual([null, '2027-09-01', '2026-10-07']);
+});

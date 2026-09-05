@@ -111,6 +111,11 @@ function bodyLabel(
   if (item.time === undefined) parts.push(untimedContextLabel, 'no time');
   else parts.push(formatWallTime(item.time));
   if (item.recurrenceDescription !== undefined) parts.push(item.recurrenceDescription);
+  if (item.isSnoozed && item.originalTime !== undefined && item.time !== undefined) {
+    parts.push(
+      `Snoozed from ${formatWallTime(item.originalTime)} to ${formatWallTime(item.time)}`,
+    );
+  }
   if (item.locationLabel !== undefined) parts.push(item.locationLabel);
   if (item.participantAvatars.length > 0) {
     parts.push(

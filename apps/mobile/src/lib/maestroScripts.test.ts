@@ -44,6 +44,45 @@ describe('Maestro network-control scripts', () => {
 });
 
 describe('Maestro fixture creation', () => {
+  it.each(['2026-09-04T23:30:00.000Z', '2026-09-04T23:30:59.460Z'])(
+    'keeps the initial ticker fixture eligible across the setup minute boundary (%s)',
+    (instant) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(instant));
+      const schedules: { date: string; time: string }[] = [];
+      const output: { advanceAfterEpoch?: number } = {};
+      try {
+        runInNewContext(readFileSync(resolve('e2e/scripts/setup.js'), 'utf8'), {
+          Date,
+          API_BASE_URL: 'http://127.0.0.1:3000',
+          PROXY_CONTROL_URL: 'http://127.0.0.1:8474',
+          FLOW: 'up-next-ticker',
+          output,
+          http: {
+            post(url: string, options: { body: string }) {
+              if (new URL(url).pathname === '/v1/activities') {
+                schedules.push(JSON.parse(options.body).schedule);
+                return {
+                  body: JSON.stringify({
+                    data: { activityId: `ticker-${schedules.length}` },
+                  }),
+                };
+              }
+              return { body: '{}' };
+            },
+          },
+        });
+        expect(schedules.map(({ date, time }) => ({ date, time }))).toEqual([
+          { date: '2026-09-04', time: '19:31' },
+          { date: '2026-09-04', time: '19:32' },
+        ]);
+        expect(output.advanceAfterEpoch).toBe(Date.parse('2026-09-04T23:32:01Z'));
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     ['offline-queue-relaunch', 3],
     ['source-list-reconciliation', 2],

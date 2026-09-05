@@ -1,0 +1,87 @@
+appId: app.ordinarydays.ios.local
+name: "Calendar selection-race: exact day, detail return and Today"
+jsEngine: graaljs
+tags: [calendar, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+  IOS_DRIVER_URL: http://127.0.0.1:22087
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: calendar-selection-race
+        CALENDAR_MONTH_OFFSET: "12"
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      true: ${output.calendarPast}
+    commands:
+      - tapOn: Past
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- tapOn: ".*Choose a month"
+- repeat:
+    times: ${output.yearSteps}
+    commands:
+      - runFlow:
+          when:
+            true: ${output.calendarPast}
+          commands:
+            - tapOn: Previous year
+      - runFlow:
+          when:
+            true: ${!output.calendarPast}
+          commands:
+            - tapOn: Next year
+- runScript: scripts/reset-network-stats.js
+- runScript: scripts/hold-calendar.js
+- tapOn:
+    id: ${'plans-calendar-picker-' + output.targetMonth}
+    waitToSettleTimeoutMs: 0
+- runScript:
+    file: scripts/tap-ios-while-loading.js
+    env:
+      ELEMENT_ID: ${'calendar-cell-' + output.targetDate}
+- assertVisible:
+    text: Loading calendar
+- runScript:
+    file: scripts/tap-ios-while-loading.js
+    env:
+      ELEMENT_ID: ${'calendar-cell-' + output.neighborDate}
+- runScript: scripts/release-calendar.js
+- assertVisible:
+    id: ${'plans-date-' + output.neighborDate}
+- assertVisible: ${output.neighborTitle}
+# XCTest includes cells occluded by the opaque calendar header in its hierarchy.
+# The earlier selection must not appear in the visible day area below that header.
+- assertVisible:
+    id: ${'plans-date-' + output.neighborDate}
+    below:
+      id: plans-calendar
+- assertNotVisible:
+    text: ${output.targetTitle}
+    below:
+      id: plans-calendar
+- runScript: scripts/assert-calendar-requests.js
+- tapOn: ${output.neighborTitle}
+- assertVisible:
+    id: detail-content
+- assertVisible: ${output.neighborTitle}
+- tapOn:
+    id: detail-back
+- assertVisible:
+    id: ${'plans-date-' + output.neighborDate}
+- assertVisible: ${output.neighborTitle}
+- tapOn: "Today, tab, .*"
+- assertVisible:
+    id: today-screen
+- assertVisible: ${output.todayTitle}

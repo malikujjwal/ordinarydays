@@ -233,3 +233,24 @@ describe('what the derive path may be handed', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+it.each([
+  ['2026-12', 1, '2027-01'],
+  ['2027-01', -1, '2026-12'],
+  ['2026-09', 6, '2027-03'],
+  ['2026-09', 12, '2027-09'],
+  ['2026-09', -12, '2025-09'],
+] as const)('shifts %s by %s months to %s', (month, offset, expected) => {
+  expect(shiftMonth(month, offset)).toBe(expected);
+});
+
+it.each([
+  ['2026-12', '2026-11-30', '2027-01-03'],
+  ['2028-02', '2028-01-31', '2028-03-05'],
+  ['2027-02', '2027-02-01', '2027-02-28'],
+] as const)(
+  'bounds the %s calendar grid across month and leap boundaries',
+  (month, from, through) => {
+    expect(monthGridWindow(month)).toEqual({ from, through });
+  },
+);

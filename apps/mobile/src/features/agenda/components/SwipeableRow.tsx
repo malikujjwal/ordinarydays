@@ -1,4 +1,4 @@
-import { Text, Touchable, useTheme } from '@od/ui';
+import { Text, Touchable, useMotion, useTheme } from '@od/ui';
 import { useCallback } from 'react';
 import { View } from 'react-native';
 import ReanimatedSwipeable, {
@@ -69,7 +69,9 @@ function ActionPanel({
   );
 
   useAnimatedReaction(
-    () => mayCommitFull && Math.abs(translation.value) >= fullSwipeDistance,
+    () =>
+      mayCommitFull &&
+      (side === 'positive' ? translation.value : -translation.value) >= fullSwipeDistance,
     (pastThreshold) => {
       if (pastThreshold && !fullSwipeArmed.value && first !== undefined) {
         fullSwipeArmed.value = true;
@@ -144,6 +146,7 @@ export function SwipeableRowWithState({
   completion,
   ...rowProps
 }: SwipeableRowWithStateProps) {
+  const motion = useMotion();
   const { mutationInert: inert } = intentState;
   const completionLocked = rowProps.completionLocked ?? completion.locked;
   const actions =
@@ -164,7 +167,7 @@ export function SwipeableRowWithState({
       overshootFriction={1}
       overshootLeft={actions.positive[0]?.destructive === false}
       overshootRight={actions.secondary[0]?.destructive === false}
-      animationOptions={{ reduceMotion: ReduceMotion.System }}
+      animationOptions={{ ...motion.spring, reduceMotion: ReduceMotion.System }}
       {...(actions.positive.length === 0
         ? {}
         : {

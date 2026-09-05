@@ -16,7 +16,13 @@ export interface UpcomingGap {
   label: string;
 }
 
-export type UpcomingListItem = UpcomingDateGroup | UpcomingGap;
+export interface UpcomingUnloadedRange {
+  kind: 'unloaded';
+  from: string;
+  to: string;
+}
+
+export type UpcomingListItem = UpcomingDateGroup | UpcomingGap | UpcomingUnloadedRange;
 
 export interface UpcomingMonthSection {
   month: string;

@@ -1,0 +1,82 @@
+appId: app.ordinarydays.ios.local
+name: New recurring Task appears beyond reminder coverage without refresh
+jsEngine: graaljs
+tags: [plans, recurrence, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: recurring-create-window
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- tapOn: "Plans, tab, .*"
+- assertVisible:
+    id: plans-stage-switcher
+- runScript: scripts/proxy-offline.js
+- tapOn:
+    id: global-add
+- tapOn:
+    id: object-choice-task
+- tapOn:
+    id: compose-title
+- inputText: ${output.title}
+- tapOn:
+    text: Today
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: compose-repeat
+    direction: DOWN
+- tapOn:
+    id: compose-repeat
+- tapOn:
+    id: repeat-option
+- tapOn: Daily
+- tapOn:
+    id: repeat-apply
+- tapOn:
+    id: compose-save
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- runFlow:
+    when:
+      notVisible:
+        id: ${'calendar-cell-' + output.afterWeek}
+    commands:
+      - tapOn: Next month
+- tapOn:
+    id: ${'calendar-cell-' + output.afterWeek}
+- assertVisible:
+    id: ${'plans-date-' + output.afterWeek}
+- assertVisible: ${output.title}
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- runFlow:
+    when:
+      notVisible:
+        id: ${'calendar-cell-' + output.afterWeek}
+    commands:
+      - tapOn: Next month
+- tapOn:
+    id: ${'calendar-cell-' + output.afterWeek}
+- assertVisible:
+    id: ${'plans-date-' + output.afterWeek}
+- assertVisible: ${output.title}
+- runScript: scripts/proxy-online.js

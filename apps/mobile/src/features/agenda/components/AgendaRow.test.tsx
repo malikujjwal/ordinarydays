@@ -725,3 +725,24 @@ describe('AgendaRow — the skipped tag', () => {
     );
   });
 });
+
+it('announces the visible snooze change on the accessible recurring row body', () => {
+  mount(
+    <AgendaRow
+      item={item('task', {
+        title: 'Snoozed task',
+        isRecurring: true,
+        recurrenceDescription: 'Daily',
+        isSnoozed: true,
+        originalTime: '18:00',
+        time: '20:00',
+      })}
+      onOpen={vi.fn()}
+    />,
+  );
+  expect(
+    screen.getByRole('button', {
+      name: 'Snoozed task, 8:00 PM, Daily, Snoozed from 6:00 PM to 8:00 PM',
+    }),
+  ).toBeDefined();
+});

@@ -3,7 +3,7 @@ import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { AccessibilityInfo, Animated, SectionList } from 'react-native';
+import { AccessibilityInfo, Animated, Platform, SectionList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
@@ -157,7 +157,7 @@ function mount(onOpen = () => {}, onAdd = () => {}) {
     defaultOptions: { queries: { retry: false, networkMode: 'always' } },
   });
   client.setQueryData(['me'], { timezone: 'UTC' });
-  return render(
+  const result = render(
     <SafeAreaProvider>
       <ClockProvider clock={fixedClock('2026-08-06T15:10:00.000Z' as Instant)}>
         <ThemeProvider scheme="light">
@@ -168,12 +168,14 @@ function mount(onOpen = () => {}, onAdd = () => {}) {
       </ClockProvider>
     </SafeAreaProvider>,
   );
+  return { ...result, client };
 }
 
 const openStage = (label: string) =>
   fireEvent.click(screen.getByRole('tab', { name: label }));
 
 afterEach(() => {
+  Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -370,6 +372,20 @@ it('groups Upcoming into day cards with gap lines and sticky month sections', as
   expect(screen.getByRole('heading', { name: 'September 2026' })).toBeDefined();
 });
 
+it('reserves only the space needed to land a short final day below the calendar', async () => {
+  stubFetch(initialBody({ upcoming: [plansDay('2026-09-04', [row(2)])] }));
+  mount();
+  await screen.findByTestId('plans-date-2026-09-04');
+  reportCalendarHeight(144);
+  reportLayout('plans-viewport', 800);
+  reportLayout('plans-date-2026-09-04', 160);
+  const content = screen.getByTestId('plans-list').firstElementChild as HTMLElement;
+  expect(content.style.paddingBottom).toBe('496px');
+  // A tall final card already supplies the scroll range; keep only the existing chrome gap.
+  reportLayout('plans-date-2026-09-04', 720);
+  expect(content.style.paddingBottom).toBe('156px');
+});
+
 it('lands a calendar day on that exact Upcoming card', async () => {
   const scrollToLocation = vi
     .spyOn(SectionList.prototype, 'scrollToLocation')
@@ -396,6 +412,114 @@ it('lands a calendar day on that exact Upcoming card', async () => {
     ),
   );
 });
+
+it('updates an active calendar landing when the visible header is remeasured', async () => {
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  stubFetch(initialBody({ upcoming: [plansDay('2026-09-04', [row(2)])] }));
+  mount();
+  await screen.findByTestId('plans-date-2026-09-04');
+  reportLayout('plans-header', 544);
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
+  expect(scrollToLocation).toHaveBeenLastCalledWith(
+    expect.objectContaining({ viewOffset: 544 }),
+  );
+  reportLayout('plans-header', 158);
+  expect(scrollToLocation).toHaveBeenLastCalledWith(
+    expect.objectContaining({ viewOffset: 158 }),
+  );
+  clock.mockReturnValue(1_257);
+  reportLayout('plans-header', 200);
+  expect(scrollToLocation).toHaveBeenLastCalledWith(
+    expect.objectContaining({ viewOffset: 158 }),
+  );
+});
+
+it('ignores a delayed unmeasured-row failure after the recovery deadline', async () => {
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+  let fail:
+    | ((info: {
+        index: number;
+        highestMeasuredFrameIndex: number;
+        averageItemLength: number;
+      }) => void)
+    | undefined;
+  vi.spyOn(SectionList.prototype, 'scrollToLocation').mockImplementation(function (
+    this: SectionList<unknown>,
+  ) {
+    fail = this.props.onScrollToIndexFailed;
+  });
+  const responder = vi.spyOn(SectionList.prototype, 'getScrollResponder');
+  stubFetch(initialBody({ upcoming: [plansDay('2026-09-04', [row(2)])] }));
+  mount();
+  await screen.findByTestId('plans-date-2026-09-04');
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
+  expect(fail).toBeTypeOf('function');
+  act(() => {
+    fail?.({ index: 15, highestMeasuredFrameIndex: 11, averageItemLength: 148 });
+    fail?.({ index: 15, highestMeasuredFrameIndex: 12, averageItemLength: 170 });
+  });
+  expect(responder).toHaveBeenCalledTimes(1);
+  clock.mockReturnValue(1_257);
+  responder.mockClear();
+  act(() => fail?.({ index: 15, highestMeasuredFrameIndex: 11, averageItemLength: 148 }));
+  expect(responder).not.toHaveBeenCalled();
+});
+
+it.each(['stage', 'refresh'])(
+  'mounts an unmeasured day and clears its anchor on %s',
+  async (reset) => {
+    Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+    vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    let failed = false;
+    vi.spyOn(SectionList.prototype, 'scrollToLocation').mockImplementation(function (
+      this: SectionList<unknown>,
+    ) {
+      if (failed) return;
+      failed = true;
+      this.props.onScrollToIndexFailed?.({
+        index: 15,
+        highestMeasuredFrameIndex: 9,
+        averageItemLength: 148,
+      });
+    });
+    const past = [plansDay('2026-08-01', [row(30, { isPast: true })])];
+    const body = initialBody({
+      upcoming: Array.from({ length: 28 }, (_, i) =>
+        plansDay(`2026-09-${String(i + 1).padStart(2, '0')}`, [
+          row(i, { title: `Day ${i + 1}` }),
+        ]),
+      ),
+      past,
+    });
+    stubFetch(body, initialBody({ past }), body);
+    const { client } = mount();
+    await screen.findByTestId('plans-date-2026-09-01');
+    const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+    if (expand) fireEvent.click(expand);
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+    fireEvent.click(screen.getByTestId('calendar-cell-2026-09-15'));
+    await screen.findByTestId('plans-date-2026-09-15');
+    expect(screen.queryByTestId('plans-date-2026-09-01')).toBeNull();
+    if (reset === 'stage') {
+      openStage('Past');
+      openStage('Upcoming');
+    } else {
+      await act(() => client.refetchQueries());
+      await screen.findByTestId('plans-upcoming-empty');
+      await act(() => client.refetchQueries());
+    }
+    await screen.findByTestId('plans-date-2026-09-01');
+  },
+);
 
 it('lands a calendar day on that exact Past card', async () => {
   const scrollToLocation = vi
@@ -644,7 +768,7 @@ it('loads and lands an Upcoming day after November beyond the initial window bou
       data: {
         mode: 'upcoming_window',
         upcoming: [plansDay('2026-12-02', [row(2, { title: 'December second' })])],
-        upcomingWindow: { from: '2026-10-07', through: '2026-12-07', nextFrom: null },
+        upcomingWindow: { from: '2026-11-30', through: '2027-01-03', nextFrom: null },
         warnings: [],
       },
       meta: { requestId: 'req_december_window_first_chunk' },
@@ -652,11 +776,13 @@ it('loads and lands an Upcoming day after November beyond the initial window bou
     {
       data: {
         mode: 'upcoming_window',
-        upcoming: [],
-        upcomingWindow: { from: '2026-12-08', through: '2027-01-10', nextFrom: null },
+        upcoming: [
+          plansDay('2026-11-02', [row(3, { title: 'Intervening appointment' })]),
+        ],
+        upcomingWindow: { from: '2026-10-07', through: '2026-11-29', nextFrom: null },
         warnings: [],
       },
-      meta: { requestId: 'req_december_window_second_chunk' },
+      meta: { requestId: 'req_scroll_boundary' },
     },
   );
   mount();
@@ -676,9 +802,29 @@ it('loads and lands an Upcoming day after November beyond the initial window bou
       expect.objectContaining({ itemIndex: 1, animated: false }),
     ),
   );
-  expect(calls.some(({ url }) => url.includes('upcomingFrom=2026-10-07'))).toBe(true);
-  expect(calls.some(({ url }) => url.includes('upcomingTo=2026-12-07'))).toBe(true);
-  expect(calls.some(({ url }) => url.includes('upcomingFrom=2026-12-08'))).toBe(true);
+  expect(
+    calls
+      .filter(({ url }) => url.includes('mode=upcoming_window'))
+      .map(({ url }) => {
+        const params = new URL(url).searchParams;
+        return [params.get('upcomingFrom'), params.get('upcomingTo')];
+      }),
+  ).toEqual([['2026-11-30', '2027-01-03']]);
+  // The date jump itself is bounded. The unknown interval remains reachable through
+  // its accessible scrolling boundary, never labelled as an empty year.
+  fireEvent.click(screen.getByRole('button', { name: 'Load more dates' }));
+  await screen.findByText('Intervening appointment');
+  expect(
+    calls
+      .filter(({ url }) => url.includes('mode=upcoming_window'))
+      .map(({ url }) => {
+        const query = new URL(url).searchParams;
+        return [query.get('upcomingFrom'), query.get('upcomingTo')];
+      }),
+  ).toEqual([
+    ['2026-11-30', '2027-01-03'],
+    ['2026-10-07', '2026-11-29'],
+  ]);
 });
 
 it('keeps an opaque safe-area surface while the Plans header compacts and restores', async () => {

@@ -484,6 +484,8 @@ test('9.3 Trip plan → Packing list: prep tasks, two plan-created lists, and bo
   } else {
     await testId(page, 'add-to-plan-list').click();
   }
+  await expect(testId(page, 'add-list-to-plan-sheet')).toBeVisible();
+  await page.getByRole('button', { name: 'Create new list', exact: true }).click();
   await expect(testId(page, 'list-style-chooser')).toBeVisible();
   await expect(testId(page, 'new-list-title')).toHaveCount(0);
   await testId(page, 'list-style-checklist').click();
@@ -511,6 +513,8 @@ test('9.3 Trip plan → Packing list: prep tasks, two plan-created lists, and bo
   } else {
     await testId(page, 'add-to-plan-list').click();
   }
+  await expect(testId(page, 'add-list-to-plan-sheet')).toBeVisible();
+  await page.getByRole('button', { name: 'Create new list', exact: true }).click();
   await testId(page, 'list-style-places-to-visit').click();
   await testId(page, 'new-list-create').click();
   await expect.poll(async () => (await lists(request)).length).toBe(2);
@@ -566,10 +570,24 @@ test('9.3 Trip plan → Packing list: prep tasks, two plan-created lists, and bo
       (await items(request, packing.listId)).every((row) => row.state === 'open'),
     )
     .toBe(true);
-  await request.patch(`${API}/v1/lists/${packing.listId}`, {
-    headers: e2eHeaders(),
+  const currentPacking = await get<{ list: { updatedAt: string } }>(
+    request,
+    `/v1/lists/${packing.listId}`,
+  );
+  const renamed = await request.patch(`${API}/v1/lists/${packing.listId}`, {
+    headers: {
+      ...e2eHeaders(randomUUID()),
+      'If-Match': currentPacking.list.updatedAt,
+    },
     data: { title: 'Packing' },
   });
+  expect(renamed.ok(), await renamed.text()).toBe(true);
+  await expect
+    .poll(
+      async () =>
+        (await lists(request)).find((list) => list.listId === packing.listId)?.title,
+    )
+    .toBe('Packing');
   expect((await items(request, packing.listId)).map((row) => row.title).sort()).toEqual([
     'Charger',
     'Jacket',

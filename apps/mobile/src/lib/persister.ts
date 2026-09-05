@@ -67,7 +67,16 @@ export function restorableState(
   const base = platform === 'ios' ? withoutNativeActivityState(state) : state;
   return {
     ...base,
-    queries: base.queries.filter((query) => !isProjectionKey(query.queryKey)),
+    queries: base.queries
+      .filter((query) => !isProjectionKey(query.queryKey))
+      .map((query) =>
+        // A page can close before the throttled save records a relationship write's
+        // invalidation. Keep the cached detail for paint, but verify it on web reopen:
+        // a recently saved snapshot is not proof that its Lists/Prep are still current.
+        platform === 'web' && query.queryKey[0] === 'activity'
+          ? { ...query, state: { ...query.state, isInvalidated: true } }
+          : query,
+      ),
   };
 }
 

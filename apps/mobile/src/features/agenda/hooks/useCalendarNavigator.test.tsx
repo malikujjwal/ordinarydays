@@ -36,6 +36,76 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('useCalendarNavigator', () => {
+  it('clears a failed distant window when returning to a covered month', async () => {
+    const storage = memoryStorage();
+    const loadRange = vi.fn<CalendarLoadRange>(async () => {
+      throw new Error('offline');
+    });
+    const { result } = renderHook(() =>
+      useCalendarNavigator({
+        stage: 'upcoming',
+        today: TODAY,
+        projection: projection([{ from: '2026-08-14', through: '2026-10-14' }]),
+        loadRange,
+        storage,
+      }),
+    );
+    act(() => {
+      result.current.setExpanded(true);
+      result.current.setMonth('2027-08');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(result.current.failed).toBe(true);
+    act(() => result.current.setMonth('2026-09'));
+    expect(result.current.failed).toBe(false);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores a superseded request that later %ss',
+    async (outcome) => {
+      const pending: { resolve: () => void; reject: (error: Error) => void }[] = [];
+      const storage = memoryStorage();
+      const loadRange: CalendarLoadRange = () =>
+        new Promise<void>((resolve, reject) => {
+          pending.push({ resolve, reject });
+        });
+      const { result } = renderHook(() =>
+        useCalendarNavigator({
+          stage: 'upcoming',
+          today: TODAY,
+          projection: projection([{ from: '2026-08-14', through: '2026-10-14' }]),
+          loadRange,
+          storage,
+        }),
+      );
+      act(() => {
+        result.current.setExpanded(true);
+        result.current.setMonth('2027-02');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      act(() => result.current.setMonth('2027-08'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await act(async () => {
+        if (outcome === 'resolve') pending[0]?.resolve();
+        else pending[0]?.reject(new Error('old window failed'));
+      });
+      expect(result.current.month).toBe('2027-08');
+      expect(result.current.failed).toBe(false);
+      expect(result.current.loading).toBe(true);
+      await act(async () => {
+        pending[1]?.resolve();
+      });
+      expect(result.current.loading).toBe(false);
+    },
+  );
+
   it('expanding issues zero requests when the grid is already covered', async () => {
     const loadRange = vi.fn<CalendarLoadRange>(async () => undefined);
     const storage = memoryStorage();

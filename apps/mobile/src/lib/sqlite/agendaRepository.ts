@@ -1,3 +1,4 @@
+import { MAX_AGENDA_DAYS } from '@od/shared/constants';
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { agendaItem as agendaItemSchema } from '@od/shared/schemas';
@@ -999,6 +1000,37 @@ export class AgendaRepository {
       [activity.updatedAt, activity.activityId],
     );
     if (visible.changes > 0) transaction.changed('agenda');
+  }
+
+  /** Creation knows the complete new recurrence rule. Project only retained windows,
+   * including Plans coverage; an unknown gap between calendar jumps remains unknown. */
+  async readCreateWindows(database: SqliteReader): Promise<AgendaData[]> {
+    const rows = await database.all(`
+      SELECT from_date, to_date FROM agenda_coverage
+      UNION SELECT covered_from AS from_date, covered_through AS to_date FROM native_plans_coverage
+      ORDER BY from_date, to_date;
+    `);
+    const windows: Array<{ from: string; to: string }> = [];
+    for (const row of rows) {
+      const from = text(row, 'from_date');
+      const to = text(row, 'to_date');
+      if (from === undefined || to === undefined)
+        throw new Error('Missing create coverage bounds.');
+      const previous = windows.at(-1);
+      if (previous !== undefined && from <= addWallDays(previous.to, 1)) {
+        if (to > previous.to) previous.to = to;
+      } else windows.push({ from, to });
+    }
+    const data: AgendaData[] = [];
+    for (const window of windows) {
+      for (let from = window.from; from <= window.to; ) {
+        const limit = addWallDays(from, MAX_AGENDA_DAYS - 1);
+        const to = limit < window.to ? limit : window.to;
+        data.push(await this.readWith(database, { from, to, timezone: 'UTC' }));
+        from = addWallDays(to, 1);
+      }
+    }
+    return data;
   }
 
   async readMaterializedWindow(

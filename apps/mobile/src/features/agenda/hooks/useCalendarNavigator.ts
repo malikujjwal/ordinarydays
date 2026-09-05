@@ -176,6 +176,9 @@ export function useCalendarNavigator({
     void attempt;
     controller.current?.abort();
     controller.current = undefined;
+    // Status belongs to this window, never the month the user has left.
+    setFailed(false);
+    setLoading(false);
     if (need === undefined) {
       setLoading(false);
       return;

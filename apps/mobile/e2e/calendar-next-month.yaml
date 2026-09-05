@@ -1,0 +1,63 @@
+appId: app.ordinarydays.ios.local
+name: "Calendar next-month: exact day, detail return and Today"
+jsEngine: graaljs
+tags: [calendar, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: calendar-next-month
+        CALENDAR_MONTH_OFFSET: "1"
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      true: ${output.calendarPast}
+    commands:
+      - tapOn: Past
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- tapOn: ".*Choose a month"
+- repeat:
+    times: ${output.yearSteps}
+    commands:
+      - runFlow:
+          when:
+            true: ${output.calendarPast}
+          commands:
+            - tapOn: Previous year
+      - runFlow:
+          when:
+            true: ${!output.calendarPast}
+          commands:
+            - tapOn: Next year
+- tapOn:
+    id: ${'plans-calendar-picker-' + output.targetMonth}
+- tapOn:
+    id: ${'calendar-cell-' + output.targetDate}
+- assertVisible:
+    id: ${'plans-date-' + output.targetDate}
+- assertVisible: ${output.targetTitle}
+- tapOn: ${output.targetTitle}
+- assertVisible:
+    id: detail-content
+- assertVisible: ${output.targetTitle}
+- tapOn:
+    id: detail-back
+- assertVisible:
+    id: ${'plans-date-' + output.targetDate}
+- assertVisible: ${output.targetTitle}
+- tapOn: "Today, tab, .*"
+- assertVisible:
+    id: today-screen
+- assertVisible: ${output.todayTitle}
