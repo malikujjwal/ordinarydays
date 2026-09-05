@@ -5,10 +5,10 @@ import { Platform, type ScrollView, TextInput } from 'react-native';
 const GAP = 16;
 
 /**
- * Scrolls the focused input out from under the keyboard — **on Android only**.
+ * Scrolls an occluded input above the keyboard and any fixed footer.
  *
- * iOS has `automaticallyAdjustKeyboardInsets`, and a browser scrolls a focused element into view
- * by itself. Android has neither: the inset its container adds makes the field *reachable*, but
+ * iOS automatic insets do not account for a fixed footer; that case uses the native
+ * scroll responder after measuring occlusion. Android has no automatic correction: the inset its container adds makes the field *reachable*, but
  * nothing moves it, so the user is left scrolling blind for their own caret. That is §20's named
  * failure, and this closes it in the two containers that own layout rather than in each screen.
  *
@@ -18,22 +18,40 @@ const GAP = 16;
  * correct after a validation message appears and moves the field.
  */
 export function useScrollToFocusedInput(
-  scrollRef: RefObject<ScrollView | null>,
+  scrollRef: RefObject<Pick<
+    ScrollView,
+    'getScrollableNode' | 'scrollTo' | 'scrollResponderScrollNativeHandleToKeyboard'
+  > | null>,
   keyboardInset: number,
   /** The container's own visible height, so occlusion can be judged against it. */
   viewportHeight: number,
   /** Re-measure when rapid entry or validation changes content above the focused field. */
   contentHeight = 0,
+  footerHeight = 0,
 ): void {
   useEffect(() => {
     // Reading the measured size makes insertion itself a remeasurement trigger while the same
     // input retains focus; the value is not part of the offset calculation.
     void contentHeight;
-    if (Platform.OS !== 'android' || keyboardInset <= 0) return;
+    if (keyboardInset <= 0 || (Platform.OS !== 'android' && footerHeight <= 0)) return;
 
     const scroll = scrollRef.current;
     const focused = TextInput.State.currentlyFocusedInput();
     if (scroll === null || focused === null) return;
+
+    if (Platform.OS === 'ios') {
+      const frame = requestAnimationFrame(() => {
+        focused.measureInWindow((_x, y, _width, height) => {
+          if (y + height <= viewportHeight - keyboardInset - footerHeight - GAP) return;
+          scroll.scrollResponderScrollNativeHandleToKeyboard(
+            focused,
+            footerHeight + GAP,
+            true,
+          );
+        });
+      });
+      return () => cancelAnimationFrame(frame);
+    }
 
     /**
      * A frame's grace before measuring: the inset arrives with `keyboardDidShow`, and the
@@ -43,7 +61,7 @@ export function useScrollToFocusedInput(
       focused.measureLayout(
         scroll.getScrollableNode() as number,
         (_x: number, y: number, _width: number, height: number) => {
-          const visible = viewportHeight - keyboardInset;
+          const visible = viewportHeight - keyboardInset - footerHeight;
           const bottom = y + height;
           if (bottom <= visible - GAP) return;
           scroll.scrollTo({ y: bottom - visible + GAP, animated: true });
@@ -53,5 +71,5 @@ export function useScrollToFocusedInput(
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [contentHeight, keyboardInset, scrollRef, viewportHeight]);
+  }, [contentHeight, footerHeight, keyboardInset, scrollRef, viewportHeight]);
 }

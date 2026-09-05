@@ -1,8 +1,10 @@
 import type { ActivityDetailTarget } from '@od/shared/types';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
 import { AttachmentPickerSheet } from '@/features/attachments/components/AttachmentPickerSheet';
 import { AddListToPlanSheet } from '@/features/lists/components/AddListToPlanSheet';
@@ -30,6 +32,23 @@ export default function ActivityDetailRoute() {
     occurrenceDate?: string;
   }>();
   const router = useRouter();
+  const navigation = useNavigation();
+  const [notesGuard, setNotesGuard] = useState({
+    blocked: false,
+    requestLeave: (leave: () => void) => leave(),
+  });
+  usePreventRemove(notesGuard.blocked, ({ data }) => {
+    notesGuard.requestLeave(() => navigation.dispatch(data.action));
+  });
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !notesGuard.blocked || typeof window === 'undefined')
+      return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [notesGuard.blocked]);
   const openPrepTask = useComposeDraft((s) => s.openPrepTask);
   // `Add list` (P3-39): the sheet is composed here because features may not import each
   // other — the route is the point where the activity feature meets the lists feature.
@@ -55,7 +74,9 @@ export default function ActivityDetailRoute() {
   return (
     <>
       <ActivityDetailScreen
+        key={JSON.stringify(target)}
         target={target}
+        onNotesGuardChange={setNotesGuard}
         followUp={followUpNavigation(router)}
         today={format(new Date(), 'yyyy-MM-dd')}
         onBack={() => router.back()}

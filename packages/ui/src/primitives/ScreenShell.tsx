@@ -91,12 +91,19 @@ export function ScreenShell({
   const keyboard = useKeyboardInset();
   const scrollRef = useRef<RNScrollView | null>(null);
   const [contentHeight, setContentHeight] = useState(0);
+  const [footerHeight, setFooterHeight] = useState(0);
   /**
    * `useWindowDimensions`, never `Dimensions.get()` at module scope (§21): the viewport changes
    * on rotation, on a browser resize, and when the keyboard itself shrinks it.
    */
   const { height: viewportHeight } = useWindowDimensions();
-  useScrollToFocusedInput(scrollRef, keyboard, viewportHeight, contentHeight);
+  useScrollToFocusedInput(
+    scrollRef,
+    keyboard,
+    viewportHeight,
+    contentHeight,
+    footer === undefined ? 0 : footerHeight,
+  );
   useEffect(() => {
     // A rapid add changes only content size while the keyboard and editor remain mounted.
     void contentHeight;
@@ -181,6 +188,7 @@ export function ScreenShell({
 
       {footer === undefined ? null : (
         <View
+          onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
           style={{
             borderTopWidth: 1,
             borderTopColor: theme.colors.border,

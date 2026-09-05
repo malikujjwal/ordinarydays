@@ -134,3 +134,49 @@ describe('Maestro fixture creation', () => {
     }
   });
 });
+
+it('retains the durable offline-created Activity ID for exact cleanup', () => {
+  const output = { title: 'Unique task', today: '2026-09-05', activityIds: ['seed'] };
+  const get = vi.fn((_url: string) => ({
+    body: JSON.stringify({ activityId: 'created' }),
+  }));
+  runInNewContext(
+    readFileSync(resolve('e2e/scripts/assert-created-persisted.js'), 'utf8'),
+    {
+      PROXY_CONTROL_URL: 'http://127.0.0.1:18474',
+      output,
+      http: { get },
+    },
+  );
+  expect(new URL(get.mock.calls[0]?.[0] ?? '').searchParams.get('title')).toBe(
+    'Unique task',
+  );
+  expect(output.activityIds).toEqual(['seed', 'created']);
+});
+
+it('cleans up a submitted offline create even when the journey failed before reconnect verification', () => {
+  const deleted: string[] = [];
+  runInNewContext(readFileSync(resolve('e2e/scripts/cleanup.js'), 'utf8'), {
+    API_BASE_URL: 'http://127.0.0.1:13000',
+    PROXY_CONTROL_URL: 'http://127.0.0.1:18474',
+    output: {
+      title: 'Owned offline task',
+      today: '2026-09-05',
+      offlineCreateSubmitted: true,
+    },
+    http: {
+      post: () => ({ body: '{}' }),
+      get: (url: string) => ({
+        body: JSON.stringify(
+          url.includes('/wait-for-activity')
+            ? { activityId: 'late-create' }
+            : { data: { days: [] } },
+        ),
+      }),
+      delete: (url: string) => {
+        deleted.push(url);
+      },
+    },
+  });
+  expect(deleted).toEqual(['http://127.0.0.1:13000/v1/activities/late-create']);
+});

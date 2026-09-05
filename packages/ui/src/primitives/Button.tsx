@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type Ref, useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import type { IconProps } from '../icons/index';
 import { useTheme } from '../theme/index';
@@ -17,6 +17,8 @@ import { Touchable } from './Touchable';
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dangerGhost';
 
 export interface ButtonProps {
+  /** For restoring focus when an inline editor closes. */
+  elementRef?: Ref<View>;
   label: string;
   /** Override when the visible shorthand does not describe the action's result. */
   accessibilityLabel?: string;
@@ -46,6 +48,8 @@ export interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   fullWidth?: boolean;
+  /** Allow editor actions to wrap at larger text sizes above the control minimum. */
+  contentSized?: boolean;
   /**
    * `md` — the filled-control shape. **Not `pill`**, which the radius table reserves for things
    * that behave like pills: the Add button, chips, filters. Defaulting to `pill` made every
@@ -71,6 +75,7 @@ export interface ButtonProps {
 
 export function Button({
   label,
+  elementRef,
   accessibilityLabel,
   onPress,
   variant = 'primary',
@@ -80,6 +85,7 @@ export function Button({
   loading = false,
   disabled = false,
   fullWidth = false,
+  contentSized = false,
   radius = 'md',
   flush = false,
   testID,
@@ -129,6 +135,7 @@ export function Button({
 
   return (
     <Touchable
+      {...(elementRef === undefined ? {} : { elementRef })}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled: inactive, busy: loading }}
@@ -139,7 +146,13 @@ export function Button({
       testID={testID}
       style={[
         {
-          height,
+          ...(contentSized
+            ? ({
+                minHeight: height,
+                maxWidth: '100%',
+                paddingVertical: theme.space[2],
+              } as const)
+            : { height }),
           paddingHorizontal: size === 'sm' ? theme.space[3] : theme.space[6],
           ...(flush
             ? { marginHorizontal: -(size === 'sm' ? theme.space[3] : theme.space[6]) }
@@ -164,7 +177,7 @@ export function Button({
           {Icon === undefined || iconPosition === 'trailing' ? null : (
             <Icon size={20} color={foregroundColor} />
           )}
-          <View>
+          <View style={contentSized ? { flexShrink: 1 } : undefined}>
             <Text
               variant={size === 'sm' ? 'footnoteStrong' : 'bodyStrong'}
               color={palette.fg}

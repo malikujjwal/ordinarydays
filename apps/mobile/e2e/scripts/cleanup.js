@@ -12,6 +12,19 @@ function headers() {
 }
 
 http.post(`${CONTROL}/online`, { body: '' });
+if (output.offlineCreateSubmitted) {
+  const persisted = JSON.parse(
+    http.get(
+      `${CONTROL}/wait-for-activity?date=${output.today}&title=${encodeURIComponent(output.title)}`,
+    ).body,
+  );
+  if (!persisted.activityId)
+    throw new Error(
+      'Cleanup could not confirm the submitted offline Activity; isolated test data may remain.',
+    );
+  output.activityIds = [...(output.activityIds || []), persisted.activityId];
+  output.offlineCreateSubmitted = false;
+}
 const cleanupListTitles = output.cleanupListTitles || [];
 if (cleanupListTitles.length > 0) {
   const response = http.get(`${API}/v1/lists`, { headers: headers() });

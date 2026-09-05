@@ -34,6 +34,7 @@ export function useScrollToFocusedInput(
   keyboardInset: number,
   viewportHeight: number,
   contentHeight = 0,
+  footerHeight = 0,
 ): void {
   useEffect(() => {
     // Reading the measured size makes insertion itself a remeasurement trigger while the same
@@ -54,7 +55,8 @@ export function useScrollToFocusedInput(
           ? viewportHeight - keyboardInset
           : viewport.offsetTop + viewport.height;
       const occludedBy =
-        focused.getBoundingClientRect().bottom - (visibleBottom - space[8]);
+        focused.getBoundingClientRect().bottom -
+        (visibleBottom - footerHeight - space[8]);
       if (occludedBy <= 0) return;
 
       const scrollOwner = nearestScrollOwner(focused);
@@ -82,5 +84,5 @@ export function useScrollToFocusedInput(
       if (frame !== undefined) window.cancelAnimationFrame(frame);
       document.removeEventListener('focusin', scheduleCorrection);
     };
-  }, [contentHeight, keyboardInset, viewportHeight]);
+  }, [contentHeight, footerHeight, keyboardInset, viewportHeight]);
 }

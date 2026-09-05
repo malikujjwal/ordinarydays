@@ -3,6 +3,9 @@
 Ordinary Days is a pnpm monorepo. Read the canonical product and engineering contracts before
 changing an area, then follow the nearest package tests and public interfaces.
 
+For task workflow, skill selection, verification commands, and concurrent-work ownership,
+read [the project workflow guide](docs/agents/workflow.md).
+
 | Area | Context and ownership |
 | --- | --- |
 | `apps/mobile/` | Expo/React Native application and web-rendered mobile UI |

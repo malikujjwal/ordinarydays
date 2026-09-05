@@ -106,6 +106,120 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     await rm(directory, { recursive: true, force: true });
   });
 
+  it.each([
+    ['2026-10-19', 'occurrence'],
+    ['2027-08-19', 'occurrence'],
+    ['2026-10-19', 'future'],
+    ['2027-08-19', 'future'],
+  ])(
+    'preserves loaded repeated Plan dates after a time edit %s %s',
+    async (date, scope) => {
+      if (database === undefined) throw new Error('missing database');
+      await database.run(
+        `INSERT INTO native_plans_coverage (timezone, ordinal, covered_from, covered_through) VALUES (?, 0, ?, ?);`,
+        ['America/New_York', date, date],
+      );
+      await coordinator.create(
+        {
+          input: {
+            ...createInput(),
+            objectKind: 'plan',
+            type: 'custom',
+            details: { kind: 'custom' },
+          },
+          idempotencyKey: 'retained-create',
+        },
+        clock,
+      );
+      await transactions.run(async (t) => {
+        await outbox.acknowledge(t.database, 'retained-create');
+        await t.database.run("UPDATE activities SET local_state = 'canonical';");
+        await t.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      });
+      expect(
+        await database.first(
+          'SELECT time FROM agenda_rows WHERE activity_id=? AND viewer_date=?',
+          [ACTIVITY, date],
+        ),
+      ).toEqual({ time: '09:00' });
+      const result =
+        scope === 'occurrence'
+          ? await coordinator.schedule(
+              ACTIVITY,
+              'retained-time',
+              { occurrenceDate: date, date, time: '11:00', timezone: 'America/New_York' },
+              clock,
+            )
+          : await coordinator.patch(
+              ACTIVITY,
+              'retained-time',
+              {
+                recurrence: {
+                  mode: 'fixed',
+                  segments: [
+                    { freq: 'daily', interval: 1, effectiveFrom: '2026-08-19' },
+                    { freq: 'daily', interval: 1, effectiveFrom: date, time: '11:00' },
+                  ],
+                },
+              },
+              '2026-08-19T00:00:00Z',
+              clock,
+            );
+      expect(result.kind).toBe('accepted');
+      if (scope === 'occurrence')
+        expect(
+          await database.first(
+            'SELECT time FROM activity_occurrences WHERE activity_id=? AND nominal_date=?',
+            [ACTIVITY, date],
+          ),
+        ).toEqual({ time: '11:00' });
+      const visible = await agenda.read({
+        from: date,
+        to: date,
+        timezone: 'America/New_York',
+      });
+      expect(
+        visible.days[0]?.schedule.map((item) => ({
+          id: item.activityId,
+          time: item.time,
+        })),
+      ).toEqual([{ id: ACTIVITY, time: '11:00' }]);
+      expect(
+        (
+          await agenda.read({
+            from: '2026-08-19',
+            to: '2026-08-19',
+            timezone: 'America/New_York',
+          })
+        ).days[0]?.schedule[0]?.time,
+      ).toBe('09:00');
+      const materialized = await agenda.readMaterializedWindow();
+      expect(materialized.days.map((day) => day.date)).toEqual([
+        '2026-08-19',
+        '2026-08-20',
+        '2026-08-21',
+        date,
+      ]);
+    },
+  );
+
+  it('bounds reconciliation requests and excludes unknown calendar gaps', async () => {
+    if (database === undefined) throw new Error('Missing database');
+    await database.run(`INSERT INTO native_plans_coverage (timezone,ordinal,covered_from,covered_through) VALUES
+      ('America/New_York',0,'2026-08-19','2026-10-25'),
+      ('America/New_York',1,'2027-08-19','2027-08-19');`);
+    const coverages = await agenda.reconciliationCoverage();
+    expect(coverages.map(({ from, to }) => [from, to])).toEqual([
+      ['2026-08-19', '2026-08-21'],
+      ['2026-08-22', '2026-10-22'],
+      ['2026-10-23', '2026-10-25'],
+      ['2027-08-19', '2027-08-19'],
+    ]);
+    expect(coverages.every((coverage) => coverage.timezone === 'America/New_York')).toBe(
+      true,
+    );
+  });
+
   it('makes a locally created dated Task visible to mounted Plans without a refetch', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     const plans = new PlansRepository(database, subscriptions);

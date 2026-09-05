@@ -8,6 +8,7 @@ import { AccessibilityInfo, Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
+import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { readPlanActivityFloor } from '@/lib/planActivityFloors';
 import { createOfflineQueryClient } from '@/lib/queryClient';
@@ -166,6 +167,8 @@ function mount(
   resolutionOccurrenceDate?: string | null,
   occurrenceDate?: string,
   providedClient?: QueryClient,
+  followUp?: FollowUpNavigation,
+  onAddAttachment?: () => void,
 ) {
   const queryClient =
     providedClient ??
@@ -198,7 +201,9 @@ function mount(
         }
         today={TODAY}
         onBack={onBack}
+        {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
         onOpenActivity={onOpenActivity}
+        {...(followUp === undefined ? {} : { followUp })}
         {...(resolutionOccurrenceDate === undefined ? {} : { resolutionOccurrenceDate })}
       />,
     ),
@@ -311,10 +316,8 @@ describe('reading', () => {
         .getByTestId('when-where-date')
         .contains(screen.getByText('Does not repeat · No reminder')),
     ).toBe(true);
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
-    );
-    expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    expect(fieldValue('Notes for this plan')).toBe('Check-in is after 3 PM.');
   });
 
   it('uses icon-only header controls with complete accessible names', async () => {
@@ -344,10 +347,12 @@ describe('reading', () => {
     // Each row closes itself, so the list ends on its last row rather than needing a rule
     // bolted onto the container — which is what produced two lines with a gap between them.
     expect(screen.getByTestId('section-notes').style.borderBottomWidth).toBe('1px');
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
-    );
-    expect(screen.getByLabelText('Notes').style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    expect(
+      Number.parseFloat(
+        getComputedStyle(screen.getByLabelText('Notes for this task')).borderTopWidth,
+      ),
+    ).toBeGreaterThan(0);
     expect(screen.getByTestId('section-related').style.borderBottomWidth).toBe('1px');
   });
 
@@ -459,23 +464,19 @@ describe('reading', () => {
 });
 
 describe('the sections', () => {
-  it('announces disclosure state and reveals Notes only after the row is pressed', async () => {
+  it('offers labeled notes editing and never saves a draft on blur', async () => {
     stubFetch({ status: 200, body: detailBody(task()) });
     mount();
     await loaded();
-
-    const notes = screen.getByRole('button', {
-      name: 'Notes, Check-in is after 3 PM.',
-    });
-    expect(notes.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByLabelText('Notes')).toBeNull();
-
-    fireEvent.click(notes);
-    expect(notes.getAttribute('aria-expanded')).toBe('true');
-    expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
-
-    fireEvent.click(notes);
-    expect(screen.queryByLabelText('Notes')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    const field = screen.getByLabelText('Notes for this task');
+    fireEvent.change(field, { target: { value: 'Unsaved draft' } });
+    fireEvent.blur(field);
+    expect(fieldValue('Notes for this task')).toBe('Unsaved draft');
+    expect(sent.filter((request) => request.method === 'PATCH')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Save notes' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('button', { name: 'Keep editing' })).toBeDefined();
   });
 
   /**
@@ -513,23 +514,14 @@ describe('the sections', () => {
    * 1,300-character note produced a 1,465 pt "collapsed" Notes row that pushed `Reminder` and
    * every capability under it off the screen entirely.
    */
-  it('summarises a long note in one line rather than rendering it collapsed', async () => {
+  it('keeps long notes readable through the explicit edit action', async () => {
     const long = 'Lorem ipsum dolor sit amet. '.repeat(50).trim();
     stubFetch({ status: 200, body: detailBody(task({ notes: long })) });
     mount();
     await loaded();
-
-    // React Native Web renders `numberOfLines={1}` as its one-line class rather than an
-    // inline clamp, so the assertion is on the resolved rule.
-    const summary = screen.getByText(long);
-    expect(getComputedStyle(summary).whiteSpace).toBe('nowrap');
-    expect(getComputedStyle(summary).textOverflow).toBe('ellipsis');
-    // The full text stays in the accessible name — the clamp is visual only.
-    expect(
-      screen
-        .getByRole('button', { name: `Notes, ${long}` })
-        .getAttribute('aria-expanded'),
-    ).toBe('false');
+    expect(screen.getByText(long)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    expect(fieldValue('Notes for this task')).toBe(long);
   });
 
   /**
@@ -1410,6 +1402,99 @@ describe('editing in place', () => {
       headers: { 'Idempotency-Key': 'idem-test-key' },
     });
     await waitFor(() => expect(onOpenActivity).toHaveBeenCalledWith(ID));
+  });
+
+  it('protects dirty notes before converting an occurrence, so Keep editing writes nothing', async () => {
+    const current = task({
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    stubFetch({
+      status: 200,
+      body: detailBody(current, [], undefined, occurrenceProjection()),
+    });
+    const onOpenActivity = vi.fn();
+    mount(() => {}, onOpenActivity, undefined, TODAY);
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    fireEvent.change(screen.getByLabelText('Notes for this task'), {
+      target: { value: 'Keep my occurrence draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
+    fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep editing' }));
+    expect(sent.filter((request) => request.method !== 'GET')).toHaveLength(0);
+    expect(fieldValue('Notes for this task')).toBe('Keep my occurrence draft');
+    expect(onOpenActivity).not.toHaveBeenCalled();
+  });
+
+  it('guards a completion follow-up destination while notes are dirty', async () => {
+    const meal = plan({ type: 'meal', details: { kind: 'meal' } });
+    stubFetch(
+      { status: 200, body: detailBody(meal) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: plan({ ...meal, status: 'completed', outcome: 'had_it' }),
+            outcome: 'had_it',
+            followUp: { kind: 'meal_ingredients', remaining: 3 },
+          },
+          meta: { requestId: 'req_followup' },
+        },
+      },
+    );
+    const openActivity = vi.fn();
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      { openActivity, openCompose: vi.fn() },
+    );
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    fireEvent.change(screen.getByLabelText('Notes for this plan'), {
+      target: { value: 'Draft after dinner' },
+    });
+    fireEvent.click(screen.getByTestId('detail-complete'));
+    await waitFor(() => {
+      const toast = useToast.getState().current;
+      expect(toast?.kind === 'undo' ? toast.followUp?.actions.length : 0).toBeGreaterThan(
+        0,
+      );
+    });
+    act(() => {
+      const toast = useToast.getState().current;
+      if (toast?.kind === 'undo') toast.followUp?.actions[0]?.onPress();
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep editing' }));
+    expect(openActivity).not.toHaveBeenCalled();
+    expect(fieldValue('Notes for this plan')).toBe('Draft after dinner');
+  });
+
+  it('confirms dirty notes before Back and preserves them when Keep editing is chosen', async () => {
+    stubFetch({ status: 200, body: detailBody(task()) });
+    const back = vi.fn();
+    mount(back);
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    fireEvent.change(screen.getByLabelText('Notes for this task'), {
+      target: { value: 'Draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep editing' }));
+    expect(back).not.toHaveBeenCalled();
+    expect(fieldValue('Notes for this task')).toBe('Draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }));
+    expect(back).toHaveBeenCalledOnce();
+    expect(sent.filter((request) => request.method === 'PATCH')).toHaveLength(0);
   });
 
   it('commits the title on blur with If-Match, and no Save button exists', async () => {
@@ -3434,6 +3519,7 @@ describe('the viewer and the hero (P3-42)', () => {
     viewer: string,
     activity: Activity,
     extras: Record<string, unknown> = {},
+    onAddAttachment?: () => void,
   ) {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -3452,10 +3538,45 @@ describe('the viewer and the hero (P3-42)', () => {
         ...extras,
       }),
     });
-    return mount(undefined, undefined, undefined, undefined, queryClient);
+    return mount(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      queryClient,
+      undefined,
+      onAddAttachment,
+    );
   }
   const OWNER = 'usr_01J0000000000000000000000B';
   const GUEST = 'usr_01J0000000000000000000000C';
+
+  it.each([false, true])(
+    'does not offer photo upload to a participant (populated: %s)',
+    async (populated) => {
+      const add = vi.fn();
+      mountAs(GUEST, plan(), { attachments: populated ? photos : [] }, add);
+      await loaded();
+      expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Add photo/i })).toBeNull();
+      expect(add).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    'keeps photo upload available to the owner (populated: %s)',
+    async (populated) => {
+      const add = vi.fn();
+      mountAs(OWNER, plan(), { attachments: populated ? photos : [] }, add);
+      await loaded();
+      fireEvent.click(
+        populated
+          ? screen.getByRole('button', { name: 'Add photo' })
+          : screen.getByTestId('add-to-plan-photo'),
+      );
+      expect(add).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('renders no hero without primaryAttachmentId, and the thumbnails by key', async () => {
     mountAs(OWNER, plan());
@@ -3475,7 +3596,8 @@ describe('the viewer and the hero (P3-42)', () => {
       ATT_B.slice(4),
     );
     // Announced once: the hero carries no second copy of the title.
-    expect(screen.getAllByText('Zahav')).toHaveLength(1);
+    expect(screen.getAllByRole('textbox', { name: 'Title' })).toHaveLength(1);
+    expect(screen.queryByRole('img', { name: 'Zahav' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Photo 2 of 2, cover' })).toBeDefined();
   });
 

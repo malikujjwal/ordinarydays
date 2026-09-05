@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { type Ref, useState } from 'react';
 import {
   Pressable,
   type PressableProps,
   type StyleProp,
+  type View,
   type ViewStyle,
 } from 'react-native';
 import { useTheme } from '../theme/index';
@@ -25,6 +26,7 @@ import { useTheme } from '../theme/index';
  */
 
 export interface TouchableProps extends Omit<PressableProps, 'style' | 'children'> {
+  elementRef?: Ref<View>;
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   /** React Native Web forwards these as `data-*`; native safely ignores them. */
@@ -37,6 +39,7 @@ export interface TouchableProps extends Omit<PressableProps, 'style' | 'children
 
 export function Touchable({
   children,
+  elementRef,
   style,
   visualSize,
   square = false,
@@ -56,6 +59,7 @@ export function Touchable({
 
   return (
     <Pressable
+      ref={elementRef}
       accessibilityState={{ disabled: disabled === true }}
       disabled={disabled}
       hitSlop={slop}

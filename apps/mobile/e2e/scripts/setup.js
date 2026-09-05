@@ -163,6 +163,15 @@ if (FLOW.startsWith('calendar-')) {
       }),
     );
   }
+} else if (FLOW === 'activity-notes') {
+  output.title = `Native notes ${stamp}`;
+  output.activityId = create(output.title, wall.date);
+  output.activityIds.push(output.activityId);
+} else if (FLOW === 'recurring-edit-window') {
+  output.title = `Native repeated edit ${stamp}`;
+  const fields = wall.date.split('-').map(Number);
+  output.targetMonth = `${fields[0] + 1}-${String(fields[1]).padStart(2, '0')}`;
+  output.targetDate = `${output.targetMonth}-15`;
 } else if (FLOW === 'recurring-create-window') {
   output.title = `Native new daily ${stamp}`;
   output.afterWeek = addWallDays(wall.date, 8);

@@ -323,7 +323,13 @@ export class PlansRepository {
       data.mode === 'initial' || data.mode === 'upcoming_window'
         ? mergeWindowProgress(data.mode === 'initial' ? undefined : held, {
             from: data.upcomingWindow.from as WallDate,
-            through: data.upcomingWindow.through as WallDate,
+            // Initial refresh retains cached distant windows, so retain their rendered extent.
+            through:
+              data.mode === 'initial' &&
+              held !== undefined &&
+              held.through > data.upcomingWindow.through
+                ? held.through
+                : (data.upcomingWindow.through as WallDate),
             nextFrom: data.upcomingWindow.nextFrom as WallDate | null,
           })
         : held;
@@ -602,6 +608,15 @@ export class PlansRepository {
       const rows = byDate.get(date) ?? [];
       rows.push(readLocalAgendaItem(row));
       byDate.set(date, rows);
+    }
+    // Local time edits and targeted canonical replacements can change a row's position
+    // relative to cached peers. Match the Plans API's untimed/time/id order after merging.
+    for (const items of byDate.values()) {
+      items.sort(
+        (left, right) =>
+          (left.time ?? '').localeCompare(right.time ?? '') ||
+          left.activityId.localeCompare(right.activityId),
+      );
     }
     const coverageRows = await reader.all(
       `SELECT covered_from, covered_through FROM native_plans_coverage

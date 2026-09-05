@@ -95,13 +95,17 @@ import type { PendingActivity } from '@/lib/pendingActivity';
 import { planKindLabel } from '@/lib/planKinds';
 import { ME_QUERY_KEY } from '@/lib/queryKeys';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
+import { useNotesDraft } from '../hooks/useNotesDraft';
+import { ActivityNotes, type NotesDraft } from './ActivityNotes';
+import { NotesActions } from './NotesActions';
+import { NotesDiscardPrompt } from './NotesDiscardPrompt';
 
 /**
  * The Activity detail screen (P1-26).
  *
  * One `GET /v1/activities/:id`, composed server-side from exact strong reads and bounded
- * section prefixes. Editing is **in place**: there is no edit mode and no per-field Save
- * button. Text commits on blur, pickers commit on selection, and each issues its own `PATCH`
+ * section prefixes. Editing is **in place**: title commits on blur and pickers on selection.
+ * Notes use an explicit Save/Cancel draft editor. Each successful edit issues its own `PATCH`
  * with `If-Match` (`activities.md` §6.1).
  *
  * ## The two rules this screen exists to hold
@@ -130,6 +134,10 @@ export interface ActivityDetailScreenProps {
   /** The user's today, in their zone. Injected so the quick chips are testable (§4.3). */
   today: WallDate;
   onBack: () => void;
+  onNotesGuardChange?: (guard: {
+    blocked: boolean;
+    requestLeave: (leave: () => void) => void;
+  }) => void;
   /** Where a duplicate lands: its own detail screen (P1-27, `activities.md` §7.1). */
   onOpenActivity: (activityId: string) => void;
   /** Where a completion follow-up's navigation rows go (P3-44). */
@@ -177,10 +185,15 @@ interface PendingChange {
   confirmation: Confirmation;
 }
 
-export function ActivityDetailScreen({
+export function ActivityDetailScreen(props: ActivityDetailScreenProps) {
+  return <ActivityDetailBody key={JSON.stringify(props.target)} {...props} />;
+}
+
+function ActivityDetailBody({
   target,
   today,
   onBack,
+  onNotesGuardChange,
   followUp,
   onOpenActivity,
   onOpenList,
@@ -196,9 +209,23 @@ export function ActivityDetailScreen({
   const theme = useTheme();
   const activityId = target.activityId;
   const detail = useActivityDetail(target);
+  const notes = useNotesDraft(detail.detail?.activity.notes ?? '', (value) =>
+    detail.patch({ notes: value }),
+  );
+  const { dirty, saving, requestLeave } = notes;
+  useEffect(() => {
+    onNotesGuardChange?.({ blocked: dirty || saving, requestLeave });
+  }, [dirty, saving, requestLeave, onNotesGuardChange]);
   const actions = useActivityActions(
     activityId,
-    followUp === undefined ? {} : { followUp },
+    followUp === undefined
+      ? {}
+      : {
+          followUp: {
+            openActivity: (id) => notes.requestLeave(() => followUp.openActivity(id)),
+            openCompose: () => notes.requestLeave(followUp.openCompose),
+          },
+        },
   );
   /**
    * Derived from pending-intent presentation, never from a field on the Activity (P2-50).
@@ -225,6 +252,7 @@ export function ActivityDetailScreen({
   }
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [repeatOpen, setRepeatOpen] = useState(false);
+  const [convertAfterRepeatClose, setConvertAfterRepeatClose] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [kindSheet, setKindSheet] = useState<'planKind' | 'toPlan' | undefined>(
     undefined,
@@ -232,6 +260,7 @@ export function ActivityDetailScreen({
   const [pending, setPending] = useState<PendingChange | undefined>(undefined);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteRequested, setDeleteRequested] = useState(false);
+  const [duplicateRequested, setDuplicateRequested] = useState(false);
   const [deleteSeriesConfirmOpen, setDeleteSeriesConfirmOpen] = useState(false);
   const [deleteSeriesConfirmRequested, setDeleteSeriesConfirmRequested] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
@@ -568,7 +597,7 @@ export function ActivityDetailScreen({
           icon={ChevronLeft}
           label="Back"
           tone="accent"
-          onPress={onBack}
+          onPress={() => notes.requestLeave(onBack)}
           testID="detail-back"
         />
         {activity === undefined || pendingCreate.pending ? null : (
@@ -599,9 +628,12 @@ export function ActivityDetailScreen({
       ) : (
         <Loaded
           activity={activity}
+          notes={notes}
           detail={detail}
           today={today}
-          onOpenChild={onOpenChild ?? onOpenActivity}
+          onOpenChild={(id) =>
+            notes.requestLeave(() => (onOpenChild ?? onOpenActivity)(id))
+          }
           onToggleChild={actions.setChildCompletion}
           {...(actions.errorMessage === undefined
             ? {}
@@ -614,8 +646,12 @@ export function ActivityDetailScreen({
                 onDismissActionError: actions.dismissError,
               })}
           updatesPaginationSignal={updatesPaginationSignal}
-          {...(onOpenList === undefined ? {} : { onOpenList })}
-          {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
+          {...(onOpenList === undefined
+            ? {}
+            : { onOpenList: (id: string) => notes.requestLeave(() => onOpenList(id)) })}
+          {...(onAddPrepTask === undefined
+            ? {}
+            : { onAddPrepTask: () => notes.requestLeave(onAddPrepTask) })}
           {...(onAddList === undefined ? {} : { onAddList })}
           {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
           ingredientDestination={ingredientDestination}
@@ -686,6 +722,7 @@ export function ActivityDetailScreen({
        */}
       <ScreenShell
         measure="reading"
+        {...(notes.editing ? { footer: <NotesActions notes={notes} /> } : {})}
         onScroll={handleDetailScroll}
         scrollEventThrottle={16}
         testID="detail-shell"
@@ -693,6 +730,7 @@ export function ActivityDetailScreen({
         <View testID="detail-surface">{detailContent}</View>
       </ScreenShell>
 
+      <NotesDiscardPrompt notes={notes} />
       {authoritativeActivity === undefined ? null : (
         <>
           <SnoozeSheet
@@ -774,6 +812,16 @@ export function ActivityDetailScreen({
             <RepeatSheet
               open={repeatOpen}
               onClose={() => setRepeatOpen(false)}
+              onClosed={() => {
+                if (!convertAfterRepeatClose || actionOccurrenceDate === undefined)
+                  return;
+                setConvertAfterRepeatClose(false);
+                notes.requestLeave(() => {
+                  void detail.convertToOneOff(actionOccurrenceDate).then((converted) => {
+                    if (converted) onOpenActivity(activityId);
+                  });
+                });
+              }}
               anchorDate={
                 authoritativeActivity.recurrence === undefined
                   ? authoritativeActivity.schedule.date
@@ -788,6 +836,11 @@ export function ActivityDetailScreen({
                 ? {}
                 : {
                     onConvertToOneOff: async () => {
+                      if (notes.dirty || notes.saving) {
+                        setConvertAfterRepeatClose(true);
+                        setRepeatOpen(false);
+                        return false;
+                      }
                       const converted =
                         await detail.convertToOneOff(actionOccurrenceDate);
                       if (converted) onOpenActivity(activityId);
@@ -816,9 +869,13 @@ export function ActivityDetailScreen({
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
             onClosed={() => {
-              if (!deleteRequested) return;
-              setDeleteRequested(false);
-              setDeleteOpen(true);
+              if (duplicateRequested) {
+                setDuplicateRequested(false);
+                notes.requestLeave(() => void duplicate());
+              } else if (deleteRequested) {
+                setDeleteRequested(false);
+                notes.requestLeave(() => setDeleteOpen(true));
+              }
             }}
             activity={authoritativeActivity}
             onChangePlanKind={() => setKindSheet('planKind')}
@@ -830,7 +887,7 @@ export function ActivityDetailScreen({
               // Plan → Task needs no kind chosen; the menu already checked the blockers.
               propose(authoritativeActivity, { objectKind: 'task', type: 'task' });
             }}
-            onDuplicate={() => void duplicate()}
+            onDuplicate={() => setDuplicateRequested(true)}
             onDelete={() => setDeleteRequested(true)}
           />
 
@@ -982,6 +1039,7 @@ export function ActivityDetailScreen({
 }
 
 interface LoadedProps {
+  notes: NotesDraft;
   /** The create has not been acknowledged, so the server knows nothing about this row. */
   pending: boolean;
   pendingNeedsAttention: boolean;
@@ -1080,6 +1138,7 @@ const SKIPPED_STATUSES = new Set(['skipped', 'skipped_occurrence']);
 type ResolutionKind = 'completed' | 'skipped';
 
 function Loaded({
+  notes,
   activity,
   detail,
   today,
@@ -1142,6 +1201,7 @@ function Loaded({
     'ownerId' in activity ? activity : { ownerId: undefined },
     viewerUserId,
   );
+  const addAttachment = manageAttachments && !pending ? onAddAttachment : undefined;
   const hero = resolveHero(activity.primaryAttachmentId, attachments);
   const [viewerIndex, setViewerIndex] = useState<number | undefined>(undefined);
   const attachmentActions = useAttachmentActions({
@@ -1195,7 +1255,7 @@ function Loaded({
     wired: {
       prepTask: onAddPrepTask !== undefined,
       list: onAddList !== undefined,
-      attachment: onAddAttachment !== undefined,
+      attachment: addAttachment !== undefined,
     },
   });
 
@@ -1322,6 +1382,7 @@ function Loaded({
               hideLabel
               appearance="bare"
               textVariant="display"
+              multiline
               onCommit={async (title) => {
                 await detail.patch({ title });
               }}
@@ -1571,6 +1632,7 @@ function Loaded({
                       )
                 }
                 {...(pending ? {} : { onPress: onOpenReminders })}
+                opens={!pending}
                 testID="section-reminders"
               />
             );
@@ -1587,6 +1649,7 @@ function Loaded({
                     : describeRecurrence(activity.recurrence, today)
                 }
                 {...(pending ? {} : { onPress: onOpenRepeat })}
+                opens={!pending}
                 testID="detail-edit-recurrence"
               />
             );
@@ -1594,37 +1657,13 @@ function Loaded({
 
           if (section.key === 'notes') {
             return (
-              <DisclosureRow
+              <ActivityNotes
                 key={section.key}
-                label="Notes"
-                summary={
-                  activity.notes?.trim() === '' || activity.notes === undefined
-                    ? 'Add notes'
-                    : activity.notes
-                }
-                testID="section-notes"
-              >
-                {pending ? (
-                  <Text variant="body" color="textSecondary" testID="detail-notes">
-                    {activity.notes?.trim() === '' || activity.notes === undefined
-                      ? 'No notes'
-                      : activity.notes}
-                  </Text>
-                ) : (
-                  <InlineText
-                    label="Notes"
-                    value={activity.notes ?? ''}
-                    hideLabel
-                    appearance="bare"
-                    multiline
-                    placeholder="Add notes"
-                    onCommit={async (notes) => {
-                      await detail.patch({ notes });
-                    }}
-                    testID="detail-notes"
-                  />
-                )}
-              </DisclosureRow>
+                notes={notes}
+                value={activity.notes ?? ''}
+                kind={activity.objectKind}
+                pending={pending}
+              />
             );
           }
 
@@ -1712,7 +1751,7 @@ function Loaded({
           coverAttachmentId={activity.primaryAttachmentId}
           onOpen={setViewerIndex}
           {...(manageAttachments ? { onActions: attachmentActions.open } : {})}
-          {...(onAddAttachment === undefined ? {} : { onAdd: onAddAttachment })}
+          {...(addAttachment === undefined ? {} : { onAdd: addAttachment })}
         />
       ) : null}
       {sections.some((section) => section.key === 'updates') ? (
@@ -1750,7 +1789,7 @@ function Loaded({
           {...(onAddList === undefined
             ? {}
             : { onAddList: () => onAddList(activity.title) })}
-          {...(onAddAttachment === undefined ? {} : { onAddAttachment })}
+          {...(addAttachment === undefined ? {} : { onAddAttachment: addAttachment })}
         />
       ) : null}
       <AttachmentViewer

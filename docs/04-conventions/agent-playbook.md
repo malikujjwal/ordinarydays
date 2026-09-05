@@ -17,10 +17,17 @@ Every unit of work has an ID of the form `P<phase>-<task>` — `P2-07`, `P5-11` 
 `docs/03-implementation/phase-<n>.md`. **Only the ten phase files named in
 `docs/00-index.md` define task IDs**; if any other file matching `phase-*.md` exists in the
 repo, it is superseded and must not be scheduled from. You are given one. If you were not
-given one, stop and ask; do not invent one, and do not start work "to be helpful".
+given one for roadmap implementation, resolve the intended existing task before implementing;
+do not invent one. A direct maintenance, investigation, or documentation request supplies
+its own scope and can proceed without a phase ID, per the
+[issue-tracker convention](../agents/issue-tracker.md). Do not fabricate a phase-task footer
+for such work. The task-ID-specific branch/footer checklists below apply to roadmap tasks.
 
 Your task ID determines your branch (`git-workflow.md` §1.1), your commit footer, your PR
 title, and the scope you are allowed to touch.
+
+Use [the project workflow guide](../agents/workflow.md) to select skills and verification
+for the current kind of work.
 
 ### 1.1a Task file inventories are minima
 

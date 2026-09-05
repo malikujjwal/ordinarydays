@@ -33,6 +33,7 @@ export function AttachmentPickerSheet({
       // Closing mid-upload leaves the chain running; the confirm still lands and refetches.
       actions={
         <Button
+          contentSized
           label="Done"
           size="lg"
           fullWidth

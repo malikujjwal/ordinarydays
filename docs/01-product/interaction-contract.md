@@ -317,6 +317,7 @@ List bounds those actions to the current populated stage.
 | When/where block | Reschedule sheet. Owner only; for a participant the block is not interactive | — | — |
 | Address line within it | Open the platform maps app | — | Copy address |
 | Reminder row within it | Your own reminder's picker. Never shows or reaches anyone else's ([`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1) | — | — |
+| Activity notes action (`Add notes` / `Edit notes`) | Open an inline draft editor with `Save notes` and `Cancel`; blur does nothing. Changed drafts require `Keep editing` / `Discard changes` before cancel or leaving. Saving blocks duplicate submission and leaving; failure retains the draft for retry ([`activities.md`](activities.md) §6.1). | — | — |
 | Functional capability disclosure | Toggle its inline content; the row exposes its expanded state and the chevron communicates the same change visually | — | — |
 | Unimplemented Plan capability discovery row (`Coming later`) | — (non-interactive; no chevron or disabled action) | — | — |
 | Date suggestion row | `Works for me` toggles your availability; `Use this date` (owner only) opens the reschedule sheet pre-filled ([`plans-and-lists.md`](plans-and-lists.md) §2.3) | Author or owner: `Delete` | — |

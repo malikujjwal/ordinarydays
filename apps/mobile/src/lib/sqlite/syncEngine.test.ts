@@ -1041,6 +1041,62 @@ describe('serialized native convergence guard', () => {
     ).toBeUndefined();
   });
 
+  it.each(['undated', 'overdue'] as const)(
+    'keeps canonical %s Today rows out of dated Plans',
+    async (kind) => {
+      if (database === undefined) throw new Error('Missing database');
+      const request = { from: '2026-08-19', to: '2026-08-19', tz: 'UTC' } as const;
+      const before = await agenda.read({
+        from: request.from,
+        to: request.to,
+        timezone: 'UTC',
+      });
+      const item = before.days[0]?.anytime.find((row) => row.activityId === ACTIVITY);
+      if (item === undefined) throw new Error('Missing fixture');
+      await transactions.run(async (transaction) => {
+        await transaction.database.run(
+          `INSERT INTO native_plans_state (timezone,upcoming_from,upcoming_through) VALUES ('UTC','2026-08-19','2026-09-19');`,
+        );
+        if (kind === 'undated') {
+          await transaction.database.run(
+            'UPDATE activities SET schedule_date = NULL WHERE activity_id = ?;',
+            [ACTIVITY],
+          );
+        }
+        await agenda.replaceCanonicalActivityRows(
+          transaction,
+          request,
+          {
+            activityId: ACTIVITY,
+            activityVersion: '2026-08-19T12:00:00.000Z',
+            rows: [
+              {
+                date: request.from,
+                item: {
+                  ...item,
+                  ...(kind === 'overdue' ? { overdueFromDate: '2026-08-18' } : {}),
+                },
+              },
+            ],
+          },
+          clock,
+        );
+      });
+      expect(
+        await database.first(
+          'SELECT activity_id FROM agenda_rows WHERE activity_id = ?;',
+          [ACTIVITY],
+        ),
+      ).toBeDefined();
+      const plans = await new PlansRepository(database, subscriptions).read('UTC');
+      expect(
+        plans?.store.byDate
+          .get(parseWallDate(request.from))
+          ?.some((row) => row.activityId === ACTIVITY) ?? false,
+      ).toBe(false);
+    },
+  );
+
   it('keeps a zero-row projection fence across targeted replacement and repository restart', async () => {
     if (database === undefined) throw new Error('missing zero-row fence database');
     const request = { from: '2026-08-19', to: '2026-08-19', tz: 'UTC' } as const;
@@ -4755,6 +4811,154 @@ describe('serialized native convergence guard', () => {
       local_state: 'canonical',
     });
   });
+
+  it.each([
+    ['override', '2027-08-19'],
+    ['empty', '2027-08-19'],
+    ['override', '2026-08-20'],
+    ['coverage-growth', '2027-08-19'],
+  ] as const)(
+    'reconciles retained Plans dates after a series edit without fetching the gap: %s %s',
+    async (responseKind, far) => {
+      if (database === undefined) throw new Error('Missing database');
+      const activity = await seedRecurring();
+      const before = await agenda.read({
+        from: '2026-08-19',
+        to: '2026-08-19',
+        timezone: 'UTC',
+      });
+      const day = before.days[0];
+      if (day === undefined) throw new Error('Missing seeded day');
+      const { upNext: _upNext, ...dayWithoutUpNext } = day;
+      const farDay = {
+        ...dayWithoutUpNext,
+        date: far,
+        schedule: day.schedule.map((item) => ({ ...item, occurrenceDate: far })),
+        anytime: [],
+        earlier: [],
+      };
+      await transactions.run(async (transaction) => {
+        await transaction.database.run(
+          `INSERT INTO native_plans_state (timezone,upcoming_from,upcoming_through) VALUES ('UTC','2026-08-21','2026-09-21');`,
+        );
+        await transaction.database.run(
+          `INSERT INTO native_plans_coverage (timezone,ordinal,covered_from,covered_through) VALUES ('UTC',0,?,?);`,
+          [far, far],
+        );
+        await agenda.replaceLocalActivityRows(
+          transaction,
+          ACTIVITY,
+          { days: [day, farDay], warnings: [] },
+          'canonical',
+        );
+        await transaction.database.run(
+          `INSERT INTO native_plans_date_rows (timezone,date,ordinal,activity_id,occurrence_date,status,item_json) VALUES ('UTC',?,0,?,?,'scheduled',?);`,
+          [far, ACTIVITY, far, JSON.stringify(farDay.schedule[0])],
+        );
+        await transaction.database.run(
+          `INSERT INTO native_plans_date_rows (timezone,date,ordinal,activity_id,occurrence_date,status,item_json) VALUES ('UTC',?,1,?,?,'scheduled',?);`,
+          [
+            far,
+            OTHER,
+            far,
+            JSON.stringify({ ...farDay.schedule[0], activityId: OTHER, time: '13:00' }),
+          ],
+        );
+        await service.patch(
+          transaction,
+          {
+            activityId: ACTIVITY,
+            intentId: 'retained-recurrence-edit',
+            ifMatch: activity.updatedAt,
+            input: {
+              recurrence: {
+                mode: 'fixed',
+                segments: [
+                  {
+                    freq: 'daily',
+                    interval: 1,
+                    effectiveFrom: '2026-08-19',
+                    time: '11:00',
+                  },
+                ],
+              },
+            },
+          },
+          clock,
+        );
+      });
+      const acknowledged = { ...activity, updatedAt: '2026-08-19T12:00:00.000Z' };
+      let grew = false;
+      const targeted = vi.fn<TargetedAgendaTransport['load']>(async (_id, request) => {
+        if (responseKind === 'coverage-growth' && !grew) {
+          grew = true;
+          await transactions.run((t) =>
+            t.database.run(
+              `INSERT INTO native_plans_coverage (timezone,ordinal,covered_from,covered_through) VALUES ('UTC',1,'2028-08-19','2028-08-19');`,
+            ),
+          );
+        }
+        return {
+          activityId: ACTIVITY,
+          activityVersion: acknowledged.updatedAt,
+          rows: [day, farDay]
+            .filter(
+              (d) =>
+                d.date >= request.from &&
+                d.date <= request.to &&
+                (responseKind !== 'empty' || d.date !== far),
+            )
+            .flatMap((d) =>
+              d.schedule.map((item) => ({
+                date: d.date,
+                item: { ...item, time: d.date === far ? '12:00' : '11:00' },
+              })),
+            ),
+        };
+      });
+      const sync = syncEngine({
+        push: { ...pushTransport(), patch: async () => acknowledged },
+        targeted: { load: targeted },
+      });
+      await sync.syncNow();
+      sync.stop();
+      expect(targeted.mock.calls.map((call) => [call[1].from, call[1].to])).toEqual([
+        ['2026-08-19', '2026-08-19'],
+        [far, far],
+        ...(responseKind === 'coverage-growth'
+          ? [
+              ['2026-08-19', '2026-08-19'],
+              [far, far],
+              ['2028-08-19', '2028-08-19'],
+            ]
+          : []),
+      ]);
+      expect(
+        await database.first(
+          'SELECT time,local_state FROM agenda_rows WHERE activity_id=? AND viewer_date=?',
+          [ACTIVITY, far],
+        ),
+      ).toEqual(
+        responseKind === 'empty'
+          ? undefined
+          : { time: '12:00', local_state: 'canonical' },
+      );
+      const visiblePlans = await new PlansRepository(database, subscriptions).read('UTC');
+      expect(
+        visiblePlans?.store.byDate
+          .get(parseWallDate(far))
+          ?.map((item) => ({ id: item.activityId, time: item.time })) ?? [],
+      ).toEqual(
+        responseKind === 'empty'
+          ? [{ id: OTHER, time: '13:00' }]
+          : [
+              { id: ACTIVITY, time: '12:00' },
+              { id: OTHER, time: '13:00' },
+            ],
+      );
+      expect(await outbox.all()).toEqual([]);
+    },
+  );
 
   it('retains recurrence rows and receipt on targeted failure, then accepts zero rows on Retry', async () => {
     const activity = await seedRecurring();

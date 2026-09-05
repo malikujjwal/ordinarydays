@@ -575,8 +575,17 @@ Activity. See [`overview.md`](overview.md#44-suggest-never-auto-create).
 ### 6.1 General rules
 
 - Editing happens on the Activity detail screen, in place. There is no separate "edit
-  mode" screen and no Save button for individual fields: a field commits on blur (text) or
-  on selection (pickers), issuing a `PATCH /v1/activities/:id`.
+  mode" screen. Title commits on blur and pickers on selection, issuing a
+  `PATCH /v1/activities/:id`. **Activity notes are the explicit exception**: `Add notes` or
+  `Edit notes` opens an inline, persistently labeled, bordered draft editor with `Save notes`
+  and `Cancel`. Blur, tapping outside, and keyboard dismissal neither save nor discard.
+  Save retains the draft until the existing platform mutation owner succeeds (durable
+  SQLite/outbox acceptance on native); while saving, show feedback and prevent duplicates.
+  Failure retains the draft with an announced error and retry through `Save notes`.
+  Cancel unchanged closes immediately. Cancel or leaving with changed notes offers
+  `Keep editing` and `Discard changes`; leaving is blocked while saving. The field and
+  actions remain reachable with the keyboard open, small screens, and larger text.
+  This exception does not alter title blur-to-save or any other field or relationship.
 - Every `PATCH` sends `If-Match: <updatedAt>`. A `409 conflict` means someone else changed
   the plan; the client refetches, shows `This plan changed. Review the update.` and
   re-applies the user's pending edit onto the fresh version only if the fields do not

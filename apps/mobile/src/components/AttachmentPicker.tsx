@@ -52,6 +52,7 @@ export function AttachmentPicker({
       <View style={{ flexDirection: 'row', gap: theme.space[3], flexWrap: 'wrap' }}>
         {Platform.OS === 'web' ? null : (
           <Button
+            contentSized
             label="Camera"
             variant="secondary"
             onPress={() => void controller.pick('camera')}
@@ -59,6 +60,7 @@ export function AttachmentPicker({
           />
         )}
         <Button
+          contentSized
           label="Photos"
           variant="secondary"
           onPress={() => void controller.pick('library')}
@@ -118,6 +120,7 @@ export function AttachmentPicker({
             </View>
             {upload.status === 'failed' ? (
               <Button
+                contentSized
                 label="Retry"
                 variant="ghost"
                 onPress={() => controller.retry(upload.localId)}
@@ -131,6 +134,7 @@ export function AttachmentPicker({
              */}
             {upload.status === 'done' && upload.attachment !== undefined ? null : (
               <Button
+                contentSized
                 label="Remove"
                 variant="ghost"
                 onPress={() => controller.remove(upload.localId)}

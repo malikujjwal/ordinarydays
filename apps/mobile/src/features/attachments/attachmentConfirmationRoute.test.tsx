@@ -1,6 +1,7 @@
 import { instant } from '@od/shared/schemas';
 import type { Attachment } from '@od/shared/types';
 import { act, render, waitFor } from '@testing-library/react';
+import { Platform } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ActivityDetailRoute from '../../../app/(app)/activity/[id]';
 
@@ -9,12 +10,26 @@ import ActivityDetailRoute from '../../../app/(app)/activity/[id]';
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-attachment-route-test' }));
 
 const harness = vi.hoisted(() => ({
-  detailProps: undefined as { onAddAttachment?: () => void } | undefined,
+  detailProps: undefined as
+    | {
+        onAddAttachment?: () => void;
+        onNotesGuardChange?: (guard: {
+          blocked: boolean;
+          requestLeave: (leave: () => void) => void;
+        }) => void;
+      }
+    | undefined,
   pickerProps: undefined as
     | { open: boolean; onConfirmed: (attachment: Attachment) => void }
     | undefined,
   invalidate: vi.fn(),
   pullActivity: vi.fn(async () => undefined),
+}));
+
+// Navigation is a native boundary; this test exercises attachment reconciliation only.
+vi.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ dispatch: vi.fn() }),
+  usePreventRemove: vi.fn(),
 }));
 
 vi.mock('expo-router', () => ({
@@ -61,6 +76,25 @@ describe('native attachment confirmation reconciliation', () => {
     harness.pickerProps = undefined;
     harness.invalidate.mockClear();
     harness.pullActivity.mockClear();
+  });
+
+  it('never registers browser unload listeners when native notes become dirty', () => {
+    const platform = Platform.OS;
+    const listener = vi.spyOn(window, 'addEventListener');
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+    try {
+      render(<ActivityDetailRoute />);
+      act(() =>
+        harness.detailProps?.onNotesGuardChange?.({
+          blocked: true,
+          requestLeave: () => {},
+        }),
+      );
+      expect(listener.mock.calls.some(([event]) => event === 'beforeunload')).toBe(false);
+    } finally {
+      Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
+      listener.mockRestore();
+    }
   });
 
   it('uses the native targeted-detail path after a photo is confirmed', async () => {

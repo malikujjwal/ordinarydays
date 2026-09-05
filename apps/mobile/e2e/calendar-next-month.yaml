@@ -2,9 +2,6 @@ appId: app.ordinarydays.ios.local
 name: "Calendar next-month: exact day, detail return and Today"
 jsEngine: graaljs
 tags: [calendar, ios, release]
-env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
 onFlowStart:
   - runScript:
       file: scripts/setup.js

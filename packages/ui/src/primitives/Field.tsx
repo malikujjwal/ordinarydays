@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { TextInput, View } from 'react-native';
+import { type Ref, useState } from 'react';
+import { Text as NativeText, TextInput, View } from 'react-native';
 import { useTheme } from '../theme/index';
 import type { TypeVariant } from '../theme/tokens';
 import { Text } from './Text';
@@ -16,6 +16,8 @@ import { Text } from './Text';
  */
 export interface FieldProps {
   label: string;
+  /** Restore focus after an editor confirmation without remounting its draft. */
+  inputRef?: Ref<TextInput>;
   value: string;
   onChangeText?: (next: string) => void;
   placeholder?: string;
@@ -90,6 +92,7 @@ export interface FieldProps {
 
 export function Field({
   label,
+  inputRef,
   accessibilityLabel,
   autoFocus = false,
   onSubmitEditing,
@@ -140,101 +143,134 @@ export function Field({
         </View>
       )}
 
-      <TextInput
-        accessibilityLabel={accessibilityLabel ?? label}
-        aria-label={accessibilityLabel ?? label}
-        accessibilityState={{ disabled }}
-        aria-disabled={disabled}
-        /**
-         * **The error is announced, not only reddened.** Colour is never the only carrier of
-         * meaning (`design-system.md` §5.1), and `accessibilityHint` alone does not reach
-         * the DOM through React Native Web — `aria-errormessage` needs an element to point
-         * at, so the text is inlined as the description instead.
-         */
-        {...(error === undefined
-          ? {}
-          : {
-              accessibilityHint: error,
-              'aria-description': error,
-              'aria-invalid': true,
-            })}
-        editable={!disabled}
-        autoFocus={autoFocus}
-        {...(onSubmitEditing === undefined
-          ? {}
-          : {
-              onSubmitEditing,
-              returnKeyType: 'done' as const,
-              blurOnSubmit: submitBlurs,
-            })}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        /* A placeholder is readable tertiary content, not a disabled state (§5.1). */
-        placeholderTextColor={theme.colors.textMuted}
-        multiline={multiline}
-        keyboardType={keyboardType}
-        {...(inputAccessoryViewID === undefined ? {} : { inputAccessoryViewID })}
-        {...(maxLength === undefined ? {} : { maxLength })}
-        onFocus={() => setFocused(true)}
-        onBlur={() => {
-          setFocused(false);
-          onBlur?.();
-        }}
-        testID={testID}
-        style={[
-          theme.font(textVariant),
-          {
-            color: disabled
-              ? theme.colors.textDisabled
-              : quiet
-                ? theme.colors.textDisplay
-                : theme.colors.textPrimary,
-            backgroundColor: quiet ? 'transparent' : theme.colors.surfaceInput,
-            borderRadius: quiet ? theme.radius.none : theme.radius.lg,
-            paddingHorizontal: quiet ? theme.space[0] : theme.space[5],
-            paddingVertical: quiet ? theme.space[2] : theme.space[4],
-            minHeight: multiline && !quiet ? 96 : theme.layout.hitTarget,
-            textAlignVertical: multiline ? 'top' : 'center',
-            outlineColor: underline ? 'transparent' : undefined,
-            outlineStyle: underline ? 'solid' : undefined,
-            outlineWidth: underline ? 0 : undefined,
-            ...(underline
-              ? {
-                  borderWidth: 0,
-                  borderBottomWidth: focused ? theme.layout.focusRingWidth : 1,
-                }
-              : { borderWidth: 1 }),
-            /**
-             * **The rest border is `borderStrong`** — amended 2026-08-16 (P2-43), on the
-             * founder's report that in light mode you cannot tell where the input is.
-             *
-             * It was `'transparent'`, which left the `surfaceInput` fill as the field's only
-             * boundary — and that fill is **1.02:1 against `surface`** in light and 1.05:1 in
-             * dark. So a text input had no perceivable edge in either scheme, which is WCAG
-             * 1.4.11's 3:1 control-boundary requirement missed outright rather than narrowly.
-             *
-             * `design-system.md` §5.1 already answers it: `borderSubtle` "may never be the sole
-             * required control indicator" and required boundaries take `borderStrong`. This is
-             * that rule applied, not a new one — 4.77:1 light, 6.33:1 dark. A `bare` field is
-             * exempt: it is inline text on a detail screen, not a boxed control.
-             */
-            borderColor:
-              error !== undefined
-                ? theme.colors.danger
-                : focused
+      <View>
+        {/* A layout-only text mirror lets bare multiline fields grow and shrink on both
+            platforms, including width/font changes. It is excluded from accessibility. */}
+        {multiline && bare ? (
+          <NativeText
+            accessible={false}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            aria-hidden
+            pointerEvents="none"
+            style={[
+              theme.font(textVariant),
+              {
+                opacity: 0,
+                minHeight: theme.layout.hitTarget,
+                paddingVertical: theme.space[2],
+                borderWidth: 1,
+                borderColor: 'transparent',
+              },
+            ]}
+          >{`${value || ' '}\u200b`}</NativeText>
+        ) : null}
+        <TextInput
+          ref={inputRef}
+          accessibilityLabel={accessibilityLabel ?? label}
+          aria-label={accessibilityLabel ?? label}
+          accessibilityState={{ disabled }}
+          aria-disabled={disabled}
+          /**
+           * **The error is announced, not only reddened.** Colour is never the only carrier of
+           * meaning (`design-system.md` §5.1), and `accessibilityHint` alone does not reach
+           * the DOM through React Native Web — `aria-errormessage` needs an element to point
+           * at, so the text is inlined as the description instead.
+           */
+          {...(error === undefined
+            ? {}
+            : {
+                accessibilityHint: error,
+                'aria-description': error,
+                'aria-invalid': true,
+              })}
+          editable={!disabled}
+          autoFocus={autoFocus}
+          {...(onSubmitEditing === undefined
+            ? {}
+            : {
+                onSubmitEditing,
+                returnKeyType: 'done' as const,
+                blurOnSubmit: submitBlurs,
+              })}
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          /* A placeholder is readable tertiary content, not a disabled state (§5.1). */
+          placeholderTextColor={theme.colors.textMuted}
+          multiline={multiline}
+          keyboardType={keyboardType}
+          {...(inputAccessoryViewID === undefined ? {} : { inputAccessoryViewID })}
+          {...(maxLength === undefined ? {} : { maxLength })}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false);
+            onBlur?.();
+          }}
+          testID={testID}
+          style={[
+            theme.font(textVariant),
+            {
+              color: disabled
+                ? theme.colors.textDisabled
+                : quiet
+                  ? theme.colors.textDisplay
+                  : theme.colors.textPrimary,
+              backgroundColor: quiet ? 'transparent' : theme.colors.surfaceInput,
+              borderRadius: quiet ? theme.radius.none : theme.radius.lg,
+              paddingHorizontal: quiet ? theme.space[0] : theme.space[5],
+              paddingVertical: quiet ? theme.space[2] : theme.space[4],
+              ...(multiline && bare
+                ? ({
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                  } as const)
+                : {}),
+              minHeight: multiline && !quiet ? 96 : theme.layout.hitTarget,
+              textAlignVertical: multiline ? 'top' : 'center',
+              outlineColor: underline ? 'transparent' : undefined,
+              outlineStyle: underline ? 'solid' : undefined,
+              outlineWidth: underline ? 0 : undefined,
+              ...(underline
+                ? {
+                    borderWidth: 0,
+                    borderBottomWidth: focused ? theme.layout.focusRingWidth : 1,
+                  }
+                : { borderWidth: 1 }),
+              /**
+               * **The rest border is `borderStrong`** — amended 2026-08-16 (P2-43), on the
+               * founder's report that in light mode you cannot tell where the input is.
+               *
+               * It was `'transparent'`, which left the `surfaceInput` fill as the field's only
+               * boundary — and that fill is **1.02:1 against `surface`** in light and 1.05:1 in
+               * dark. So a text input had no perceivable edge in either scheme, which is WCAG
+               * 1.4.11's 3:1 control-boundary requirement missed outright rather than narrowly.
+               *
+               * `design-system.md` §5.1 already answers it: `borderSubtle` "may never be the sole
+               * required control indicator" and required boundaries take `borderStrong`. This is
+               * that rule applied, not a new one — 4.77:1 light, 6.33:1 dark. A `bare` field is
+               * exempt: it is inline text on a detail screen, not a boxed control.
+               */
+              borderColor:
+                error !== undefined
+                  ? theme.colors.danger
+                  : focused
+                    ? theme.colors.focusRing
+                    : bare
+                      ? 'transparent'
+                      : theme.colors.borderStrong,
+              borderBottomColor: underline
+                ? focused
                   ? theme.colors.focusRing
-                  : bare
-                    ? 'transparent'
-                    : theme.colors.borderStrong,
-            borderBottomColor: underline
-              ? focused
-                ? theme.colors.focusRing
-                : theme.colors.borderStrong
-              : undefined,
-          },
-        ]}
-      />
+                  : theme.colors.borderStrong
+                : undefined,
+            },
+          ]}
+        />
+      </View>
 
       {error === undefined ? (
         hint === undefined ? null : (

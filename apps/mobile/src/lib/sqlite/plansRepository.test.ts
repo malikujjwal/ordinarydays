@@ -150,6 +150,47 @@ describe('native Plans projection', () => {
     await rm(directory, { recursive: true, force: true });
   });
 
+  it('retains the rendered distant window when initial refresh preserves its cached dates', async () => {
+    await transactions.run((transaction) =>
+      plans.install(transaction, TIMEZONE, initial()),
+    );
+    const far = parseWallDate('2027-09-15');
+    await transactions.run((transaction) =>
+      plans.install(
+        transaction,
+        TIMEZONE,
+        plansData.parse({
+          mode: 'upcoming_window',
+          upcoming: [{ date: far, items: [datedItem(B)] }],
+          upcomingWindow: { from: '2027-09-01', through: '2027-09-30', nextFrom: null },
+          warnings: [],
+        }),
+      ),
+    );
+    const refreshed = plansData.parse({
+      ...initial(),
+      upcomingWindow: {
+        from: '2026-08-07',
+        through: '2026-10-07',
+        nextFrom: '2026-10-08',
+      },
+    });
+    await transactions.run((transaction) =>
+      plans.install(transaction, TIMEZONE, refreshed),
+    );
+    const current = await plans.read(TIMEZONE);
+    expect(current?.store.byDate.get(far)?.[0]?.activityId).toBe(B);
+    expect(current?.upcomingWindow).toEqual({
+      from: '2026-08-07',
+      through: '2027-09-30',
+      nextFrom: '2026-10-08',
+    });
+    expect(current?.store.covered).toEqual([
+      { from: '2026-08-06', through: '2026-10-07' },
+      { from: '2027-09-01', through: '2027-09-30' },
+    ]);
+  });
+
   it('installs a new page without rewriting other dates and removes an exhausted empty date', async () => {
     if (database === undefined) throw new Error('Missing database');
     await transactions.run((transaction) =>

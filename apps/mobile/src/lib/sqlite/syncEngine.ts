@@ -1140,6 +1140,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
        */
       if (claimedCount === MAX_INTENTS_PER_PASS) this.requested = true;
       const reconciliation = await this.reconciler.reconcilePending();
+      if (reconciliation.coverageChanged > 0) this.requested = true;
       if (reconciliation.failed > 0) {
         this.cycleError ??= new Error("Couldn't refresh schedule · Retry");
         this.scheduleRetry();

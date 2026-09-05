@@ -12,7 +12,10 @@ import type {
   OccurrenceDetailProjection,
 } from '@od/shared/types';
 import { partitionAgenda } from '@/lib/agenda/partition';
-import type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
+import {
+  type AgendaCoverage,
+  latestNativeAgendaCoverage,
+} from '@/lib/sqlite/agendaCoverage';
 import {
   measureSqliteReader,
   type SqliteExecutionMetrics,
@@ -469,6 +472,49 @@ export class AgendaRepository {
     });
   }
 
+  /** Canonical recurrence reconciliation includes retained Plans windows, not unknown gaps. */
+  async reconciliationCoverage(
+    reader: SqliteReader = this.reader,
+  ): Promise<readonly AgendaCoverage[]> {
+    const coverages = [...latestNativeAgendaCoverage(await this.coverage(reader))];
+    const plans = await reader.all(
+      'SELECT timezone, covered_from, covered_through FROM native_plans_coverage ORDER BY timezone, covered_from;',
+    );
+    for (const row of plans) {
+      const timezone = text(row, 'timezone');
+      const from = text(row, 'covered_from');
+      const to = text(row, 'covered_through');
+      if (timezone === undefined || from === undefined || to === undefined) {
+        throw new Error('Missing retained Plans coverage bounds.');
+      }
+      let missing = [{ from, to }];
+      for (const covered of coverages.filter(
+        (coverage) => coverage.timezone === timezone,
+      )) {
+        missing = missing.flatMap((window) => {
+          if (covered.to < window.from || covered.from > window.to) return [window];
+          return [
+            ...(window.from < covered.from
+              ? [{ from: window.from, to: addWallDays(covered.from, -1) }]
+              : []),
+            ...(window.to > covered.to
+              ? [{ from: addWallDays(covered.to, 1), to: window.to }]
+              : []),
+          ];
+        });
+      }
+      for (const window of missing) {
+        for (let start = window.from; start <= window.to; ) {
+          const limit = addWallDays(start, MAX_AGENDA_DAYS - 1);
+          const end = limit < window.to ? limit : window.to;
+          coverages.push({ from: start, to: end, timezone });
+          start = addWallDays(end, 1);
+        }
+      }
+    }
+    return coverages;
+  }
+
   async hasCoverage(coverage: AgendaCoverage): Promise<boolean> {
     return (
       (await this.reader.first(
@@ -830,6 +876,20 @@ export class AgendaRepository {
        WHERE activity_id = ? AND viewer_date BETWEEN ? AND ?;`,
       [canonical.activityId, request.from, request.to],
     );
+    // The strong response replaces both cached sources for this activity/window. Leaving
+    // a Plans row behind would resurrect it when the authoritative response is empty.
+    await transaction.database.run(
+      `DELETE FROM native_plans_date_rows
+       WHERE activity_id = ? AND timezone = ? AND date BETWEEN ? AND ?;`,
+      [canonical.activityId, request.tz, request.from, request.to],
+    );
+    const hasPlans = await transaction.database.first(
+      `SELECT 1 AS present FROM native_plans_state
+       WHERE timezone = ? AND EXISTS (
+         SELECT 1 FROM activities WHERE activity_id = ? AND schedule_date IS NOT NULL
+       );`,
+      [request.tz, canonical.activityId],
+    );
     const itemsByDate = new Map<string, AgendaItem[]>();
     for (const row of canonical.rows) {
       if (
@@ -838,6 +898,24 @@ export class AgendaRepository {
         row.date > request.to
       ) {
         continue;
+      }
+      if (hasPlans !== undefined && row.item.overdueFromDate === undefined) {
+        await transaction.database.run(
+          `INSERT OR REPLACE INTO native_plans_date_rows
+            (timezone, date, ordinal, activity_id, occurrence_date, status, item_json)
+           SELECT ?, ?, COALESCE(MAX(ordinal), -1) + 1, ?, ?, ?, ?
+           FROM native_plans_date_rows WHERE timezone = ? AND date = ?;`,
+          [
+            request.tz,
+            row.date,
+            canonical.activityId,
+            row.item.occurrenceDate ?? null,
+            row.item.status,
+            JSON.stringify(row.item),
+            request.tz,
+            row.date,
+          ],
+        );
       }
       const items = itemsByDate.get(row.date) ?? [];
       items.push(row.item);
@@ -864,6 +942,7 @@ export class AgendaRepository {
       );
     }
     transaction.changed('agenda');
+    transaction.changed(PLANS_SCOPE);
   }
 
   /**
@@ -1036,13 +1115,22 @@ export class AgendaRepository {
   async readMaterializedWindow(
     database: SqliteReader = this.reader,
   ): Promise<AgendaData> {
-    const bounds = await database.first(
-      'SELECT MIN(from_date) AS from_date, MAX(to_date) AS to_date FROM agenda_coverage;',
+    // Edits replace this activity's retained projection. Plans may have materialized
+    // distant rows outside reminder coverage; dropping them here would delete valid dates.
+    // Keep sparse loaded dates rather than filling the gap between calendar jumps.
+    const rows = await database.all(
+      `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
+       ORDER BY viewer_date, section, sort_order, activity_id;`,
     );
-    const from = bounds === undefined ? undefined : text(bounds, 'from_date');
-    const to = bounds === undefined ? undefined : text(bounds, 'to_date');
-    if (from === undefined || to === undefined) return { days: [], warnings: [] };
-    return this.readWith(database, { from, to, timezone: 'UTC' });
+    const dates = new Set<string>();
+    for (const coverage of await this.coverage(database)) {
+      for (const date of datesInCoverage(coverage)) dates.add(date);
+    }
+    for (const row of rows) {
+      const date = text(row, 'viewer_date');
+      if (date !== undefined) dates.add(date);
+    }
+    return { days: daysForDates(rows, [...dates].sort()), warnings: [] };
   }
 
   async recordSyncError(

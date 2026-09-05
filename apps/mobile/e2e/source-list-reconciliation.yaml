@@ -2,9 +2,6 @@ appId: app.ordinarydays.ios.local
 name: P3 native source List reconciliation
 jsEngine: graaljs
 tags: [p3, ios, release, reconciliation]
-env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
 onFlowStart:
   - runScript:
       file: scripts/setup.js
@@ -36,11 +33,28 @@ onFlowComplete:
 - tapOn: "Today, tab, .*"
 - assertVisible:
     id: today-screen
-- assertVisible: ${output.planTitle}
+- runFlow:
+    when:
+      notVisible:
+        id: agenda-row-body
+        text: ${output.planTitle + ',.*'}
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: agenda-row-body
+            text: ${output.planTitle + ',.*'}
+          direction: DOWN
+          centerElement: true
 - tapOn:
-    id: ${'agenda-row-' + output.activityId}
+    id: agenda-row-body
+    text: ${output.planTitle + ',.*'}
 - assertVisible:
     id: detail-content
+- scrollUntilVisible:
+    element:
+      id: add-to-plan-list
+    direction: DOWN
+    centerElement: true
 - tapOn:
     id: add-to-plan-list
 - assertVisible:
@@ -65,9 +79,11 @@ onFlowComplete:
 - assertVisible:
     id: list-detail
 - tapOn: Add item
-- tapOn:
+- assertVisible:
     id: list-contextual-add-title
 - inputText: Passport
+- assertVisible: Passport
+- takeScreenshot: list-draft-before-add
 - tapOn:
     id: list-contextual-add-commit
 - assertVisible: Passport

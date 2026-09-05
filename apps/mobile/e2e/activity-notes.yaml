@@ -1,0 +1,90 @@
+appId: app.ordinarydays.ios.local
+name: Activity notes drafts, save, cancel and return
+jsEngine: graaljs
+tags: [activity, notes, ios, release]
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: activity-notes
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- scrollUntilVisible:
+    element:
+      text: ${output.title}
+    direction: DOWN
+- tapOn: ${output.title}
+- scrollUntilVisible:
+    element:
+      id: notes-edit
+    direction: DOWN
+- tapOn: Add notes
+- assertVisible: Notes for this task
+- tapOn:
+    id: detail-notes
+- inputText: Maya is bringing dessert.
+- assertVisible: Maya is bringing dessert.
+- assertVisible:
+    id: notes-save
+- assertVisible:
+    id: notes-cancel
+- takeScreenshot: notes-keyboard
+- tapOn: Save notes
+- tapOn: Edit notes
+- assertVisible: Maya is bringing dessert.
+- tapOn: Cancel
+- assertNotVisible:
+    id: detail-notes
+- tapOn: Edit notes
+- tapOn:
+    id: detail-notes
+- eraseText
+- inputText: Keep this draft
+- tapOn:
+    text: Notes
+- assertVisible: Keep this draft
+- tapOn: Cancel
+- tapOn: Keep editing
+- assertVisible: Keep this draft
+- swipe:
+    from:
+      text: Notes
+    direction: DOWN
+- scrollUntilVisible:
+    element:
+      id: detail-back
+    direction: UP
+- tapOn:
+    id: detail-back
+- tapOn: Discard changes
+- assertVisible:
+    id: today-screen
+- scrollUntilVisible:
+    element:
+      text: ${output.title}
+    direction: DOWN
+- tapOn: ${output.title}
+- scrollUntilVisible:
+    element:
+      id: notes-edit
+    direction: DOWN
+- assertVisible: Maya is bringing dessert.
+- assertNotVisible: Keep this draft
+- takeScreenshot: notes-saved
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- scrollUntilVisible:
+    element:
+      text: ${output.title}
+    direction: DOWN
+- tapOn: ${output.title}
+- scrollUntilVisible:
+    element:
+      id: notes-edit
+    direction: DOWN
+- assertVisible: Maya is bringing dessert.

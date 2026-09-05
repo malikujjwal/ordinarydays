@@ -27,6 +27,7 @@ const PICK_DATE_ONLY = ['pick'] as const;
 export interface RepeatSheetProps {
   open: boolean;
   onClose: () => void;
+  onClosed?: () => void;
   /** First-segment schedule date, or the all-future effective date supplied by the caller. */
   anchorDate: string;
   /**
@@ -107,6 +108,7 @@ function Stepper({
 export function RepeatSheet({
   open,
   onClose,
+  onClosed,
   anchorDate,
   scope,
   value,
@@ -287,6 +289,7 @@ export function RepeatSheet({
        * position all moved into `Sheet` for the same reason.
        */}
       <Sheet
+        {...(onClosed === undefined ? {} : { onClosed })}
         open={open}
         onClose={close}
         dirty={dirty}

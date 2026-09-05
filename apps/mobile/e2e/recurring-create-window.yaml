@@ -2,9 +2,6 @@ appId: app.ordinarydays.ios.local
 name: New recurring Task appears beyond reminder coverage without refresh
 jsEngine: graaljs
 tags: [plans, recurrence, ios, release]
-env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
 onFlowStart:
   - runScript:
       file: scripts/setup.js
@@ -42,6 +39,7 @@ onFlowComplete:
     id: repeat-apply
 - tapOn:
     id: compose-save
+- evalScript: ${output.offlineCreateSubmitted = true}
 - runFlow:
     when:
       visible: Expand calendar
@@ -80,3 +78,4 @@ onFlowComplete:
     id: ${'plans-date-' + output.afterWeek}
 - assertVisible: ${output.title}
 - runScript: scripts/proxy-online.js
+- runScript: scripts/assert-created-persisted.js

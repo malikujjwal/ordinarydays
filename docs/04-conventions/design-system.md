@@ -1277,6 +1277,22 @@ and the reference for every later task that adds a capability to this screen.
 > case. Rule 2's warning still stands for the case it was written about — a collapsed row must
 > never render a long value in full.
 
+**Activity notes exception (approved 2026-09-05).** Notes remains the first setting, with a
+visible heading, a two-line preview (full text available to assistive technology), and an
+explicit action-colored `Add notes` or `Edit notes` button. Its inline editor uses the shared
+bordered Field with a persistent label. Save/Cancel belong to the keyboard-aware screen
+footer, with wrapping actions for larger text. This supersedes the generic disclosure rule
+below only for Activity notes; other sections, including Related plan, are unchanged.
+The existing `Add to this plan` entry actions — `Prep task`, `List`, and `Photo` —
+remain reachable by ordinary vertical scrolling on compact screens; the notes editor does
+not replace or remove them. Empty capabilities use these named chips, while populated
+sections retain their own Add action. Photo entry remains owner-only, per
+`plans-and-lists.md` §2.1. Small-screen verification must exercise these entry actions and
+their return paths, not only the notes editor.
+Titles wrap to their full height and retain blur-to-save. Repeat and Reminder use the
+existing interactive SettingRow value color and disclosure icon. Draft behavior is canonical
+in [`../01-product/activities.md`](../01-product/activities.md) §6.1.
+
 **Three rules hold the whole screen.**
 
 1. **The top says what it is, when it is, and what to do next** — in that order, in one
@@ -1381,7 +1397,7 @@ map onto them:
 
 | Device class | Width | Breakpoint | Layout |
 | --- | --- | --- | --- |
-| Phone | 320–429 | `compact` | Single-column screen structure, 16 pt gutters, bottom tab bar. **Modal controls present as bottom sheets at the smallest detent that fits the task** (§6.1) — full-screen presentation is reserved for flows whose content requires it. The Lists index remains a 2-up card grid. Verified at 320 with no horizontal scroll and no clipping. |
+| Phone | 320–429 | `compact` | Single-column screen structure, 16 pt gutters, bottom tab bar. **Modal controls present as bottom sheets at the smallest detent that fits the task** (§6.1) — full-screen presentation is reserved for flows whose content requires it. The Lists index remains a 2-up card grid. Must be verified at 320 with no horizontal scroll or clipping; standard-text evidence does not establish Dynamic Type acceptance (§9). |
 | Large phone | 430–767 | `compact` | Identical structure. The extra width goes to the title column, not to new elements. Avatar stack may show 4. |
 | Tablet | 768–1199 | `medium` | Single column capped at 720 pt and centred; 24 pt gutters; the tab bar becomes a left rail. List cards remain 2-up. Sheets present as centred cards at 480 pt wide. |
 | Web, wide | ≥ 1200 | `expanded` | **Two panes.** |

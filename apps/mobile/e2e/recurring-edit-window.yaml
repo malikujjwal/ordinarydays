@@ -1,0 +1,139 @@
+appId: app.ordinarydays.ios.local
+name: Editing a repeated Plan preserves loaded distant occurrences
+jsEngine: graaljs
+tags: [plans, recurrence, ios, release]
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: recurring-edit-window
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- tapOn: ".*Choose a month"
+- tapOn: Next year
+- tapOn:
+    id: ${'plans-calendar-picker-' + output.targetMonth}
+- tapOn:
+    id: ${'calendar-cell-' + output.targetDate}
+- tapOn: "Today, tab, .*"
+- tapOn:
+    id: global-add
+- tapOn:
+    id: object-choice-plan
+- tapOn:
+    id: plan-kind-custom
+- tapOn:
+    id: compose-title
+- inputText: ${output.title}
+- tapOn: Today
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: compose-repeat
+    direction: DOWN
+- tapOn:
+    id: compose-repeat
+- tapOn:
+    id: repeat-option
+- tapOn: Daily
+- tapOn:
+    id: repeat-apply
+- tapOn:
+    id: compose-save
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      visible: Open full calendar
+    commands:
+      - tapOn: Open full calendar
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- tapOn:
+    id: ${'calendar-cell-' + output.targetDate}
+- assertVisible: ${output.title}
+- takeScreenshot: distant-before-edit
+- tapOn: "Today, tab, .*"
+- scrollUntilVisible:
+    element:
+      text: ${output.title}
+      below:
+        text: Today
+      above:
+        text: "Today, tab, .*"
+    direction: DOWN
+- tapOn:
+    text: ${output.title}
+    below:
+      text: Today
+    above:
+      text: "Today, tab, .*"
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: when-where-date
+- tapOn: Set a time
+- scrollUntilVisible:
+    element:
+      text: Done
+    direction: DOWN
+- tapOn: Done
+- runFlow:
+    when:
+      visible:
+        id: reschedule-all-future
+    commands:
+      - tapOn:
+          id: reschedule-all-future
+- assertVisible:
+    id: when-where-date
+    text: ".*9:00 AM.*"
+- tapOn:
+    id: detail-back
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      visible: Open full calendar
+    commands:
+      - tapOn: Open full calendar
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- tapOn:
+    id: ${'calendar-cell-' + output.targetDate}
+- takeScreenshot: distant-after-edit
+- assertVisible: ${output.title}
+- assertVisible:
+    id: ${'plans-date-' + output.targetDate}
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- tapOn: "Plans, tab, .*"
+- runFlow:
+    when:
+      visible: Expand calendar
+    commands:
+      - tapOn: Expand calendar
+- tapOn: ".*Choose a month"
+- tapOn: Next year
+- tapOn:
+    id: ${'plans-calendar-picker-' + output.targetMonth}
+- tapOn:
+    id: ${'calendar-cell-' + output.targetDate}
+- assertVisible: ${output.title}
+- assertVisible:
+    id: ${'plans-date-' + output.targetDate}

@@ -2,9 +2,6 @@ appId: app.ordinarydays.ios.local
 name: P3 native attachment projection survives relaunch
 jsEngine: graaljs
 tags: [p3, ios, release, reconciliation, attachments]
-env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
 onFlowStart:
   - runScript:
       file: scripts/setup.js
@@ -19,11 +16,28 @@ onFlowComplete:
     clearState: true
 - assertVisible:
     id: today-screen
-- assertVisible: ${output.planTitle}
+- runFlow:
+    when:
+      notVisible:
+        id: agenda-row-body
+        text: ${output.planTitle + ',.*'}
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: agenda-row-body
+            text: ${output.planTitle + ',.*'}
+          direction: DOWN
+          centerElement: true
 - tapOn:
-    id: ${'agenda-row-' + output.activityId}
+    id: agenda-row-body
+    text: ${output.planTitle + ',.*'}
 - assertVisible:
     id: detail-content
+- scrollUntilVisible:
+    element:
+      id: add-to-plan-photo
+    direction: DOWN
+    centerElement: true
 - tapOn:
     id: add-to-plan-photo
 - assertVisible:
@@ -37,6 +51,11 @@ onFlowComplete:
 - assertVisible: Added
 - tapOn:
     id: attachment-sheet-done
+- scrollUntilVisible:
+    element:
+      id: section-attachments
+    direction: DOWN
+    centerElement: true
 - assertVisible:
     id: section-attachments
 - assertVisible: Photo 1 of 1
@@ -51,9 +70,26 @@ onFlowComplete:
 - killApp
 - launchApp:
     stopApp: false
-- assertVisible: ${output.planTitle}
+- runFlow:
+    when:
+      notVisible:
+        id: agenda-row-body
+        text: ${output.planTitle + ',.*'}
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: agenda-row-body
+            text: ${output.planTitle + ',.*'}
+          direction: DOWN
+          centerElement: true
 - tapOn:
-    id: ${'agenda-row-' + output.activityId}
+    id: agenda-row-body
+    text: ${output.planTitle + ',.*'}
+- scrollUntilVisible:
+    element:
+      id: section-attachments
+    direction: DOWN
+    centerElement: true
 - assertVisible:
     id: section-attachments
 - assertVisible: Photo 1 of 1
@@ -72,11 +108,34 @@ onFlowComplete:
 - killApp
 - launchApp:
     stopApp: false
-- assertVisible: ${output.planTitle}
+- runFlow:
+    when:
+      notVisible:
+        id: agenda-row-body
+        text: ${output.planTitle + ',.*'}
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: agenda-row-body
+            text: ${output.planTitle + ',.*'}
+          direction: DOWN
+          centerElement: true
 - tapOn:
-    id: ${'agenda-row-' + output.activityId}
+    id: agenda-row-body
+    text: ${output.planTitle + ',.*'}
 - assertVisible:
     id: detail-content
+- scrollUntilVisible:
+    element:
+      id: add-to-plan-photo
+    direction: DOWN
+    centerElement: true
 - assertVisible:
     id: add-to-plan-photo
 - assertNotVisible: Photo 1 of 1
+
+- assertVisible:
+    id: add-to-plan-prep-task
+- assertVisible:
+    id: add-to-plan-list
+- takeScreenshot: plan-add-actions

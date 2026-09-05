@@ -2,9 +2,6 @@ appId: app.ordinarydays.ios.local
 name: P2-55 completing today leaves tomorrow's recurring occurrence live
 jsEngine: graaljs
 tags: [p2-55, ios, release]
-env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
 onFlowStart:
   - runScript:
       file: scripts/setup.js
@@ -20,12 +17,16 @@ onFlowComplete:
 - tapOn: "Plans, tab, .*"
 - assertVisible:
     id: ${'plans-date-' + output.today}
-- assertVisible:
-    id: ${'plans-date-' + output.tomorrow}
+- scrollUntilVisible:
+    element:
+      text: ${output.title}
+      childOf:
+        id: ${'plans-day-' + output.today}
+    direction: DOWN
 - tapOn:
     text: ${output.title}
-    above:
-      id: ${'plans-date-' + output.tomorrow}
+    childOf:
+      id: ${'plans-day-' + output.today}
 - assertVisible:
     id: detail-complete
 - tapOn:

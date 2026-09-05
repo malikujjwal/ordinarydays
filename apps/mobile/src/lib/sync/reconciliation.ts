@@ -4,10 +4,7 @@ import { systemClock, toWallTime } from '@od/shared/time';
 import type { ActivityAgendaData } from '@od/shared/types';
 import { apiClient } from '@/lib/apiClient';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
-import {
-  agendaQueryForCoverage,
-  latestNativeAgendaCoverage,
-} from '@/lib/sqlite/agendaCoverage';
+import { agendaQueryForCoverage } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -28,9 +25,10 @@ export const sharedTargetedAgendaTransport: TargetedAgendaTransport = {
 export interface ReconciliationResult {
   readonly reconciled: number;
   readonly failed: number;
+  readonly coverageChanged: number;
 }
 
-type ReconciliationOutcome = 'reconciled' | 'deferred' | 'failed';
+type ReconciliationOutcome = 'reconciled' | 'deferred' | 'failed' | 'coverage-changed';
 
 function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -52,12 +50,14 @@ export class RecurrenceReconciler {
   async reconcilePending(): Promise<ReconciliationResult> {
     let reconciled = 0;
     let failed = 0;
+    let coverageChanged = 0;
     for (const intent of await this.outbox.pendingReconciliations()) {
       const outcome = await this.reconcile(intent);
       if (outcome === 'reconciled') reconciled += 1;
       else if (outcome === 'failed') failed += 1;
+      else if (outcome === 'coverage-changed') coverageChanged += 1;
     }
-    return { reconciled, failed };
+    return { reconciled, failed, coverageChanged };
   }
 
   private async reconcile(intent: OutboxIntent): Promise<ReconciliationOutcome> {
@@ -80,7 +80,7 @@ export class RecurrenceReconciler {
     });
     if (ready === 'stale') return 'reconciled';
     if (ready === 'deferred') return 'deferred';
-    const coverages = latestNativeAgendaCoverage(await this.agenda.coverage());
+    const coverages = await this.agenda.reconciliationCoverage();
     try {
       const responses: Array<{
         readonly request: AgendaQuery;
@@ -116,6 +116,15 @@ export class RecurrenceReconciler {
           intent.seq,
         );
         if (later.length > 0) return 'deferred' as const;
+        // A calendar window loaded during the read phase must also be reconciled before
+        // retiring this receipt. Keep it pending so the next pass takes a fresh snapshot.
+        if (
+          JSON.stringify(
+            await this.agenda.reconciliationCoverage(transaction.database),
+          ) !== JSON.stringify(coverages)
+        ) {
+          return 'coverage-changed' as const;
+        }
         for (const response of responses) {
           await this.agenda.replaceCanonicalActivityRows(
             transaction,
@@ -150,7 +159,11 @@ export class RecurrenceReconciler {
         transaction.changed('outbox');
         return 'installed' as const;
       });
-      return installed === 'deferred' ? 'deferred' : 'reconciled';
+      return installed === 'coverage-changed'
+        ? 'coverage-changed'
+        : installed === 'deferred'
+          ? 'deferred'
+          : 'reconciled';
     } catch (error) {
       const message = failureMessage(error);
       await this.transactions.run(async (transaction) => {

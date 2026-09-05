@@ -3,8 +3,6 @@ name: P2-55 occurrence completion survives offline replay and process death
 jsEngine: graaljs
 tags: [p2-37, p2-55, ios, release]
 env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
   NETWORK_MODE: proxy
 onFlowStart:
   - runScript:

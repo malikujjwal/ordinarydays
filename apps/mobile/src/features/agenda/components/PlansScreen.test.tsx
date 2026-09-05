@@ -440,6 +440,57 @@ it('updates an active calendar landing when the visible header is remeasured', a
   );
 });
 
+it('waits for compact chrome measurements instead of combining expanded and compact geometry', async () => {
+  vi.spyOn(performance, 'now').mockReturnValue(1_000);
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(() => undefined);
+  stubFetch(initialBody({ upcoming: [plansDay('2026-09-04', [row(2)])] }));
+  mount();
+  await screen.findByTestId('plans-date-2026-09-04');
+  reportLayout('plans-header', 544);
+  reportLayout('plans-compact-chrome', 420);
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
+  scrollToLocation.mockClear();
+  const list = screen.getByTestId('plans-list');
+  Object.defineProperty(list, 'scrollTop', { value: 218, writable: true });
+  fireEvent.scroll(list);
+  expect(scrollToLocation).not.toHaveBeenCalled();
+  reportLayout('plans-compact-chrome', 92);
+  expect(scrollToLocation).toHaveBeenLastCalledWith(
+    expect.objectContaining({ viewOffset: 143 }),
+  );
+});
+
+it('does not expand the header on transient zero offsets during a calendar landing', async () => {
+  const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+  vi.spyOn(SectionList.prototype, 'scrollToLocation').mockImplementation(() => undefined);
+  stubFetch(initialBody({ upcoming: [plansDay('2026-09-04', [row(2)])] }));
+  mount();
+  await screen.findByTestId('plans-date-2026-09-04');
+  reportLayout('plans-header', 544);
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
+  const list = screen.getByTestId('plans-list');
+  Object.defineProperty(list, 'scrollTop', { value: 218, writable: true });
+  fireEvent.scroll(list);
+  expect(screen.getByRole('button', { name: 'Open full calendar' })).toBeDefined();
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+  expect(screen.getByRole('button', { name: 'Open full calendar' })).toBeDefined();
+  now.mockReturnValue(1_257);
+  list.scrollTop = 40;
+  fireEvent.scroll(list);
+  list.scrollTop = 0;
+  fireEvent.scroll(list);
+  await screen.findByRole('heading', { name: 'Plans' });
+});
+
 it('ignores a delayed unmeasured-row failure after the recovery deadline', async () => {
   const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
   let fail:
@@ -520,6 +571,37 @@ it.each(['stage', 'refresh'])(
     await screen.findByTestId('plans-date-2026-09-01');
   },
 );
+
+it('starts a fresh native landing when the same calendar date is selected again', async () => {
+  Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+  const landedLists: SectionList<unknown>[] = [];
+  vi.spyOn(SectionList.prototype, 'scrollToLocation').mockImplementation(function (
+    this: SectionList<unknown>,
+  ) {
+    landedLists.push(this);
+  });
+  stubFetch(
+    initialBody({
+      upcoming: Array.from({ length: 20 }, (_, index) =>
+        plansDay(`2026-09-${String(index + 1).padStart(2, '0')}`, [row(index)]),
+      ),
+    }),
+  );
+  mount();
+  await screen.findByTestId('plans-date-2026-09-01');
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-15'));
+  const firstLandingList = landedLists.at(-1);
+  expect(firstLandingList).toBeDefined();
+  landedLists.length = 0;
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-15'));
+  await waitFor(() => expect(landedLists.length).toBeGreaterThan(0));
+  // A previous native maintained-position anchor must not participate in this new jump.
+  expect(landedLists.at(-1) === firstLandingList).toBe(false);
+  expect(screen.getByTestId('plans-date-2026-09-15')).toBeDefined();
+});
 
 it('lands a calendar day on that exact Past card', async () => {
   const scrollToLocation = vi

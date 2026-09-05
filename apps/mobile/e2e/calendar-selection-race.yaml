@@ -3,8 +3,6 @@ name: "Calendar selection-race: exact day, detail return and Today"
 jsEngine: graaljs
 tags: [calendar, ios, release]
 env:
-  API_BASE_URL: http://127.0.0.1:3000
-  PROXY_CONTROL_URL: http://127.0.0.1:8474
   IOS_DRIVER_URL: http://127.0.0.1:22087
 onFlowStart:
   - runScript:

@@ -1,14 +1,22 @@
 import http from 'node:http';
 
-const listenPort = 3000;
-const controlPort = 8474;
-const upstream = new URL('http://127.0.0.1:3001');
+const listenPort = Number(process.env.MAESTRO_PROXY_PORT ?? 3000);
+const controlPort = Number(process.env.MAESTRO_CONTROL_PORT ?? 8474);
+const upstream = new URL(process.env.MAESTRO_API_URL ?? 'http://127.0.0.1:3001');
 
 let online = true;
 let requests = [];
 let plansRequests = [];
 let holdPlans = false;
 let heldPlans = [];
+const timers = new Set();
+function later(callback, delay) {
+  const timer = setTimeout(() => {
+    timers.delete(timer);
+    callback();
+  }, delay);
+  timers.add(timer);
+}
 
 function releasePlans() {
   holdPlans = false;
@@ -116,10 +124,56 @@ const control = http.createServer((request, response) => {
       json(response, 400, { error: 'epoch is required' });
       return;
     }
-    setTimeout(
+    later(
       () => json(response, 200, { now: Date.now() }),
       Math.max(0, epoch - Date.now()),
     );
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/wait-for-activity') {
+    const title = url.searchParams.get('title');
+    const date = url.searchParams.get('date');
+    if (!title || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      json(response, 400, { error: 'title and date are required' });
+      return;
+    }
+    const agenda = new URL('/v1/agenda', upstream);
+    agenda.search = new URLSearchParams({
+      from: date,
+      to: date,
+      tz: 'America/New_York',
+      include: 'anytime_unscheduled,overdue',
+    }).toString();
+    // Observe durable server state, not merely a queued or started POST. This is the
+    // existing harness wait deadline, not an application performance requirement.
+    const deadline = Date.now() + 20_000;
+    const poll = async () => {
+      try {
+        const result = await fetch(agenda, {
+          signal: AbortSignal.timeout(2000),
+          headers: { 'X-Client-Timezone': 'America/New_York' },
+        });
+        if (result.ok) {
+          const body = await result.json();
+          const rows = (body.data?.days ?? []).flatMap((day) => [
+            ...(day.schedule ?? []),
+            ...(day.anytime ?? []),
+            ...(day.earlier ?? []),
+          ]);
+          const activity = rows.find((item) => item.title === title);
+          if (activity) {
+            json(response, 200, { activityId: activity.activityId });
+            return;
+          }
+        }
+      } catch {
+        /* Reconnection can precede the API becoming available. */
+      }
+      if (Date.now() >= deadline)
+        json(response, 408, { error: 'Activity did not persist' });
+      else if (!response.destroyed) later(poll, 100);
+    };
+    void poll();
     return;
   }
   if (request.method === 'GET' && url.pathname === '/wait-for-completions') {
@@ -132,7 +186,7 @@ const control = http.createServer((request, response) => {
       ).length;
       if (count >= expected) json(response, 200, { count });
       else if (Date.now() >= deadline) json(response, 408, { count, expected });
-      else setTimeout(poll, 100);
+      else later(poll, 100);
     };
     poll();
     return;
@@ -150,8 +204,13 @@ control.listen(controlPort, '0.0.0.0', () => {
 });
 
 function close() {
+  for (const timer of timers) clearTimeout(timer);
+  timers.clear();
+  heldPlans = [];
   proxy.close();
   control.close();
+  proxy.closeAllConnections();
+  control.closeAllConnections();
 }
 
 process.on('SIGINT', close);

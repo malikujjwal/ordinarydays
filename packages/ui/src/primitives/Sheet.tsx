@@ -230,9 +230,10 @@ export function Sheet({
           dragY.setValue(0);
           setExit('travel');
           onDone?.();
-          // iOS owns one more asynchronous boundary: wait for its view controller dismissal
-          // below before a consumer presents the next modal.
-          if (Platform.OS !== 'ios') onClosed?.();
+          // iOS dismisses its view controller asynchronously; web also unmounts its focus
+          // trap after this frame. Both report onDismiss below, so restored editor focus
+          // is not subsequently stolen by the closing modal. Android has no onDismiss.
+          if (Platform.OS === 'android') onClosed?.();
         },
       );
     },
@@ -417,7 +418,7 @@ export function Sheet({
       accessibilityLabel={title ?? 'Dialog'}
       // Hardware Back on Android and Escape on web arrive here — and go through the same guard.
       onRequestClose={dismissible ? requestClose : undefined}
-      {...(Platform.OS === 'ios' && onClosed !== undefined
+      {...(Platform.OS !== 'android' && onClosed !== undefined
         ? { onDismiss: onClosed }
         : {})}
     >

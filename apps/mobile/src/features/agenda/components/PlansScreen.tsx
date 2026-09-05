@@ -213,7 +213,10 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
   const [calendarHeight, setCalendarHeight] = useState(0);
   const [fullHeaderHeight, setFullHeaderHeight] = useState(0);
   const [titleBlockHeight, setTitleBlockHeight] = useState(0);
-  const [chromeHeight, setChromeHeight] = useState(0);
+  // Measurements belong to a presentation: expanded chrome cannot size a compact jump.
+  const [chromeLayout, setChromeLayout] = useState({ compact: false, height: 0 });
+  const chromeHeight = chromeLayout.height;
+  const headerReady = !compactHeader || chromeLayout.compact;
   const [viewportHeight, setViewportHeight] = useState(0);
   const [lastDayLayout, setLastDayLayout] = useState({ key: '', height: 0 });
   const compactHeaderRef = useRef(false);
@@ -237,9 +240,12 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     stage: Stage;
     date: WallDate;
     precedingRows: number;
+    selection: number;
   }>();
+  const currentHeaderReady = useRef(true);
   const retryLanding = useCallback(() => {
-    if (performance.now() < landingDeadline.current) pendingScroll.current();
+    if (currentHeaderReady.current && performance.now() < landingDeadline.current)
+      pendingScroll.current();
   }, []);
 
   const resetHeaderVisibility = useCallback(() => {
@@ -309,7 +315,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             target,
             calendarWindow.precedingRows,
           ),
-          key: `upcoming:${calendarWindow.date}`,
+          key: `upcoming:${calendarWindow.date}:${calendarWindow.selection}`,
         };
   }, [allUpcomingSections, calendarWindow, plans.store]);
   const pastView = useMemo(() => {
@@ -331,7 +337,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             target,
             calendarWindow.precedingRows,
           ),
-          key: `past:${calendarWindow.date}`,
+          key: `past:${calendarWindow.date}:${calendarWindow.selection}`,
         };
   }, [allPastSections, calendarWindow, plans.store]);
   const upcomingSections = upcomingView.sections;
@@ -424,6 +430,9 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
         restoreCalendarPrefix();
       nearWindowStart.current = near;
       if (y <= theme.space[2]) {
+        // A native layout adjustment during the jump is not a user return to the top.
+        // Reopening here changes the measured inset and feeds back into the same landing.
+        if (performance.now() < landingDeadline.current) return;
         resetHeaderVisibility();
         return;
       }
@@ -442,14 +451,16 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
 
   const currentHeaderOffset = useRef(visibleHeaderOffset);
   useEffect(() => {
+    currentHeaderReady.current = headerReady;
+    if (!headerReady) return;
     currentHeaderOffset.current = visibleHeaderOffset;
     // Native scrolling compacts/re-measures the overlay after the first jump. Do not
     // keep the expanded header's captured offset during the contract's recovery window.
     retryLanding();
-  }, [visibleHeaderOffset, retryLanding]);
+  }, [visibleHeaderOffset, headerReady, retryLanding]);
 
   useEffect(() => {
-    if (landing === undefined) return;
+    if (landing === undefined || !headerReady) return;
     // One landing for both stages: a fresh retry budget, the scroll, and the state cleared.
     const land = (scroll: () => void) => {
       pendingScroll.current = scroll;
@@ -495,7 +506,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
         );
       }
     }
-  }, [landing, stage, upcomingSections, pastSections, plans.store]);
+  }, [landing, stage, upcomingSections, pastSections, plans.store, headerReady]);
 
   /**
    * The tap projects **synchronously and on both platforms** — native has no MutationCache
@@ -732,7 +743,11 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
             : {})}
           ref={upcomingList}
           onScrollToIndexFailed={(info) => {
-            if (performance.now() >= landingDeadline.current) return;
+            if (
+              !currentHeaderReady.current ||
+              performance.now() >= landingDeadline.current
+            )
+              return;
             onScrollToIndexFailed(
               upcomingList.current,
               info,
@@ -796,7 +811,8 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
           : {})}
         ref={pastList}
         onScrollToIndexFailed={(info) => {
-          if (performance.now() >= landingDeadline.current) return;
+          if (!currentHeaderReady.current || performance.now() >= landingDeadline.current)
+            return;
           onScrollToIndexFailed(
             pastList.current,
             info,
@@ -945,7 +961,13 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
               testID="plans-compact-chrome"
               onLayout={(event) => {
                 const height = event.nativeEvent.layout.height;
-                if (height > 0 && height !== chromeHeight) setChromeHeight(height);
+                if (height > 0) {
+                  setChromeLayout((held) =>
+                    held.height === height && held.compact === compactHeader
+                      ? held
+                      : { compact: compactHeader, height },
+                  );
+                }
               }}
               style={{
                 gap: compactHeader ? theme.space[0] : theme.space[4],
@@ -988,7 +1010,14 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
                     landingDeadline.current = 0;
                     userScrolling.current = false;
                     if (Platform.OS !== 'web')
-                      setCalendarWindow({ stage, date, precedingRows: 1 });
+                      // A new date command owns a fresh native scroll anchor, even for the
+                      // same date after manual scrolling has prepended earlier rows.
+                      setCalendarWindow((previous) => ({
+                        stage,
+                        date,
+                        precedingRows: 1,
+                        selection: (previous?.selection ?? 0) + 1,
+                      }));
                     boundary.selectDate();
                     setLanding(date);
                   }}
