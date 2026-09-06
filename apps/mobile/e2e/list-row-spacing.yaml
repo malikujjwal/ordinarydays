@@ -1,0 +1,98 @@
+appId: app.ordinarydays.ios.local
+name: Compact List row destinations and controls
+jsEngine: graaljs
+tags: [p3, ios, release, lists]
+onFlowStart:
+  - runScript: scripts/list-row-setup.js
+onFlowComplete:
+  - runScript: scripts/list-row-cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- openLink: ${'ordinarydays-local://lists/' + output.rowListId}
+- assertVisible:
+    id: ${'list-item-' + output.rowItemId + '-body'}
+- runScript: scripts/assert-list-row-layout.js
+- takeScreenshot: rows-before-interaction
+- runFlow:
+    when:
+      true: ${output.rowCheckable}
+    commands:
+      - tapOn:
+          id: ${'list-item-' + output.rowItemId + '-checkbox'}
+      - assertVisible:
+          id: ${'list-item-' + output.rowItemId + '-checkbox'}
+          text: ${output.rowTitle + ', checked'}
+      - assertNotVisible:
+          id: item-sheet
+- runFlow:
+    when:
+      true: ${output.rowStage !== ''}
+    commands:
+      - tapOn: ${output.rowStage + ', 0'}
+      - assertNotVisible:
+          id: ${'list-item-' + output.rowItemId + '-body'}
+      - tapOn: 'All, 2'
+- tapOn:
+    id: ${'list-item-' + output.rowItemId + '-body'}
+- assertVisible:
+    id: item-sheet-title
+    text: ${output.rowTitle}
+- tapOn: Close
+- assertNotVisible:
+    id: item-sheet
+- runFlow:
+    when:
+      true: ${output.rowHasPlace}
+    commands:
+      - tapOn:
+          id: ${'list-item-' + output.rowItemId + '-location'}
+      - assertNotVisible:
+          id: list-detail
+      - runFlow:
+          when:
+            visible: 'Don.t Allow'
+          commands:
+            - tapOn: 'Don.t Allow'
+      - runFlow:
+          when:
+            visible: 'Maps may show local ads.*'
+          commands:
+            - tapOn: Continue
+            - launchApp:
+                stopApp: false
+            - tapOn:
+                id: ${'list-item-' + output.rowItemId + '-location'}
+      - assertVisible:
+          id: PlaceHeaderView
+          text: 990 Washington Ave.*
+      - takeScreenshot: maps-destination
+      - launchApp:
+          stopApp: false
+      - assertVisible:
+          id: ${'list-item-' + output.rowItemId + '-body'}
+# The fixed header exceeds half the screen at AX5. Start gestures inside the measured
+# scrolling body; Maestro's default center-screen scroll would hit that header instead.
+- repeat:
+    times: ${output.rowScrollGestures}
+    commands:
+      - runFlow:
+          when:
+            notVisible:
+              id: ${'list-item-' + output.rowMissingId + '-body'}
+          commands:
+            - swipe:
+                from:
+                  id: list-detail-body
+                direction: UP
+- assertVisible:
+    id: ${'list-item-' + output.rowMissingId + '-body'}
+- takeScreenshot: missing-detail-row-reached
+- tapOn:
+    id: ${'list-item-' + output.rowMissingId + '-body'}
+- assertVisible:
+    id: item-sheet-title
+    text: An item without supporting details
+- tapOn: Close

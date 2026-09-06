@@ -992,6 +992,7 @@ Two more rules:
 | **Archive** | Header overflow → `Archive list`. Sends `PATCH /v1/lists/:id { archived: true }` and offers settings Undo. Archived lists leave the Lists index, keep their items, and are reachable through `Lists → ⋯ → Show archived`. Owner only on a shared list — archiving is a change to the object, not to your view of it. Restoring is one tap. |
 | **Delete** | Header overflow → `Delete list`, confirmed. **Owner only.** Deletes items and their per-viewer `LNK#` projections. Every Plan created through `Plan this item` survives; the confirmation says how many of the owner's linked Plans survive, plus the number of other members who lose the list (§1a.1). |
 | **Rename** | Inline on the header title. Available to members as well as the owner — it changes nothing but the title (§5.5). |
+| **Place on an item row** | The title, note preview, progress, Place text and Sub-items count share the Item-details body target with compact 4 pt token gaps. Titles and addresses wrap fully. A separate 44×44 Maps icon button opens the platform map using the address, or label when no address exists. This is the founder-approved mock-v2 interaction (2026-09-05); checkbox, staged state and linked Plan actions remain independent. |
 | **Item detail** | Tapping opens one item shell: title, note, exposed state and enabled typed-feature editors from the registry, plus `Plan this item` and `Delete`. Text fields save after a short debounce while focus remains in the field; blur or the sheet's single Close flushes immediately. A trimmed-empty title is rejected and never overwrites the stored title. |
 | **Empty list** | One compact semantic List icon, `Start with one item`, the List's stored `emptyStateCopy`, and one primary `Add item` action (§5.9). No large illustration or second empty add row. |
 | **Item cap** | 500 items per list. Beyond that, `POST` returns `validation_failed` with `List is full.` |
@@ -1059,7 +1060,8 @@ the shared ListItem (§6.2).
 
 One common row and item sheet ask a typed registry for enabled feature summaries, renderers and
 editors. Empty configured features add no row metadata and no blank controls. Populated summaries
-stay to one concise line: `S2 E4`, `Page 143`, `8 ingredients` or the Place label. Generic
+form concise supporting lines: `S2 E4`, `Page 143`, `8 ingredients` and the Place address or label.
+Place text wraps fully; all supporting lines remain grouped with the item title (§5.6). Generic
 Sub-items use configured words inside the item; labels do not activate integrations.
 
 The item sheet keeps Title and the top-aligned optional Note first, then groups only the exposed
@@ -1828,7 +1830,7 @@ successful use of the product.
 | 2 | Explicitly chooses **Places to Visit** → changes the visible name to `Places we love` | Local draft only; editing the title does not change the chosen preset. |
 | 3 | `Create list` | `POST /v1/lists { title: 'Places we love', templateKey: 'places-to-visit' }` copies checkbox presentation and the Place feature, with `slot: null`. |
 | 4 | Adds `Zahav`, `Suraya`, `Kalaya`, each with an address and a note (`the lamb`) | Four `POST /v1/lists/lst_f/items` with `location` |
-| 5 | Six months of use | The list is opened 40 times, an item is tapped for its address, the maps app opens. **Zero activities exist.** |
+| 5 | Six months of use | The list is opened 40 times, an item or its address is tapped to open Item details, or its separate Maps button opens the maps app. **Zero activities exist.** |
 | 6 | What the app does about it | Nothing. No progress indicator, no "you haven't planned any of these", no archive prompt, no suggestion to schedule. The list is finished the day it is created. |
 | 7 | The user removes and later restores checkboxes | `⋯` → `List settings` → **Item state** → None, then Checkboxes. Each change is immediate, has no confirmation, and preserves every item's intrinsic state (§5.5). |
 | 8 | Later still, one item does become a Plan | Item → `Plan this item` → the user explicitly chooses **Event** → `Just me` → `Save plan`. The list is unchanged by this; it was never waiting for it. |

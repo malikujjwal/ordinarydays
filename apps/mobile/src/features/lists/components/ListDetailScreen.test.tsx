@@ -2,6 +2,7 @@ import { instant } from '@od/shared/schemas';
 import type { List, ListItemView } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { Linking } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListDetailView } from '../hooks/useListDetail';
 import { ListDetailScreen } from './ListDetailScreen';
@@ -192,6 +193,35 @@ describe('the configuration-driven List detail', () => {
     expect(screen.getByRole('tab', { name: 'Shipped, 0' })).toBeTruthy();
     expect(screen.queryByText('Write tests')).toBeNull();
     expect(screen.getByText('Review')).toBeTruthy();
+  });
+
+  it('keeps Maps available for a Place enabled on a grouped staged List', () => {
+    const maps = vi.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    setView({
+      list: {
+        ...LIST,
+        itemStateMode: {
+          mode: 'stages',
+          labels: { open: 'Queued', active: 'Building', done: 'Shipped' },
+          groupByState: true,
+        },
+        featureConfig: { place: { enabled: true } },
+      },
+      items: [
+        {
+          ...item('1X3', 'Coffee', 'open'),
+          features: { place: { label: 'Cafe', address: '9 W 19th St' } },
+        },
+      ],
+      itemCount: 1,
+    });
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: '9 W 19th St, open in Maps' }));
+    expect(maps).toHaveBeenCalledWith(
+      'https://www.google.com/maps/search/?api=1&query=9%20W%2019th%20St',
+    );
+    expect(screen.queryByTestId('item-sheet')).toBeNull();
+    maps.mockRestore();
   });
 
   it('offers both done-set actions for a fully loaded checkbox list', () => {

@@ -167,7 +167,14 @@ export function ListDetailSurface({
               items={items}
               onOpen={onOpenItem}
               onDrop={onDrop}
-              rowExtras={stateLineProps}
+              rowExtras={(item) => ({
+                ...stateLineProps(item),
+                ...(item.features?.place === undefined
+                  ? {}
+                  : {
+                      onOpenLocation: () => void openInMaps(item.features?.place),
+                    }),
+              })}
             />
           </View>
         ) : (

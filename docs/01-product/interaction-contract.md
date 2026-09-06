@@ -285,8 +285,18 @@ rule applies to the tab bar, so this pushed screen does not add a tab.
 ### 3.2 List rows
 
 Rows use one common item shell. The List's state presentation controls only the state affordance;
-the typed feature registry adds populated one-line summaries and actions. `templateKey` never
+the typed feature registry adds populated summaries and actions. `templateKey` never
 selects a row implementation.
+
+Within a List item, title, one-line note preview, progress, Place text and Sub-items count
+form one compact vertical body target with `space[2]` (4 pt) between supporting lines.
+Titles and Place text wrap fully without a line clamp; rows grow with content and text size.
+Tapping any of those lines opens Item details without changing state. An enabled, populated
+Place also exposes a separate 44×44 Maps icon button, labelled `<address or label>, open in Maps`.
+The body, checkbox, Maps, linked Plan state line and trailing reorder grip retain separate
+accessible targets with at least `space[3]` (8 pt) between adjacent targets. The Plan state line
+continues to open its linked Activity. This Place interaction was approved by the founder for
+mock v2 on 2026-09-05; it does not change Activity-detail address interactions (§3.3).
 
 | Row type | Tap body | Tap checkbox | Swipe right | Swipe right (full) | Swipe left | Swipe left (full) | Long press |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -640,7 +650,7 @@ appends the `Reorder <item title>` grip defined in §3.2. `accessibilityRole` is
 | UP NEXT card | 1. Card body | `Up next. Pick up groceries, in 2 hours, 5:30 PM` | `button` | Same as the row |
 | List item, checkbox mode | 1. Checkbox<br>2. Row body | 1. `Chicken, not checked`<br>2. `Chicken, from Sunday dinner` | `checkbox`, `button` | `Plan this item`, `Delete` |
 | List item, state hidden | 1. Row body<br>2. linked Plan state line when present | 1. `Zahav`<br>2. `Planned Saturday 7:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
-| List item with enabled, populated Place | 1. Row body<br>2. Address line | 1. `Zahav, 237 St James Place`<br>2. `237 St James Place, open in Maps` | `button`, `button` | `Plan this item`, `Delete` |
+| List item with enabled, populated Place | 1. Row body including address<br>2. Maps button | 1. `Zahav, 237 St James Place`<br>2. `237 St James Place, open in Maps` | `button`, `button` | `Plan this item`, `Delete` |
 | List item in configured Watching stage with episode Progress | 1. Row body<br>2. linked Plan state line | 1. `Severance, watching, season 2 episode 4`<br>2. `Next session Friday 8:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
 | Person row | 1. Row body<br>2. Balance chip | 1. `Alice, 3 upcoming together` or `Priya, in 2 lists with you`<br>2. `Alice owes you 42 dollars 50, see the expenses` | `button`, `button` | `Plan something`, `Delete` |
 | Balance line | 1. Line | `Alice owes you 42 dollars 50. See the expenses behind this.` | `button` | — |

@@ -1,7 +1,8 @@
 import type { ListItemPlanState, ListItemView } from '@od/shared/types';
-import { Checkbox, Chip, Text, Touchable, useTheme } from '@od/ui';
-import { useEffect, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { Checkbox, Chip, MapPin, Text, Touchable, useTheme } from '@od/ui';
+import type { Theme } from '@od/ui/theme';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import {
   checkboxChecked,
   checkboxLabel,
@@ -42,6 +43,7 @@ export function ListItemRow({
   testID,
 }: ListItemRowProps) {
   const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const checkable = showsCheckbox(list);
   const groupedStages =
     list.itemStateMode.mode === 'stages' && list.itemStateMode.groupByState;
@@ -105,18 +107,7 @@ export function ListItemRow({
     testID === undefined ? {} : { testID: `${testID}-${suffix}` };
 
   return (
-    <View
-      testID={testID}
-      style={{
-        minHeight: theme.layout.rowMinHeight + theme.space[5],
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: theme.space[3],
-        paddingVertical: theme.space[3],
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.borderSubtle,
-      }}
-    >
+    <View testID={testID} style={styles.row}>
       {checkable ? (
         <Checkbox
           checked={checked}
@@ -131,105 +122,76 @@ export function ListItemRow({
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           {...id('leading-marker')}
-          style={{
-            width: theme.layout.hitTarget,
-            height: theme.layout.hitTarget,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+          style={styles.leading}
         >
-          <View
-            style={{
-              width: theme.space[4],
-              height: theme.space[4],
-              borderRadius: theme.radius.pill,
-              backgroundColor: theme.colors.accent,
-            }}
-          />
+          <View style={styles.marker} />
         </View>
       ) : null}
-      <View
-        pointerEvents="box-none"
-        style={{ flex: 1, minWidth: 0, gap: theme.space[1] }}
-      >
+      <View pointerEvents="box-none" style={styles.content}>
         <Touchable
           accessibilityRole="button"
           accessibilityLabel={rowBodyLabel(list, item)}
           disabled={onOpen === undefined}
           {...(onOpen === undefined ? {} : { onPress: onOpen })}
           {...id('body')}
-          style={{ alignItems: 'flex-start', alignSelf: 'stretch' }}
+          style={styles.body}
         >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'baseline',
-              flexWrap: 'wrap',
-              gap: theme.space[2],
-            }}
-          >
-            <Text
-              variant="bodyStrong"
-              color={checkable && checked ? 'textSecondary' : 'textPrimary'}
-              struck={checkable && checked}
-              {...id('title')}
-            >
-              {item.title}
-            </Text>
+          <View style={styles.titleGroup}>
+            <View style={styles.titleBounds}>
+              <Text
+                variant="bodyStrong"
+                color={checkable && checked ? 'textSecondary' : 'textPrimary'}
+                struck={checkable && checked}
+                numberOfLines={0}
+                {...id('title')}
+              >
+                {item.title}
+              </Text>
+            </View>
             {item.sourceLabel === undefined ? null : (
               <Text variant="subhead" color="textMuted">{`— ${item.sourceLabel}`}</Text>
             )}
           </View>
           {item.note === undefined ? null : (
-            <Text variant="subhead" color="textSecondary" numberOfLines={1}>
+            <Text
+              variant="subhead"
+              color="textSecondary"
+              numberOfLines={1}
+              {...id('note')}
+            >
               {item.note}
             </Text>
           )}
+          {stage === undefined &&
+          progress === undefined &&
+          place === undefined &&
+          subItems === undefined ? null : (
+            <View
+              style={styles.metadata}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              aria-hidden
+              {...id('metadata')}
+            >
+              {stage === undefined ? null : <Chip label={stage} {...id('state')} />}
+              {progress === undefined ? null : (
+                <Text variant="subhead" color="textSecondary" {...id('progress')}>
+                  {progress}
+                </Text>
+              )}
+              {place === undefined ? null : (
+                <Text variant="subhead" color="textSecondary" {...id('place')}>
+                  {place.address ?? place.label}
+                </Text>
+              )}
+              {subItems === undefined ? null : (
+                <Text variant="subhead" color="textSecondary" {...id('sub-items')}>
+                  {subItems}
+                </Text>
+              )}
+            </View>
+          )}
         </Touchable>
-
-        {stage === undefined &&
-        progress === undefined &&
-        subItems === undefined ? null : (
-          <View
-            style={{
-              flexDirection: 'row',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              gap: theme.space[2],
-            }}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            aria-hidden
-            {...id('metadata')}
-          >
-            {stage === undefined ? null : <Chip label={stage} {...id('state')} />}
-            {progress === undefined ? null : (
-              <Text variant="subhead" color="textSecondary">
-                {progress}
-              </Text>
-            )}
-            {subItems === undefined ? null : (
-              <Text variant="subhead" color="textSecondary">
-                {subItems}
-              </Text>
-            )}
-          </View>
-        )}
-
-        {place === undefined ? null : (
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel={`${place.address ?? place.label}, open in Maps`}
-            disabled={onOpenLocation === undefined}
-            {...(onOpenLocation === undefined ? {} : { onPress: onOpenLocation })}
-            {...id('location')}
-            style={{ alignItems: 'flex-start', alignSelf: 'stretch' }}
-          >
-            <Text variant="subhead" color="textSecondary">
-              {place.address ?? place.label}
-            </Text>
-          </Touchable>
-        )}
 
         {stateLine === undefined ? null : (
           <Touchable
@@ -238,7 +200,7 @@ export function ListItemRow({
             disabled={onOpenPlan === undefined}
             {...(onOpenPlan === undefined ? {} : { onPress: onOpenPlan })}
             {...id('plan-state')}
-            style={{ alignItems: 'flex-start', alignSelf: 'stretch' }}
+            style={styles.planState}
           >
             <Text variant="subhead" color="accent">
               {stateLine}
@@ -246,6 +208,63 @@ export function ListItemRow({
           </Touchable>
         )}
       </View>
+      {place === undefined ? null : (
+        <Touchable
+          square
+          accessibilityRole="button"
+          accessibilityLabel={`${place.address ?? place.label}, open in Maps`}
+          disabled={onOpenLocation === undefined}
+          {...(onOpenLocation === undefined ? {} : { onPress: onOpenLocation })}
+          {...id('location')}
+          style={styles.maps}
+        >
+          <MapPin size={20} color={theme.colors.accent} />
+        </Touchable>
+      )}
     </View>
   );
+}
+
+function createStyles(theme: Theme) {
+  return StyleSheet.create({
+    row: {
+      minHeight: theme.layout.rowMinHeight + theme.space[5],
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: theme.space[3],
+      paddingVertical: theme.space[4],
+      marginRight: theme.space[3],
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.borderSubtle,
+    },
+    leading: {
+      width: theme.layout.hitTarget,
+      height: theme.layout.hitTarget,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    marker: {
+      width: theme.space[4],
+      height: theme.space[4],
+      borderRadius: theme.radius.pill,
+      backgroundColor: theme.colors.accent,
+    },
+    content: { flex: 1, minWidth: 0, gap: theme.space[3] },
+    body: { alignItems: 'flex-start', alignSelf: 'stretch', gap: theme.space[2] },
+    titleGroup: {
+      maxWidth: '100%',
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      flexWrap: 'wrap',
+      gap: theme.space[2],
+    },
+    titleBounds: { maxWidth: '100%' },
+    metadata: {
+      alignSelf: 'stretch',
+      alignItems: 'flex-start',
+      gap: theme.space[2],
+    },
+    planState: { alignItems: 'flex-start', alignSelf: 'stretch' },
+    maps: { width: theme.layout.hitTarget, alignItems: 'center' },
+  });
 }

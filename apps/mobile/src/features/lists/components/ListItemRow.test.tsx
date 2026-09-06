@@ -44,6 +44,59 @@ function mount(
 }
 
 describe('the canonical list item shell', () => {
+  it('opens details from every supporting line while Maps and checkbox stay independent', () => {
+    const onOpen = vi.fn();
+    const onOpenLocation = vi.fn();
+    const onToggleChecked = vi.fn(async () => true);
+    render(
+      <ThemeProvider scheme="light">
+        <ListItemRow
+          list={list({
+            featureConfig: {
+              progress: { enabled: true, kind: 'episode' },
+              place: { enabled: true },
+              subItems: {
+                enabled: true,
+                sectionLabel: 'Ingredients',
+                singularLabel: 'Ingredient',
+              },
+            },
+          })}
+          item={item({
+            note: 'Watch over coffee',
+            features: {
+              progress: { kind: 'episode', season: 2, episode: 4 },
+              place: { label: 'Joe Coffee', address: '9 W 19th St' },
+              subItems: { entries: [{ id: 'sub_1', title: 'Milk', rank: 'a0' }] },
+            },
+          })}
+          onOpen={onOpen}
+          onOpenLocation={onOpenLocation}
+          onToggleChecked={onToggleChecked}
+        />
+      </ThemeProvider>,
+    );
+
+    for (const text of [
+      'The Bear',
+      'Watch over coffee',
+      'S2 E4',
+      '9 W 19th St',
+      '1 Ingredient',
+    ]) {
+      fireEvent.click(screen.getByText(text));
+    }
+    expect(onOpen).toHaveBeenCalledTimes(5);
+    expect(onOpenLocation).not.toHaveBeenCalled();
+    expect(onToggleChecked).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '9 W 19th St, open in Maps' }));
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onOpenLocation).toHaveBeenCalledOnce();
+    expect(onToggleChecked).toHaveBeenCalledWith(true);
+    expect(onOpen).toHaveBeenCalledTimes(5);
+  });
+
   it('maps only done to a checked checkbox and writes the requested next value', () => {
     const handlers = mount(item({ state: 'done' }));
     const checkbox = screen.getByRole('checkbox', { name: 'The Bear, checked' });

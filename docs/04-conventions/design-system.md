@@ -1103,6 +1103,13 @@ chip or section header. `All` retains the intrinsic rank order. Every drag remai
 the item's intrinsic state and never changes state. At 200% text labels reflow before they
 clip; the grip retains its 44 pt target.
 
+List item content follows the approved compact grouping: `space[2]` (4 pt) between title,
+note preview and each populated supporting line; `space[4]` (12 pt) vertical padding and the
+existing 72 pt minimum row height. Titles and addresses wrap fully. This overrides the generic
+two-line title clamp only for List items. Supporting lines share the Item-details target;
+checkbox, optional Maps icon button, linked Plan state line and reorder grip retain their
+44 pt minimum targets and `space[3]` (8 pt) separation. Item separators remain visible.
+
 ### 7.3 Plans — event cards
 
 > **Decision — reversed (2026-08-08).** The previous rule ("all three Plans stages render
