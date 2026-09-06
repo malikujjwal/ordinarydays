@@ -3869,6 +3869,129 @@ describe('serialized native convergence guard', () => {
     ).toBe('Canonical seed');
   });
 
+  it.each(['ready', 'unavailable', 'pending-parent'])(
+    'restores the parent Preparation collection when a Prep delete is rejected (deferred=%s)',
+    async (deferredParent) => {
+      let parentUnavailable = deferredParent === 'unavailable';
+      const initial = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+      if (initial === undefined) throw new Error('missing delete rejection fixture');
+      const canonical: ActivityDetail = {
+        ...initial,
+        activity: { ...initial.activity, parentActivityId: OTHER },
+      };
+      const parent: ActivityDetail = {
+        activity: {
+          ...initial.activity,
+          activityId: OTHER,
+          objectKind: 'plan',
+          type: 'custom',
+          details: { kind: 'custom' },
+          title: 'Parent plan',
+          childCount: 1,
+        },
+        reminders: [],
+        children: [
+          {
+            activityId: ACTIVITY,
+            title: initial.activity.title,
+            status: initial.activity.status,
+            restoredStatus: 'saved',
+            isRecurring: false,
+          },
+        ],
+      };
+      await transactions.run(async (transaction) => {
+        await activities.putCanonical(transaction, parent);
+        await activities.putCanonical(transaction, canonical);
+      });
+      await transactions.run((transaction) =>
+        service.remove(transaction, {
+          activityId: ACTIVITY,
+          intentId: 'rejected-delete',
+        }),
+      );
+      expect(
+        await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+      ).toBeUndefined();
+      if (deferredParent === 'pending-parent') {
+        await transactions.run((transaction) =>
+          service.patch(
+            transaction,
+            {
+              activityId: OTHER,
+              intentId: 'pending-parent-edit',
+              input: { notes: 'Local notes' },
+              ifMatch: parent.activity.updatedAt,
+            },
+            clock,
+          ),
+        );
+      }
+      const sync = syncEngine({
+        targeted: {
+          load: async () => ({
+            activityId: ACTIVITY,
+            activityVersion: canonical.activity.updatedAt,
+            rows: [],
+          }),
+        },
+        push: {
+          ...pushTransport(),
+          remove: async () => {
+            throw new ApiError(
+              'forbidden',
+              'Cannot delete this activity',
+              403,
+              'req_delete',
+            );
+          },
+        },
+        pull: {
+          ...pullAdapter(),
+          activity: async (target) => {
+            if (target.activityId === OTHER && parentUnavailable)
+              throw new NetworkError('Parent temporarily unavailable', undefined);
+            return target.activityId === OTHER ? parent : canonical;
+          },
+        },
+      });
+
+      await expect(sync.syncNow()).rejects.toThrow('Cannot delete this activity');
+      sync.stop();
+      if (deferredParent !== 'ready') {
+        expect(
+          await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+        ).toBeUndefined();
+        expect((await outbox.all())[0]?.recoveryRequired).toBe(true);
+        expect(await sync.recoverRejectedIntent('rejected-delete')).toBe(false);
+        parentUnavailable = false;
+        if (deferredParent === 'pending-parent') {
+          await transactions.run((transaction) =>
+            outbox.acknowledge(transaction.database, 'pending-parent-edit'),
+          );
+        }
+        expect(await sync.recoverRejectedIntent('rejected-delete')).toBe(true);
+        expect((await outbox.all())[0]?.recoveryRequired).not.toBe(true);
+      }
+
+      expect((await outbox.all())[0]).toMatchObject({
+        intentId: 'rejected-delete',
+        status: 'needs_attention',
+        attention: { kind: 'rejected', status: 403 },
+      });
+      expect(
+        (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
+          .title,
+      ).toBe('Canonical seed');
+      const restoredParent = await activities.read({
+        kind: 'activity',
+        activityId: OTHER,
+      });
+      expect(restoredParent?.children).toEqual(parent.children);
+      expect(restoredParent?.activity.childCount).toBe(1);
+    },
+  );
+
   it('recovers a lost create response by stable identity without redispatching', async () => {
     await transactions.run((transaction) =>
       service.create(

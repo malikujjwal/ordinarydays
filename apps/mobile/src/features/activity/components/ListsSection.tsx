@@ -57,7 +57,8 @@ export function ListsSection({ sourceLists, onOpenList, onAddList }: ListsSectio
       )}
       {onAddList === undefined ? null : (
         <ActionRow
-          label="+ Add list"
+          label="Add list"
+          icon="plus"
           accessibilityLabel="Add list"
           onPress={onAddList}
           testID="lists-add"

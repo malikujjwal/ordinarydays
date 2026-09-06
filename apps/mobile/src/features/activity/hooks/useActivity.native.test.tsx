@@ -126,7 +126,72 @@ describe('native useActivityDetail', () => {
     mounted.unmount();
   });
 
-  it('does not repeat the targeted read once canonical capabilities are installed', async () => {
+  it('revalidates an installed detail on entry and removes an authoritative deleted Plan', async () => {
+    let deleted = false;
+    const pullActivity = vi.fn(async () => {
+      deleted = true;
+      throw new ApiError('not_found', 'Activity not found.', 404, 'req_deleted');
+    });
+    nativeState.current = {
+      activities: {
+        subscribe: () => () => undefined,
+        version: () => 0,
+        read: async () => (deleted ? undefined : canonical),
+        hasInstalledDetail: async () => true,
+        detailHydrationState: async () => 'installed',
+      },
+      outbox: { forEntity: async () => [] },
+      sync: { pullActivity },
+      coordinator: {},
+    };
+
+    const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
+
+    await waitFor(() => expect(mounted.result.current.status).toBe('error'));
+    expect(mounted.result.current.detail).toBeUndefined();
+    expect(pullActivity).toHaveBeenCalledTimes(1);
+    mounted.unmount();
+  });
+
+  it('clears cached detail when a 404 publishes deletion during entry revalidation', async () => {
+    let deleted = false;
+    let version = 0;
+    let listener: (() => void) | undefined;
+    let reject!: (error: Error) => void;
+    const response = new Promise<ActivityDetail>((_resolve, onReject) => {
+      reject = onReject;
+    });
+    const pullActivity = vi.fn(() => response);
+    nativeState.current = {
+      activities: {
+        subscribe: (_activityId: string, callback: () => void) => {
+          listener = callback;
+          return () => undefined;
+        },
+        version: () => version,
+        read: async () => (deleted ? undefined : canonical),
+        hasInstalledDetail: async () => !deleted,
+        detailHydrationState: async () => (deleted ? 'missing' : 'installed'),
+      },
+      sync: { pullActivity },
+      coordinator: {},
+    };
+    const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
+    await waitFor(() => expect(pullActivity).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      deleted = true;
+      version += 1;
+      listener?.();
+    });
+    await act(async () => {
+      reject(new ApiError('not_found', 'Activity not found.', 404, 'req_gone'));
+    });
+    await waitFor(() => expect(mounted.result.current.status).toBe('error'));
+    expect(mounted.result.current.detail).toBeUndefined();
+    mounted.unmount();
+  });
+
+  it('revalidates installed detail once on entry without repeating on render', async () => {
     const pullActivity = vi.fn(async () => canonical);
     nativeState.current = {
       activities: {
@@ -144,7 +209,9 @@ describe('native useActivityDetail', () => {
     const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
 
     await waitFor(() => expect(mounted.result.current.status).toBe('success'));
-    expect(pullActivity).not.toHaveBeenCalled();
+    await waitFor(() => expect(pullActivity).toHaveBeenCalledTimes(1));
+    mounted.rerender();
+    expect(pullActivity).toHaveBeenCalledTimes(1);
     mounted.unmount();
   });
 
@@ -262,7 +329,7 @@ describe('native useActivityDetail', () => {
       await waitFor(() => expect(mounted.result.current.status).toBe('success'));
       expect(mounted.result.current.detail?.capabilities?.complete).toBe(true);
       expect(mounted.result.current.editError).toBeUndefined();
-      expect(pullActivity).not.toHaveBeenCalled();
+      expect(pullActivity).toHaveBeenCalledTimes(1);
       mounted.unmount();
     },
   );
@@ -451,49 +518,52 @@ describe('native useActivityDetail', () => {
     mounted.unmount();
   });
 
-  it('retries a failed capability hydration and records success only after installation', async () => {
-    let installed = false;
-    let activePulls = 0;
-    let maxActivePulls = 0;
-    let pullCount = 0;
-    const pullActivity = vi.fn<() => Promise<ActivityDetail>>(async () => {
-      activePulls += 1;
-      maxActivePulls = Math.max(maxActivePulls, activePulls);
-      pullCount += 1;
-      try {
-        if (pullCount === 1) {
-          throw new NetworkError('detail not ready', new Error('offline'));
+  it.each([false, true])(
+    'retries a failed detail hydration (installed=%s)',
+    async (initiallyInstalled) => {
+      let installed = initiallyInstalled;
+      let activePulls = 0;
+      let maxActivePulls = 0;
+      let pullCount = 0;
+      const pullActivity = vi.fn<() => Promise<ActivityDetail>>(async () => {
+        activePulls += 1;
+        maxActivePulls = Math.max(maxActivePulls, activePulls);
+        pullCount += 1;
+        try {
+          if (pullCount === 1) {
+            throw new NetworkError('detail not ready', new Error('offline'));
+          }
+          installed = true;
+          return canonical;
+        } finally {
+          activePulls -= 1;
         }
-        installed = true;
-        return canonical;
-      } finally {
-        activePulls -= 1;
-      }
-    });
-    nativeState.current = {
-      activities: {
-        subscribe: () => () => undefined,
-        version: () => 0,
-        read: async () => (installed ? canonical : committed),
-        hasInstalledDetail: async () => installed,
-        detailHydrationState: async () => (installed ? 'installed' : 'missing'),
-      },
-      outbox: { forEntity: async () => [] },
-      sync: { pullActivity },
-      coordinator: {},
-    };
+      });
+      nativeState.current = {
+        activities: {
+          subscribe: () => () => undefined,
+          version: () => 0,
+          read: async () => (installed ? canonical : committed),
+          hasInstalledDetail: async () => installed,
+          detailHydrationState: async () => (installed ? 'installed' : 'missing'),
+        },
+        outbox: { forEntity: async () => [] },
+        sync: { pullActivity },
+        coordinator: {},
+      };
 
-    const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
+      const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
 
-    await waitFor(() => expect(pullActivity).toHaveBeenCalledTimes(2), {
-      timeout: 2_000,
-    });
-    await waitFor(() =>
-      expect(mounted.result.current.detail?.capabilities?.complete).toBe(true),
-    );
-    expect(maxActivePulls).toBe(1);
-    mounted.unmount();
-  });
+      await waitFor(() => expect(pullActivity).toHaveBeenCalledTimes(2), {
+        timeout: 2_000,
+      });
+      await waitFor(() =>
+        expect(mounted.result.current.detail?.capabilities?.complete).toBe(true),
+      );
+      expect(maxActivePulls).toBe(1);
+      mounted.unmount();
+    },
+  );
 
   it('settles a permanent hydration failure without scheduling another pull', async () => {
     vi.useFakeTimers();

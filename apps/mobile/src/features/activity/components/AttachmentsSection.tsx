@@ -120,7 +120,8 @@ export function AttachmentsSection({
       </View>
       {onAdd === undefined ? null : (
         <ActionRow
-          label="+ Add photo"
+          label="Add photo"
+          icon="plus"
           accessibilityLabel="Add photo"
           onPress={onAdd}
           testID="attachments-add"

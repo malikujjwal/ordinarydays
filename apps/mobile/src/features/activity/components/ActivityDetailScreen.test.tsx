@@ -3186,7 +3186,7 @@ describe('the prep-task entry points (P3-38)', () => {
     const { onAddPrepTask } = mountWithPrepEntry({ children: [child(1)] });
     await screen.findByTestId('section-prep');
     expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
-    expect(screen.getByText('+ Add prep task')).toBeDefined();
+    expect(screen.getByText('Add prep task')).toBeDefined();
     fireEvent.click(screen.getByTestId('prep-add'));
     expect(onAddPrepTask).toHaveBeenCalledTimes(1);
   });
@@ -3259,7 +3259,7 @@ describe('the Add-list entry points (P3-39)', () => {
     const { onAddList } = mountWithListEntry({ sourceLists: [sourceList] });
     await screen.findByTestId('section-lists');
     expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
-    expect(screen.getByText('+ Add list')).toBeDefined();
+    expect(screen.getByText('Add list')).toBeDefined();
     fireEvent.click(screen.getByTestId('lists-add'));
     expect(onAddList).toHaveBeenCalledWith('Zahav');
   });

@@ -815,7 +815,7 @@ export class ActivityRepository {
 
   private async installCanonicalDetail(
     transaction: TransactionContext,
-    detail: ActivityDetail,
+    incoming: ActivityDetail,
     options: {
       readonly preserveLocalReminders: boolean;
       readonly guards?: Awaited<ReturnType<typeof readCanonicalOutboxGuards>>;
@@ -823,6 +823,34 @@ export class ActivityRepository {
       readonly installUpdates?: boolean;
     },
   ): Promise<boolean> {
+    const guards =
+      options.guards ?? (await readCanonicalOutboxGuards(transaction.database));
+    const localChildren =
+      incoming.children === undefined || guards.protectedActivityIds.size === 0
+        ? []
+        : ((
+            await this.readBoundedDetail(
+              incoming.activity.activityId,
+              transaction.database,
+            )
+          ).children ?? []);
+    const localById = new Map(localChildren.map((child) => [child.activityId, child]));
+    const children = incoming.children
+      ?.filter((child) => !guards.deletedActivityIds.has(child.activityId))
+      .map((child) =>
+        guards.protectedActivityIds.has(child.activityId)
+          ? (localById.get(child.activityId) ?? child)
+          : child,
+      );
+
+    const detail: ActivityDetail =
+      children === undefined
+        ? incoming
+        : {
+            ...incoming,
+            activity: { ...incoming.activity, childCount: children.length },
+            children,
+          };
     const existing = await transaction.database.first(
       'SELECT canonical_version FROM activities WHERE activity_id = ?;',
       [detail.activity.activityId],
@@ -958,27 +986,7 @@ export class ActivityRepository {
       'DELETE FROM activity_children WHERE parent_activity_id = ?;',
       [activityId],
     );
-    // A deleted Prep task also leaves its parent's section and its parent's count: the
-    // server decrements `childCount` in the child's delete transaction (P3-18), so the local
-    // projection mirrors both halves or neither. The parent is told so it re-reads.
-    const parents = await transaction.database.all(
-      'SELECT parent_activity_id FROM activity_children WHERE child_activity_id = ?;',
-      [activityId],
-    );
-    await transaction.database.run(
-      'DELETE FROM activity_children WHERE child_activity_id = ?;',
-      [activityId],
-    );
-    for (const parent of parents) {
-      const parentActivityId = text(parent, 'parent_activity_id');
-      if (parentActivityId === undefined) continue;
-      await transaction.database.run(
-        `UPDATE activities SET child_count = MAX(child_count - 1, 0)
-         WHERE activity_id = ?;`,
-        [parentActivityId],
-      );
-      transaction.changed(this.scope(parentActivityId));
-    }
+    await this.removeChildProjection(transaction, activityId);
     await transaction.database.run(
       'DELETE FROM activity_source_lists WHERE activity_id = ?;',
       [activityId],
@@ -1010,6 +1018,34 @@ export class ActivityRepository {
     transaction.changed('agenda');
     transaction.changed('anytime');
     transaction.changed('reminders');
+  }
+
+  /** Remove a Prep child and publish its parent's count in the same durable transaction. */
+  async removeChildProjection(
+    transaction: TransactionContext,
+    activityId: string,
+  ): Promise<void> {
+    // A deleted Prep task also leaves its parent's section and its parent's count: the
+    // server decrements `childCount` in the child's delete transaction (P3-18), so the local
+    // projection mirrors both halves or neither. The parent is told so it re-reads.
+    const parents = await transaction.database.all(
+      'SELECT parent_activity_id FROM activity_children WHERE child_activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_children WHERE child_activity_id = ?;',
+      [activityId],
+    );
+    for (const parent of parents) {
+      const parentActivityId = text(parent, 'parent_activity_id');
+      if (parentActivityId === undefined) continue;
+      await transaction.database.run(
+        `UPDATE activities SET child_count = MAX(child_count - 1, 0)
+         WHERE activity_id = ?;`,
+        [parentActivityId],
+      );
+      transaction.changed(this.scope(parentActivityId));
+    }
   }
 
   private async putUpdate(

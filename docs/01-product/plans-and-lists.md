@@ -655,6 +655,15 @@ sitting in another plan's PREP section (`validation_failed`, P3-18).
 | On parent deletion | `parentActivityId` is cleared; the task survives ([`today-and-tasks.md`](today-and-tasks.md#55-related-plan)) |
 | Shared plans | Prep tasks on a shared plan are visible to **any participant of the plan**, who may complete, uncomplete and edit them whoever created them. Their completion writes to the updates feed. A prep task is an item on a shared checklist, so ticking `Book hotel` says nothing about whether the trip happened; completing the **plan** stays with the owner ([`activities.md`](activities.md#51-states) §5.1). The rule is one line in the authorisation middleware — a participant of the parent may act on a child — in [`../02-architecture/api-contract.md#3-authorisation-rules`](../02-architecture/api-contract.md#3-authorisation-rules) §3. |
 
+**Native Preparation reconciliation (clarified 2026-09-05).** Creating, completing or deleting
+a child must update the loaded parent's Preparation collection and progress without a
+refresh. A locally accepted deletion removes the child and decrements the parent count in
+one SQLite/outbox transaction. A stale parent response cannot restore a deleted child or
+replace a pending child completion. If deletion is rejected, recovery restores the authoritative
+parent collection together with the child; an unavailable parent read leaves recovery pending.
+The counter always names both values (`0 of 1 done`, for example), including during a pending
+checkbox change. Its full label must fit inside the section on compact screens.
+
 Nesting is capped at **2 levels** (a plan, and its prep tasks). A `POST` that would create a
 third level returns `validation_failed`, and so does a `PATCH` that would assemble one.
 

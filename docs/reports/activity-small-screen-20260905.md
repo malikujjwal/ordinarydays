@@ -1,5 +1,7 @@
 # Activity details: small-screen contract audit — 2026-09-05
 
+Follow-up: the [Preparation audit](activity-preparation-20260905.md) records the later reported stale-child, deleted-Plan cache and mock-styling defects, their corrections, and the additional SE catalogue failures. The historical passes below did not cover those new regressions.
+
 Status: focused small-screen, repository and web checks passed. Full standard native catalogue passed 21/21 on attempt 2. AX5 Today acceptance remains open. Small screens are supported by the canonical design; complete largest-text accessibility compliance is not established. No contract was relaxed to accept a failure. No commit, push, deployment or merge was performed.
 
 ## Correction to the earlier report

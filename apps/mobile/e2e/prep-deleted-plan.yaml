@@ -1,0 +1,30 @@
+appId: app.ordinarydays.ios.local
+name: Cached deleted Plan stops offering Prep creation
+jsEngine: graaljs
+tags: [p3, ios, release, reconciliation]
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: prep-deleted-plan
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- openLink: ordinarydays-local:///activity/${output.activityId}
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: detail-back
+- assertVisible:
+    id: today-screen
+- runScript: scripts/delete-opened-plan.js
+- openLink: ordinarydays-local:///activity/${output.activityId}
+- assertVisible:
+    id: detail-error
+- assertNotVisible:
+    id: detail-content
+- takeScreenshot: deleted-plan-error

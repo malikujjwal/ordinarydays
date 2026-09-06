@@ -1,4 +1,5 @@
-import { Text, Touchable, useTheme } from '@od/ui';
+import { Plus, Text, Touchable, useTheme } from '@od/ui';
+import { View } from 'react-native';
 
 /**
  * One left-aligned action-text row: the Plan-detail section affordances (`+ Add prep task`,
@@ -17,6 +18,7 @@ export interface ActionRowProps {
    * making something and revealing what exists.
    */
   variant?: 'body' | 'subhead';
+  icon?: 'plus';
 }
 
 export function ActionRow({
@@ -26,6 +28,7 @@ export function ActionRow({
   testID,
   disabled = false,
   variant = 'body',
+  icon,
 }: ActionRowProps) {
   const theme = useTheme();
   return (
@@ -34,12 +37,21 @@ export function ActionRow({
       accessibilityLabel={accessibilityLabel}
       onPress={onPress}
       disabled={disabled}
-      style={{ alignItems: 'flex-start', paddingVertical: theme.space[2] }}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        gap: theme.space[3],
+        paddingVertical: theme.space[2],
+      }}
       {...(testID === undefined ? {} : { testID })}
     >
-      <Text variant={variant} color="textAction">
-        {label}
-      </Text>
+      {icon === 'plus' ? <Plus size={20} color={theme.colors.textAction} /> : null}
+      <View style={{ flexShrink: 1 }}>
+        <Text variant={variant} color="textAction">
+          {label}
+        </Text>
+      </View>
     </Touchable>
   );
 }

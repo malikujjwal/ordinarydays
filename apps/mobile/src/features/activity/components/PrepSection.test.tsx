@@ -33,6 +33,8 @@ describe('PrepSection optimistic completion', () => {
       screen.queryByRole('checkbox', { name: 'Pack a bag, not completed' }),
     ).toBeNull();
 
+    expect(screen.getByRole('button', { name: '1 of 1 done' })).toBeDefined();
+
     reject(new Error('storage detail that must not escape'));
     await waitFor(() =>
       expect(

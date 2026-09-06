@@ -28,12 +28,15 @@ export function SectionFrame({
       <View
         style={{
           flexDirection: 'row',
+          flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'baseline',
           gap: theme.space[2],
         }}
       >
-        <SectionHeader title={label} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <SectionHeader title={label} />
+        </View>
         {trailing === undefined ? null : onTrailingPress === undefined ? (
           <Text variant="footnoteStrong" color="textSecondary">
             {trailing}
@@ -43,7 +46,12 @@ export function SectionFrame({
             accessibilityRole="button"
             accessibilityLabel={trailing}
             onPress={onTrailingPress}
-            style={{ minHeight: theme.layout.hitTarget, justifyContent: 'center' }}
+            style={{
+              minHeight: theme.layout.hitTarget,
+              justifyContent: 'center',
+              flexShrink: 1,
+              maxWidth: '100%',
+            }}
           >
             <Text variant="footnoteStrong" color="textSecondary">
               {trailing}

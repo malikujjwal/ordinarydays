@@ -706,6 +706,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       ) {
         return undefined;
       }
+      const prepParent = await this.pullPrepParentForDelete(intent, detail);
       const coverages = latestNativeAgendaCoverage(await this.agenda.coverage());
       const coverageKeys = new Set(
         coverages.map((coverage) => agendaQueryKey(agendaQueryForCoverage(coverage))),
@@ -748,6 +749,12 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           if (
             currentCoverageKeys.size !== coverageKeys.size ||
             [...currentCoverageKeys].some((key) => !coverageKeys.has(key))
+          ) {
+            return false;
+          }
+          if (
+            prepParent !== undefined &&
+            !(await this.activities.putCanonical(transaction, prepParent))
           ) {
             return false;
           }
@@ -1933,6 +1940,19 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     });
   }
 
+  /** A refused Prep deletion restores the parent's ordered collection as well as the child. */
+  private async pullPrepParentForDelete(
+    intent: OutboxIntent,
+    detail: ActivityDetail,
+  ): Promise<ActivityDetail | undefined> {
+    const parentActivityId = detail.activity.parentActivityId;
+    if (intent.mutationKey[1] !== 'delete' || parentActivityId === undefined)
+      return undefined;
+    return this.serialNetwork((signal) =>
+      this.pull.activity({ kind: 'activity', activityId: parentActivityId }, signal),
+    );
+  }
+
   /** Restores the last server truth before exposing a permanent rejection for recovery. */
   private async rollbackPermanentRejection(
     intent: OutboxIntent,
@@ -2007,6 +2027,20 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
     }
 
+    let prepParent: ActivityDetail | undefined;
+    if (canonical !== undefined) {
+      try {
+        prepParent = await this.pullPrepParentForDelete(intent, canonical);
+      } catch (parentError) {
+        canonical = undefined;
+        if (__DEV__)
+          console.warn('native_rejection_prep_parent_read_failed', {
+            intentId: intent.intentId,
+            message: message(parentError),
+          });
+      }
+    }
+
     let canonicalAgendas:
       | Array<{ readonly request: AgendaQuery; readonly data: AgendaData }>
       | undefined;
@@ -2054,6 +2088,19 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
       }
       if (canonical !== undefined) {
+        if (
+          prepParent !== undefined &&
+          !(await this.activities.putCanonical(transaction, prepParent))
+        ) {
+          await this.outbox.needsAttention(
+            transaction.database,
+            intent.intentId,
+            rejectedAttention(failure, true),
+            failure.message,
+          );
+          transaction.changed('outbox');
+          return;
+        }
         const restored = await this.activities.restoreCanonicalAfterRejection(
           transaction,
           canonical,

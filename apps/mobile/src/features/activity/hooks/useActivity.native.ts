@@ -15,6 +15,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { ACTIVITY_GONE } from '@/features/activity/model/activityActions';
 import { CONFLICT_MESSAGE } from '@/features/activity/model/conflict';
 import { useClock } from '@/hooks/useClock';
 import { newLocalId } from '@/lib/localIds';
@@ -93,6 +94,8 @@ export function useActivityDetail(
   const [reminderError, setReminderError] = useState<string>();
   const [hydrationRetry, setHydrationRetry] = useState(0);
   const mounted = useRef(false);
+  const hadCommittedDetail = useRef(false);
+  const entryRefreshStarted = useRef(false);
   const requestGeneration = useRef(0);
   const automaticPullKey = useRef<string | undefined>(undefined);
   const automaticPullInFlight = useRef<string | undefined>(undefined);
@@ -134,8 +137,13 @@ export function useActivityDetail(
       const committed = await state.activities.read(target);
       if (!isCurrentRequest(generation)) return undefined;
       if (committed !== undefined) {
+        hadCommittedDetail.current = true;
         setDetail(committed);
         setStatus('success');
+      } else if (hadCommittedDetail.current) {
+        setDetail(undefined);
+        setStatus('error');
+        setLoadMessage(ACTIVITY_GONE);
       }
       return committed;
     },
@@ -209,6 +217,8 @@ export function useActivityDetail(
     void state;
     void targetKey;
     mounted.current = true;
+    hadCommittedDetail.current = false;
+    entryRefreshStarted.current = false;
     automaticPullKey.current = undefined;
     automaticPullInFlight.current = undefined;
     retryIndex.current = 0;
@@ -234,7 +244,9 @@ export function useActivityDetail(
         return;
       }
       const needsCanonicalDetail =
-        committed === undefined || hydrationState === 'missing';
+        (target.kind === 'activity' && !entryRefreshStarted.current) ||
+        committed === undefined ||
+        hydrationState === 'missing';
       const pullKey = `${targetKey}:${committed?.activity.updatedAt ?? 'missing'}`;
       if (
         needsCanonicalDetail &&
@@ -243,6 +255,7 @@ export function useActivityDetail(
       ) {
         clearRetry();
         automaticPullInFlight.current = pullKey;
+        entryRefreshStarted.current = true;
         try {
           const canonical = await state.sync.pullActivity(target);
           if (!isCurrentRequest(generation)) return;
@@ -278,6 +291,7 @@ export function useActivityDetail(
               : undefined,
           );
           if (retryable) {
+            entryRefreshStarted.current = false;
             scheduleRetry();
           } else {
             automaticPullKey.current = `${targetKey}:${retained?.activity.updatedAt ?? 'missing'}`;

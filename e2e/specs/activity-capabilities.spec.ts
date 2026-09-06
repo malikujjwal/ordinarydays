@@ -31,6 +31,8 @@ for (const textSize of [13, 52]) {
         const button = page.getByTestId(`add-to-plan-${id}`);
         await button.scrollIntoViewIfNeeded();
         await expect(button).toBeVisible();
+        await expect(button).toHaveCSS('border-top-width', '1px');
+        await expect(button.locator('svg')).toHaveCount(1);
         const bounds = await button.boundingBox();
         if (bounds === null) throw new Error(`Missing action bounds: ${id}`);
         expect(bounds.x).toBeGreaterThanOrEqual(0);
@@ -66,3 +68,62 @@ for (const textSize of [13, 52]) {
     }
   });
 }
+
+test('Preparation progress fits a compact screen and names the full count', async ({
+  page,
+  request,
+}, testInfo) => {
+  const parent = await request.post(`${API}/v1/activities`, {
+    headers: e2eHeaders(randomUUID()),
+    data: {
+      objectKind: 'plan',
+      type: 'custom',
+      title: 'Preparation count check',
+      details: { kind: 'custom' },
+    },
+  });
+  const { data: plan } = await parent.json();
+  let childId: string | undefined;
+  try {
+    const response = await request.post(`${API}/v1/activities`, {
+      headers: e2eHeaders(randomUUID()),
+      data: {
+        objectKind: 'task',
+        type: 'task',
+        title: 'Distinct prep task',
+        parentActivityId: plan.activityId,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const { data: child } = await response.json();
+    childId = child.activityId;
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto(`/activity/${plan.activityId}`);
+    const count = page.getByRole('button', { name: '0 of 1 done', exact: true });
+    await count.scrollIntoViewIfNeeded();
+    await expect(count).toBeVisible();
+    const heading = page.getByRole('heading', { name: 'Preparation', exact: true });
+    await expect(heading).toBeVisible();
+    const headingBounds = await heading.boundingBox();
+    if (headingBounds === null) throw new Error('Missing Preparation heading');
+    expect(headingBounds.width).toBeGreaterThan(0);
+    const bounds = await count.boundingBox();
+    if (bounds === null) throw new Error('Missing Preparation count');
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(304);
+    const addPrep = page.getByTestId('prep-add');
+    const actionBounds = await addPrep.boundingBox();
+    const iconBounds = await addPrep.locator('svg').boundingBox();
+    if (actionBounds === null || iconBounds === null)
+      throw new Error('Missing Prep action');
+    expect(iconBounds.x).toBe(actionBounds.x);
+    await page.screenshot({
+      path: testInfo.outputPath('preparation-count.png'),
+      fullPage: true,
+    });
+  } finally {
+    await deleteActivities(request, [
+      ...(childId === undefined ? [] : [childId]),
+      plan.activityId,
+    ]);
+  }
+});

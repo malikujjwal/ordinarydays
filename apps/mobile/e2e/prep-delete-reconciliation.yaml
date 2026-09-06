@@ -1,0 +1,98 @@
+appId: app.ordinarydays.ios.local
+name: Prep creation, progress and deletion reconciliation
+jsEngine: graaljs
+tags: [p3, ios, release, reconciliation]
+env:
+  IOS_DRIVER_URL: http://127.0.0.1:22087
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: prep-delete-reconciliation
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- openLink: ordinarydays-local:///activity/${output.activityId}
+- runFlow:
+    when:
+      visible: Open
+    commands:
+      - tapOn: Open
+- assertVisible:
+    id: detail-content
+- scrollUntilVisible:
+    element:
+      text: ${output.planTitle}
+    direction: DOWN
+    centerElement: true
+- scrollUntilVisible:
+    element:
+      id: add-to-plan-prep-task
+    direction: DOWN
+    centerElement: true
+- tapOn:
+    id: add-to-plan-prep-task
+- assertVisible:
+    id: compose-form
+- tapOn:
+    id: compose-title
+- inputText: ${output.prepTitle}
+- tapOn:
+    id: compose-save
+- assertVisible:
+    id: section-prep
+- assertVisible: ${output.prepTitle}
+
+- assertVisible: 0 of 1 done
+- extendedWaitUntil:
+    notVisible: Task · saved to Anytime
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      id: section-prep
+    direction: DOWN
+    centerElement: true
+- runScript: scripts/assert-prep-layout.js
+- takeScreenshot: preparation-count
+- tapOn: ${output.prepTitle}
+- assertVisible:
+    id: detail-content
+- tapOn:
+    id: detail-overflow
+- tapOn:
+    id: overflow-delete
+- assertVisible:
+    id: delete-confirm
+- tapOn:
+    id: confirm-accept
+- assertVisible:
+    id: detail-content
+- scrollUntilVisible:
+    element:
+      id: add-to-plan-prep-task
+    direction: DOWN
+    centerElement: true
+- assertNotVisible: ${output.prepTitle}
+- assertNotVisible:
+    id: section-prep
+- takeScreenshot: preparation-after-delete
+
+- stopApp
+- launchApp
+- assertVisible:
+    id: today-screen
+- openLink: ordinarydays-local:///activity/${output.activityId}
+- assertVisible:
+    id: detail-content
+- scrollUntilVisible:
+    element:
+      id: add-to-plan-prep-task
+    direction: DOWN
+    centerElement: true
+- assertNotVisible: ${output.prepTitle}
+- assertNotVisible:
+    id: section-prep

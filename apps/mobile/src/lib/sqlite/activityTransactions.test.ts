@@ -1316,6 +1316,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     );
 
     expect(accepted).toMatchObject({ kind: 'accepted' });
+    await transactions.run((transaction) => activities.putCanonical(transaction, parent));
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
     ).toEqual([{ ...parent.children?.[0], status: 'scheduled' }]);
@@ -1369,6 +1370,58 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.children,
     ).toEqual([{ ...parent.children?.[0], status: 'completed' }]);
+  });
+
+  it('removes a deleted Prep task and parent count before network acknowledgement', async () => {
+    const timestamp = '2026-08-19T08:00:00.000Z';
+    const parent: ActivityDetail = {
+      activity: {
+        activityId: ACTIVITY,
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        status: 'saved',
+        title: 'Shared trip',
+        participantCount: 1,
+        childCount: 1,
+        expenseTotalCents: 0,
+        visibility: 'private',
+        details: { kind: 'custom' },
+        icsSequence: 0,
+        createdAt: timestamp,
+        lastActivityAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: 1,
+      },
+      reminders: [],
+      children: [
+        {
+          activityId: OTHER,
+          title: 'Pack a bag',
+          status: 'completed',
+          restoredStatus: 'scheduled',
+          isRecurring: false,
+        },
+      ],
+    };
+    await transactions.run((transaction) => activities.putCanonical(transaction, parent));
+
+    const notify = vi.fn();
+    const unsubscribe = activities.subscribe(ACTIVITY, notify);
+    await coordinator.remove(OTHER, 'delete-prep');
+    const restored = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    expect(restored?.children).toEqual([]);
+    expect(restored?.activity.childCount).toBe(0);
+    expect(notify).toHaveBeenCalled();
+    unsubscribe();
+    // A parent request already in flight still includes the just-deleted child.
+    await transactions.run((transaction) => activities.putCanonical(transaction, parent));
+    const afterStalePull = await activities.read({
+      kind: 'activity',
+      activityId: ACTIVITY,
+    });
+    expect(afterStalePull?.children).toEqual([]);
+    expect(afterStalePull?.activity.childCount).toBe(0);
   });
 
   it('removes the parent pointer when the child is canonically absent', async () => {

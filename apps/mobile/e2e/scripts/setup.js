@@ -177,7 +177,11 @@ if (FLOW.startsWith('calendar-')) {
   output.afterWeek = addWallDays(wall.date, 8);
 } else if (FLOW === 'add-and-complete') {
   output.title = `P2-37 iOS add ${stamp}`;
-} else if (FLOW === 'prep-parent-reconciliation') {
+} else if (
+  FLOW === 'prep-parent-reconciliation' ||
+  FLOW === 'prep-delete-reconciliation' ||
+  FLOW === 'prep-deleted-plan'
+) {
   output.planTitle = `P3 native Prep parent ${stamp}`;
   output.prepTitle = `Book room ${stamp}`;
   output.activityId = createPlan(output.planTitle, wall.date);

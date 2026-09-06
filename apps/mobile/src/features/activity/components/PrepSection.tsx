@@ -87,7 +87,7 @@ export function PrepSection({
   return (
     <SectionFrame
       label="Preparation"
-      trailing={prepProgress(prepTasks)}
+      trailing={prepProgress(projectedTasks)}
       {...(expanded ? {} : { onTrailingPress: () => setExpanded(true) })}
       testID="section-prep"
     >
@@ -99,6 +99,8 @@ export function PrepSection({
             alignItems: 'center',
             gap: theme.space[3],
             minHeight: theme.layout.hitTarget,
+            borderBottomWidth: 1,
+            borderBottomColor: theme.colors.border,
           }}
           testID={`prep-child-${child.activityId}`}
         >
@@ -140,7 +142,8 @@ export function PrepSection({
       )}
       {onAddPrepTask === undefined ? null : (
         <ActionRow
-          label="+ Add prep task"
+          label="Add prep task"
+          icon="plus"
           accessibilityLabel="Add prep task"
           onPress={onAddPrepTask}
           testID="prep-add"

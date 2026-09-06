@@ -1,4 +1,4 @@
-import { Chip, SectionHeader, Touchable, useTheme } from '@od/ui';
+import { Plus, SectionHeader, Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
 
 /**
@@ -48,8 +48,25 @@ export function AddToPlanRow({
             accessibilityLabel={`Add ${entry.label.toLowerCase()} to this plan`}
             onPress={entry.onPress}
             testID={`add-to-plan-${entry.label.toLowerCase().replaceAll(' ', '-')}`}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.space[3],
+              maxWidth: '100%',
+              minHeight: theme.layout.hitTarget,
+              paddingHorizontal: theme.space[4],
+              paddingVertical: theme.space[3],
+              borderWidth: 1,
+              borderColor: theme.colors.borderStrong,
+              borderRadius: theme.radius.md,
+            }}
           >
-            <Chip label={entry.label} />
+            <Plus size={20} color={theme.colors.textAction} />
+            <View style={{ flexShrink: 1 }}>
+              <Text variant="body" color="textAction">
+                {entry.label}
+              </Text>
+            </View>
           </Touchable>
         ))}
       </View>

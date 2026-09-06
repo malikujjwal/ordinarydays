@@ -491,6 +491,7 @@ export class ActivityTransactionService {
       mutation('delete', variables.intentId, variables.activityId, variables),
     );
     if (appended.kind === 'existing' && !projectExisting) return appended;
+    await this.activities.removeChildProjection(transaction, variables.activityId);
     await transaction.database.run(
       'DELETE FROM activity_reminders WHERE activity_id = ?;',
       [variables.activityId],

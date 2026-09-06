@@ -1289,6 +1289,12 @@ not replace or remove them. Empty capabilities use these named chips, while popu
 sections retain their own Add action. Photo entry remains owner-only, per
 `plans-and-lists.md` §2.1. Small-screen verification must exercise these entry actions and
 their return paths, not only the notes editor.
+The approved Add controls use an outlined `md` boundary, the existing Plus icon and
+`textAction` label/icon color, with a minimum 44 pt target. They wrap as needed instead of
+clipping at compact widths or larger text. Populated Prep/List/Photo sections use the same
+Plus icon with their existing text action; Prep rows retain a quiet divider. The Preparation
+header and its full progress label share the available width and may wrap; the label must
+never extend beyond the section's bounds.
 Titles wrap to their full height and retain blur-to-save. Repeat and Reminder use the
 existing interactive SettingRow value color and disclosure icon. Draft behavior is canonical
 in [`../01-product/activities.md`](../01-product/activities.md) §6.1.
