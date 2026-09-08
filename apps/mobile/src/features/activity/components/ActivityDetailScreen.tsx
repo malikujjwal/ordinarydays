@@ -1,4 +1,4 @@
-import type { ChangeTarget, User } from '@od/shared';
+import type { ChangeTarget } from '@od/shared';
 import { addWallDays, describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
@@ -84,6 +84,7 @@ import { useClock } from '@/hooks/useClock';
 import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { cancelPendingCreate, usePendingCreate } from '@/hooks/usePendingIntents';
+import { useViewer } from '@/hooks/useViewer';
 import { openInMaps } from '@/lib/openInMaps';
 import {
   completionVerb,
@@ -93,7 +94,6 @@ import {
 } from '@/lib/passedPlanResolution';
 import type { PendingActivity } from '@/lib/pendingActivity';
 import { planKindLabel } from '@/lib/planKinds';
-import { ME_QUERY_KEY } from '@/lib/queryKeys';
 import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { useNotesDraft } from '../hooks/useNotesDraft';
 import { ActivityNotes, type NotesDraft } from './ActivityNotes';
@@ -1196,7 +1196,8 @@ function Loaded({
    * The viewer, the cover and deletion (P3-42). The owner sees the long-press actions; a
    * participant — or a viewer the app has not identified — sees the tiles and the viewer only.
    */
-  const viewerUserId = useQueryClient().getQueryData<User>(ME_QUERY_KEY)?.userId;
+  // The route fetches identity; subscribe here so a later response reveals owner actions.
+  const viewerUserId = useViewer(false)?.userId;
   const manageAttachments = canManageAttachments(
     'ownerId' in activity ? activity : { ownerId: undefined },
     viewerUserId,

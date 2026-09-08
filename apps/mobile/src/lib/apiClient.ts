@@ -1,7 +1,7 @@
 import type { HttpClientConfig } from '@od/shared/client';
 import { createHttpClient, localTokenProvider } from '@od/shared/client';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 
 /**
  * Where the app's configuration is read, and the only place in the client that does so.
@@ -46,12 +46,26 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
 
 export function metroLanHost(): string | undefined {
   const hostUri = Constants.expoConfig?.hostUri;
-  if (typeof hostUri !== 'string' || hostUri === '') return undefined;
+  const expoHost =
+    typeof hostUri === 'string' ? networkHost(`http://${hostUri}`) : undefined;
+  if (expoHost !== undefined) return expoHost;
 
-  // IPv6 hosts arrive bracketed (`[::1]:8081`); strip the brackets before comparing.
-  const host = hostUri.split(':')[0]?.replace(/^\[|\]$/g, '');
-  if (host === undefined || host === '' || LOOPBACK.has(host)) return undefined;
-  return host;
+  // Xcode debug builds load JavaScript from Metro but may have only embedded Expo
+  // config, without hostUri. React Native retains the actual loaded bundle URL.
+  if (!__DEV__) return undefined;
+  const scriptURL: unknown = NativeModules.SourceCode?.getConstants?.().scriptURL;
+  return typeof scriptURL === 'string' ? networkHost(scriptURL) : undefined;
+}
+
+function networkHost(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    return host === '' || LOOPBACK.has(host) ? undefined : url.hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

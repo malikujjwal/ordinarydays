@@ -3578,6 +3578,30 @@ describe('the viewer and the hero (P3-42)', () => {
     },
   );
 
+  it('reveals photo upload when the owner identity arrives after the plan', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const add = vi.fn();
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount(undefined, undefined, undefined, undefined, client, undefined, add);
+    await loaded();
+    expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
+
+    act(() => {
+      client.setQueryData(['me'], {
+        userId: OWNER,
+        displayName: 'Dev',
+        timezone: 'America/New_York',
+        currency: 'USD',
+        weekStartsOn: 1,
+      });
+    });
+    await waitFor(() => expect(screen.getByTestId('add-to-plan-photo')).toBeDefined());
+    fireEvent.click(screen.getByTestId('add-to-plan-photo'));
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+
   it('renders no hero without primaryAttachmentId, and the thumbnails by key', async () => {
     mountAs(OWNER, plan());
     await loaded();

@@ -7,9 +7,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * configuration once per app run, and it is the right trade for the app; the test just has
  * to respect it.
  */
-async function load(expoConfig: Record<string, unknown> | undefined) {
+async function load(expoConfig: Record<string, unknown> | undefined, scriptURL?: string) {
   vi.resetModules();
   vi.doMock('expo-constants', () => ({ default: { expoConfig } }));
+  vi.doMock('react-native', async () => {
+    const actual = await vi.importActual<typeof import('react-native')>('react-native');
+    return {
+      ...actual,
+      NativeModules: { SourceCode: { getConstants: () => ({ scriptURL }) } },
+    };
+  });
   return import('@/lib/apiClient');
 }
 
@@ -39,6 +46,31 @@ describe('resolveApiBaseUrl', () => {
   it('falls back to localhost when Metro advertises no host', async () => {
     const { resolveApiBaseUrl } = await load(localConfig());
     expect(resolveApiBaseUrl()).toBe('http://localhost:3000');
+  });
+
+  it('uses the native bundle host when an Xcode build has no Expo hostUri', async () => {
+    const { resolveApiBaseUrl } = await load(
+      localConfig(),
+      'http://172.20.10.4:8081/.expo/.virtual-metro-entry.bundle?platform=ios',
+    );
+    expect(resolveApiBaseUrl()).toBe('http://172.20.10.4:3000');
+  });
+
+  it.each([
+    'file:///var/containers/Bundle/Application/main.jsbundle',
+    'http://127.0.0.1:8081/index.bundle',
+    'invalid-url',
+  ])('does not use a non-LAN native bundle URL: %s', async (scriptURL) => {
+    const { resolveApiBaseUrl } = await load(localConfig(), scriptURL);
+    expect(resolveApiBaseUrl()).toBe('http://localhost:3000');
+  });
+
+  it('preserves the production API even with a native development bundle', async () => {
+    const { resolveApiBaseUrl } = await load(
+      { extra: { profile: 'prod', apiBaseUrl: 'https://api.ordinarydays.app' } },
+      'http://172.20.10.4:8081/index.bundle',
+    );
+    expect(resolveApiBaseUrl()).toBe('https://api.ordinarydays.app');
   });
 
   it('uses the LAN address Metro advertised, so a physical device can reach the API', async () => {
