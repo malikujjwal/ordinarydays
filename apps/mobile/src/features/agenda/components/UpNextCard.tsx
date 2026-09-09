@@ -263,7 +263,7 @@ export function UpNextCardWithState({
              */}
             <View pointerEvents="none" style={{ marginTop: theme.space[4] }}>
               <Text
-                variant="title"
+                variant="heading"
                 color="textPrimary"
                 numberOfLines={2}
                 testID="up-next-title"

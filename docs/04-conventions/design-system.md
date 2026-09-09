@@ -497,7 +497,7 @@ background.
 | `event` | `map-pin` | `#8C4A5E` | `#AD748C` | 6.1:1 / ≥ 3:1 |
 | `custom` | `diamond` | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 
-Non-task rows render a small non-interactive marker in the type's accent — a `16 × 16`
+Non-task rows render a small non-interactive marker in the type's accent — a `20 × 20`
 outlined glyph centred on a quiet `24 × 24` type surface and
 `accessibilityElementsHidden`. The 24 pt surface matches the task checkbox's visual footprint;
 its meaning goes into the row's label instead (`interaction-contract.md` §6.2).
@@ -605,7 +605,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderStrong` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
-| `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
+| `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 20 × 20 visual. |
 | `SettingRow` | `label`, `summary?`, `value?`, `note?`, `selected?`, `switchValue?`, `role` (`button` \| `checkbox` \| `switch`), `opens?`, `expanded?`, `icon?`, `iconTone?` (`neutral` \| `success` \| `danger`), `density` (`standard` \| `compact`), `danger?`, `separated?`, `onPress?`, `disabled?` | The utility-row family: inert/read-only, default, pressed, selected, expanded, checked/unchecked switch, disabled and focus-visible. `standard` has a 72 pt floor; transient action-menu `compact` has the content-row 56 pt floor. `icon` is a recognition aid; an optional semantic `iconTone` places it on the shared 36 pt soft tile without caller-owned colour. `danger` changes ink rather than filling the row, and `separated` adds token spacing before a consequential action. The entire row is one target; switch rows use the shared token-owned track/thumb with checked state and reduced-motion-safe transition, while choice rows use selected state plus a check and navigation/disclosure rows use a truthful chevron. |
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
@@ -839,7 +839,7 @@ the `base` width ease, and at `0 of n` it renders empty, not hidden.
 ```
  ┌────────────────────────────────────────────────────┐  radius.xl · e3 (mulberry shadow)
  │ 2:30 ║ UP NEXT · IN 2H 15M                         │  time rail · double rule · caption, textAction
- │  PM  ║ Dentist appointment                         │  title — no marker, no checkbox
+ │  PM  ║ Dentist appointment                         │  heading — no marker, no checkbox
  │      ║ ─────────────────────────                   │  1 px border rule under each band
  │      ║ Jefferson Dental Center                     │  subhead — the metadata band
  │      ║ ─────────────────────────                   │
@@ -893,7 +893,7 @@ hairline connector, content to the right:
   > 16 pt semibold with 13 pt beneath it. It was `body` over `subhead`, which left two points
   > between the two lines and made every row read as two equal ones. The rail is `space[11]`
   > wide: `12:00 PM` measures 58 pt in `footnote`, so the previous `space[10]` truncated it.
-- Marker column: the 24 pt task-checkbox visual or a 16 pt type glyph on a 24 pt quiet surface;
+- Marker column: the 20 pt task-checkbox visual or a 20 pt type glyph on a 24 pt quiet surface;
   a 1 px `border` connector runs vertically to each 24 pt node edge — no halo gap and no line
   through the glyph. It is what makes the day read as a timeline.
 - The **NOW divider** sits between EARLIER TODAY and what remains: `NOW` in `caption`

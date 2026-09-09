@@ -219,7 +219,7 @@ product spec defines settings. They do not create or specify an app-wide Setting
 | Control | Hit target | Notes |
 | --- | --- | --- |
 | Row body | Full row width minus the checkbox and any trailing control, min height 44 pt | One `Pressable` |
-| Checkbox | 44 × 44 pt, visually 24 × 24 | Separate element |
+| Checkbox | 44 × 44 pt, visually 20 × 20 | Separate element |
 | Time column | 44 pt tall, ≥ 56 pt wide | Separate element; opens reschedule |
 | Trailing prompt chip (`How did it go?`) | 44 pt tall | Separate element |
 | Avatar stack | Not interactive on a row | Interactive on plan detail |

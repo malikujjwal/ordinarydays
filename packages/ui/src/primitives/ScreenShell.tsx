@@ -57,6 +57,12 @@ export interface ScreenShellProps {
    * fold can scroll a child into view without taking over keyboard or footer layout.
    */
   bodyScrollRef?: Ref<RNScrollView | null>;
+  /**
+   * iOS rubber-bands a short ScrollView even when there is nothing to scroll. On a modal
+   * that pan is the dismiss gesture. Pass `false` for a form sheet that must not close on
+   * a swipe through empty space. Default is RN's `true`.
+   */
+  alwaysBounceVertical?: boolean;
   testID?: string;
 }
 
@@ -98,6 +104,7 @@ export function ScreenShell({
   scrollEventThrottle,
   keepEndVisibleWithKeyboard = false,
   bodyScrollRef,
+  alwaysBounceVertical,
   testID,
 }: ScreenShellProps) {
   const theme = useTheme();
@@ -167,9 +174,12 @@ export function ScreenShell({
           onScroll={onScroll}
           scrollEventThrottle={scrollEventThrottle}
           onContentSizeChange={(_width, height) => setContentHeight(height)}
-          automaticallyAdjustKeyboardInsets
+          automaticallyAdjustKeyboardInsets={footer === undefined}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
+          {...(alwaysBounceVertical === undefined
+            ? {}
+            : { alwaysBounceVertical, bounces: alwaysBounceVertical })}
           contentContainerStyle={{
             paddingTop:
               header === undefined

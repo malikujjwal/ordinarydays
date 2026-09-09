@@ -98,9 +98,9 @@ describe('RowLeading marker rendering', () => {
     expect(visual.style.height).toBe('24px');
     expect(visual.style.backgroundColor).toBe(cssColor(typeAccents.light[type].surface));
     expect(screen.queryByRole('checkbox')).toBeNull();
-    // 16 × 16, in the type's light accent — the only colour a marker may take.
+    // 20 × 20 in the 24 pt node, matching the 20 pt checkbox visual.
     expect(lastProps(Icon)).toEqual(
-      expect.objectContaining({ size: 16, color: typeAccents.light[type].accent }),
+      expect.objectContaining({ size: 20, color: typeAccents.light[type].accent }),
     );
     // And no other kind's glyph was drawn for this row.
     const drawn = spies.filter((spy) => spy.mock.calls.length > 0);

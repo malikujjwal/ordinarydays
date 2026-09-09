@@ -250,13 +250,18 @@ export function ComposeScreen({
   }
 
   const globalInline = !draft.intentLocked;
+  const revealIdentity =
+    draft.target === undefined
+      ? draft.objectChoice
+      : `${draft.objectChoice}:${draft.target.objectKind}:${'type' in draft.target ? draft.target.type : ''}`;
   useLayoutEffect(() => {
+    void revealIdentity;
     if (!globalInline || draft.objectChoice === undefined) return;
     const frame = requestAnimationFrame(() => {
       scrollRevealedSectionIntoView(bodyScrollRef.current, revealedSectionRef.current);
     });
     return () => cancelAnimationFrame(frame);
-  }, [draft.objectChoice, globalInline]);
+  }, [draft.objectChoice, globalInline, revealIdentity]);
   // The bridge enters at the kind step, so that step has nowhere back to go (P3-34).
   const showBack =
     !globalInline &&
@@ -366,6 +371,7 @@ export function ComposeScreen({
         header={header}
         measure="reading"
         bodyScrollRef={bodyScrollRef}
+        alwaysBounceVertical={false}
         {...(footer === undefined ? {} : { footer })}
       >
         <View style={{ gap: theme.space[5] }}>
@@ -389,7 +395,10 @@ export function ComposeScreen({
                 disabled={!titleReady}
               />
               {draft.objectChoice === 'plan' ? (
-                <View ref={revealedSectionRef} collapsable={false}>
+                <View
+                  collapsable={false}
+                  {...(draft.target === undefined ? { ref: revealedSectionRef } : {})}
+                >
                   <PlanKindChooser
                     variant="select"
                     {...(draft.target?.objectKind === 'plan'
@@ -440,7 +449,10 @@ export function ComposeScreen({
           draft.target.objectKind !== 'listItem' ? (
             <View
               collapsable={false}
-              {...(draft.objectChoice === 'task' ? { ref: revealedSectionRef } : {})}
+              {...(draft.objectChoice === 'task' ||
+              (draft.objectChoice === 'plan' && draft.target !== undefined)
+                ? { ref: revealedSectionRef }
+                : {})}
             >
               <ComposeForm
                 target={draft.target}

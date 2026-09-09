@@ -1579,7 +1579,7 @@ describe('TodayScreen timeline furniture', () => {
     expect(actions.getAttribute('aria-hidden')).toBeNull();
   });
 
-  it('uses one compact detail line and the serif planner title in Up Next', async () => {
+  it('uses one compact detail line and the page sans title in Up Next', async () => {
     const timed = row(1, {
       title: 'Dentist appointment',
       time: '17:30',
@@ -1592,7 +1592,7 @@ describe('TodayScreen timeline furniture', () => {
     expect(screen.getByTestId('up-next-meta').textContent).toBe(
       'Jefferson Dental Center · Bring insurance card · Annual checkup',
     );
-    expect(screen.getByTestId('up-next-title').style.fontSize).toBe('24px');
+    expect(screen.getByTestId('up-next-title').style.fontSize).toBe('16px');
   });
 
   it('keeps Up Next inspectable while recurrence topology blocks mutations', () => {

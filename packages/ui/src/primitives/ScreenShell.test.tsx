@@ -105,6 +105,20 @@ describe('ScreenShell keyboard and paginated-scroll ownership', () => {
     expect(getComputedStyle(scrollContent()).paddingBottom).toBe('66px');
   });
 
+  it('does not pad the scroll body by the keyboard when a footer owns the inset', () => {
+    keyboardInset.value = 336;
+    render(
+      <ThemeProvider scheme="light">
+        <SafeAreaProvider>
+          <ScreenShell testID="shell" footer={<Text>Save</Text>}>
+            <Text>Focused field</Text>
+          </ScreenShell>
+        </SafeAreaProvider>
+      </ThemeProvider>,
+    );
+    expect(getComputedStyle(scrollContent()).paddingBottom).toBe('32px');
+  });
+
   it('exposes the owned body ScrollView through bodyScrollRef', () => {
     const bodyScrollRef: RefObject<RNScrollView | null> = { current: null };
     render(

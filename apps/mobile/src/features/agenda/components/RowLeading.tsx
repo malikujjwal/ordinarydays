@@ -1,5 +1,5 @@
 import type { ActivityType } from '@od/shared/types';
-import { Checkbox, MARKER_SIZE, useTheme } from '@od/ui';
+import { Checkbox, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import { typeMarker } from '../model/typeMarker';
 
@@ -50,8 +50,8 @@ export function RowLeading({
   /**
    * Non-interactive and hidden from assistive technology: the marker keeps no hit target and
    * its meaning is already in the row's label (`interaction-contract.md` §6.2). It is drawn
-   * from the marker forms at 16 pt in the kind's accent, centred in the same 24 pt visual
-   * footprint as the checkbox. The quiet type surface aligns the nodes without turning the
+   * from the marker forms at 20 pt in the kind's accent, centred in a 24 pt quiet surface
+   * beside the 20 pt checkbox. The quiet type surface aligns the nodes without turning the
    * non-interactive glyph into a control (§5.2).
    */
   return (
@@ -79,7 +79,7 @@ export function RowLeading({
             backgroundColor: accent.surface,
           }}
         >
-          <marker.Icon size={MARKER_SIZE} color={accent.accent} />
+          <marker.Icon size={20} color={accent.accent} />
         </View>
       )}
     </View>

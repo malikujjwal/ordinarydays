@@ -252,7 +252,7 @@ describe('hit targets are at least 44 × 44', () => {
     expect(Number.parseInt(style.minHeight, 10)).toBeGreaterThanOrEqual(layout.hitTarget);
   });
 
-  it('Checkbox, whose visual is only 24', () => {
+  it('Checkbox, whose visual is only 20', () => {
     wrap(<Checkbox checked={false} label="Gym" />);
     const style = getComputedStyle(screen.getByRole('checkbox', { name: 'Gym' }));
     expect(Number.parseInt(style.minHeight, 10)).toBeGreaterThanOrEqual(layout.hitTarget);

@@ -8,7 +8,7 @@ import { Touchable } from './Touchable';
  * The one control that mutates from a row (`design-system.md` §6,
  * `interaction-contract.md` U1).
  *
- * 44 × 44 target, 24 × 24 visual. Checked is an **olive** fill with a white check — the
+ * 44 × 44 target, 20 × 20 visual. Checked is an **olive** fill with a white check — the
  * product's success colour is a garden colour, not a traffic light.
  *
  * It is its own accessibility element with `role="checkbox"` and a `checked` state, so a
@@ -32,7 +32,7 @@ export function Checkbox({
 }: CheckboxProps) {
   const theme = useTheme();
   const motion = useMotion();
-  const visual = 24;
+  const visual = 20;
   const previousChecked = useRef(checked);
   const scale = useRef(new Animated.Value(1)).current;
   const checkProgress = useRef(new Animated.Value(checked ? 1 : 0)).current;
@@ -120,7 +120,7 @@ export function Checkbox({
             ],
           }}
         >
-          <Check size={16} color={theme.colors.textInverse} />
+          <Check size={14} color={theme.colors.textInverse} />
         </Animated.View>
       </Animated.View>
     </Touchable>

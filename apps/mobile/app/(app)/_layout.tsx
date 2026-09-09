@@ -29,7 +29,13 @@ export default function AppLayout() {
         <Stack.Screen name="anytime" />
         <Stack.Screen
           name="compose"
-          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+          options={{
+            presentation: 'modal',
+            animation: 'slide_from_bottom',
+            // Empty space below the form is still tappable. A downward pan there must not
+            // dismiss Add — Close is the way out.
+            gestureEnabled: false,
+          }}
         />
         <Stack.Screen name="lists/new" options={NEW_LIST_ROUTE_OPTIONS} />
       </Stack>
