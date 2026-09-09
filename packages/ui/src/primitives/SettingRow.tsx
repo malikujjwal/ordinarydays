@@ -1,7 +1,8 @@
 import type { ComponentType } from 'react';
-import { View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, View } from 'react-native';
 import { Check, ChevronRight, type IconProps } from '../icons/index';
-import { useTheme } from '../theme/index';
+import { useMotion, useTheme } from '../theme/index';
 import { Text } from './Text';
 import { Touchable } from './Touchable';
 
@@ -363,30 +364,59 @@ export function SettingRow({
 
 function SwitchIndicator({ checked }: { checked: boolean }) {
   const theme = useTheme();
+  const motion = useMotion();
+  const progress = useRef(new Animated.Value(checked ? 1 : 0)).current;
+  const travel =
+    theme.layout.switchTrackWidth -
+    theme.layout.switchInset * 2 -
+    theme.layout.switchThumbSize;
+
+  useEffect(() => {
+    if (motion.duration.switch === 0) {
+      progress.setValue(checked ? 1 : 0);
+      return;
+    }
+    const animation = Animated.timing(progress, {
+      toValue: checked ? 1 : 0,
+      duration: motion.duration.switch,
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [checked, motion.duration.switch, progress]);
+
   return (
-    <View
+    <Animated.View
       aria-hidden
       style={{
         width: theme.layout.switchTrackWidth,
         height: theme.layout.switchTrackHeight,
         padding: theme.layout.switchInset,
         borderRadius: theme.radius.pill,
-        backgroundColor: checked
-          ? theme.colors.switchTrackOn
-          : theme.colors.switchTrackOff,
-        alignItems: checked ? 'flex-end' : 'flex-start',
+        backgroundColor: progress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [theme.colors.switchTrackOff, theme.colors.switchTrackOn],
+        }),
         justifyContent: 'center',
       }}
     >
-      <View
+      <Animated.View
         style={{
           width: theme.layout.switchThumbSize,
           height: theme.layout.switchThumbSize,
           borderRadius: theme.radius.pill,
           backgroundColor: theme.colors.switchThumb,
+          transform: [
+            {
+              translateX: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, travel],
+              }),
+            },
+          ],
         }}
       />
-    </View>
+    </Animated.View>
   );
 }
 

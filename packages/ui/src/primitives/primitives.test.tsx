@@ -285,10 +285,12 @@ describe('interaction', () => {
     expect(onChange).toHaveBeenCalledWith(true);
   });
 
-  it('animates only a changed committed Checkbox value with the fast motion token', () => {
+  it('animates only a changed committed Checkbox value with the spring and fill tokens', () => {
     const timing = vi.spyOn(Animated, 'timing');
+    const spring = vi.spyOn(Animated, 'spring');
     const mounted = wrap(<Checkbox checked={false} label="Gym" testID="gym-check" />);
     timing.mockClear();
+    spring.mockClear();
 
     mounted.rerender(
       <ThemeProvider scheme="light">
@@ -296,12 +298,14 @@ describe('interaction', () => {
       </ThemeProvider>,
     );
 
-    expect(timing).toHaveBeenCalledTimes(2);
+    expect(spring).toHaveBeenCalledTimes(2);
+    expect(timing).toHaveBeenCalledTimes(1);
     expect(timing).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ duration: 120, useNativeDriver: true }),
+      expect.objectContaining({ duration: 120, useNativeDriver: false }),
     );
     timing.mockRestore();
+    spring.mockRestore();
   });
 
   it('settles a changed Checkbox instantly when Reduce Motion is enabled', async () => {

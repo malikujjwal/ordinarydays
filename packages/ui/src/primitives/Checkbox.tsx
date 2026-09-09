@@ -36,6 +36,7 @@ export function Checkbox({
   const previousChecked = useRef(checked);
   const scale = useRef(new Animated.Value(1)).current;
   const checkProgress = useRef(new Animated.Value(checked ? 1 : 0)).current;
+  const fill = useRef(new Animated.Value(checked ? 1 : 0)).current;
 
   useEffect(() => {
     const changed = previousChecked.current !== checked;
@@ -44,25 +45,48 @@ export function Checkbox({
     if (!changed || motion.duration.fast === 0) {
       scale.setValue(1);
       checkProgress.setValue(finalProgress);
+      fill.setValue(finalProgress);
       return;
     }
 
     scale.setValue(0.88);
-    const transition = Animated.parallel([
-      Animated.timing(scale, {
-        toValue: 1,
-        duration: motion.duration.fast,
-        useNativeDriver: true,
-      }),
-      Animated.timing(checkProgress, {
-        toValue: finalProgress,
-        duration: motion.duration.fast,
-        useNativeDriver: true,
-      }),
-    ]);
-    transition.start();
-    return () => transition.stop();
-  }, [checkProgress, checked, motion.duration.fast, scale]);
+    const pop = Animated.spring(scale, {
+      toValue: 1,
+      damping: motion.spring.damping,
+      stiffness: motion.spring.stiffness,
+      mass: motion.spring.mass,
+      useNativeDriver: true,
+    });
+    const mark = Animated.spring(checkProgress, {
+      toValue: finalProgress,
+      damping: motion.spring.damping,
+      stiffness: motion.spring.stiffness,
+      mass: motion.spring.mass,
+      useNativeDriver: true,
+    });
+    const wash = Animated.timing(fill, {
+      toValue: finalProgress,
+      duration: motion.duration.fast,
+      useNativeDriver: false,
+    });
+    pop.start();
+    mark.start();
+    wash.start();
+    return () => {
+      pop.stop();
+      mark.stop();
+      wash.stop();
+    };
+  }, [
+    checkProgress,
+    checked,
+    fill,
+    motion.duration.fast,
+    motion.spring.damping,
+    motion.spring.mass,
+    motion.spring.stiffness,
+    scale,
+  ]);
 
   return (
     <Touchable
@@ -89,38 +113,45 @@ export function Checkbox({
       testID={testID}
       style={{ alignItems: 'center', justifyContent: 'center' }}
     >
-      <Animated.View
-        testID={testID === undefined ? undefined : `${testID}-visual`}
-        style={{
-          width: visual,
-          height: visual,
-          borderRadius: theme.radius.sm,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: checked ? theme.colors.success : 'transparent',
-          borderWidth: checked ? 0 : 1.5,
-          borderColor: disabled ? theme.colors.textDisabled : theme.colors.borderStrong,
-          opacity: disabled ? 0.5 : 1,
-          transform: [{ scale }],
-        }}
-      >
+      <Animated.View style={{ transform: [{ scale }] }}>
         <Animated.View
-          aria-hidden
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
+          testID={testID === undefined ? undefined : `${testID}-visual`}
           style={{
-            opacity: checkProgress,
-            transform: [
-              {
-                scale: checkProgress.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0.7, 1],
-                }),
-              },
-            ],
+            width: visual,
+            height: visual,
+            borderRadius: theme.radius.sm,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: fill.interpolate({
+              inputRange: [0, 1],
+              outputRange: ['rgba(0,0,0,0)', theme.colors.success],
+            }),
+            borderWidth: fill.interpolate({
+              inputRange: [0, 1],
+              outputRange: [1.5, 0],
+            }),
+            borderColor: disabled ? theme.colors.textDisabled : theme.colors.borderStrong,
+            opacity: disabled ? 0.5 : 1,
           }}
         >
-          <Check size={14} color={theme.colors.textInverse} />
+          <Animated.View
+            aria-hidden
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={{
+              opacity: checkProgress,
+              transform: [
+                {
+                  scale: checkProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.7, 1],
+                  }),
+                },
+              ],
+            }}
+          >
+            <Check size={14} color={theme.colors.textInverse} />
+          </Animated.View>
         </Animated.View>
       </Animated.View>
     </Touchable>
