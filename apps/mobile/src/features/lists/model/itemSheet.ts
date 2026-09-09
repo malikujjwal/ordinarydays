@@ -74,17 +74,19 @@ export function provenanceLine(value: ItemProvenance): string {
 export function titlePatch(
   item: ListItemView,
   next: string,
+  force = false,
 ): PatchListItemInput | undefined {
   const title = next.trim();
-  return title === '' || title === item.title ? undefined : { title };
+  return title === '' || (!force && title === item.title) ? undefined : { title };
 }
 
 export function notePatch(
   item: ListItemView,
   next: string,
+  force = false,
 ): PatchListItemInput | undefined {
   const note = next.trim();
-  if (note === (item.note ?? '')) return undefined;
+  if (!force && note === (item.note ?? '')) return undefined;
   return { note: note === '' ? null : note };
 }
 
@@ -92,8 +94,10 @@ function featuresPatch(
   item: ListItemView,
   key: keyof ListItemFeatures,
   value: ListItemFeatures[typeof key] | undefined,
+  force = false,
 ): PatchListItemInput | undefined {
-  if (JSON.stringify(value) === JSON.stringify(item.features?.[key])) return undefined;
+  if (!force && JSON.stringify(value) === JSON.stringify(item.features?.[key]))
+    return undefined;
   return { features: { [key]: value ?? null } };
 }
 
@@ -101,10 +105,11 @@ export function placePatch(
   item: ListItemView,
   label: string,
   address: string,
+  force = false,
 ): PatchListItemInput | undefined {
   const trimmedLabel = label.trim();
   const trimmedAddress = address.trim();
-  if (trimmedLabel === '') return featuresPatch(item, 'place', undefined);
+  if (trimmedLabel === '') return featuresPatch(item, 'place', undefined, force);
   const current = item.features?.place;
   const next: ListPlace = {
     label: trimmedLabel,
@@ -112,21 +117,23 @@ export function placePatch(
     ...(current?.lat === undefined ? {} : { lat: current.lat }),
     ...(current?.lng === undefined ? {} : { lng: current.lng }),
   };
-  return featuresPatch(item, 'place', next);
+  return featuresPatch(item, 'place', next, force);
 }
 
 export function progressPatch(
   item: ListItemView,
   progress: ProgressValue | undefined,
+  force = false,
 ): PatchListItemInput | undefined {
-  return featuresPatch(item, 'progress', progress);
+  return featuresPatch(item, 'progress', progress, force);
 }
 
 export function subItemsPatch(
   item: ListItemView,
   entries: readonly ListSubItem[],
+  force = false,
 ): PatchListItemInput | undefined {
-  return featuresPatch(item, 'subItems', { entries: [...entries] });
+  return featuresPatch(item, 'subItems', { entries: [...entries] }, force);
 }
 
 export function appendSubItem(

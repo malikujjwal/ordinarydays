@@ -7,7 +7,7 @@ import {
   undoListOperation,
 } from '@od/shared/client';
 import { randomUUID } from 'expo-crypto';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useClock } from '@/hooks/useClock';
 import { apiClient } from '@/lib/apiClient';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
@@ -42,8 +42,8 @@ export interface ListItemActions {
   /**
    * Sends one field and reports whether it was accepted.
    *
-   * `false` means the caller reverts that field to its committed value — the toast naming the
-   * failure and offering `Retry` has already been shown (`interaction-contract.md` §5.3).
+   * `false` retains the editor draft. The mounted editor may own inline Retry; other callers
+   * and a closed editor receive the existing failure toast.
    */
   readonly save: (item: ListItemRow, changes: PatchListItemInput) => Promise<boolean>;
   /** Deletes with no confirmation and offers the six-second Undo (§4.1). */
@@ -59,6 +59,7 @@ export interface ListItemActions {
    */
   readonly sourceResolves: (activityId: string) => Promise<boolean>;
   readonly isSaving: boolean;
+  readonly finishEditing: (hasFailedDraft: boolean) => void;
 }
 
 function failureToast(error: unknown, message: string, retry: () => void): ToastMessage {
@@ -87,6 +88,11 @@ function failureToast(error: unknown, message: string, retry: () => void): Toast
 export interface ListItemRefresh {
   /** After an accepted field edit. Native re-reads SQLite; web asks the server. */
   readonly onSaved: () => void;
+  /** The mounted editor owns failure copy and retries its latest draft. */
+  readonly inlineSaveFeedback?: boolean;
+  /** A dismissed editor retains ownership of its latest failed drafts through the toast. */
+  readonly retrySave?: () => void;
+  readonly releaseFailed?: () => void;
   /** Re-reads the local projection after the tap has committed to SQLite. */
   readonly onRemoving?: () => void;
   /** After the web-only online delete or its Undo. */
@@ -95,15 +101,57 @@ export interface ListItemRefresh {
 
 export function useListItemActions({
   onSaved,
+  inlineSaveFeedback = false,
+  retrySave,
+  releaseFailed,
   onRemoving,
   onRemoved,
 }: ListItemRefresh): ListItemActions {
+  const lastFailure = useRef<{ error: unknown; title: string } | undefined>(undefined);
+  const retryToast = useRef<number | undefined>(undefined);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const clock = useClock();
   const patch = usePatchListItem();
   const deletion = useDeleteListItem();
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);
+
+  const reportFailure = useCallback(
+    (error: unknown, title: string, retry: () => void) => {
+      let retried = false;
+      const id = show(
+        failureToast(error, `Couldn't save "${title}."`, () => {
+          retried = true;
+          retry();
+        }),
+      );
+      retryToast.current = id;
+      const unsubscribe = useToast.subscribe((state) => {
+        if (state.current?.id === id) return;
+        unsubscribe();
+        // ToastHost dismisses before invoking its action in the same tap. Dispose only after
+        // that action has had its turn; a retry still owns the retained draft.
+        queueMicrotask(() => {
+          if (!retried && retryToast.current === id) releaseFailed?.();
+        });
+      });
+    },
+    [show, releaseFailed],
+  );
+
+  const finishEditing = (hasFailedDraft: boolean) => {
+    mounted.current = false;
+    if (hasFailedDraft && lastFailure.current && retrySave) {
+      reportFailure(lastFailure.current.error, lastFailure.current.title, retrySave);
+    }
+  };
 
   const save = useCallback(
     async (item: ListItemRow, changes: PatchListItemInput): Promise<boolean> => {
@@ -112,14 +160,19 @@ export function useListItemActions({
         onSaved();
         return true;
       }
-      show(
-        failureToast(outcome.error, `Couldn't save "${item.title}."`, () => {
-          void save(item, changes);
-        }),
+      lastFailure.current = { error: outcome.error, title: item.title };
+      if (inlineSaveFeedback && mounted.current) return false;
+      reportFailure(
+        outcome.error,
+        item.title,
+        retrySave ??
+          (() => {
+            void save(item, changes);
+          }),
       );
       return false;
     },
-    [onSaved, patch.patch, show],
+    [onSaved, patch.patch, inlineSaveFeedback, retrySave, reportFailure],
   );
 
   const undoOnline = useCallback(
@@ -245,5 +298,5 @@ export function useListItemActions({
     }
   }, []);
 
-  return { save, remove, sourceResolves, isSaving: patch.isSaving };
+  return { save, remove, sourceResolves, isSaving: patch.isSaving, finishEditing };
 }

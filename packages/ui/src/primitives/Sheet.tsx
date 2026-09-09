@@ -75,6 +75,10 @@ interface SheetBaseProps {
   /** Called after an owner-driven exit and, on iOS, its native modal dismissal have finished. */
   onClosed?: () => void;
   title?: string;
+  /** Compact chrome for an editor whose scaled heading would consume its keyboard viewport. */
+  compactTitle?: boolean;
+  /** Persistent context or save feedback below the title, outside the scrolling body. */
+  headerAccessory?: React.ReactNode;
   /**
    * §6.1's detent table, keyed to the task rather than to taste.
    *
@@ -129,6 +133,8 @@ export function Sheet({
   onClose,
   onClosed,
   title,
+  compactTitle = false,
+  headerAccessory,
   children,
   virtualizedBody,
   detent = 'fit',
@@ -526,21 +532,29 @@ export function Sheet({
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: theme.space[4],
-                paddingBottom: theme.space[6],
+                paddingBottom: compactTitle ? theme.space[3] : theme.space[6],
               }}
             >
               {title === undefined ? (
                 <View />
               ) : (
                 // Serif, as the frames set every sheet heading.
-                <Text variant="title" color="textDisplay" accessibilityRole="header">
-                  {title}
-                </Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    variant={compactTitle ? 'footnoteStrong' : 'title'}
+                    color="textDisplay"
+                    accessibilityRole="header"
+                    numberOfLines={0}
+                  >
+                    {title}
+                  </Text>
+                </View>
               )}
               {dismissible ? (
                 <IconButton icon={Close} label="Close" onPress={requestClose} />
               ) : null}
             </View>
+            {headerAccessory}
           </View>
 
           {/**

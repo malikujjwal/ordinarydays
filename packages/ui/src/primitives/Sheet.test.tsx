@@ -565,3 +565,23 @@ describe('Sheet — present / dismiss is its own motion (§4.3)', () => {
     expect(release).toContain("outcome === 'settle-then-discard'");
   });
 });
+
+it('keeps save feedback outside the scrolling body and preserves the single Close action', () => {
+  const onClose = vi.fn();
+  mount(
+    <Sheet
+      open
+      title="Item details"
+      onClose={onClose}
+      testID="item"
+      headerAccessory={<div role="status">Saving…</div>}
+    >
+      <div>Scrolling fields</div>
+    </Sheet>,
+  );
+  expect(screen.getByTestId('item-body').contains(screen.getByRole('status'))).toBe(
+    false,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(onClose).toHaveBeenCalledOnce();
+});

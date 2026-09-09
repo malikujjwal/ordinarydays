@@ -176,6 +176,42 @@ const control = http.createServer((request, response) => {
     void poll();
     return;
   }
+  if (request.method === 'GET' && url.pathname === '/wait-for-item') {
+    const listId = url.searchParams.get('listId');
+    const itemId = url.searchParams.get('itemId');
+    const note = url.searchParams.get('note');
+    if (
+      !/^lst_[0-9A-HJKMNP-TV-Z]{26}$/.test(listId ?? '') ||
+      !/^itm_[0-9A-HJKMNP-TV-Z]{26}$/.test(itemId ?? '') ||
+      note === null
+    ) {
+      json(response, 400, { error: 'listId, itemId and note are required' });
+      return;
+    }
+    const deadline = Date.now() + 20_000;
+    const poll = async () => {
+      try {
+        const result = await fetch(
+          new URL(`/v1/lists/${listId}/items/${itemId}`, upstream),
+          {
+            signal: AbortSignal.timeout(2000),
+            headers: { 'X-Client-Timezone': 'America/New_York' },
+          },
+        );
+        if (result.ok && (await result.json()).data?.note === note) {
+          json(response, 200, { persisted: true });
+          return;
+        }
+      } catch {
+        /* Reconnection can precede the API becoming available. */
+      }
+      if (Date.now() >= deadline)
+        json(response, 408, { error: 'Item note did not persist' });
+      else if (!response.destroyed) later(poll, 100);
+    };
+    void poll();
+    return;
+  }
   if (request.method === 'GET' && url.pathname === '/wait-for-completions') {
     const expected = Number(url.searchParams.get('count'));
     const deadline = Date.now() + 20_000;

@@ -437,13 +437,11 @@ test.describe('P3-33 production List contracts', () => {
     await openFrame(page, 'item-state-place', 'dark');
     await expect(page.getByRole('dialog', { name: 'Item details' })).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Mark as done, Not completed' }),
+      page.getByRole('button', { name: 'Not done', exact: true }),
     ).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Ember & Grain, 48 Cedar Lane' }),
-    ).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Edit place' })).toBeVisible();
-    await expect(page.getByLabel('Address')).toHaveCount(0);
+    await expect(page.getByLabel('Name', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Ember & Grain');
+    await expect(page.getByLabel('Address')).toHaveValue('48 Cedar Lane');
     await expect(page).toHaveScreenshot('item-state-place-compact-dark.png');
   });
 
@@ -474,7 +472,6 @@ test.describe('P3-33 production List contracts', () => {
     await expectAboveKeyboard(page, 'item-sheet', 280);
 
     await setKeyboardInset(page, 0);
-    await page.getByRole('button', { name: 'Edit place' }).click();
     const address = page.getByLabel('Address');
     await address.focus();
     await setKeyboardInset(page, 280);

@@ -49,8 +49,8 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
-describe('the canonical item editor shell', () => {
-  it('persists Title and Note while typing without requiring blur', () => {
+describe('the canonical item editor shell', async () => {
+  it('persists Title and Note while typing without requiring blur', async () => {
     vi.useFakeTimers();
     const subject = item({ note: 'Pilot' });
     mount(subject);
@@ -61,13 +61,15 @@ describe('the canonical item editor shell', () => {
     fireEvent.change(screen.getByLabelText('Note'), {
       target: { value: 'Watch on Thursday' },
     });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
 
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { note: 'Watch on Thursday' });
   });
 
-  it('does not allow an item to be renamed to an empty title', () => {
+  it('does not allow an item to be renamed to an empty title', async () => {
     vi.useFakeTimers();
     const subject = item();
     mount(subject);
@@ -75,33 +77,36 @@ describe('the canonical item editor shell', () => {
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: '   ' },
     });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
 
     expect(screen.getByText('Title is required.')).toBeTruthy();
+    await act(async () => undefined);
     expect(calls.save).not.toHaveBeenCalledWith(
       subject,
       expect.objectContaining({ title: '' }),
     );
   });
 
-  it('does not repeat an accepted title write after an invalid blank draft', () => {
+  it('does not repeat an accepted title write after an invalid blank draft', async () => {
     vi.useFakeTimers();
     const subject = item();
     mount(subject);
     const title = screen.getByLabelText('Title');
 
     fireEvent.change(title, { target: { value: 'The Bear season 4' } });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
     fireEvent.change(title, { target: { value: '   ' } });
     fireEvent.blur(title);
     fireEvent.change(title, { target: { value: 'The Bear season 4' } });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
 
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledTimes(1);
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
   });
 
-  it('still saves a restored valid title when blank input interrupted its debounce', () => {
+  it('still saves a restored valid title when blank input interrupted its debounce', async () => {
     vi.useFakeTimers();
     const subject = item();
     mount(subject);
@@ -110,13 +115,15 @@ describe('the canonical item editor shell', () => {
     fireEvent.change(title, { target: { value: 'The Bear season 4' } });
     fireEvent.change(title, { target: { value: '   ' } });
     fireEvent.change(title, { target: { value: 'The Bear season 4' } });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
 
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledOnce();
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
   });
 
-  it('still saves when only trailing whitespace changes before the debounce', () => {
+  it('still saves when only trailing whitespace changes before the debounce', async () => {
     vi.useFakeTimers();
     const subject = item();
     mount(subject);
@@ -124,13 +131,15 @@ describe('the canonical item editor shell', () => {
 
     fireEvent.change(title, { target: { value: 'The Bear season 4' } });
     fireEvent.change(title, { target: { value: 'The Bear season 4 ' } });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
 
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledOnce();
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear season 4' });
   });
 
-  it('flushes an in-focus field edit through the single close path', () => {
+  it('flushes an in-focus field edit through the single close path', async () => {
     vi.useFakeTimers();
     const subject = item();
     const onClose = vi.fn();
@@ -141,13 +150,14 @@ describe('the canonical item editor shell', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     // The sheet owns its exit (P3-51): `onClose` reaches the owner after the `slow` tween.
-    act(() => vi.advanceTimersByTime(300));
+    await act(async () => vi.advanceTimersByTime(300));
 
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { title: 'The Bear finale' });
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('persists configured Progress, Place, and Sub-item fields while typing', () => {
+  it('persists configured Progress, Place, and Sub-item fields while typing', async () => {
     vi.useFakeTimers();
     const subject = item({
       features: {
@@ -174,22 +184,24 @@ describe('the canonical item editor shell', () => {
     fireEvent.change(screen.getByLabelText('Progress'), {
       target: { value: 'Page 11' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Edit place' }));
-    fireEvent.change(screen.getByLabelText('Place'), {
+    fireEvent.change(screen.getByLabelText('Name'), {
       target: { value: 'Branch library' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Edit Paper' }));
     fireEvent.change(screen.getByLabelText('Material'), {
       target: { value: 'Cardstock' },
     });
-    act(() => vi.advanceTimersByTime(400));
+    await act(async () => vi.advanceTimersByTime(400));
 
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, {
       features: { progress: { kind: 'text', value: 'Page 11' } },
     });
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, {
       features: { place: { label: 'Branch library', address: 'Main Street' } },
     });
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, {
       features: {
         subItems: {
@@ -198,7 +210,7 @@ describe('the canonical item editor shell', () => {
       },
     });
   });
-  it('uses the common Item details title and marks the top-aligned Note optional', () => {
+  it('uses the common Item details title and marks the top-aligned Note optional', async () => {
     mount();
 
     expect(screen.getByRole('dialog', { name: 'Item details' })).toBeTruthy();
@@ -208,7 +220,7 @@ describe('the canonical item editor shell', () => {
     );
   });
 
-  it('keeps hidden intrinsic state and exposes configured stage labels', () => {
+  it('keeps hidden intrinsic state and exposes configured stage labels', async () => {
     mount();
     expect(screen.queryByTestId('item-state-editor')).toBeNull();
 
@@ -225,26 +237,32 @@ describe('the canonical item editor shell', () => {
     expect(screen.getByText('Reading')).toBeTruthy();
   });
 
-  it('exposes checkbox state as one compact explicit action and never offers active', () => {
+  it('exposes compact explicit checkbox choices and never offers active', async () => {
     const subject = item({ state: 'active' });
     mount(subject, list({ itemStateMode: { mode: 'checkbox' } }));
 
     expect(screen.queryByText('Active')).toBeNull();
-    expect(screen.getByText('Not completed')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Mark as done, Not completed' }));
+    expect(
+      screen.getByRole('button', { name: 'Not done' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { state: 'done' });
   });
 
-  it('writes open explicitly when the compact checkbox action marks a done item incomplete', () => {
+  it('writes open explicitly when the compact checkbox action marks a done item incomplete', async () => {
     const subject = item({ state: 'done' });
     mount(subject, list({ itemStateMode: { mode: 'checkbox' } }));
 
-    expect(screen.getByText('Completed')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Mark as not done, Completed' }));
+    expect(
+      screen.getByRole('button', { name: 'Done' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Not done' }));
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(subject, { state: 'open' });
   });
 
-  it('shows a quiet Add affordance instead of blank episode or Place inputs', () => {
+  it('keeps optional episode progress behind Add and labels Place inputs Name and Address', async () => {
     mount(
       item(),
       list({
@@ -255,12 +273,13 @@ describe('the canonical item editor shell', () => {
       }),
     );
 
-    expect(screen.getAllByText('Add')).toHaveLength(2);
+    expect(screen.getAllByText('Add')).toHaveLength(1);
     expect(screen.queryByText('Season')).toBeNull();
-    expect(screen.queryByText('Address')).toBeNull();
+    expect(screen.getByLabelText('Address')).toBeTruthy();
+    expect(screen.getByLabelText('Name')).toBeTruthy();
   });
 
-  it('summarises populated Place compactly and retains its values when editing opens', () => {
+  it('shows populated Place in its Name and Address editors without redundant labels', async () => {
     mount(
       item({
         features: {
@@ -278,18 +297,11 @@ describe('the canonical item editor shell', () => {
 
     expect(screen.getByDisplayValue('2')).toBeTruthy();
     expect(screen.getByDisplayValue('4')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Joe Coffee, 9 W 19th St' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Edit place' })).toBeTruthy();
-    expect(screen.queryByDisplayValue('Joe Coffee')).toBeNull();
-    expect(screen.queryByDisplayValue('9 W 19th St')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Edit place' }));
-
     expect(screen.getByDisplayValue('Joe Coffee')).toBeTruthy();
     expect(screen.getByDisplayValue('9 W 19th St')).toBeTruthy();
   });
 
-  it('uses configured Sub-item vocabulary and creates a stable ranked child', () => {
+  it('uses configured Sub-item vocabulary and creates a stable ranked child', async () => {
     mount(
       item(),
       list({
@@ -312,7 +324,7 @@ describe('the canonical item editor shell', () => {
     expect(screen.getByLabelText('Quantity')).toBeTruthy();
   });
 
-  it('renders populated Sub-items as compact vertical rows with grip and overflow', () => {
+  it('renders populated Sub-items as compact vertical rows with grip and direct removal', async () => {
     mount(
       item({
         features: {
@@ -358,6 +370,7 @@ describe('the canonical item editor shell', () => {
     fireEvent.keyDown(document, { key: 'Enter' });
     fireEvent.keyDown(document, { key: 'ArrowDown' });
     fireEvent.keyDown(document, { key: 'Enter' });
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'The Bear' }),
       expect.objectContaining({
@@ -371,11 +384,13 @@ describe('the canonical item editor shell', () => {
         },
       }),
     );
+    await act(async () => undefined);
     calls.save.mockClear();
 
     // Remove is a direct control on the row: a second Sheet cannot present over the item
     // sheet's own Modal on iOS, so a menu here is a button that does nothing on device.
     fireEvent.click(screen.getByRole('button', { name: 'Remove Paper' }));
+    await act(async () => undefined);
     expect(calls.save).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'The Bear' }),
       {
@@ -388,7 +403,7 @@ describe('the canonical item editor shell', () => {
     );
   });
 
-  it('uses configured singular lowercase copy for the compact Add action', () => {
+  it('uses configured singular lowercase copy for the compact Add action', async () => {
     mount(
       item(),
       list({
@@ -406,7 +421,7 @@ describe('the canonical item editor shell', () => {
     expect(screen.queryByText('SUB-ITEMS')).toBeNull();
   });
 
-  it('keeps a long single Sub-item compact when no secondary label is configured', () => {
+  it('keeps a long single Sub-item compact when no secondary label is configured', async () => {
     mount(
       item({
         features: {
@@ -439,7 +454,7 @@ describe('the canonical item editor shell', () => {
     expect(getComputedStyle(row).minHeight).toBe('56px');
   });
 
-  it('does not expose retained values while their feature is disabled', () => {
+  it('does not expose retained values while their feature is disabled', async () => {
     mount(
       item({
         features: {
@@ -466,25 +481,26 @@ describe('the canonical item editor shell', () => {
     expect(screen.queryByText('Materials')).toBeNull();
   });
 
-  it('removes from the stable destructive affordance', () => {
+  it('removes from the stable destructive affordance', async () => {
     const subject = item();
     mount(subject);
 
     const deleteItem = screen.getByRole('button', { name: 'Delete item' });
     fireEvent.click(deleteItem);
 
+    await act(async () => undefined);
     expect(calls.remove).toHaveBeenCalledWith(subject);
     expect(getComputedStyle(deleteItem).backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
-  it('keeps stable automation handles on the primary fields', () => {
+  it('keeps stable automation handles on the primary fields', async () => {
     mount();
 
     expect(screen.getByTestId('item-sheet-title')).toBeTruthy();
     expect(screen.getByTestId('item-sheet-note')).toBeTruthy();
   });
 
-  it('does not erase a dirty field when another field refreshes from the server', () => {
+  it('does not erase a dirty field when another field refreshes from the server', async () => {
     const subjectList = list();
     const mounted = mount(item(), subjectList);
     fireEvent.change(screen.getByLabelText('Note'), {
@@ -506,5 +522,142 @@ describe('the canonical item editor shell', () => {
 
     expect(screen.getByDisplayValue('The Bear, renamed')).toBeTruthy();
     expect(screen.getByDisplayValue('Draft note')).toBeTruthy();
+  });
+});
+
+describe('truthful item autosave feedback', async () => {
+  it('waits for persistence, retains a failed draft, and retries it once', async () => {
+    vi.useFakeTimers();
+    let rejectWrite: (accepted: boolean) => void = () => undefined;
+    calls.save.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          rejectWrite = resolve;
+        }),
+    );
+    mount();
+    expect(screen.getByText('Changes save automatically.')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Note'), {
+      target: { value: 'Keep this draft' },
+    });
+    expect(screen.getByText('Changes waiting to save…')).toBeTruthy();
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    expect(screen.getByText('Saving…')).toBeTruthy();
+    expect(screen.queryByText('All changes saved')).toBeNull();
+    await act(async () => {
+      rejectWrite(false);
+    });
+    expect(screen.getByDisplayValue('Keep this draft')).toBeTruthy();
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    await act(async () => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+    await act(async () => undefined);
+    expect(calls.save).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('All changes saved')).toBeTruthy();
+  });
+
+  it('serializes a newer edit including a return to the old value behind the pending acknowledgement', async () => {
+    vi.useFakeTimers();
+    let accept: (accepted: boolean) => void = () => undefined;
+    calls.save.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          accept = resolve;
+        }),
+    );
+    mount();
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'First edit' } });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The Bear' } });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => undefined);
+    expect(calls.save).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      accept(true);
+    });
+    await act(async () => undefined);
+    expect(calls.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: 'First edit' }),
+      { title: 'The Bear' },
+    );
+    expect(screen.getByDisplayValue('The Bear')).toBeTruthy();
+    expect(screen.getByText('All changes saved')).toBeTruthy();
+  });
+});
+
+it('does not certify an address without its required Place name as saved', async () => {
+  vi.useFakeTimers();
+  mount(item(), list({ featureConfig: { place: { enabled: true } } }));
+  fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Saved note' } });
+  await act(async () => vi.advanceTimersByTime(350));
+  fireEvent.change(screen.getByLabelText('Address'), {
+    target: { value: '48 Cedar Lane' },
+  });
+  await act(async () => vi.advanceTimersByTime(350));
+  expect(screen.getByText('Name is required when an address is present.')).toBeTruthy();
+  expect(screen.queryByText('All changes saved')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Ember' } });
+  await act(async () => vi.advanceTimersByTime(350));
+  expect(calls.save).toHaveBeenLastCalledWith(expect.anything(), {
+    features: { place: { label: 'Ember', address: '48 Cedar Lane' } },
+  });
+  expect(screen.getByText('All changes saved')).toBeTruthy();
+});
+
+it.each(['abc', '-1', '2.5', '1001'])(
+  'retains invalid Season %s without acknowledging a coerced value',
+  async (value) => {
+    vi.useFakeTimers();
+    mount(
+      item({ features: { progress: { kind: 'episode', season: 2, episode: 4 } } }),
+      list({ featureConfig: { progress: { enabled: true, kind: 'episode' } } }),
+    );
+    fireEvent.change(screen.getByLabelText('Season'), { target: { value } });
+    await act(async () => vi.advanceTimersByTime(350));
+    expect(screen.getByDisplayValue(value)).toBeTruthy();
+    expect(screen.getByText('Use a whole number from 0 to 1000.')).toBeTruthy();
+    expect(calls.save).not.toHaveBeenCalled();
+    expect(screen.queryByText('All changes saved')).toBeNull();
+  },
+);
+
+it('flushes and dismisses before navigating through item provenance', async () => {
+  vi.useFakeTimers();
+  const onClose = vi.fn();
+  const onSource = vi.fn();
+  const subject = item({
+    sourceLabel: 'Sunday dinner',
+    sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+  });
+  render(
+    <ThemeProvider scheme="light">
+      <ItemSheet
+        open
+        item={subject}
+        list={list()}
+        onClose={onClose}
+        onChanged={vi.fn()}
+        onRemoved={vi.fn()}
+        onOpenSource={onSource}
+      />
+    </ThemeProvider>,
+  );
+  fireEvent.change(screen.getByLabelText('Title'), {
+    target: { value: 'Changed before navigation' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'From Sunday dinner' }));
+  await act(async () => undefined);
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(onSource).toHaveBeenCalledWith(subject.sourceActivityId);
+  expect(calls.save).toHaveBeenCalledWith(subject, {
+    title: 'Changed before navigation',
   });
 });

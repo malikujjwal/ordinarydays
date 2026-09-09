@@ -314,3 +314,99 @@ describe('the provenance probe (§7.5)', () => {
     await expect(actions.current.sourceResolves('act_1')).resolves.toBe(true);
   });
 });
+
+it('hands a failure after dismissal to the editor-owned latest-draft retry', async () => {
+  let reject: (error: unknown) => void = () => undefined;
+  calls.patch.mockReturnValueOnce(
+    new Promise((_resolve, fail) => {
+      reject = fail;
+    }),
+  );
+  const retrySave = vi.fn();
+  const { result, unmount } = renderHook(
+    () =>
+      useListItemActions({
+        onSaved: vi.fn(),
+        onRemoved: vi.fn(),
+        inlineSaveFeedback: true,
+        retrySave,
+      }),
+    { wrapper },
+  );
+  let pending: Promise<boolean> = Promise.resolve(false);
+  act(() => {
+    pending = result.current.save(ITEM, { title: 'Earlier request' });
+  });
+  unmount();
+  await act(async () => {
+    reject(new ApiError('internal', 'Failed', 503, 'req_failed'));
+    await pending;
+  });
+  const toast = useToast.getState().current;
+  if (!toast || !('action' in toast) || !toast.action)
+    throw new Error('Expected a surviving Retry action');
+  toast.action.onPress();
+  expect(retrySave).toHaveBeenCalledOnce();
+  expect(calls.patch).toHaveBeenCalledTimes(1);
+});
+
+it('offers the latest draft Retry when an already-failed editor closes and releases it with the toast', async () => {
+  calls.patch.mockRejectedValue(new ApiError('internal', 'Failed', 503, 'req_failed'));
+  const retrySave = vi.fn();
+  const releaseFailed = vi.fn();
+  const { result, unmount } = renderHook(
+    () =>
+      useListItemActions({
+        onSaved: vi.fn(),
+        onRemoved: vi.fn(),
+        inlineSaveFeedback: true,
+        retrySave,
+        releaseFailed,
+      }),
+    { wrapper },
+  );
+  await act(async () => {
+    await result.current.save(ITEM, { title: 'Failed draft' });
+  });
+  expect(useToast.getState().current).toBeUndefined();
+  act(() => result.current.finishEditing(true));
+  unmount();
+  expect(useToast.getState().current?.message).toBe('Something went wrong.');
+  await act(async () => useToast.getState().dismiss());
+  expect(releaseFailed).toHaveBeenCalledOnce();
+});
+
+it('transfers all failed drafts to a replacement failure toast from the same editor', async () => {
+  calls.patch.mockRejectedValue(new ApiError('internal', 'Failed', 503, 'req_failed'));
+  const retrySave = vi.fn();
+  const releaseFailed = vi.fn();
+  const { result, unmount } = renderHook(
+    () =>
+      useListItemActions({
+        onSaved: vi.fn(),
+        onRemoved: vi.fn(),
+        inlineSaveFeedback: true,
+        retrySave,
+        releaseFailed,
+      }),
+    { wrapper },
+  );
+  const closed = result.current;
+  act(() => closed.finishEditing(false));
+  unmount();
+  await act(async () => {
+    await closed.save(ITEM, { title: 'Latest title' });
+  });
+  await act(async () => {
+    await closed.save(ITEM, { note: 'Latest note' });
+  });
+  expect(releaseFailed).not.toHaveBeenCalled();
+  const toast = useToast.getState().current;
+  if (!toast || !('action' in toast) || !toast.action) throw new Error('Expected Retry');
+  await act(async () => {
+    useToast.getState().dismiss();
+    toast.action?.onPress();
+  });
+  expect(retrySave).toHaveBeenCalledOnce();
+  expect(releaseFailed).not.toHaveBeenCalled();
+});

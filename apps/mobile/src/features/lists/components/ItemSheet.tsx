@@ -1,20 +1,18 @@
 import {
   MAX_ADDRESS_LEN,
+  MAX_FREE_TEXT_LEN,
   MAX_INGREDIENTS,
   MAX_NOTES_LEN,
   MAX_TITLE_LEN,
 } from '@od/shared/constants';
+import { watchEpisode, watchSeason } from '@od/shared/schemas';
 import type { ListItemState, ListSubItem, ProgressValue } from '@od/shared/types';
 import {
   Button,
-  Check,
   Diamond,
   Field,
   IconButton,
-  interactionTiming,
-  MapPin,
   Plus,
-  RowGroup,
   SettingRow,
   Sheet,
   Text,
@@ -23,10 +21,17 @@ import {
   Trash,
   useTheme,
 } from '@od/ui';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AccessibilityInfo,
+  Platform,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { newLocalId } from '@/lib/localIds';
 import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
+import { useItemAutosave } from '../hooks/useItemAutosave';
 import { useListItemActions } from '../hooks/useListItemActions';
 import {
   type ListItemFeatureEditorVisitor,
@@ -69,48 +74,15 @@ export interface ItemSheetProps {
   testID?: string;
 }
 
-const STATES: readonly ListItemState[] = ['open', 'active', 'done'];
-function useDebouncedAction() {
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const pending = useRef<(() => void) | undefined>(undefined);
-
-  const cancel = useCallback(() => {
-    if (timer.current !== undefined) clearTimeout(timer.current);
-    timer.current = undefined;
-  }, []);
-  const flush = useCallback(() => {
-    cancel();
-    const action = pending.current;
-    pending.current = undefined;
-    action?.();
-  }, [cancel]);
-  const schedule = useCallback(
-    (action: () => void) => {
-      pending.current = action;
-      cancel();
-      timer.current = setTimeout(flush, interactionTiming.fieldAutosave);
-    },
-    [cancel, flush],
-  );
-  const now = useCallback(
-    (action: () => void) => {
-      pending.current = action;
-      flush();
-    },
-    [flush],
-  );
-
-  useEffect(
-    () => () => {
-      cancel();
-      pending.current = undefined;
-    },
-    [cancel],
-  );
-
-  return { schedule, flush, now } as const;
+export function ItemSheet(props: ItemSheetProps) {
+  return <ItemSheetEditor key={props.item.itemId} {...props} />;
 }
 
+const STATES: readonly ListItemState[] = ['open', 'active', 'done'];
+const validSeason = (value: string) =>
+  value.trim() === '' || watchSeason.safeParse(itemNumber(value)).success;
+const validEpisode = (value: string) =>
+  value.trim() === '' || watchEpisode.safeParse(itemNumber(value)).success;
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     subItem: {
@@ -141,6 +113,31 @@ const createStyles = (theme: Theme) =>
     },
     subItemTitleField: { flex: 2, minWidth: 0 },
     subItemSecondaryField: { flex: 1, minWidth: 0 },
+    content: { gap: theme.space[5], paddingBottom: theme.space[1] },
+    stateControls: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] },
+    stateChoice: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minWidth: theme.layout.hitTarget * 2,
+      padding: theme.space[3],
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.radius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    selectedChoice: {
+      borderColor: theme.colors.textAction,
+      backgroundColor: theme.colors.surfaceSunken,
+    },
+    saveStatus: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: theme.space[3],
+      paddingBottom: theme.space[3],
+    },
+    statusText: { flexShrink: 1 },
     featureSection: { gap: theme.space[3] },
     featureHeading: {
       minHeight: theme.layout.hitTarget,
@@ -159,7 +156,7 @@ const createStyles = (theme: Theme) =>
     },
   });
 
-export function ItemSheet({
+function ItemSheetEditor({
   open,
   list,
   item,
@@ -171,9 +168,15 @@ export function ItemSheet({
   testID = 'item-sheet',
 }: ItemSheetProps) {
   const theme = useTheme();
+  const { fontScale } = useWindowDimensions();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const retrySave = useRef<() => void>(() => undefined);
+  const releaseFailed = useRef<() => void>(() => undefined);
   const actions = useListItemActions({
     onSaved: onChanged,
+    inlineSaveFeedback: true,
+    retrySave: () => retrySave.current(),
+    releaseFailed: () => releaseFailed.current(),
     onRemoving: onChanged,
     onRemoved,
   });
@@ -198,36 +201,48 @@ export function ItemSheet({
   const [addingProgress, setAddingProgress] = useState(progress !== undefined);
   const [placeLabel, setPlaceLabel] = useState(place?.label ?? '');
   const [placeAddress, setPlaceAddress] = useState(place?.address ?? '');
-  const [editingPlace, setEditingPlace] = useState(false);
   const [subItems, setSubItems] = useState<readonly ListSubItem[]>(
     item.features?.subItems?.entries ?? [],
   );
   const [editingSubItem, setEditingSubItem] = useState<string>();
   const previousItem = useRef(item);
-  const latestItem = useRef(item);
-  const lastDispatchedTitle = useRef(item.title);
-  latestItem.current = item;
-  const titleSave = useDebouncedAction();
-  const noteSave = useDebouncedAction();
-  const progressSave = useDebouncedAction();
-  const placeSave = useDebouncedAction();
-  const subItemsSave = useDebouncedAction();
+  const autosave = useItemAutosave(item, actions.save);
+  retrySave.current = autosave.retry;
+  releaseFailed.current = autosave.releaseFailed;
+  const titleSave = autosave.field('title');
+  const noteSave = autosave.field('note');
+  const progressSave = autosave.field('progress');
+  const placeSave = autosave.field('place');
+  const subItemsSave = autosave.field('subItems');
+  const stateSave = autosave.field('state');
+  const [selectedState, setSelectedState] = useState(item.state);
+  const messages = {
+    idle: 'Changes save automatically.',
+    waiting: 'Changes waiting to save…',
+    saving: 'Saving…',
+    saved: Platform.OS === 'web' ? 'All changes saved' : 'Saved on this device',
+    failed: 'Couldn’t save. Your changes are kept here.',
+    invalid: 'Finish the required fields to save.',
+  };
+  const saveMessage = messages[autosave.status];
+  useEffect(() => {
+    if (Platform.OS !== 'web') AccessibilityInfo.announceForAccessibility(saveMessage);
+  }, [saveMessage]);
 
   const close = () => {
+    actions.finishEditing?.(autosave.status === 'failed');
     titleSave.flush();
     noteSave.flush();
     progressSave.flush();
     placeSave.flush();
     subItemsSave.flush();
+    stateSave.flush();
     onClose();
   };
 
   useEffect(() => {
     const previous = previousItem.current;
     const changedItem = previous.itemId !== item.itemId;
-    if (changedItem || previous.title !== item.title) {
-      lastDispatchedTitle.current = item.title;
-    }
     const previousProgress = previous.features?.progress;
     const previousPlace = previous.features?.place;
     const nextProgress = item.features?.progress;
@@ -257,25 +272,38 @@ export function ItemSheet({
     // A refresh after saving one field may land while the user is typing another. Adopt
     // server truth only into fields that still equal the previous server value; a dirty
     // field belongs to the editor until its own blur commits it.
+    if (!autosave.owns('state')) setSelectedState(item.state);
     setTitle((current) =>
-      changedItem || current === previous.title ? item.title : current,
+      changedItem || (!autosave.owns('title') && current === previous.title)
+        ? item.title
+        : current,
     );
     setNote((current) =>
-      changedItem || current === (previous.note ?? '') ? (item.note ?? '') : current,
+      changedItem || (!autosave.owns('note') && current === (previous.note ?? ''))
+        ? (item.note ?? '')
+        : current,
     );
     setSubItems((current) =>
-      changedItem || JSON.stringify(current) === JSON.stringify(previousSubItems)
+      changedItem ||
+      (!autosave.owns('subItems') &&
+        JSON.stringify(current) === JSON.stringify(previousSubItems))
         ? nextSubItems
         : current,
     );
     setProgressText((current) =>
-      changedItem || current === previousProgressText ? nextProgressText : current,
+      changedItem || (!autosave.owns('progress') && current === previousProgressText)
+        ? nextProgressText
+        : current,
     );
     setSeason((current) =>
-      changedItem || current === previousSeason ? nextSeason : current,
+      changedItem || (!autosave.owns('progress') && current === previousSeason)
+        ? nextSeason
+        : current,
     );
     setEpisode((current) =>
-      changedItem || current === previousEpisode ? nextEpisode : current,
+      changedItem || (!autosave.owns('progress') && current === previousEpisode)
+        ? nextEpisode
+        : current,
     );
     setAddingProgress((current) =>
       changedItem || current === (previousProgress !== undefined)
@@ -283,22 +311,19 @@ export function ItemSheet({
         : current,
     );
     setPlaceLabel((current) =>
-      changedItem || current === (previousPlace?.label ?? '')
+      changedItem || (!autosave.owns('place') && current === (previousPlace?.label ?? ''))
         ? (nextPlace?.label ?? '')
         : current,
     );
     setPlaceAddress((current) =>
-      changedItem || current === (previousPlace?.address ?? '')
+      changedItem ||
+      (!autosave.owns('place') && current === (previousPlace?.address ?? ''))
         ? (nextPlace?.address ?? '')
         : current,
     );
-    setEditingPlace((current) => (changedItem ? false : current));
     previousItem.current = item;
-  }, [item]);
+  }, [item, autosave.owns]);
 
-  const commit = (patch: ReturnType<typeof titlePatch>) => {
-    if (patch !== undefined) void actions.save(latestItem.current, patch);
-  };
   const episodeValue = (seasonText = season, episodeText = episode): ProgressValue => {
     const seasonNumber = itemNumber(seasonText);
     const episodeNumber = itemNumber(episodeText);
@@ -328,17 +353,15 @@ export function ItemSheet({
         ) : config.kind === 'text' ? (
           <Field
             label="Progress"
+            maxLength={MAX_FREE_TEXT_LEN}
             value={progressText}
             onChangeText={(value) => {
               setProgressText(value);
-              progressSave.schedule(() =>
-                commit(
-                  progressPatch(
-                    latestItem.current,
-                    value.trim() === ''
-                      ? undefined
-                      : { kind: 'text', value: value.trim() },
-                  ),
+              progressSave.schedule((acknowledged) =>
+                progressPatch(
+                  acknowledged,
+                  value.trim() === '' ? undefined : { kind: 'text', value: value.trim() },
+                  true,
                 ),
               );
             }}
@@ -350,13 +373,17 @@ export function ItemSheet({
               <Field
                 label="Season"
                 value={season}
+                {...(!validSeason(season)
+                  ? { error: 'Use a whole number from 0 to 1000.' }
+                  : {})}
                 onChangeText={(value) => {
                   setSeason(value);
-                  progressSave.schedule(() =>
-                    commit(
-                      progressPatch(latestItem.current, episodeValue(value, episode)),
-                    ),
-                  );
+                  if (!validSeason(value) || !validEpisode(episode))
+                    progressSave.invalid();
+                  else
+                    progressSave.schedule((acknowledged) =>
+                      progressPatch(acknowledged, episodeValue(value, episode), true),
+                    );
                 }}
                 onBlur={progressSave.flush}
               />
@@ -365,13 +392,17 @@ export function ItemSheet({
               <Field
                 label="Episode"
                 value={episode}
+                {...(!validEpisode(episode)
+                  ? { error: 'Use a whole number from 0 to 10000.' }
+                  : {})}
                 onChangeText={(value) => {
                   setEpisode(value);
-                  progressSave.schedule(() =>
-                    commit(
-                      progressPatch(latestItem.current, episodeValue(season, value)),
-                    ),
-                  );
+                  if (!validSeason(season) || !validEpisode(value))
+                    progressSave.invalid();
+                  else
+                    progressSave.schedule((acknowledged) =>
+                      progressPatch(acknowledged, episodeValue(season, value), true),
+                    );
                 }}
                 onBlur={progressSave.flush}
               />
@@ -382,70 +413,42 @@ export function ItemSheet({
     ),
     place: () => (
       <View key="place" style={styles.featureSection}>
-        <View style={styles.featureHeading}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="caption" color="textMuted">
-              Place
-            </Text>
-          </View>
-          {place === undefined || editingPlace ? null : (
-            <Button
-              label="Edit"
-              accessibilityLabel="Edit place"
-              variant="ghost"
-              size="sm"
-              flush
-              onPress={() => setEditingPlace(true)}
-            />
-          )}
+        <Text variant="caption" color="textSecondary">
+          Place
+        </Text>
+        <View style={styles.featureSection}>
+          <Field
+            label="Name"
+            maxLength={MAX_FREE_TEXT_LEN}
+            value={placeLabel}
+            {...(placeLabel.trim() === '' && placeAddress.trim() !== ''
+              ? { error: 'Name is required when an address is present.' }
+              : {})}
+            onChangeText={(value) => {
+              setPlaceLabel(value);
+              if (value.trim() === '' && placeAddress.trim() !== '') placeSave.invalid();
+              else
+                placeSave.schedule((acknowledged) =>
+                  placePatch(acknowledged, value, placeAddress, true),
+                );
+            }}
+            onBlur={placeSave.flush}
+          />
+          <Field
+            label="Address"
+            value={placeAddress}
+            onChangeText={(value) => {
+              setPlaceAddress(value);
+              if (placeLabel.trim() === '' && value.trim() !== '') placeSave.invalid();
+              else
+                placeSave.schedule((acknowledged) =>
+                  placePatch(acknowledged, placeLabel, value, true),
+                );
+            }}
+            onBlur={placeSave.flush}
+            maxLength={MAX_ADDRESS_LEN}
+          />
         </View>
-        {editingPlace ? (
-          <View style={{ gap: theme.space[3] }}>
-            <Field
-              label="Place"
-              value={placeLabel}
-              onChangeText={(value) => {
-                setPlaceLabel(value);
-                placeSave.schedule(() =>
-                  commit(placePatch(latestItem.current, value, placeAddress)),
-                );
-              }}
-              onBlur={placeSave.flush}
-            />
-            <Field
-              label="Address"
-              value={placeAddress}
-              onChangeText={(value) => {
-                setPlaceAddress(value);
-                placeSave.schedule(() =>
-                  commit(placePatch(latestItem.current, placeLabel, value)),
-                );
-              }}
-              onBlur={placeSave.flush}
-              maxLength={MAX_ADDRESS_LEN}
-            />
-          </View>
-        ) : place === undefined ? (
-          <SettingRow
-            label="Place"
-            value="Add"
-            icon={MapPin}
-            iconTone="neutral"
-            density="compact"
-            opens
-            onPress={() => setEditingPlace(true)}
-          />
-        ) : (
-          <SettingRow
-            label={place.label.trim() || 'Place'}
-            {...(place.address?.trim() ? { summary: place.address.trim() } : {})}
-            icon={MapPin}
-            iconTone="neutral"
-            density="compact"
-            opens
-            onPress={() => setEditingPlace(true)}
-          />
-        )}
       </View>
     ),
     subItems: (config) => (
@@ -470,6 +473,7 @@ export function ItemSheet({
               const id = newLocalId('sub');
               setSubItems((rows) => appendSubItem(rows, id));
               setEditingSubItem(id);
+              subItemsSave.invalid();
             }}
           />
         </View>
@@ -485,7 +489,7 @@ export function ItemSheet({
             const from = subItems.findIndex((entry) => entry.id === itemId);
             const next = moveSubItem(subItems, from, to);
             setSubItems(next);
-            subItemsSave.now(() => commit(subItemsPatch(latestItem.current, next)));
+            subItemsSave.now((acknowledged) => subItemsPatch(acknowledged, next, true));
           }}
           renderItem={(entry) => {
             const name = entry.title.trim() || config.singularLabel;
@@ -508,10 +512,10 @@ export function ItemSheet({
                             );
                             setSubItems(next);
                             if (next.every((row) => row.title.trim() !== '')) {
-                              subItemsSave.schedule(() =>
-                                commit(subItemsPatch(latestItem.current, next)),
+                              subItemsSave.schedule((acknowledged) =>
+                                subItemsPatch(acknowledged, next, true),
                               );
-                            }
+                            } else subItemsSave.invalid();
                           }}
                           onBlur={() => {
                             const next = subItems.filter(
@@ -521,8 +525,8 @@ export function ItemSheet({
                             if (!next.some((row) => row.id === entry.id)) {
                               setEditingSubItem(undefined);
                             }
-                            subItemsSave.now(() =>
-                              commit(subItemsPatch(latestItem.current, next)),
+                            subItemsSave.now((acknowledged) =>
+                              subItemsPatch(acknowledged, next, true),
                             );
                           }}
                         />
@@ -542,10 +546,10 @@ export function ItemSheet({
                               );
                               setSubItems(next);
                               if (next.every((row) => row.title.trim() !== '')) {
-                                subItemsSave.schedule(() =>
-                                  commit(subItemsPatch(latestItem.current, next)),
+                                subItemsSave.schedule((acknowledged) =>
+                                  subItemsPatch(acknowledged, next, true),
                                 );
-                              }
+                              } else subItemsSave.invalid();
                             }}
                             onBlur={subItemsSave.flush}
                           />
@@ -587,8 +591,8 @@ export function ItemSheet({
                       setEditingSubItem((current) =>
                         current === entry.id ? undefined : current,
                       );
-                      subItemsSave.now(() =>
-                        commit(subItemsPatch(latestItem.current, next)),
+                      subItemsSave.now((acknowledged) =>
+                        subItemsPatch(acknowledged, next, true),
                       );
                     }}
                     testID={`sub-item-${entry.id}-remove`}
@@ -603,31 +607,43 @@ export function ItemSheet({
   };
 
   return (
-    <Sheet open={open} onClose={close} title="Item details" detent="fit" testID={testID}>
-      <View style={{ gap: theme.space[5], paddingBottom: theme.space[1] }}>
+    <Sheet
+      open={open}
+      onClose={close}
+      title="Item details"
+      compactTitle={fontScale >= 2}
+      detent="fit"
+      testID={testID}
+      headerAccessory={
+        <View style={styles.saveStatus} testID="item-save-status">
+          <View
+            style={styles.statusText}
+            accessibilityLiveRegion="polite"
+            role={Platform.OS === 'web' ? 'status' : undefined}
+          >
+            <Text
+              variant="footnote"
+              color={autosave.status === 'failed' ? 'danger' : 'textSecondary'}
+              numberOfLines={0}
+            >
+              {saveMessage}
+            </Text>
+          </View>
+          {autosave.status === 'failed' ? (
+            <Button label="Retry" size="sm" variant="ghost" onPress={autosave.retry} />
+          ) : null}
+        </View>
+      }
+    >
+      <View style={styles.content}>
         <Field
           label="Title"
           value={title}
           onChangeText={(value) => {
             setTitle(value);
-            titleSave.schedule(() => {
-              const nextTitle = value.trim();
-              if (nextTitle === '' || nextTitle === lastDispatchedTitle.current) {
-                return;
-              }
-              const current = latestItem.current;
-              const patch = titlePatch(current, value);
-              if (patch === undefined) return;
-              // A value is de-duplicated only once its write actually leaves this field.
-              // Pending drafts remain replaceable, so valid → blank → valid inside one
-              // debounce window cannot cancel the only write of the valid value.
-              lastDispatchedTitle.current = nextTitle;
-              void actions.save(current, patch).then((accepted) => {
-                if (!accepted && lastDispatchedTitle.current === nextTitle) {
-                  lastDispatchedTitle.current = latestItem.current.title;
-                }
-              });
-            });
+            if (value.trim() === '') titleSave.invalid();
+            else
+              titleSave.schedule((acknowledged) => titlePatch(acknowledged, value, true));
           }}
           onBlur={titleSave.flush}
           {...(title.trim() === '' ? { error: 'Title is required.' } : {})}
@@ -640,7 +656,7 @@ export function ItemSheet({
           value={note}
           onChangeText={(value) => {
             setNote(value);
-            noteSave.schedule(() => commit(notePatch(latestItem.current, value)));
+            noteSave.schedule((acknowledged) => notePatch(acknowledged, value, true));
           }}
           onBlur={noteSave.flush}
           maxLength={MAX_NOTES_LEN}
@@ -655,39 +671,65 @@ export function ItemSheet({
               ? {}
               : {
                   opens: true,
-                  onPress: () => onOpenSource(provenance.sourceActivityId as string),
+                  onPress: () => {
+                    close();
+                    onOpenSource(provenance.sourceActivityId as string);
+                  },
                 })}
           />
         )}
 
-        {list.itemStateMode.mode === 'none' ? null : list.itemStateMode.mode ===
-          'checkbox' ? (
-          <RowGroup label="State" testID="item-state-editor">
-            <SettingRow
-              label={item.state === 'done' ? 'Mark as not done' : 'Mark as done'}
-              summary={item.state === 'done' ? 'Completed' : 'Not completed'}
-              icon={Check}
-              iconTone="success"
-              density="compact"
-              onPress={() =>
-                void actions.save(item, {
-                  state: item.state === 'done' ? 'open' : 'done',
-                })
-              }
-              testID="item-state-action"
-            />
-          </RowGroup>
-        ) : (
-          <RowGroup label="State" testID="item-state-editor">
-            {STATES.map((state) => (
-              <SettingRow
-                key={state}
-                label={stageLabels[state]}
-                selected={item.state === state}
-                onPress={() => void actions.save(item, { state })}
-              />
-            ))}
-          </RowGroup>
+        {list.itemStateMode.mode === 'none' ? null : (
+          <View style={styles.featureSection} testID="item-state-editor">
+            <Text variant="caption" color="textSecondary">
+              State
+            </Text>
+            <View style={styles.stateControls}>
+              {(list.itemStateMode.mode === 'checkbox'
+                ? (['open', 'done'] as const)
+                : STATES
+              ).map((state) => {
+                const selected =
+                  state === selectedState ||
+                  (state === 'open' &&
+                    selectedState === 'active' &&
+                    list.itemStateMode.mode === 'checkbox');
+                const label =
+                  list.itemStateMode.mode === 'checkbox'
+                    ? state === 'done'
+                      ? 'Done'
+                      : 'Not done'
+                    : stageLabels[state];
+                return (
+                  <Touchable
+                    key={state}
+                    accessibilityRole="button"
+                    accessibilityLabel={label}
+                    accessibilityState={{ selected }}
+                    aria-pressed={selected}
+                    style={[
+                      styles.stateChoice,
+                      { flexBasis: theme.layout.hitTarget * 2 * fontScale },
+                      selected && styles.selectedChoice,
+                    ]}
+                    testID={`item-state-${state}`}
+                    onPress={() => {
+                      setSelectedState(state);
+                      stateSave.now(() => ({ state }));
+                    }}
+                  >
+                    <Text
+                      variant={selected ? 'footnoteStrong' : 'footnote'}
+                      color={selected ? 'textAction' : 'textSecondary'}
+                      numberOfLines={0}
+                    >
+                      {label}
+                    </Text>
+                  </Touchable>
+                );
+              })}
+            </View>
+          </View>
         )}
 
         {visitEnabledFeatureEditors(list.featureConfig, item.features, featureEditors)}

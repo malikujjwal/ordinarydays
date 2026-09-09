@@ -1,6 +1,5 @@
 import type { ListItemPlanState, ListItemView } from '@od/shared/types';
-import { Checkbox, Chip, MapPin, Text, Touchable, useTheme } from '@od/ui';
-import type { Theme } from '@od/ui/theme';
+import { Checkbox, Chip, MapPin, Text, type Theme, Touchable, useTheme } from '@od/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import {

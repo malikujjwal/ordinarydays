@@ -7,7 +7,9 @@
     "dev": "expo start",
     "build": "expo export --platform web",
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo-google-fonts/newsreader": "0.4.1",

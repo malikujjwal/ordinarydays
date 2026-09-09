@@ -1,0 +1,82 @@
+appId: app.ordinarydays.ios.local
+name: Item details autosave survives offline relaunch
+jsEngine: graaljs
+tags: [p3, ios, release, lists]
+onFlowStart:
+  - runScript: scripts/proxy-online.js
+  - runScript: scripts/list-row-setup.js
+onFlowComplete:
+  - runScript: scripts/proxy-online.js
+  - runScript: scripts/list-row-cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- openLink: ${'ordinarydays-local://lists/' + output.rowListId}
+- tapOn:
+    id: ${'list-item-' + output.rowItemId + '-body'}
+- assertVisible: Changes save automatically.
+- takeScreenshot: item-details-before-edit
+- runScript: scripts/proxy-offline.js
+- runScript: scripts/measure-item-sheet.js
+- repeat:
+    times: ${output.itemScrollGestures}
+    commands:
+      - runFlow:
+          when:
+            true: ${!output.itemNoteReachable}
+          commands:
+            - swipe:
+                from:
+                  id: item-sheet-body
+                direction: UP
+            - runScript: scripts/measure-item-sheet.js
+- assertTrue: ${output.itemNoteReachable}
+- tapOn:
+    point: ${output.itemNotePoint}
+- runScript: scripts/measure-item-sheet.js
+- longPressOn:
+    point: ${output.itemNotePoint}
+- runFlow:
+    when:
+      notVisible: Select All
+    commands:
+      - tapOn: Forward
+- tapOn: Select All
+- inputText: Saved offline and kept after relaunch
+- runScript: scripts/measure-item-sheet.js
+- assertTrue: ${output.itemNoteReachable}
+- assertTrue: ${output.itemNoteValue === 'Saved offline and kept after relaunch'}
+- assertVisible: Saved on this device
+- takeScreenshot: item-details-keyboard-save
+- tapOn: Close
+- assertNotVisible:
+    id: item-sheet
+- stopApp
+- launchApp
+- openLink: ${'ordinarydays-local://lists/' + output.rowListId}
+- tapOn:
+    id: ${'list-item-' + output.rowItemId + '-body'}
+- runScript: scripts/measure-item-sheet.js
+- repeat:
+    times: ${output.itemScrollGestures}
+    commands:
+      - runFlow:
+          when:
+            true: ${!output.itemNoteReachable}
+          commands:
+            - swipe:
+                from:
+                  id: item-sheet-body
+                direction: UP
+            - runScript: scripts/measure-item-sheet.js
+- assertTrue: ${output.itemNoteReachable}
+- assertTrue: ${output.itemNoteValue === 'Saved offline and kept after relaunch'}
+- takeScreenshot: item-details-offline-relaunch
+- tapOn: Close
+- runScript: scripts/proxy-online.js
+- extendedWaitUntil:
+    notVisible: Offline
+    timeout: 15000
+- runScript: scripts/verify-item-autosave.js

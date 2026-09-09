@@ -997,6 +997,29 @@ Two more rules:
 | **Empty list** | One compact semantic List icon, `Start with one item`, the List's stored `emptyStateCopy`, and one primary `Add item` action (§5.9). No large illustration or second empty add row. |
 | **Item cap** | 500 items per list. Beyond that, `POST` returns `validation_failed` with `List is full.` |
 
+**Item-details autosave feedback — approved scope, 2026-09-05.** The fixed sheet header
+shows `Changes save automatically.`, `Changes waiting to save…`, `Saving…`, and an acknowledged
+success. Web says `All changes saved` only after the server accepts every valid edit; native
+says `Saved on this device` only after the SQLite projection and outbox intent commit atomically.
+That native message does not claim server sync: existing offline/recovery indicators retain
+that responsibility. Failed writes retain the current draft with inline `Retry`. Edits to the
+same field are ordered across dismissal/reopening; retry must never replace a newer draft with
+an older failed request. Invalid required/typed fields cannot be reported saved.
+
+The founder explicitly chose **preserve current close behavior**, declining the mock's proposed
+close guard. Close, scrim, Escape, hardware Back and the supported drag still converge on the
+existing Close path, which flushes pending valid edits and dismisses without a confirmation.
+A failure that arrives after dismissal uses the existing toast with the latest failed draft's
+Retry; already acknowledged edits are never undone. No Discard control is added.
+
+State choices use compact wrapping controls with configured stage labels, selected-state
+semantics and 44 pt minimum targets. Checkbox mode offers `Not done` and `Done` only; hidden
+intrinsic `active` still presents as not done. Place uses one section heading and editable
+`Name` and `Address` fields. An address requires a nonblank Name; clearing both removes Place.
+This validates the existing typed Place shape, rather than acknowledging an address that the
+persistence layer cannot store. Title/Note ordering, feature gating and all existing item actions
+remain in effect.
+
 (Moving an item between lists is not in v1 — copy the text into the other list and delete
 the original.)
 

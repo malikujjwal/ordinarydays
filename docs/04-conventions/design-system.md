@@ -677,6 +677,13 @@ invalid; feature code does not nest a virtualized list inside the ordinary body.
  [ primary ]  secondary        fixed; reachable while the body scrolls
 ```
 
+A screen may supply `headerAccessory` for persistent context or save feedback below the title.
+It remains outside the scrolling body and moves with the sheet above the keyboard. Item details
+uses `compactTitle` (the existing `footnoteStrong` token with compact spacing) at native font
+scale 2 and above, retaining full text scaling while keeping a usable editor viewport above
+the keyboard. The title wraps within its available column; the single Close target keeps its
+full size.
+
 A screen **supplies** actions; it does not decide where they sit or how they relate. Left to
 each modal, `Done`, `Cancel` and `Apply` acquired a different arrangement every time — one of
 them stacked into a column because the content above it happened to grow.
@@ -1086,6 +1093,12 @@ state accessibly and visibly; destructive rows use danger ink on a transparent r
 token gap, never a filled oversized button. Focused editors such as Repeat keep their purpose-built
 controls inside the same `Sheet`; this rule is about the page-level action hierarchy, not replacing
 fields or pickers with rows.
+
+Item-details save feedback occupies that fixed header context slot (product §5.6). Configured
+State choices wrap with `space[3]` separation, 44 pt minimum targets, action ink and explicit
+selected semantics. Place has one heading followed by Name and Address fields. These changes
+preserve automatic saving and the founder-selected unguarded dismissal behavior; the mock's
+close guard is not approved.
 
 Item details uses the compact Title field, the labelled top-aligned optional Note, then exposed
 State and enabled typed-feature groups. A configured Sub-item section uses its own vocabulary,

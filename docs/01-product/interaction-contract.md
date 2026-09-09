@@ -298,6 +298,13 @@ accessible targets with at least `space[3]` (8 pt) between adjacent targets. The
 continues to open its linked Activity. This Place interaction was approved by the founder for
 mock v2 on 2026-09-05; it does not change Activity-detail address interactions (§3.3).
 
+Item details continues to autosave on the existing debounce and flush on blur/Close. The
+founder declined the proposed unsaved-close confirmation on 2026-09-05: every supported sheet
+exit retains that behavior. Its fixed header reports waiting, saving, acknowledged saving or
+failure with Retry, following [plans-and-lists.md §5.6](plans-and-lists.md#56-operations-on-a-list).
+Native acknowledgement is durable device storage, not remote sync. Retry retains the latest
+failed draft, including when the original failure arrives after dismissal.
+
 | Row type | Tap body | Tap checkbox | Swipe right | Swipe right (full) | Swipe left | Swipe left (full) | Long press |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | List (on the Lists index), you own it | Open the list | — | — | — | `Archive` · `Delete` | — | Open the same Archive / Delete action sheet |
