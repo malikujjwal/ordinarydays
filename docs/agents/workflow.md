@@ -33,6 +33,30 @@ Completion evidence names the source revision, commands, results, and any unrun 
 For native work include Xcode/runtime/device, build configuration/profile, and artifact or
 log location. A compilation result closes compilation only, not a Maestro/device matrix.
 
+## Implementation ownership
+
+Any change to product behavior, application code, tests, or canonical docs runs as an
+orchestrated implementation. The parent keeps intent, scope, arbitration, and the
+user-facing report. It is not the routine writer.
+
+1. **Scout** (read-only): contracts, one real path, acceptance, exclusions, verification
+   commands, and files in play. No edits.
+2. **Oracle** (read-only): direction and material tradeoffs from the scout evidence. It does
+   not implement and does not replace review. The parent accepts or rejects that direction
+   before a worker writes.
+3. **Worker**: one bounded behavior in an isolated worktree when overlap matters. Tests and
+   the task's verification commands travel with the change.
+4. **Reviewer** (fresh context, read-only): standards and specification against a pinned
+   revision. A second reviewer when the `code-review` skill applies.
+5. **Parent**: accept, reject, or apply a small review fix with a one-line reason. Do not
+   silently redo the worker's job.
+
+Skip this loop only for questions, recaps, or when the user says to implement directly. A
+parent that writes the feature itself is a process miss, not a shortcut.
+
+`implement` and `tdd` still name the work; they do not authorize a solo parent
+implementation. `implement-spec` remains the recipe for a larger task graph.
+
 ## Skill routes
 
 Names below use the installed `matt-skills-curated:` prefix. Read the selected skill's
@@ -56,9 +80,9 @@ Use `engineering-workflow-guide` only when the route is unclear. Routine fixes d
 an interview, new specification, ticket graph, or architecture survey. Use `retro` after a
 meaningful delivery problem to improve the specific instruction or check that missed it.
 
-The `code-review` skill specifies two review subagents. The `implement-spec` skill is for
-deliberate multi-agent execution across a task graph; it is not the default for every phase
-task. Follow the selected skill and current user/runtime delegation constraints.
+The `code-review` skill specifies two review subagents. Follow the selected skill inside the
+implementation-ownership loop above. `implement-spec` is the recipe when the work is a task
+graph rather than one bounded behavior. Follow current user/runtime delegation constraints.
 
 ## Architecture that determines the workflow
 
