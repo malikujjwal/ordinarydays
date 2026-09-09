@@ -7,7 +7,12 @@ export function GlobalComposerFixture() {
       onClose={() => {}}
       today="2026-08-28"
       timezone="America/New_York"
-      onCreateList={() => {}}
+      listWriter={{
+        save: async () => undefined,
+        isCreating: false,
+        errorMessage: undefined,
+        errorRequestId: undefined,
+      }}
     />
   );
 }

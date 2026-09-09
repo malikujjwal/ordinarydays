@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, type Ref, useEffect, useRef, useState } from 'react';
 import {
   type ScrollView as RNScrollView,
   ScrollView,
@@ -52,7 +52,21 @@ export interface ScreenShellProps {
    * offsets.
    */
   keepEndVisibleWithKeyboard?: boolean;
+  /**
+   * Optional handle to the owned body ScrollView. A screen that reveals content below the
+   * fold can scroll a child into view without taking over keyboard or footer layout.
+   */
+  bodyScrollRef?: Ref<RNScrollView | null>;
   testID?: string;
+}
+
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
+  if (ref == null) return;
+  if (typeof ref === 'function') {
+    ref(value);
+    return;
+  }
+  ref.current = value;
 }
 
 const MEASURE = { standard: 720, reading: 620 } as const;
@@ -83,6 +97,7 @@ export function ScreenShell({
   onScroll,
   scrollEventThrottle,
   keepEndVisibleWithKeyboard = false,
+  bodyScrollRef,
   testID,
 }: ScreenShellProps) {
   const theme = useTheme();
@@ -145,7 +160,10 @@ export function ScreenShell({
 
       {scroll ? (
         <ScrollView
-          ref={scrollRef}
+          ref={(node) => {
+            scrollRef.current = node;
+            assignRef(bodyScrollRef, node);
+          }}
           onScroll={onScroll}
           scrollEventThrottle={scrollEventThrottle}
           onContentSizeChange={(_width, height) => setContentHeight(height)}

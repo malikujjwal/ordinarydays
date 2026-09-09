@@ -107,6 +107,13 @@ export function saveLabel(target: CreationTarget, listName?: string): string {
   return `Add to ${listName ?? 'list'}`;
 }
 
+/** Global Add's final button. Contextual entries keep {@link saveLabel}. */
+export function createLabel(choice: ObjectChoice): string {
+  if (choice === 'task') return 'Create task';
+  if (choice === 'plan') return 'Create plan';
+  return 'Create list';
+}
+
 /**
  * The draft fields that survive a target change.
  *

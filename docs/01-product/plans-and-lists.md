@@ -921,9 +921,14 @@ Rules:
    `List name, pre-filled with <title>` on the title step. Focus never skips the explicit
    style selection.
 
-Global `+` → **Add list** enters the same unselected catalogue above. Successful creation
-closes the global Add flow; it does not open or return to a global List-item composer. List
-items are created only through the contextual action inside their destination List.
+Global `+` → **Add list** shows the same unselected catalogue **inline** on the Add sheet.
+The title already entered becomes the list name and must not be overwritten by the style's
+`defaultTitle`. Successful creation closes the global Add flow; it does not open or return
+to a global List-item composer. List items are created only through the contextual action
+inside their destination List.
+
+Lists-index `New list` and a Plan's `Add list` → `Create new list` keep the style-first sheet
+above, including `defaultTitle` prefill on the title step.
 
 > **What the frames fix, and what the sheet primitive does** — settled 2026-08-27 (founder),
 > on the divergence raised in P3-26's PR.

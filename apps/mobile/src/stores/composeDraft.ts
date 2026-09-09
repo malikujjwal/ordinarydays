@@ -122,6 +122,22 @@ export interface ComposeDraftState {
    * item's destination, and no words can supply it.
    */
   parentActivityId: string | undefined;
+  /**
+   * The named object on global Add, or `undefined` until the user taps one.
+   *
+   * Separate from `target` because Plan is chosen before a kind exists, and List never
+   * becomes an Activity target. Words cannot set this.
+   */
+  objectChoice: ObjectChoice | undefined;
+  /** The explicitly tapped List style, or `undefined` until one is named. */
+  listTemplateKey: string | undefined;
+  /** Last Plan kind chosen on this draft, so switching away and back does not drop it. */
+  planKindMemory: PlanType | undefined;
+  /**
+   * Contextual entries (`+ Add a task`, `+ Add prep task`, `Plan this item`) skip the
+   * global title-first sheet. Backing out to the object chooser clears this.
+   */
+  intentLocked: boolean;
 
   /** `activities.md` §4's Date / Time / End time, for every type that has them. */
   schedule: DraftSchedule;
@@ -139,6 +155,7 @@ export interface ComposeDraftState {
   openPrepTask: (parentActivityId: string) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
+  chooseListStyle: (templateKey: string) => void;
   /** The one place `audience` is set, and only by the visible `Just me` tap. */
   chooseAudience: (audience: DraftAudience) => void;
   back: () => void;
@@ -186,6 +203,10 @@ const EMPTY = {
   bridge: undefined,
   audience: undefined,
   parentActivityId: undefined,
+  objectChoice: undefined,
+  listTemplateKey: undefined,
+  planKindMemory: undefined,
+  intentLocked: false,
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
@@ -199,6 +220,7 @@ const EMPTY = {
   | 'openPrepTask'
   | 'chooseObject'
   | 'choosePlanKind'
+  | 'chooseListStyle'
   | 'chooseAudience'
   | 'back'
   | 'setTitle'
@@ -272,6 +294,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       ...EMPTY,
       step: 'form',
       target: { objectKind: 'task', type: 'task' },
+      objectChoice: 'task',
+      intentLocked: true,
       schedule: { ...EMPTY_SCHEDULE, date },
     }),
 
@@ -281,7 +305,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    * title, creation preset, settings, features — participates in the choice. The draft starts
    * empty; fields fill only after the explicit kind tap, via {@link bridgePrefill}.
    */
-  openPlanForItem: (bridge) => set({ ...EMPTY, step: 'planKind', bridge }),
+  openPlanForItem: (bridge) =>
+    set({ ...EMPTY, step: 'planKind', objectChoice: 'plan', intentLocked: true, bridge }),
 
   /**
    * `+ Add prep task` (P3-38): the plan's labelled action is itself the explicit Task
@@ -294,6 +319,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       ...EMPTY,
       step: 'form',
       target: { objectKind: 'task', type: 'task' },
+      objectChoice: 'task',
+      intentLocked: true,
       parentActivityId,
     }),
 
@@ -305,16 +332,30 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    * nothing. `General` is chosen there, never defaulted here.
    */
   chooseObject: (choice) => {
+    const { objectChoice, planKindMemory } = get();
     if (choice === 'task') {
-      set({ step: 'form', target: { objectKind: 'task', type: 'task' } });
+      set({
+        objectChoice: 'task',
+        step: 'form',
+        target: { objectKind: 'task', type: 'task' },
+      });
       return;
     }
     if (choice === 'plan') {
-      set({ step: 'planKind', target: undefined });
+      if (objectChoice === 'plan') return;
+      if (planKindMemory !== undefined) {
+        set({
+          objectChoice: 'plan',
+          step: 'form',
+          target: { objectKind: 'plan', type: planKindMemory },
+        });
+        return;
+      }
+      set({ objectChoice: 'plan', step: 'planKind', target: undefined });
       return;
     }
-    // List creation is a separate catalogue owned by the route. It never becomes an
-    // Activity draft target and never opens a global List-item composer.
+    // List never becomes an Activity target and never opens a global List-item composer.
+    set({ objectChoice: 'list', step: 'object', target: undefined });
   },
 
   /**
@@ -348,6 +389,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       set(
         edited({
           step: 'audience',
+          objectChoice: 'plan',
+          planKindMemory: type,
           target: { objectKind: 'plan', type },
           audience: undefined,
           title: currentTitle.trim() === '' ? prefill.title : currentTitle,
@@ -368,6 +411,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       set(
         edited({
           step: 'form',
+          objectChoice: 'plan',
+          planKindMemory: type,
           target: { objectKind: 'plan', type },
           details: withEventDefaults(type, details, eventDefaults),
         }),
@@ -396,11 +441,16 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     set(
       edited({
         step: 'form',
+        objectChoice: 'plan',
+        planKindMemory: type,
         target: { objectKind: 'plan', type },
         details: nextDetails,
       }),
     );
   },
+
+  /** The one place a List style is named. It never writes or overwrites the title. */
+  chooseListStyle: (listTemplateKey) => set({ listTemplateKey }),
 
   /**
    * The audience step's only writer. `just_me` is the whole union in this phase, and it
@@ -427,7 +477,12 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     const { step, target, bridge } = get();
     if (step === 'planKind') {
       if (bridge !== undefined) return;
-      set({ step: 'object', target: undefined });
+      set({
+        step: 'object',
+        target: undefined,
+        objectChoice: undefined,
+        intentLocked: false,
+      });
       return;
     }
     if (step === 'audience') {
@@ -447,6 +502,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
         step: target?.objectKind === 'plan' ? 'planKind' : 'object',
         target: undefined,
         parentActivityId: undefined,
+        intentLocked: false,
+        objectChoice: target?.objectKind === 'plan' ? 'plan' : undefined,
       });
     }
   },

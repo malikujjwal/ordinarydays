@@ -77,10 +77,10 @@ async function me(request: APIRequestContext) {
 async function openMealForm(page: Page, title: string, ingredients: readonly string[]) {
   await page.goto('/plans');
   await testId(page, 'global-add').click();
+  await testId(page, 'compose-title').fill(title);
   await testId(page, 'object-choice-plan').click();
   await page.getByRole('button', { name: /^Meal,/ }).click();
   await expect(testId(page, 'compose-form')).toBeVisible();
-  await testId(page, 'compose-title').fill(title);
   await page.getByRole('button', { name: 'Tomorrow' }).click();
   await page.getByRole('button', { name: /^More options/ }).click();
   for (const [index, name] of ingredients.entries()) {
@@ -111,7 +111,7 @@ test('one grocery list: the row names it, nothing is asked, and the write lands 
     'aria-checked',
     'false',
   );
-  await expect(page.getByRole('button', { name: 'Save plan' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create plan' })).toBeVisible();
 
   await page.getByRole('checkbox', { name: 'Chicken' }).click();
   await page.getByRole('checkbox', { name: 'Tortillas' }).click();
@@ -242,10 +242,10 @@ test('no grocery list: nothing is suggested, Create list writes no ingredient, t
 async function openWatchForm(page: Page, title: string) {
   await page.goto('/plans');
   await testId(page, 'global-add').click();
+  await testId(page, 'compose-title').fill(title);
   await testId(page, 'object-choice-plan').click();
   await page.getByRole('button', { name: /^Watch,/ }).click();
   await expect(testId(page, 'compose-form')).toBeVisible();
-  await testId(page, 'compose-title').fill(title);
   await page.getByRole('button', { name: 'Tomorrow' }).click();
   await page.getByRole('button', { name: /^More options/ }).click();
   await expect(testId(page, 'watch-destination-toggle')).toHaveAttribute(
@@ -260,7 +260,7 @@ test('watch, one destination: the toggle is off, turning it on names the list, t
 }) => {
   const watchLater = await createList(request, 'Watch Later', 'watch-later');
   await openWatchForm(page, 'Severance');
-  await expect(page.getByRole('button', { name: 'Save plan' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create plan' })).toBeVisible();
 
   await testId(page, 'watch-destination-toggle').click();
   await expect(testId(page, 'watch-destination-list-name')).toHaveText('Watch Later');

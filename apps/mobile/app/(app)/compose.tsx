@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
 import { DestinationSheet } from '@/features/lists/components/DestinationSheet';
-import { NewListSheet } from '@/features/lists/components/NewListSheet';
+import { useCreateList } from '@/features/lists/hooks/useCreateList';
 import { apiClient } from '@/lib/apiClient';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -21,15 +21,14 @@ const profileQuery = queryOptions({
  * renders one feature component. What it supplies is `onClose` plus the edge values — the
  * user's today and their zone — so `ComposeScreen` never has to know it is a route.
  *
- * The route is the allowed cross-feature seam: `Add list` opens the ordinary unselected List
- * catalogue without teaching the Activity composer about List creation internals.
+ * The route is the allowed cross-feature seam: List creation is written through
+ * `useCreateList` without teaching the Activity composer about List internals.
  */
 export default function ComposeRoute() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const profile = useQuery(profileQuery);
-  const resetDraft = useComposeDraft((state) => state.reset);
-  const [creatingList, setCreatingList] = useState(false);
+  const createList = useCreateList();
   // P3-43: the destination picker meets the compose feature here (features stay vertical).
   const [choosingSlot, setChoosingSlot] = useState<'groceries' | 'watch'>();
   const destinations = useComposeDraft((state) => state.destinations);
@@ -45,7 +44,12 @@ export default function ComposeRoute() {
           const user = profile.data ?? (await queryClient.ensureQueryData(profileQuery));
           return { reservationName: user.displayName, currency: user.currency };
         }}
-        onCreateList={() => setCreatingList(true)}
+        listWriter={{
+          save: (templateKey, title) => createList.create(templateKey, title),
+          isCreating: createList.isCreating,
+          errorMessage: createList.errorMessage,
+          errorRequestId: createList.errorRequestId,
+        }}
         onChooseDestination={setChoosingSlot}
       />
       {choosingSlot === undefined ? null : (
@@ -57,15 +61,6 @@ export default function ComposeRoute() {
           onClose={() => setChoosingSlot(undefined)}
         />
       )}
-      <NewListSheet
-        open={creatingList}
-        onClose={() => setCreatingList(false)}
-        onCreated={() => {
-          setCreatingList(false);
-          resetDraft();
-          router.back();
-        }}
-      />
     </>
   );
 }

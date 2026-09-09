@@ -79,6 +79,7 @@ describe('nothing is selected until the user taps', () => {
     draft().chooseObject('list');
     expect(draft().step).toBe('object');
     expect(draft().target).toBeUndefined();
+    expect(draft().objectChoice).toBe('list');
   });
 
   it('keeps content out of the Activity draft when List creation is chosen', () => {
@@ -90,6 +91,15 @@ describe('nothing is selected until the user taps', () => {
     expect(draft().target).toBeUndefined();
     expect(draft().title).toBe('Try Zahav');
     expect(draft().notes).toBe('Ask about the tasting menu');
+  });
+
+  it('choosing a List style never overwrites the title', () => {
+    draft().setTitle('Movies and shows');
+    draft().chooseObject('list');
+    draft().chooseListStyle('watch-later');
+
+    expect(draft().title).toBe('Movies and shows');
+    expect(draft().listTemplateKey).toBe('watch-later');
   });
 
   it('Back from an untouched Add chooser retains no destination', () => {

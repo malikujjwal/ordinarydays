@@ -28,12 +28,12 @@ onFlowComplete:
 - tapOn:
     id: global-add
 - tapOn:
+    id: compose-title
+- inputText: ${output.title}
+- tapOn:
     id: object-choice-plan
 - tapOn:
     id: plan-kind-custom
-- tapOn:
-    id: compose-title
-- inputText: ${output.title}
 - tapOn: Today
 - hideKeyboard
 - scrollUntilVisible:

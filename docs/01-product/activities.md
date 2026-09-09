@@ -81,20 +81,24 @@ in its label and skips only that already-answered choice.
 
 ### 2.2 The global object chooser
 
-Opening global `+` or pressing `N` presents one required, unselected choice:
+Opening global `+` or pressing `N` presents one sheet. A title field is focused immediately.
+Task / Plan / Add list sit beneath it, with nothing selected. Typing does not choose a
+category, infer a Plan kind, or create anything. Global Add requires a non-empty trimmed title
+before those category choices can be pressed; the chosen category then reveals and scrolls to
+the next controls.
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  Cancel                                          │
-│                                                  │
 │  What would you like to add?                     │
+│  ┌────────────────────────────────────────────┐  │
+│  │                                            │  │
+│  └────────────────────────────────────────────┘  │
 │                                                  │
-│  Task                                          › │
-│  Something you need to do                        │
-│  Plan                                          › │
-│  Something you intend to make happen             │
-│  Add list                                      › │
-│  A collection for things you want to keep track of│
+│  Create as                                       │
+│  Task · Something you need to do                 │
+│  Plan · Something you intend to make happen      │
+│  Add list · A collection for things you want to  │
+│             keep track of                        │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -105,13 +109,15 @@ user's. It is spoken as well as shown — the row's accessible name is `Task, So
 do`, §6.2's comma-joined grammar.
 
 No row is selected, recommended, reordered from history, or bypassed by typed or shared
-content. Each row determines the stored object before capture starts:
+content. Category selection reveals the rest of the sheet inline; the title stays visible and
+editable. Capture stays off until object — and for a Plan, Plan kind — is named. Each row
+determines the stored object before capture starts:
 
 | Choice | Next required choice | Result |
 | --- | --- | --- |
-| **Task** | None | Task form; every create request sends `objectKind: 'task'`, `type: 'task'`. |
-| **Plan** | **General / Meal / Watch / Event**, with none selected | The matching Plan form sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
-| **Add list** | One of the seven List creation types, with none selected | The ordinary List catalogue, followed by its editable title step. |
+| **Task** | None | Task fields; `Create task` sends `objectKind: 'task'`, `type: 'task'`. |
+| **Plan** | **General / Meal / Watch / Event**, with none selected | The matching Plan fields; `Create plan` sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
+| **Add list** | One of the seven List creation types, with none selected | The ordinary List catalogue, inline. The entered title becomes the list name and is not overwritten by the style's `defaultTitle`. `Create list` writes `POST /v1/lists`. |
 
 List-item creation is deliberately absent from this global chooser. It begins with the
 contextual `+ Add an item` inside an open List, where the destination is already explicit.
@@ -150,9 +156,10 @@ selected. Back returns to the chooser without writing. Closing a non-empty form 
 their entry-point labels. They open the corresponding form directly. The current list or
 parent plan is also explicit in the surrounding screen, so no destination is inferred.
 
-Once object kind — and, for a Plan, Plan kind — is fixed, the form's title field is focused
-and the keyboard is up. Text, Camera, Photos, and Link can then help fill **compatible
-fields on that form only**:
+On global Add the title field is focused immediately; capture still waits until object kind
+— and, for a Plan, Plan kind — is named. Contextual entries focus the title on an already
+chosen form. Text, Camera, Photos, and Link can then help fill **compatible fields on that
+form only**:
 
 | Mode | Input | What happens | Endpoint |
 | --- | --- | --- | --- |
@@ -198,14 +205,18 @@ Rules:
 
 ### 2.5 Named write behaviour
 
-- A non-empty trimmed title enables the final action because object and Plan kind have
-  already been chosen. Every other field remains optional.
+- A non-empty trimmed title enables the final action only after object — and for a Plan,
+  Plan kind, and for a List, style — have been chosen. Every other field remains optional.
+  Category or style selection alone never creates anything.
 - Final buttons name exactly what will be written:
 
   | Selected object | Button | Write |
   | --- | --- | --- |
-  | Task | `Save task` | One `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`. |
-  | Plan | `Save plan` | One `POST /v1/activities` with `objectKind: 'plan'` and the explicitly selected Plan kind's type. |
+  | Task, global Add | `Create task` | One `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`. |
+  | Plan, global Add | `Create plan` | One `POST /v1/activities` with `objectKind: 'plan'` and the explicitly selected Plan kind's type. |
+  | List, global Add | `Create list` | One `POST /v1/lists` with the selected `templateKey` and the entered title. |
+  | Task, contextual | `Save task` | The same Task write, from `+ Add a task` or `+ Add prep task`. |
+  | Plan, contextual | `Save plan` | The same Plan write, from `Plan this item`. |
   | Contextual List item | `Add` in the row whose field is named `Add item to <list name>` | One `POST /v1/lists/:id/items` to the open List. |
 
 - The client always includes the selected `type`. It never omits the field and never relies

@@ -332,9 +332,9 @@ test('9.2 Meal → Groceries: three labelled items, Added on the meal, checking 
   // Step 1–3: Plan → Meal, four ingredients, one left unchecked; the destination is named.
   await page.goto('/plans');
   await testId(page, 'global-add').click();
+  await testId(page, 'compose-title').fill('Chicken tacos');
   await testId(page, 'object-choice-plan').click();
   await page.getByRole('button', { name: /^Meal,/ }).click();
-  await testId(page, 'compose-title').fill('Chicken tacos');
   await page.getByRole('button', { name: 'Today' }).click();
   await setTime(page, passedTimeToday());
   await page.getByRole('button', { name: /^More options/ }).click();
@@ -441,13 +441,13 @@ test('9.3 Trip plan → Packing list: prep tasks, two plan-created lists, and bo
   // Step 1: Plan → Event → New York Trip, tomorrow, Manhattan.
   await page.goto('/plans');
   await testId(page, 'global-add').click();
+  await testId(page, 'compose-title').fill('New York Trip');
   await testId(page, 'object-choice-plan').click();
   await page.getByRole('button', { name: /^Event,/ }).click();
-  await testId(page, 'compose-title').fill('New York Trip');
   await page.getByRole('button', { name: 'Tomorrow' }).click();
   await page.getByRole('button', { name: /^More options/ }).click();
   await testId(page, 'compose-location-label').fill('Manhattan');
-  await page.getByRole('button', { name: 'Save plan' }).click();
+  await page.getByRole('button', { name: 'Create plan' }).click();
   await expect(testId(page, 'compose-form')).toHaveCount(0);
   const tripId = (await allActivityIds(request))[0] as string;
   expect(tripId).toBeDefined();
@@ -641,10 +641,10 @@ test('a Plan with no date: Needs a date and nowhere else, then a Saturday moves 
   });
   await page.goto('/plans');
   await testId(page, 'global-add').click();
+  await testId(page, 'compose-title').fill('Poconos trip');
   await testId(page, 'object-choice-plan').click();
   await page.getByRole('button', { name: /^Event,/ }).click();
-  await testId(page, 'compose-title').fill('Poconos trip');
-  await expect(testId(page, 'compose-save')).toHaveText('Save plan');
+  await expect(testId(page, 'compose-save')).toHaveText('Create plan');
   await testId(page, 'compose-save').click();
   await expect(testId(page, 'compose-form')).toHaveCount(0);
   expect(createBodies).toHaveLength(1);

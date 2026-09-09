@@ -2,6 +2,7 @@ import type { PlanType } from '@od/shared/types';
 import { Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import { ChooserRow } from '@/features/compose/components/ChooserRow';
+import { SelectableChoice } from '@/features/compose/components/SelectableChoice';
 import { planKindChoices } from '@/features/compose/model/targets';
 
 /**
@@ -30,10 +31,21 @@ import { planKindChoices } from '@/features/compose/model/targets';
  */
 export interface PlanKindChooserProps {
   onChoose: (type: PlanType) => void;
+  /**
+   * `select` keeps kinds on the sheet as toggles. `navigate` is the `Plan this item`
+   * step, which still leaves this screen on tap.
+   */
+  variant?: 'navigate' | 'select';
+  selected?: PlanType;
 }
 
-export function PlanKindChooser({ onChoose }: PlanKindChooserProps) {
+export function PlanKindChooser({
+  onChoose,
+  variant = 'navigate',
+  selected,
+}: PlanKindChooserProps) {
   const theme = useTheme();
+  const inline = variant === 'select';
 
   return (
     <View testID="plan-kind-chooser" style={{ gap: theme.space[5] }}>
@@ -41,16 +53,27 @@ export function PlanKindChooser({ onChoose }: PlanKindChooserProps) {
         What kind of plan?
       </Text>
 
-      <View>
-        {planKindChoices.map((choice) => (
-          <ChooserRow
-            key={choice.value}
-            label={choice.label}
-            subtitle={choice.subtitle}
-            onPress={() => onChoose(choice.value)}
-            testID={`plan-kind-${choice.value}`}
-          />
-        ))}
+      <View style={inline ? { gap: theme.space[3] } : undefined}>
+        {planKindChoices.map((choice) =>
+          inline ? (
+            <SelectableChoice
+              key={choice.value}
+              label={choice.label}
+              subtitle={choice.subtitle}
+              selected={selected === choice.value}
+              onPress={() => onChoose(choice.value)}
+              testID={`plan-kind-${choice.value}`}
+            />
+          ) : (
+            <ChooserRow
+              key={choice.value}
+              label={choice.label}
+              subtitle={choice.subtitle}
+              onPress={() => onChoose(choice.value)}
+              testID={`plan-kind-${choice.value}`}
+            />
+          ),
+        )}
       </View>
     </View>
   );

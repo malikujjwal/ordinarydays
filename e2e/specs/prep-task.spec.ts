@@ -81,11 +81,10 @@ test('the same words through global Add stay a standalone custom Plan', async ({
 
   await testId(page, 'global-add').click();
   await expect(testId(page, 'object-chooser')).toBeVisible();
+  await testId(page, 'compose-title').fill(`Book hotel ${stamp}`);
   await testId(page, 'object-choice-plan').click();
   await page.getByRole('button', { name: /^General,/ }).click();
-
-  await testId(page, 'compose-title').fill(`Book hotel ${stamp}`);
-  await expect(testId(page, 'compose-save')).toHaveText('Save plan');
+  await expect(testId(page, 'compose-save')).toHaveText('Create plan');
   await testId(page, 'compose-save').click();
   await expect(testId(page, 'plans-screen')).toBeVisible();
 

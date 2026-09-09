@@ -82,11 +82,11 @@ test('global Add creates a List and contextual Add creates its List item', async
 
   // ---- Route one: global `+` → `Add list` ---------------------------------------
   await testId(page, 'global-add').click();
+  await testId(page, 'compose-title').fill(quickList);
   await page.getByRole('button', { name: /^Add list,/ }).click();
 
   // The ordinary catalogue opens unselected; no global List-item destination exists.
   await expect(testId(page, 'list-style-chooser')).toBeVisible();
-  await expect(page.getByLabel(/^List name,/)).toHaveCount(0);
   await expect(testId(page, 'list-destination-chooser')).toHaveCount(0);
   await expect(testId(page, 'compose-form')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^List item,/ })).toHaveCount(0);
@@ -94,8 +94,8 @@ test('global Add creates a List and contextual Add creates its List item', async
   await expectNoSeriousA11yViolations(page, '/compose (Add list catalogue)');
 
   await testId(page, 'list-style-blank').click();
-  await page.getByLabel(/^List name,/).fill(quickList);
-  await testId(page, 'new-list-create').click();
+  await expect(testId(page, 'compose-title')).toHaveValue(quickList);
+  await testId(page, 'compose-save').click();
   await expect(testId(page, 'lists-screen')).toBeVisible();
   await expect(page.getByText(quickList)).toBeVisible();
   expect(await itemTitles(request, groceriesId)).toEqual([]);

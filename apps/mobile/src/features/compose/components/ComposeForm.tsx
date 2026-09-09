@@ -40,6 +40,10 @@ export interface ComposeFormProps {
   titleLabel: string;
   onTitleChange: (title: string) => void;
   onChangeTarget: () => void;
+  /** Global Add already shows the title above the category choices. */
+  hideTitle?: boolean;
+  /** Global Add keeps the category choices visible, so Change is redundant. */
+  hideChange?: boolean;
   errorMessage: string | undefined;
   errorRequestId: string | undefined;
   fieldErrors: Record<string, string>;
@@ -61,6 +65,8 @@ export function ComposeForm({
   titleLabel,
   onTitleChange,
   onChangeTarget,
+  hideTitle = false,
+  hideChange = false,
   errorMessage,
   errorRequestId,
   fieldErrors,
@@ -85,24 +91,28 @@ export function ComposeForm({
         >
           {targetHeading(target)}
         </Text>
-        <Button
-          label="Change"
-          variant="ghost"
-          flush
-          onPress={onChangeTarget}
-          testID="compose-change-target"
-        />
+        {hideChange ? null : (
+          <Button
+            label="Change"
+            variant="ghost"
+            flush
+            onPress={onChangeTarget}
+            testID="compose-change-target"
+          />
+        )}
       </View>
 
-      <Field
-        label={titleLabel}
-        value={fields.title}
-        onChangeText={onTitleChange}
-        required
-        maxLength={MAX_TITLE_LEN}
-        testID="compose-title"
-        {...(fieldErrors.title === undefined ? {} : { error: fieldErrors.title })}
-      />
+      {hideTitle ? null : (
+        <Field
+          label={titleLabel}
+          value={fields.title}
+          onChangeText={onTitleChange}
+          required
+          maxLength={MAX_TITLE_LEN}
+          testID="compose-title"
+          {...(fieldErrors.title === undefined ? {} : { error: fieldErrors.title })}
+        />
+      )}
 
       {/**
        * P1-25's type-specific fields, in `activities.md` §4's order — **including `Notes`**,
@@ -144,7 +154,9 @@ export function ComposeForm({
 }
 
 export interface ComposeSaveBarProps {
-  target: CreationTarget;
+  target?: CreationTarget;
+  /** Overrides `saveLabel(target)` for global Create task / Create plan / Create list. */
+  label?: string;
   /**
    * The destination a List item is bound for, so the button can name it (criterion 33).
    *
@@ -176,6 +188,7 @@ export interface ComposeSaveBarProps {
  */
 export function ComposeSaveBar({
   target,
+  label,
   listName,
   saveEnabled,
   attachments,
@@ -189,7 +202,11 @@ export function ComposeSaveBar({
   return (
     <View style={{ gap: theme.space[3] }}>
       <Button
-        label={bridgeLabel ?? saveLabel(target, listName)}
+        label={
+          bridgeLabel ??
+          label ??
+          (target === undefined ? 'Choose a category' : saveLabel(target, listName))
+        }
         size="lg"
         fullWidth
         onPress={onSave}

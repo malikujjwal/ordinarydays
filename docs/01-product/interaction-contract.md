@@ -152,12 +152,17 @@ Rules for the follow-up itself:
 
 ### 1a.3 Creation intent is selected before assistance
 
-The global `+` always opens **Task / Plan / Add list** in that fixed order, with nothing
-selected. A contextual control fixes intent only by naming it: `+ Add a task`,
-`+ Add an item`, or `+ Add prep task`. Plan then requires **General / Meal / Watch /
-Event**, also fixed and unselected; General is an explicit choice, never a hidden
-fallback. `Add list` opens the ordinary unselected seven-type List catalogue. List items are
-created only from a contextual control inside the List that owns them.
+The global `+` always opens one sheet: a focused title field, then **Task / Plan / Add list**
+in that fixed order, with nothing selected. Typing does not choose a category. Global Add
+requires a non-empty trimmed title before those category choices can be pressed; the chosen
+category then reveals and scrolls to the next controls. A contextual control fixes intent
+only by naming it: `+ Add a task`, `+ Add an item`, or `+ Add prep task`.
+Plan then requires **General / Meal / Watch / Event**, also fixed and unselected; General is
+an explicit choice, never a hidden fallback. `Add list` reveals the ordinary unselected
+seven-type List catalogue on the same sheet; the entered title becomes the list name and is
+not replaced by a style default. List items are created only from a contextual control inside
+the List that owns them. Nothing is written until `Create task`, `Create plan`, `Create list`,
+or the contextual named write.
 
 In an open List, `+ Add an item` opens the List-owned rapid-entry row inline in the same
 scrolling measure, with the header and current content still visible. The current List fixes
@@ -171,7 +176,8 @@ Text, photos, links, and AI are enabled only after those choices. They may sugge
 compatible field values but never object kind, Plan kind, people, sharing, destination,
 reminder/notification state, or the save action. A reminder is set only by its visible
 control or the user's explicitly saved default; words such as `remind me` never change it.
-Final Activity controls name the write: `Save task` or `Save plan`. The rapid List-item row
+Final Activity controls name the write: `Create task` or `Create plan` on global Add, and
+`Save task` or `Save plan` on contextual entries. The rapid List-item row
 names its destination on the field and uses `Add`. Every
 ListItem's `Plan this item` flow additionally requires an
 unselected **Just me / Choose people** choice; membership is never copied to the Plan,

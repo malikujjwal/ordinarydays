@@ -19,10 +19,10 @@ onFlowComplete:
 - tapOn:
     id: global-add
 - tapOn:
-    id: object-choice-task
-- tapOn:
     id: compose-title
 - inputText: ${output.title}
+- tapOn:
+    id: object-choice-task
 - tapOn:
     text: Today
 - hideKeyboard

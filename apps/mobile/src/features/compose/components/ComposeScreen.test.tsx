@@ -17,9 +17,9 @@ const ZONE = 'America/New_York';
 /**
  * The Add flow end to end (P1-24).
  *
- * This is the Vitest half of the flow P1-24 specifies as a Maestro test: open the chooser,
- * assert the exact three labels, choose `Task`, type a title, tap `Save task`, and assert the
- * request carries `{ objectKind: 'task', type: 'task' }`. Maestro runs it on a simulator
+ * This is the Vitest half of the flow P1-24 specifies as a Maestro test: open the sheet,
+ * type a title, choose `Task`, tap `Create task`, and assert the request carries
+ * `{ objectKind: 'task', type: 'task' }`. Maestro runs it on a simulator
  * (P1-29); this runs it on every commit, against the real store, the real model mapping and
  * the real shared client, with only the socket replaced.
  *
@@ -146,13 +146,23 @@ const chooser = (label: string) =>
   screen.getByRole('button', { name: new RegExp(`^${label},`) });
 const tapChoice = (label: string) => fireEvent.click(chooser(label));
 
+/** Global Add's category rows stay disabled until this field has a real title. */
+function typeGlobalTitle(value = 'Call the dentist') {
+  fireEvent.change(screen.getByLabelText('What would you like to add?'), {
+    target: { value },
+  });
+}
+
+function chooseWithTitle(label: string, title = 'Call the dentist') {
+  typeGlobalTitle(title);
+  tapChoice(label);
+}
+
 describe('the first screen', () => {
   it('asks the question and offers exactly Task, Plan, and Add list', () => {
     mount();
 
-    expect(
-      screen.getByRole('heading', { name: 'What would you like to add?' }),
-    ).toBeDefined();
+    expect(screen.getByLabelText('What would you like to add?')).toBeDefined();
     expect(chooser('Task')).toBeDefined();
     expect(chooser('Plan')).toBeDefined();
     expect(chooser('Add list')).toBeDefined();
@@ -160,15 +170,15 @@ describe('the first screen', () => {
   });
 
   it('opens ordinary List creation without entering a global List-item form', () => {
-    const onCreateList = vi.fn();
-    mount(undefined, { onCreateList });
+    mount();
 
-    tapChoice('Add list');
+    chooseWithTitle('Add list');
 
-    expect(onCreateList).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('list-style-chooser')).toBeDefined();
     expect(screen.queryByTestId('list-destination-chooser')).toBeNull();
     expect(useComposeDraft.getState().step).toBe('object');
     expect(useComposeDraft.getState().target).toBeUndefined();
+    expect(useComposeDraft.getState().objectChoice).toBe('list');
   });
 
   /**
@@ -190,17 +200,52 @@ describe('the first screen', () => {
   });
 
   /**
-   * The structural half of `CLAUDE.md` rule 2: there is no writable title field on this
-   * screen, so there is no text for anything to classify before a target exists.
+   * The title is present before a category, but capture is not. Words still cannot choose
+   * the object (`CLAUDE.md` rule 2).
    */
-  it('has no title field before a target is chosen', () => {
+  it('has a title field before a target is chosen, and no capture yet', () => {
     mount();
-    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.getByLabelText('What would you like to add?')).toBeDefined();
+    expect(screen.getByTestId('compose-title')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Photos' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add a link' })).toBeNull();
   });
 
   it('sends no request of any kind before a choice is made', () => {
     mount();
     expect(sent).toHaveLength(0);
+  });
+
+  it('disables Task, Plan, and Add list until the title has a non-empty trimmed value', () => {
+    mount();
+
+    for (const name of ['Task', 'Plan', 'Add list'] as const) {
+      expect(chooser(name).getAttribute('aria-disabled')).toBe('true');
+    }
+
+    typeGlobalTitle('   ');
+    for (const name of ['Task', 'Plan', 'Add list'] as const) {
+      expect(chooser(name).getAttribute('aria-disabled')).toBe('true');
+    }
+    tapChoice('Task');
+    expect(useComposeDraft.getState().objectChoice).toBeUndefined();
+    expect(screen.queryByTestId('compose-form')).toBeNull();
+
+    typeGlobalTitle('Call the dentist');
+    for (const name of ['Task', 'Plan', 'Add list'] as const) {
+      expect(chooser(name).getAttribute('aria-disabled')).toBeNull();
+    }
+  });
+
+  it.each([
+    ['Task', 'compose-form'],
+    ['Plan', 'plan-kind-chooser'],
+    ['Add list', 'list-style-chooser'],
+  ] as const)('reveals %s next controls after a title and choice', (label, testId) => {
+    mount();
+    expect(screen.queryByTestId(testId)).toBeNull();
+    chooseWithTitle(label);
+    expect(screen.getByTestId(testId)).toBeDefined();
   });
 });
 
@@ -216,7 +261,7 @@ describe('nothing is ever pre-selected', () => {
     (name) => {
       mount();
       const row = chooser(name);
-      expect(row.getAttribute('aria-pressed')).toBeNull();
+      expect(row.getAttribute('aria-pressed')).toBe('false');
       expect(row.getAttribute('aria-selected')).toBeNull();
       expect(row.getAttribute('aria-checked')).toBeNull();
     },
@@ -226,9 +271,9 @@ describe('nothing is ever pre-selected', () => {
     'the Plan-kind chooser opens %s unselected',
     (name) => {
       mount();
-      tapChoice('Plan');
+      chooseWithTitle('Plan');
       const row = chooser(name);
-      expect(row.getAttribute('aria-pressed')).toBeNull();
+      expect(row.getAttribute('aria-pressed')).toBe('false');
       expect(row.getAttribute('aria-selected')).toBeNull();
       expect(row.getAttribute('aria-checked')).toBeNull();
     },
@@ -237,7 +282,7 @@ describe('nothing is ever pre-selected', () => {
   it('leaves the draft with no target until a row is tapped', () => {
     mount();
     expect(useComposeDraft.getState().target).toBeUndefined();
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
     expect(useComposeDraft.getState().target).toBeUndefined();
     tapChoice('General');
     expect(useComposeDraft.getState().target).toEqual({
@@ -253,7 +298,7 @@ describe('nothing is ever pre-selected', () => {
    */
   it('reveals Time and Reminder empty when a date makes them relevant', () => {
     mount();
-    tapChoice('Task');
+    chooseWithTitle('Task');
     tap('Today');
 
     expect(useComposeDraft.getState().schedule.time).toBeUndefined();
@@ -270,35 +315,36 @@ describe('nothing is ever pre-selected', () => {
  * and where.
  */
 describe('the pinned named write', () => {
-  it('reads Save task for a Task', () => {
+  it('reads Create task for a Task', () => {
     mount();
-    tapChoice('Task');
-    expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
+    chooseWithTitle('Task');
+    expect(screen.getByRole('button', { name: 'Create task' })).toBeDefined();
   });
 
   it.each(['General', 'Meal', 'Watch', 'Event'])(
-    'reads Save plan for a %s Plan',
+    'reads Create plan for a %s Plan',
     (kind) => {
       mount();
-      tapChoice('Plan');
+      chooseWithTitle('Plan');
       tapChoice(kind);
-      expect(screen.getByRole('button', { name: 'Save plan' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Create plan' })).toBeDefined();
     },
   );
 
   it('does not render a global List-item commit', () => {
-    mount(undefined, { onCreateList: vi.fn() });
-    tapChoice('Add list');
+    mount();
+    chooseWithTitle('Add list');
     expect(screen.queryByRole('button', { name: 'Choose a list' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Add to / })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create list' })).toBeDefined();
   });
 
   /** Pinned, so it is reachable without scrolling the form it commits. */
   it('sits in the screen shell footer, outside the scrolling form', () => {
     mount();
-    tapChoice('Task');
+    chooseWithTitle('Task');
 
-    const save = screen.getByRole('button', { name: 'Save task' });
+    const save = screen.getByRole('button', { name: 'Create task' });
     expect(screen.getByTestId('compose-form').contains(save)).toBe(false);
   });
 });
@@ -334,15 +380,15 @@ describe("Today's contextual Task entry", () => {
 describe('Task', () => {
   it('opens the form with the target named in the header', () => {
     mount();
-    tapChoice('Task');
-    expect(screen.getByText('Task')).toBeDefined();
+    chooseWithTitle('Task');
+    expect(screen.getByTestId('compose-target-heading').textContent).toBe('Task');
     expect(screen.getByLabelText('Title')).toBeDefined();
   });
 
   it('names the write on its button', () => {
     mount();
-    tapChoice('Task');
-    expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
+    chooseWithTitle('Task');
+    expect(screen.getByRole('button', { name: 'Create task' })).toBeDefined();
   });
 
   /**
@@ -352,12 +398,12 @@ describe('Task', () => {
    */
   it('enables the write as soon as the title is non-empty after trimming', () => {
     mount();
-    tapChoice('Task');
+    chooseWithTitle('Task');
 
     const disabledState = () =>
-      screen.getByRole('button', { name: 'Save task' }).getAttribute('aria-disabled');
+      screen.getByRole('button', { name: 'Create task' }).getAttribute('aria-disabled');
 
-    expect(disabledState()).toBe('true');
+    expect(disabledState()).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: '   ' } });
     expect(disabledState()).toBe('true');
@@ -373,11 +419,11 @@ describe('Task', () => {
     const onClose = vi.fn();
     mount(onClose);
 
-    tapChoice('Task');
+    chooseWithTitle('Task');
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Call the dentist' },
     });
-    tap('Save task');
+    tap('Create task');
 
     await waitFor(() => expect(sent).toHaveLength(1));
 
@@ -393,11 +439,11 @@ describe('Task', () => {
 
   it('names where it landed in the toast, after the form dismisses', async () => {
     mount();
-    tapChoice('Task');
+    chooseWithTitle('Task');
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Call the dentist' },
     });
-    tap('Save task');
+    tap('Create task');
 
     await waitFor(() =>
       expect(useToast.getState().current?.message).toBe('Task · saved to Anytime'),
@@ -408,7 +454,7 @@ describe('Task', () => {
 describe('Plan', () => {
   it('requires a second choice, with nothing selected', () => {
     mount();
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
 
     expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
     for (const label of ['General', 'Meal', 'Watch', 'Event']) {
@@ -417,12 +463,13 @@ describe('Plan', () => {
     // Each kind says what it is for, from §1.1's own "Guides creation of" column.
     expect(screen.getByText('Something to eat or cook')).toBeDefined();
     expect(screen.getByText('A movie, show, or episode')).toBeDefined();
-    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.getByLabelText('What would you like to add?')).toBeDefined();
+    expect(screen.queryByTestId('compose-form')).toBeNull();
   });
 
   it('posts objectKind plan with the chosen kind', async () => {
     mount();
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
     tapChoice('Watch');
 
     expect(screen.getByText('Plan · Watch')).toBeDefined();
@@ -431,7 +478,7 @@ describe('Plan', () => {
     fireEvent.change(screen.getByLabelText('Movie or show'), {
       target: { value: 'Severance' },
     });
-    tap('Save plan');
+    tap('Create plan');
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]?.body).toMatchObject({
@@ -444,7 +491,7 @@ describe('Plan', () => {
 
   it('treats General as an explicit choice that stores custom', async () => {
     mount();
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
     tapChoice('General');
 
     expect(screen.getByText('Plan · General')).toBeDefined();
@@ -452,23 +499,20 @@ describe('Plan', () => {
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Practice guitar' },
     });
-    tap('Save plan');
+    tap('Create plan');
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]?.body).toMatchObject({ objectKind: 'plan', type: 'custom' });
   });
 
-  it('Change returns to the kind chooser and keeps the title', () => {
+  it('keeps the title when switching Plan kind inline', () => {
     mount();
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
     tapChoice('Meal');
     fireEvent.change(screen.getByLabelText('Meal'), {
       target: { value: 'Chicken tacos' },
     });
 
-    tap('Change');
-
-    expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
     tapChoice('Event');
     expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Chicken tacos');
   });
@@ -485,7 +529,7 @@ describe('Plan', () => {
     );
     mount(() => {}, { loadEventDefaults });
 
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
     tapChoice('Event');
     expect(loadEventDefaults).toHaveBeenCalledOnce();
     expect(screen.queryByLabelText('Title')).toBeNull();
@@ -500,7 +544,7 @@ describe('Plan', () => {
     tap('Tickets & details');
     fireEvent.change(screen.getByLabelText('Price'), { target: { value: '18.50' } });
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Concert' } });
-    tap('Save plan');
+    tap('Create plan');
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]?.body).toMatchObject({
@@ -514,52 +558,139 @@ describe('Plan', () => {
       },
     });
   });
+
+  it('does not apply Event defaults after the user has chosen Task', async () => {
+    let resolveDefaults:
+      | ((value: { reservationName: string; currency: string }) => void)
+      | undefined;
+    const loadEventDefaults = vi.fn(
+      () =>
+        new Promise<{ reservationName: string; currency: string }>((resolve) => {
+          resolveDefaults = resolve;
+        }),
+    );
+    mount(() => {}, { loadEventDefaults });
+
+    chooseWithTitle('Plan');
+    tapChoice('Event');
+    tapChoice('Task');
+    expect(useComposeDraft.getState().objectChoice).toBe('task');
+    expect(useComposeDraft.getState().target).toEqual({
+      objectKind: 'task',
+      type: 'task',
+    });
+
+    resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
+    await waitFor(() => expect(loadEventDefaults).toHaveBeenCalledOnce());
+    expect(useComposeDraft.getState().objectChoice).toBe('task');
+    expect(useComposeDraft.getState().target).toEqual({
+      objectKind: 'task',
+      type: 'task',
+    });
+  });
+
+  it('does not apply Event defaults after the user has chosen another Plan kind', async () => {
+    let resolveDefaults:
+      | ((value: { reservationName: string; currency: string }) => void)
+      | undefined;
+    const loadEventDefaults = vi.fn(
+      () =>
+        new Promise<{ reservationName: string; currency: string }>((resolve) => {
+          resolveDefaults = resolve;
+        }),
+    );
+    mount(() => {}, { loadEventDefaults });
+
+    chooseWithTitle('Plan');
+    tapChoice('Event');
+    tapChoice('Meal');
+    expect(useComposeDraft.getState().target).toEqual({
+      objectKind: 'plan',
+      type: 'meal',
+    });
+
+    resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
+    await waitFor(() => expect(loadEventDefaults).toHaveBeenCalledOnce());
+    expect(useComposeDraft.getState().target).toEqual({
+      objectKind: 'plan',
+      type: 'meal',
+    });
+  });
 });
 
 /** List-item creation is contextual; global Add only launches ordinary List creation. */
 describe('Add list', () => {
   it('opens the ordinary List catalogue from the chooser', () => {
-    const onCreateList = vi.fn();
-    mount(() => {}, { onCreateList });
-    tapChoice('Add list');
-    expect(onCreateList).toHaveBeenCalledOnce();
+    mount();
+    chooseWithTitle('Add list');
+    expect(screen.getByTestId('list-style-chooser')).toBeDefined();
+    expect(screen.getByTestId('list-style-blank')).toBeDefined();
   });
 
   it('never renders the removed global List-item form', () => {
-    mount(() => {}, { onCreateList: vi.fn() });
-    tapChoice('Add list');
+    mount();
+    chooseWithTitle('Add list');
     expect(screen.queryByTestId('list-destination-chooser')).toBeNull();
-    expect(screen.queryByLabelText('Title')).toBeNull();
     expect(screen.queryByLabelText('Note')).toBeNull();
+    expect(screen.queryByTestId('compose-form')).toBeNull();
   });
 
   it('leaves the Activity draft without a target', () => {
-    mount(() => {}, { onCreateList: vi.fn() });
-    tapChoice('Add list');
+    mount();
+    chooseWithTitle('Add list');
     expect(useComposeDraft.getState().step).toBe('object');
     expect(useComposeDraft.getState().target).toBeUndefined();
   });
 
   it('sends no Activity or List-item request', () => {
-    mount(() => {}, { onCreateList: vi.fn() });
-    tapChoice('Add list');
+    mount();
+    chooseWithTitle('Add list');
     expect(sent).toHaveLength(0);
   });
 
   it('does not expose capture controls before the List catalogue', () => {
-    mount(() => {}, { onCreateList: vi.fn() });
-    tapChoice('Add list');
+    mount();
+    chooseWithTitle('Add list');
     expect(screen.queryByRole('button', { name: 'Photos' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add a link' })).toBeNull();
   });
 
-  it('keeps the chooser visible behind the catalogue callback', () => {
-    mount(() => {}, { onCreateList: vi.fn() });
-    tapChoice('Add list');
-    expect(
-      screen.getByRole('heading', { name: 'What would you like to add?' }),
-    ).toBeDefined();
+  it('keeps the title and chooser visible with the catalogue', () => {
+    mount();
+    chooseWithTitle('Add list');
+    expect(screen.getByLabelText('List name')).toBeDefined();
     expect(chooser('Add list')).toBeDefined();
+  });
+
+  it('keeps the typed title when a style is chosen, and does not write the default', async () => {
+    const save = vi.fn(async () => 'lst_01J0000000000000000000000L');
+    mount(undefined, {
+      listWriter: {
+        save,
+        isCreating: false,
+        errorMessage: undefined,
+        errorRequestId: undefined,
+      },
+    });
+
+    chooseWithTitle('Add list', 'Movies and shows');
+    fireEvent.click(screen.getByTestId('list-style-watch-later'));
+
+    expect(screen.getByLabelText('List name').getAttribute('value')).toBe(
+      'Movies and shows',
+    );
+    tap('Create list');
+
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(save).toHaveBeenCalledWith('watch-later', 'Movies and shows');
+  });
+
+  it('retains the title when switching from Task to List', () => {
+    mount();
+    chooseWithTitle('Task', 'Try Zahav');
+    tapChoice('Add list');
+    expect(screen.getByLabelText('List name').getAttribute('value')).toBe('Try Zahav');
+    expect(useComposeDraft.getState().target).toBeUndefined();
   });
 });
 
@@ -567,8 +698,7 @@ describe('closing', () => {
   it('closes straight away when nothing has been typed', () => {
     const onClose = vi.fn();
     mount(onClose);
-    tapChoice('Task');
-    // The form's close control, not the chooser's Cancel.
+    // Category rows are disabled without a title; closing an empty sheet just closes.
     tap('Close');
     expect(onClose).toHaveBeenCalledOnce();
     expect(screen.queryByRole('heading', { name: 'Discard this?' })).toBeNull();
@@ -577,7 +707,7 @@ describe('closing', () => {
   it('asks Discard this? when there is content, and Keep editing returns to the draft', () => {
     const onClose = vi.fn();
     mount(onClose);
-    tapChoice('Task');
+    chooseWithTitle('Task');
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Something' } });
 
     tap('Close');
@@ -592,7 +722,7 @@ describe('closing', () => {
   it('Discard clears the draft and closes, writing nothing', () => {
     const onClose = vi.fn();
     mount(onClose);
-    tapChoice('Task');
+    chooseWithTitle('Task');
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Something' } });
 
     tap('Close');
@@ -621,9 +751,9 @@ describe('a failed save', () => {
     });
     mount(onClose);
 
-    tapChoice('Task');
+    chooseWithTitle('Task');
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'x' } });
-    tap('Save task');
+    tap('Create task');
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeDefined());
 
@@ -680,14 +810,12 @@ describe('the prep-task contextual entry', () => {
     // Backing out abandons the labelled context; what follows is an ordinary global add,
     // and no path through the chooser may carry the prep relationship silently.
     tap('Change');
-    expect(
-      screen.getByRole('heading', { name: 'What would you like to add?' }),
-    ).toBeDefined();
-    tapChoice('Task');
+    expect(screen.getByLabelText('What would you like to add?')).toBeDefined();
+    chooseWithTitle('Task');
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Book hotel' },
     });
-    tap('Save task');
+    tap('Create task');
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const request = sent.find((call) => call.url.includes('/v1/activities'));
@@ -699,12 +827,12 @@ describe('the prep-task contextual entry', () => {
     const onClose = vi.fn();
     mount(onClose);
 
-    tapChoice('Plan');
+    chooseWithTitle('Plan');
     tapChoice('General');
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Book hotel' },
     });
-    tap('Save plan');
+    tap('Create plan');
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const request = sent.find((call) => call.url.includes('/v1/activities'));

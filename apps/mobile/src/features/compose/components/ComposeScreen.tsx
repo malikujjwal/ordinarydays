@@ -1,18 +1,22 @@
-import { Button, Close, IconButton, ScreenShell, useTheme } from '@od/ui';
-import { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import type { CreationTarget } from '@od/shared/client';
+import { MAX_TITLE_LEN } from '@od/shared/constants';
+import { Button, Close, Field, IconButton, ScreenShell, Text, useTheme } from '@od/ui';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type ScrollView, View } from 'react-native';
 import { AudienceChooser } from '@/features/compose/components/AudienceChooser';
 import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
 import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
+import { ListStyleChooser } from '@/features/compose/components/ListStyleChooser';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
+import { scrollRevealedSectionIntoView } from '@/features/compose/components/scrollRevealedSection';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
 import { useListBridge } from '@/features/compose/hooks/useListBridge';
 import { useScheduleListItem } from '@/features/compose/hooks/useScheduleListItem';
 import { titleLabel } from '@/features/compose/model/fields';
 import type { ObjectChoice } from '@/features/compose/model/targets';
-import { canSave, successToast } from '@/features/compose/model/targets';
+import { createLabel, successToast } from '@/features/compose/model/targets';
 import { useAttachmentUpload } from '@/hooks/useAttachmentUpload';
 import { useDestination } from '@/hooks/useDestination';
 import {
@@ -29,8 +33,9 @@ import { useToast } from '@/stores/toast';
 /**
  * The modal Add flow, end to end (P1-24).
  *
- * `object` → (`planKind`) → `form`. `Add list` leaves the Activity composer and opens the
- * ordinary unselected List catalogue; List items are created only from their owning List.
+ * Global Add is one sheet: title, then Task / Plan / Add list, then the relevant controls
+ * inline. Contextual entries still skip the chooser. List items are created only from their
+ * owning List.
  *
  * Nothing is written to the server before the named write button. `onSave` is the only call
  * site of the mutation in this feature.
@@ -49,8 +54,13 @@ export interface ComposeScreenProps {
   timezone: string;
   /** Resolves the profile-backed defaults only when the user chooses Event. */
   loadEventDefaults?: () => Promise<EventDraftDefaults | undefined>;
-  /** Opens the ordinary unselected List catalogue. */
-  onCreateList?: () => void;
+  /** Global Add's List write, supplied by the route so this feature does not import lists. */
+  listWriter?: {
+    save: (templateKey: string, title: string) => Promise<string | undefined>;
+    isCreating: boolean;
+    errorMessage: string | undefined;
+    errorRequestId: string | undefined;
+  };
   /** P3-43: opens the route-composed destination picker for one of the form's slots. */
   onChooseDestination?: (slot: 'groceries' | 'watch') => void;
 }
@@ -60,7 +70,7 @@ export function ComposeScreen({
   today,
   timezone,
   loadEventDefaults,
-  onCreateList,
+  listWriter,
   onChooseDestination,
 }: ComposeScreenProps) {
   const theme = useTheme();
@@ -69,18 +79,21 @@ export function ComposeScreen({
   const create = useCreateActivity();
   const bridge = useScheduleListItem();
   const [discardOpen, setDiscardOpen] = useState(false);
+  const bodyScrollRef = useRef<ScrollView>(null);
+  const revealedSectionRef = useRef<View>(null);
+  /** Invalidates an in-flight Event-default load when the user names a later intent. */
+  const intentGeneration = useRef(0);
   /** The `Plan this item` flow saves through the bridge endpoint; everything else creates. */
   const writer = draft.bridge === undefined ? create : bridge;
 
   function chooseObject(choice: ObjectChoice) {
-    if (choice === 'list') {
-      onCreateList?.();
-      return;
-    }
+    intentGeneration.current += 1;
     draft.chooseObject(choice);
   }
 
   function choosePlanKind(type: Parameters<typeof draft.choosePlanKind>[0]) {
+    intentGeneration.current += 1;
+    const generation = intentGeneration.current;
     if (type !== 'event' || loadEventDefaults === undefined) {
       draft.choosePlanKind(type);
       return;
@@ -89,8 +102,14 @@ export function ComposeScreen({
     // The route starts `/me` eagerly. Awaiting it here closes the cold-cache race without
     // copying query data into draft state from an effect after the form is already visible.
     void loadEventDefaults()
-      .then((defaults) => draft.choosePlanKind(type, defaults))
-      .catch(() => draft.choosePlanKind(type));
+      .then((defaults) => {
+        if (generation !== intentGeneration.current) return;
+        draft.choosePlanKind(type, defaults);
+      })
+      .catch(() => {
+        if (generation !== intentGeneration.current) return;
+        draft.choosePlanKind(type);
+      });
   }
 
   /** Closing with content asks first; closing an empty draft just closes (§2.2). */
@@ -120,6 +139,12 @@ export function ComposeScreen({
       failed: attachmentsFailed,
     });
   }, [setAttachments, attachments.attachmentIds, attachments.busy, attachmentsFailed]);
+  useEffect(
+    () => () => {
+      intentGeneration.current += 1;
+    },
+    [],
+  );
 
   /**
    * The list bridges (P3-43): the Meal's ingredient destination and the Watch form's
@@ -153,7 +178,19 @@ export function ComposeScreen({
       ? { list: watchList.list }
       : undefined;
 
+  async function saveList() {
+    if (draft.listTemplateKey === undefined || listWriter === undefined) return;
+    const listId = await listWriter.save(draft.listTemplateKey, draft.title.trim());
+    if (listId === undefined) return;
+    draft.reset();
+    onClose();
+  }
+
   async function save() {
+    if (draft.objectChoice === 'list') {
+      await saveList();
+      return;
+    }
     if (draft.target === undefined) return;
     const target = draft.target;
     const fields = {
@@ -212,40 +249,69 @@ export function ComposeScreen({
     showToast({ message: successToast(target, draft.schedule, today) });
   }
 
+  const globalInline = !draft.intentLocked;
+  useLayoutEffect(() => {
+    if (!globalInline || draft.objectChoice === undefined) return;
+    const frame = requestAnimationFrame(() => {
+      scrollRevealedSectionIntoView(bodyScrollRef.current, revealedSectionRef.current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [draft.objectChoice, globalInline]);
   // The bridge enters at the kind step, so that step has nowhere back to go (P3-34).
   const showBack =
-    draft.step !== 'object' && !(draft.bridge !== undefined && draft.step === 'planKind');
+    !globalInline &&
+    draft.step !== 'object' &&
+    !(draft.bridge !== undefined && draft.step === 'planKind');
   /** Every step with a fixed target to write, and so the steps that have a footer. */
   const activityForm =
-    draft.step === 'form' &&
+    draft.objectChoice !== 'list' &&
     draft.target !== undefined &&
-    draft.target.objectKind !== 'listItem';
-  const writeEnabled = canSave({ title: draft.title, notes: draft.notes });
-  const footer =
-    activityForm && draft.target !== undefined ? (
-      <ComposeSaveBar
-        target={draft.target}
-        saveEnabled={writeEnabled}
-        attachments={{ busy: attachments.busy, failed: attachmentsFailed }}
-        {...(mealBridge === undefined
-          ? watchBridge === undefined
-            ? {}
-            : {
-                bridgeLabel: savePlanAndAddTitleLabel(
-                  draft.title.trim() || 'this',
-                  watchBridge.list.title,
-                ),
-              }
+    draft.target.objectKind !== 'listItem' &&
+    (globalInline || draft.step === 'form');
+  const titleReady = draft.title.trim() !== '';
+  const writeEnabled =
+    draft.objectChoice === undefined
+      ? false
+      : draft.objectChoice === 'list'
+        ? titleReady && draft.listTemplateKey !== undefined
+        : activityForm && titleReady;
+  const writeLabel = globalInline
+    ? draft.objectChoice === undefined
+      ? 'Choose a category'
+      : createLabel(draft.objectChoice)
+    : undefined;
+  const showFooter = globalInline || activityForm;
+  const footer = showFooter ? (
+    <ComposeSaveBar
+      {...(draft.target === undefined || draft.objectChoice === 'list'
+        ? {}
+        : { target: draft.target })}
+      {...(writeLabel === undefined ? {} : { label: writeLabel })}
+      saveEnabled={writeEnabled}
+      attachments={{ busy: attachments.busy, failed: attachmentsFailed }}
+      {...(mealBridge === undefined
+        ? watchBridge === undefined
+          ? {}
           : {
-              bridgeLabel: savePlanAndAddItemsLabel(
-                selectedIngredientIds.length,
-                mealBridge.listTitle,
+              bridgeLabel: savePlanAndAddTitleLabel(
+                draft.title.trim() || 'this',
+                watchBridge.list.title,
               ),
-            })}
-        onSave={() => void save()}
-        isSaving={writer.isSaving}
-      />
-    ) : undefined;
+            }
+        : {
+            bridgeLabel: savePlanAndAddItemsLabel(
+              selectedIngredientIds.length,
+              mealBridge.listTitle,
+            ),
+          })}
+      onSave={() => void save()}
+      isSaving={
+        draft.objectChoice === 'list'
+          ? (listWriter?.isCreating ?? false)
+          : writer.isSaving
+      }
+    />
+  ) : undefined;
 
   const header = (
     <View
@@ -299,75 +365,146 @@ export function ComposeScreen({
       <ScreenShell
         header={header}
         measure="reading"
+        bodyScrollRef={bodyScrollRef}
         {...(footer === undefined ? {} : { footer })}
       >
         <View style={{ gap: theme.space[5] }}>
-          {draft.step === 'object' ? (
-            <ObjectChooser onChoose={chooseObject} />
+          {globalInline ? (
+            <>
+              <Field
+                label={globalTitleLabel(draft)}
+                value={draft.title}
+                onChangeText={draft.setTitle}
+                required
+                autoFocus
+                maxLength={MAX_TITLE_LEN}
+                testID="compose-title"
+                {...(writer.fieldErrors.title === undefined
+                  ? {}
+                  : { error: writer.fieldErrors.title })}
+              />
+              <ObjectChooser
+                selected={draft.objectChoice}
+                onChoose={chooseObject}
+                disabled={!titleReady}
+              />
+              {draft.objectChoice === 'plan' ? (
+                <View ref={revealedSectionRef} collapsable={false}>
+                  <PlanKindChooser
+                    variant="select"
+                    {...(draft.target?.objectKind === 'plan'
+                      ? { selected: draft.target.type }
+                      : {})}
+                    onChoose={choosePlanKind}
+                  />
+                </View>
+              ) : null}
+              {draft.objectChoice === 'list' ? (
+                <View ref={revealedSectionRef} collapsable={false}>
+                  <ListStyleChooser
+                    selectedKey={draft.listTemplateKey}
+                    onChoose={(choice) => draft.chooseListStyle(choice.templateKey)}
+                  />
+                </View>
+              ) : null}
+              {draft.objectChoice === 'list' && listWriter?.errorMessage !== undefined ? (
+                <View
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  testID="compose-error"
+                  style={{
+                    gap: theme.space[2],
+                    padding: theme.space[5],
+                    borderRadius: theme.radius.md,
+                    backgroundColor: theme.colors.surfaceSunken,
+                  }}
+                >
+                  <Text variant="subhead" color="danger">
+                    {listWriter.errorMessage}
+                  </Text>
+                  {listWriter.errorRequestId === undefined ? null : (
+                    <Text variant="footnote" color="textSecondary" selectable>
+                      {listWriter.errorRequestId}
+                    </Text>
+                  )}
+                </View>
+              ) : null}
+            </>
           ) : draft.step === 'planKind' ? (
             <PlanKindChooser onChoose={choosePlanKind} />
           ) : draft.step === 'audience' ? (
             <AudienceChooser onChoose={draft.chooseAudience} />
-          ) : draft.target === undefined ||
-            draft.target.objectKind === 'listItem' ? null : (
-            <ComposeForm
-              target={draft.target}
-              fields={{
-                title: draft.title,
-                notes: draft.notes,
-                ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
-              }}
-              titleLabel={titleLabel(draft.target.type)}
-              typedFields={
-                <TypedFields
-                  type={draft.target.type}
-                  title={draft.title}
-                  schedule={draft.schedule}
-                  location={draft.location}
-                  reminderOffset={draft.reminderOffset}
-                  {...(draft.recurrence === undefined
+          ) : null}
+          {activityForm &&
+          draft.target !== undefined &&
+          draft.target.objectKind !== 'listItem' ? (
+            <View
+              collapsable={false}
+              {...(draft.objectChoice === 'task' ? { ref: revealedSectionRef } : {})}
+            >
+              <ComposeForm
+                target={draft.target}
+                fields={{
+                  title: draft.title,
+                  notes: draft.notes,
+                  ...(draft.sourceUrl === undefined
                     ? {}
-                    : { recurrence: draft.recurrence })}
-                  details={draft.details}
-                  notes={draft.notes}
-                  sourceUrl={draft.sourceUrl}
-                  attachments={attachments}
-                  listBridge={{
-                    groceriesTitle: groceries.list?.title,
-                    groceriesState: groceries.resolution?.kind,
-                    watchTitle: watchList.list?.title,
-                    watchState: watchList.resolution?.kind,
-                    alsoAddToList: draft.alsoAddToList,
-                    onAlsoAddToListChange: draft.setAlsoAddToList,
-                    onChangeDestination: (slot) => onChooseDestination?.(slot),
-                  }}
-                  today={today}
-                  onDateChange={draft.setDate}
-                  onTimeChange={draft.setTime}
-                  onSlotTimeChange={draft.setTimeFromSlot}
-                  onEndTimeChange={draft.setEndTime}
-                  onLocationChange={draft.setLocation}
-                  onReminderChange={draft.setReminderOffset}
-                  onRecurrenceChange={draft.setRecurrence}
-                  onDetailsChange={draft.setDetails}
-                  onNotesChange={draft.setNotes}
-                  onSourceUrlChange={draft.setSourceUrl}
-                  fieldErrors={writer.fieldErrors}
-                />
-              }
-              onTitleChange={draft.setTitle}
-              onChangeTarget={() => {
-                draft.back();
-                // In the bridge flow the chooser that produced the target is the kind step,
-                // two steps back — the audience answer between them is dropped on the way
-                // through, so the user re-answers it after re-choosing (P3-34).
-                if (draft.bridge !== undefined) draft.back();
-              }}
-              errorMessage={writer.errorMessage}
-              errorRequestId={writer.errorRequestId}
-              fieldErrors={writer.fieldErrors}
-            />
-          )}
+                    : { sourceUrl: draft.sourceUrl }),
+                }}
+                titleLabel={titleLabel(draft.target.type)}
+                hideTitle={globalInline}
+                hideChange={globalInline}
+                typedFields={
+                  <TypedFields
+                    type={draft.target.type}
+                    title={draft.title}
+                    schedule={draft.schedule}
+                    location={draft.location}
+                    reminderOffset={draft.reminderOffset}
+                    {...(draft.recurrence === undefined
+                      ? {}
+                      : { recurrence: draft.recurrence })}
+                    details={draft.details}
+                    notes={draft.notes}
+                    sourceUrl={draft.sourceUrl}
+                    attachments={attachments}
+                    listBridge={{
+                      groceriesTitle: groceries.list?.title,
+                      groceriesState: groceries.resolution?.kind,
+                      watchTitle: watchList.list?.title,
+                      watchState: watchList.resolution?.kind,
+                      alsoAddToList: draft.alsoAddToList,
+                      onAlsoAddToListChange: draft.setAlsoAddToList,
+                      onChangeDestination: (slot) => onChooseDestination?.(slot),
+                    }}
+                    today={today}
+                    onDateChange={draft.setDate}
+                    onTimeChange={draft.setTime}
+                    onSlotTimeChange={draft.setTimeFromSlot}
+                    onEndTimeChange={draft.setEndTime}
+                    onLocationChange={draft.setLocation}
+                    onReminderChange={draft.setReminderOffset}
+                    onRecurrenceChange={draft.setRecurrence}
+                    onDetailsChange={draft.setDetails}
+                    onNotesChange={draft.setNotes}
+                    onSourceUrlChange={draft.setSourceUrl}
+                    fieldErrors={writer.fieldErrors}
+                  />
+                }
+                onTitleChange={draft.setTitle}
+                onChangeTarget={() => {
+                  draft.back();
+                  // In the bridge flow the chooser that produced the target is the kind step,
+                  // two steps back — the audience answer between them is dropped on the way
+                  // through, so the user re-answers it after re-choosing (P3-34).
+                  if (draft.bridge !== undefined) draft.back();
+                }}
+                errorMessage={writer.errorMessage}
+                errorRequestId={writer.errorRequestId}
+                fieldErrors={writer.fieldErrors}
+              />
+            </View>
+          ) : null}
         </View>
       </ScreenShell>
 
@@ -382,4 +519,15 @@ export function ComposeScreen({
       />
     </View>
   );
+}
+
+function globalTitleLabel(draft: {
+  objectChoice: ObjectChoice | undefined;
+  target: CreationTarget | undefined;
+}): string {
+  if (draft.objectChoice === 'list') return 'List name';
+  if (draft.target !== undefined && draft.target.objectKind !== 'listItem') {
+    return titleLabel(draft.target.type);
+  }
+  return 'What would you like to add?';
 }

@@ -17,9 +17,8 @@ import { expect, type Page, test } from '@playwright/test';
  *
  * `CLAUDE.md` rule 2, asserted twice and from both directions:
  *
- * 1. After the global `+`, **there is no title field on the page at all** — so there is no
- *    text for anything to classify, and the rule holds by construction rather than by a
- *    classifier being told not to run.
+ * 1. After the global `+`, the title field is present but **does not choose** Task / Plan /
+ *    Add list. Category rows stay disabled until it has a real title, and capture stays off.
  * 2. The title used is `Dinner at Zahav`, which is the docs' own example of a phrase that
  *    reads like an Outing or a Meal. The user taps `Task`, and the detail header says `Task`.
  *
@@ -85,15 +84,15 @@ test('creates a Task from global Add and shows it in the flat activity list', as
 
   await testId(page, 'global-add').click();
 
-  // Assertion 1: the chooser is the first thing, and no title field exists yet.
+  // Assertion 1: the chooser is on the same sheet as the title field, with no category yet.
   await expect(testId(page, 'object-chooser')).toBeVisible();
-  await expect(testId(page, 'compose-title')).toHaveCount(0);
+  await expect(testId(page, 'compose-title')).toBeVisible();
   await expectNoSeriousA11yViolations(page, '/compose (object chooser)');
 
+  await testId(page, 'compose-title').fill(title);
   await testId(page, 'object-choice-task').click();
 
   await expect(testId(page, 'compose-form')).toBeVisible();
-  await testId(page, 'compose-title').fill(title);
 
   /**
    * `Tomorrow`, not `Today`. The row has to land in the `#S` bucket **from today forward** for

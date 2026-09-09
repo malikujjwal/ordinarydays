@@ -1,4 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import type { RefObject } from 'react';
+import type { ScrollView as RNScrollView } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../theme/ThemeProvider';
@@ -101,5 +103,19 @@ describe('ScreenShell keyboard and paginated-scroll ownership', () => {
       </ThemeProvider>,
     );
     expect(getComputedStyle(scrollContent()).paddingBottom).toBe('66px');
+  });
+
+  it('exposes the owned body ScrollView through bodyScrollRef', () => {
+    const bodyScrollRef: RefObject<RNScrollView | null> = { current: null };
+    render(
+      <ThemeProvider scheme="light">
+        <SafeAreaProvider>
+          <ScreenShell testID="shell" bodyScrollRef={bodyScrollRef}>
+            <Text>Focused field</Text>
+          </ScreenShell>
+        </SafeAreaProvider>
+      </ThemeProvider>,
+    );
+    expect(typeof bodyScrollRef.current?.scrollTo).toBe('function');
   });
 });

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_DETAILS, EMPTY_LOCATION, EMPTY_SCHEDULE } from './draft';
 import {
   canSave,
+  createLabel,
   type DraftFields,
   objectChoices,
   planKindChoices,
@@ -116,6 +117,12 @@ describe('the form header', () => {
 describe('the named write button', () => {
   it('says Save task for a Task', () => {
     expect(saveLabel({ objectKind: 'task', type: 'task' })).toBe('Save task');
+  });
+
+  it('names Create task, Create plan and Create list on global Add', () => {
+    expect(createLabel('task')).toBe('Create task');
+    expect(createLabel('plan')).toBe('Create plan');
+    expect(createLabel('list')).toBe('Create list');
   });
 
   it('says Save plan for every Plan kind', () => {
