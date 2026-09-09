@@ -83,6 +83,10 @@ export interface LegacyImportTarget {
   verify(
     transaction: TransactionContext,
     sourceId: string,
+    expected?: {
+      readonly bases: readonly VerifiedLegacyServerBase[];
+      readonly intents: readonly LegacyIntentImport[];
+    },
   ): Promise<LegacyImportVerification>;
   scopesAfterCommit(source: LegacyImportSource): ReadonlySet<RepositoryScope>;
 }
@@ -287,7 +291,10 @@ export class LegacyImporter {
         await this.target.importIntent(transaction, source.sourceId, intent);
       }
 
-      const verification = await this.target.verify(transaction, source.sourceId);
+      const verification = await this.target.verify(transaction, source.sourceId, {
+        bases: verifiedBases,
+        intents,
+      });
       const expectedDependencies = dependencyEdges(intents);
       if (
         !sameRecords(

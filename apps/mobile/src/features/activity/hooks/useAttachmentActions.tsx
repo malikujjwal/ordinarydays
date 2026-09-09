@@ -77,7 +77,13 @@ export function useAttachmentActions(input: {
     const removing = target;
     setBusy(true);
     try {
-      await deleteAttachment(apiClient, activityId, removing.attachmentId);
+      const native = getActiveNativeState();
+      if (native?.sync.deleteAttachment !== undefined) {
+        await native.sync.deleteAttachment(activityId, removing.attachmentId);
+      } else {
+        await deleteAttachment(apiClient, activityId, removing.attachmentId);
+        await queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
+      }
     } catch (error) {
       const failure = describeApiFailure(error, "Couldn't delete that photo.");
       close();
@@ -96,23 +102,7 @@ export function useAttachmentActions(input: {
       setBusy(false);
       return;
     }
-
     close();
-    try {
-      const native = getActiveNativeState();
-      if (native === undefined) {
-        await queryClient.invalidateQueries({ queryKey: activityKey(activityId) });
-      } else {
-        await native.sync.pullActivity({ kind: 'activity', activityId });
-      }
-    } catch (error) {
-      if (__DEV__) {
-        console.info('attachment_delete_reconciliation_failed', {
-          activityId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
     setBusy(false);
   }, [activityId, close, queryClient, target]);
 

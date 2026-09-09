@@ -137,6 +137,10 @@ export class ActivityAgendaLegacyImportTarget implements LegacyImportTarget {
   async verify(
     transaction: TransactionContext,
     sourceId: string,
+    expected?: {
+      readonly bases: readonly VerifiedLegacyServerBase[];
+      readonly intents: readonly LegacyIntentImport[];
+    },
   ): Promise<LegacyImportVerification> {
     const bases = await transaction.database.all(
       'SELECT record_key, server_version FROM legacy_domain_imports WHERE source_id = ?;',
@@ -148,31 +152,117 @@ export class ActivityAgendaLegacyImportTarget implements LegacyImportTarget {
        FROM legacy_intent_imports WHERE source_id = ?;`,
       [sourceId],
     );
+    const expectedBase = new Map(
+      (expected?.bases ?? []).map((base) => [base.recordKey, base]),
+    );
+    const expectedIntent = new Map(
+      (expected?.intents ?? []).map((intent) => [intent.recordKey, intent]),
+    );
+    const verifiedBases = [];
+    for (const row of bases) {
+      const recordKey = textColumn(row, 'record_key') ?? '';
+      const serverVersion = textColumn(row, 'server_version') ?? '';
+      const source = expectedBase.get(recordKey);
+      if (
+        source !== undefined &&
+        !(await this.installedBaseMatches(transaction, source))
+      ) {
+        continue;
+      }
+      verifiedBases.push({ recordKey, serverVersion });
+    }
+    const verifiedIntents = [];
+    for (const row of intents) {
+      const recordKey = textColumn(row, 'record_key') ?? '';
+      const intentId = textColumn(row, 'intent_id') ?? '';
+      const orderingKey = textColumn(row, 'ordering_key') ?? '';
+      const status = textColumn(row, 'imported_status') ?? '';
+      const source = expectedIntent.get(recordKey);
+      if (
+        source !== undefined &&
+        !(await this.installedIntentMatches(transaction, source))
+      ) {
+        continue;
+      }
+      const dependsOnIntentId = textColumn(row, 'depends_on_intent_id');
+      const compensationForIntentId = textColumn(row, 'compensation_for_intent_id');
+      verifiedIntents.push({
+        recordKey,
+        intentId,
+        orderingKey,
+        status,
+        ...(dependsOnIntentId === undefined ? {} : { dependsOnIntentId }),
+        ...(compensationForIntentId === undefined ? {} : { compensationForIntentId }),
+      });
+    }
     return {
-      bases: bases.map((row) => ({
-        recordKey: textColumn(row, 'record_key') ?? '',
-        serverVersion: textColumn(row, 'server_version') ?? '',
-      })),
-      intents: intents.map((row) => {
-        const dependsOnIntentId = textColumn(row, 'depends_on_intent_id');
-        const compensationForIntentId = textColumn(row, 'compensation_for_intent_id');
-        return {
-          recordKey: textColumn(row, 'record_key') ?? '',
-          intentId: textColumn(row, 'intent_id') ?? '',
-          orderingKey: textColumn(row, 'ordering_key') ?? '',
-          status: textColumn(row, 'imported_status') ?? '',
-          ...(dependsOnIntentId === undefined ? {} : { dependsOnIntentId }),
-          ...(compensationForIntentId === undefined ? {} : { compensationForIntentId }),
-        };
-      }),
-      dependencyEdges: intents.flatMap((row) => {
-        const recordKey = textColumn(row, 'record_key');
-        const dependency = textColumn(row, 'depends_on_intent_id');
-        return recordKey === undefined || dependency === undefined
+      bases: verifiedBases,
+      intents: verifiedIntents,
+      dependencyEdges: verifiedIntents.flatMap((intent) =>
+        intent.dependsOnIntentId === undefined
           ? []
-          : [`${recordKey}->${dependency}`];
-      }),
+          : [`${intent.recordKey}->${intent.dependsOnIntentId}`],
+      ),
     };
+  }
+
+  private async installedBaseMatches(
+    transaction: TransactionContext,
+    record: VerifiedLegacyServerBase,
+  ): Promise<boolean> {
+    const value = object(record.value);
+    if (record.domain === 'activity') {
+      const envelope: VerifiedActivityEnvelope = {
+        detail: activityDetail.parse(value.detail) as ActivityDetail,
+      };
+      const row = await transaction.database.first(
+        'SELECT title, type, status, object_kind FROM activities WHERE activity_id = ?;',
+        [envelope.detail.activity.activityId],
+      );
+      return (
+        row !== undefined &&
+        textColumn(row, 'title') === envelope.detail.activity.title &&
+        textColumn(row, 'type') === envelope.detail.activity.type &&
+        textColumn(row, 'status') === envelope.detail.activity.status &&
+        textColumn(row, 'object_kind') === envelope.detail.activity.objectKind
+      );
+    }
+    if (record.domain === 'agenda') {
+      const envelope: VerifiedAgendaEnvelope = {
+        request: agendaQuery.parse(value.request),
+        data: agendaData.parse(value.data) as AgendaData,
+      };
+      const request = envelope.request as {
+        readonly from: string;
+        readonly to: string;
+        readonly tz: string;
+      };
+      const coverage = await transaction.database.first(
+        `SELECT 1 FROM agenda_coverage
+          WHERE from_date = ? AND to_date = ? AND timezone = ?;`,
+        [request.from, request.to, request.tz],
+      );
+      return coverage !== undefined;
+    }
+    return false;
+  }
+
+  private async installedIntentMatches(
+    transaction: TransactionContext,
+    intent: LegacyIntentImport,
+  ): Promise<boolean> {
+    const row = await transaction.database.first(
+      'SELECT intent_id, variables_json FROM outbox_intents WHERE intent_id = ?;',
+      [intent.intentId],
+    );
+    if (row === undefined) return false;
+    const stored = textColumn(row, 'variables_json');
+    if (stored === undefined) return false;
+    try {
+      return JSON.stringify(JSON.parse(stored)) === JSON.stringify(intent.variables);
+    } catch {
+      return false;
+    }
   }
 
   scopesAfterCommit(_source: LegacyImportSource): ReadonlySet<string> {

@@ -1,6 +1,7 @@
 import {
   DynamoDBDocumentClient,
   GetCommand,
+  PutCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
@@ -111,6 +112,7 @@ function seedWithPlan(role: 'owner' | 'member' = 'owner', overrides = {}) {
 beforeEach(async () => {
   ddbMock.reset();
   ddbMock.on(TransactWriteCommand).resolves({});
+  ddbMock.on(PutCommand).resolves({});
   seed();
   vi.resetModules();
   createApp = (await import('../app.js')).createApp;
@@ -219,9 +221,20 @@ describe('PATCH /v1/lists/:id', () => {
     expect((await patch({ sourceActivityId: PLAN, title: 'Packing' })).status).toBe(400);
   });
 
-  it('rejects an empty or no-op update', async () => {
+  it('rejects an empty update', async () => {
     expect((await patch({})).status).toBe(400);
-    expect((await patch({ title: 'Watch later' })).status).toBe(400);
+  });
+
+  it('returns current truth without Undo when the patch changes nothing', async () => {
+    const res = await patch({ title: 'Watch later' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.list).toMatchObject({ title: 'Watch later', listId: LIST });
+    expect(body.data.undoToken).toBeUndefined();
+    expect(body.data.undoExpiresAt).toBeUndefined();
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(PutCommand).length).toBeGreaterThan(0);
   });
 
   it('returns a conflict for a stale If-Match', async () => {

@@ -1,6 +1,7 @@
 import type { HealthData } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
+import { readColdStart } from '../lib/coldStart.js';
 import { config } from '../lib/config.js';
 
 /**
@@ -20,23 +21,13 @@ import { config } from '../lib/config.js';
  * anywhere: a cached health response makes a reload look successful when it was not.
  */
 
-/**
- * Flipped on the first request an execution environment serves.
- *
- * On Lambda this distinguishes a cold start from a warm one. Under `local.ts` it is true
- * only for the first request after a `tsx watch` restart, which is a genuinely useful
- * signal that the server reloaded rather than that your change took effect.
- */
-let coldStart = true;
-
 export const health = new Hono<AppEnv>().get('/', (c) => {
   const data: HealthData = {
     status: 'ok',
     sha: config.GIT_SHA,
     stage: config.STAGE,
-    coldStart,
+    coldStart: readColdStart(),
   };
-  coldStart = false;
 
   // Typed against the shared schema rather than parsed against it: the compiler already
   // guarantees the shape, and this is the hottest, most latency-sensitive path in the

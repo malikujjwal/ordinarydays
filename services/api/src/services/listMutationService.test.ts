@@ -137,6 +137,26 @@ describe('patchListSettings', () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    ['title', { title: 'Watch later' }],
+    ['itemStateMode', { itemStateMode: list().itemStateMode }],
+    [
+      'featureConfig',
+      { featureConfig: { progress: { enabled: true, kind: 'episode' } } },
+    ],
+    ['slot', { slot: null }],
+    ['archived', { archived: false }],
+  ] as const)(
+    'returns current truth without a write or Undo when %s is unchanged',
+    async (_field, input) => {
+      const result = await patchListSettings(USER, LIST_ID, input, NOW, LATER);
+
+      expect(result).toEqual({ list: list() });
+      expect(result.undo).toBeUndefined();
+      expect(repository.patchListMeta).not.toHaveBeenCalled();
+    },
+  );
+
   it('refuses to move a List that is already connected to another Plan', async () => {
     vi.mocked(repository.getListMeta).mockResolvedValue(
       list({ sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4' }),

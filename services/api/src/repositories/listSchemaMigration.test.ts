@@ -109,6 +109,27 @@ describe('migrateListAggregateOnRead', () => {
     expect(migratedItem).not.toHaveProperty('details');
   });
 
+  it('does not restore a Plan backlink that was cleared before finish', async () => {
+    const sourced = {
+      ...legacyMeta,
+      sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X9',
+    };
+    vi.mocked(base.getItem).mockImplementation(async (key: { sk?: string }) => {
+      if (key.sk === 'META') {
+        const { sourceActivityId: _cleared, ...rest } = sourced;
+        return { ...rest, schemaMigrationId: 'schema_v2' };
+      }
+      return undefined;
+    });
+
+    const result = await migration.migrateListAggregateOnRead(LIST_ID, sourced);
+
+    expect(result).not.toHaveProperty('sourceActivityId');
+    const finish = vi.mocked(tx.transactWrite).mock.calls.at(-1)?.[0];
+    const meta = finish?.find((entry) => entry.Put?.Item?.sk === 'META')?.Put?.Item;
+    expect(meta).not.toHaveProperty('sourceActivityId');
+  });
+
   it('resumes from the persisted cursor after an interrupted first attempt', async () => {
     vi.mocked(base.query).mockRejectedValueOnce(new Error('interrupted'));
     await expect(

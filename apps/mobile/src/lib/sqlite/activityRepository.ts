@@ -1350,6 +1350,25 @@ export class ActivityRepository {
     };
   }
 
+  async removeCanonicalAttachment(
+    transaction: TransactionContext,
+    activityId: string,
+    attachmentId: string,
+    coverCleared: boolean,
+  ): Promise<void> {
+    await transaction.database.run(
+      'DELETE FROM activity_attachments WHERE activity_id = ? AND attachment_id = ?;',
+      [activityId, attachmentId],
+    );
+    if (coverCleared) {
+      await transaction.database.run(
+        'UPDATE activities SET primary_attachment_id = NULL WHERE activity_id = ?;',
+        [activityId],
+      );
+    }
+    transaction.changed(this.scope(activityId));
+  }
+
   private async readBoundedDetail(
     activityId: string,
     database: SqliteReader,

@@ -6,6 +6,7 @@ import { useActivityActions } from './useActivityActions.native';
 const mocks = vi.hoisted(() => ({
   state: undefined as unknown,
   uuid: vi.fn(),
+  presentFollowUp: vi.fn(),
 }));
 
 vi.mock('expo-crypto', () => ({ randomUUID: mocks.uuid }));
@@ -15,12 +16,16 @@ vi.mock('@/hooks/useClock', () => ({
 vi.mock('@/lib/sqlite/nativeState', () => ({
   requireActiveNativeState: () => mocks.state,
 }));
+vi.mock('@/hooks/useFollowUp', () => ({
+  useFollowUpActions: () => ({ present: mocks.presentFollowUp }),
+}));
 
 const ACTIVITY = 'act_01J0000000000000000000000A';
 
 beforeEach(() => {
   mocks.uuid.mockReset();
   mocks.uuid.mockReturnValue('undo-intent');
+  mocks.presentFollowUp.mockReset();
   useToast.setState({ current: undefined });
 });
 
@@ -147,4 +152,36 @@ describe('native useActivityActions restoration state', () => {
       );
     },
   );
+
+  it('attaches the server follow-up to the completion Undo toast', async () => {
+    const { emitCompletionFollowUp } = await import('@/lib/completionFollowUp');
+    const complete = vi.fn().mockImplementation(async () => {
+      emitCompletionFollowUp('undo-intent', {
+        followUp: { kind: 'open_prep', count: 1, childIds: ['act_prep'] },
+      });
+      return { kind: 'accepted', status: 'queued', intent: {}, commitRevision: 1 };
+    });
+    mocks.state = {
+      activities: {
+        read: vi.fn().mockResolvedValue({
+          activity: { activityId: ACTIVITY, status: 'saved' },
+        }),
+      },
+      coordinator: { complete },
+    };
+    const projected = vi.fn();
+    const mounted = renderHook(() => useActivityActions(ACTIVITY));
+
+    act(() =>
+      mounted.result.current.resolvePassed('done', { kind: 'activity' }, projected),
+    );
+    await waitFor(() => expect(projected).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(mocks.presentFollowUp).toHaveBeenCalledTimes(1));
+    expect(mocks.presentFollowUp).toHaveBeenCalledWith(
+      { followUp: { kind: 'open_prep', count: 1, childIds: ['act_prep'] } },
+      { activityId: ACTIVITY, activityType: undefined },
+      expect.any(Number),
+    );
+    expect(useToast.getState().current).toMatchObject({ kind: 'undo' });
+  });
 });

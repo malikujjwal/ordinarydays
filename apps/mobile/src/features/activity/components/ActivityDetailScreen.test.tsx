@@ -3728,8 +3728,10 @@ describe('the viewer and the hero (P3-42)', () => {
   });
 
   it('reconciles a deleted photo through the native Activity owner', async () => {
-    const pullActivity = vi.fn().mockResolvedValue(undefined);
-    setActiveNativeState({ sync: { pullActivity } } as unknown as NativeActivityState);
+    const deleteAttachment = vi.fn().mockResolvedValue(undefined);
+    setActiveNativeState({
+      sync: { deleteAttachment },
+    } as unknown as NativeActivityState);
     vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
     vi.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({
       remove: vi.fn(),
@@ -3753,9 +3755,7 @@ describe('the viewer and the hero (P3-42)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete photo' }));
 
-    await waitFor(() =>
-      expect(pullActivity).toHaveBeenCalledWith({ kind: 'activity', activityId: ID }),
-    );
+    await waitFor(() => expect(deleteAttachment).toHaveBeenCalledWith(ID, ATT_A));
   });
 
   it('offers neither action to anyone but the owner, while the viewer still opens', async () => {

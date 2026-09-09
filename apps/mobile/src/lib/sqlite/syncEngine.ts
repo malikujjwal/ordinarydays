@@ -1,6 +1,7 @@
 import {
   ApiError,
   continuePastWindow,
+  deleteAttachment,
   NetworkError,
   type PlansData,
   type PlansRequest,
@@ -30,6 +31,8 @@ import type {
   Occurrence,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
+import { apiClient } from '@/lib/apiClient';
+import { emitCompletionFollowUp } from '@/lib/completionFollowUp';
 import {
   activityUpdateMutationKeys,
   changesRecurrenceTopology,
@@ -46,6 +49,7 @@ import {
 } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
+import { bridgeViewerPair } from '@/lib/sqlite/bridgeViewerPair';
 import type {
   ListItemPageState,
   ListItemRow,
@@ -95,6 +99,8 @@ export interface NativeSyncEngine {
   request(reason: NativeSyncReason): void;
   syncNow(): Promise<void>;
   pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail>;
+  /** Native photo deletion goes through this owner, never a UI HTTP call (ADR-057). */
+  deleteAttachment?(activityId: string, attachmentId: string): Promise<void>;
   pullActivityUpdates?(activityId: string): Promise<ActivityUpdatePage>;
   pullPlans?(request: PlansRequest): Promise<PlansData>;
   pullAgenda(request: AgendaQuery): Promise<AgendaData>;
@@ -453,6 +459,25 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     if (installed === undefined)
       throw new PendingActivityDeletionError(target.activityId);
     return installed;
+  }
+
+  async deleteAttachment(activityId: string, attachmentId: string): Promise<void> {
+    const deleted = await this.serialNetwork((signal) =>
+      deleteAttachment(apiClient, activityId, attachmentId, signal),
+    );
+    await this.transactions.run(async (transaction) => {
+      await this.activities.removeCanonicalAttachment(
+        transaction,
+        activityId,
+        attachmentId,
+        deleted.coverCleared,
+      );
+    });
+    try {
+      await this.pullActivity({ kind: 'activity', activityId });
+    } catch {
+      this.request('accepted-action');
+    }
   }
 
   async pullActivityUpdates(activityId: string): Promise<ActivityUpdatePage> {
@@ -1250,25 +1275,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
            * projection contract's exact three fields, derived from the Plan just installed.
            */
           const link = listItemActivityLink.safeParse(field(response, 'viewerLink'));
-          if (
-            link.success &&
-            pushedPlan.objectKind === 'plan' &&
-            this.listItems !== undefined
-          ) {
+          const pair = link.success ? bridgeViewerPair(link.data, pushedPlan) : undefined;
+          if (pair !== undefined && this.listItems !== undefined) {
             await this.listItems.setViewerPair(
               transaction,
-              link.data.listId,
-              link.data.itemId,
-              {
-                viewerLink: link.data,
-                viewerPlan: {
-                  type: pushedPlan.type,
-                  status: pushedPlan.status,
-                  ...(pushedPlan.schedule === undefined
-                    ? {}
-                    : { schedule: pushedPlan.schedule }),
-                },
-              },
+              pair.viewerLink.listId,
+              pair.viewerLink.itemId,
+              pair,
             );
           }
           await this.outbox.acknowledge(transaction.database, intent.intentId);
@@ -1571,6 +1584,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
         transaction.changed('outbox');
       });
+      if (intent.mutationKey[1] === 'complete') {
+        emitCompletionFollowUp(intent.intentId, response);
+      }
       await this.installSchedulePlans(intent, schedulePlans);
       if (__DEV__) {
         console.info('native_outbox_intent_settled', {

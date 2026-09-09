@@ -219,4 +219,50 @@ describe('P2-62 Activity/Agenda legacy target', () => {
       await database?.first('SELECT clock_witness FROM outbox_meta WHERE singleton = 1;'),
     ).toEqual({ clock_witness: 1_800_000_000_000 });
   });
+
+  it.each([
+    [
+      'a missing installed activity',
+      async (db: NonNullable<typeof database>) => {
+        await db.run('DELETE FROM activities WHERE activity_id = ?;', [ACTIVITY]);
+      },
+    ],
+    [
+      'a corrupted installed activity',
+      async (db: NonNullable<typeof database>) => {
+        await db.run('UPDATE activities SET title = ? WHERE activity_id = ?;', [
+          'Not the imported title',
+          ACTIVITY,
+        ]);
+      },
+    ],
+    [
+      'a missing installed agenda base',
+      async (db: NonNullable<typeof database>) => {
+        await db.run('DELETE FROM agenda_coverage;');
+      },
+    ],
+  ] as const)('refuses to certify %s and writes no receipt', async (_label, sabotage) => {
+    const target = new ActivityAgendaLegacyImportTarget(activities, agenda, outbox);
+    const sabotaged = {
+      importVerifiedBase: target.importVerifiedBase.bind(target),
+      importIntent: target.importIntent.bind(target),
+      scopesAfterCommit: target.scopesAfterCommit.bind(target),
+      verify: async (...args: Parameters<ActivityAgendaLegacyImportTarget['verify']>) => {
+        await sabotage(database as NonNullable<typeof database>);
+        return target.verify(...args);
+      },
+    };
+    const importer = new LegacyImporter(
+      transactions,
+      sabotaged,
+      async () => 'fault-source',
+    );
+
+    await expect(importer.import(source())).rejects.toThrow(
+      'Legacy import read-back verification failed.',
+    );
+    expect(await database?.all('SELECT * FROM legacy_import_receipts;')).toEqual([]);
+    expect(await database?.all('SELECT * FROM activities;')).toEqual([]);
+  });
 });

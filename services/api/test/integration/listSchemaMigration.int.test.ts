@@ -204,4 +204,41 @@ describe('legacy List aggregate migration', () => {
       rankVersion: 8,
     });
   });
+
+  it('does not restore a Plan backlink cleared before the finish transaction', async () => {
+    const listId = repository.newListId();
+    const sourced = {
+      ...legacyList(listId),
+      sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X9',
+    };
+    await seedPointer(listId);
+    await base.putItem({
+      ...keys.listMeta(listId),
+      entity: 'List',
+      schemaVersion: 1,
+      createdAt: NOW,
+      ...legacyList(listId),
+      schemaMigrationId: 'schema_v2',
+    });
+    await base.putItem({
+      ...keys.listSchemaMigration(listId, 'schema_v2'),
+      entity: 'ListSchemaMigration',
+      schemaVersion: 2,
+      createdAt: NOW,
+      updatedAt: NOW,
+      listId,
+      operationId: 'schema_v2',
+      legacyList: sourced,
+      doneCount: 0,
+      complete: true,
+    });
+
+    const list = await readThroughRepository(listId);
+    expect(list).not.toHaveProperty('sourceActivityId');
+    const stored = await base.getItem<Record<string, unknown>>(keys.listMeta(listId), {
+      consistentRead: true,
+    });
+    expect(stored).not.toHaveProperty('sourceActivityId');
+    expect(stored).not.toHaveProperty('schemaMigrationId');
+  });
 });

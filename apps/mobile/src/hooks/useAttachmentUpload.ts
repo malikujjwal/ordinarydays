@@ -12,6 +12,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { decodeBase64 } from '@/lib/base64';
+import {
+  type PendingAttachmentJournal,
+  pendingAttachmentJournal,
+} from '@/lib/pendingAttachmentUploads';
 import { isExpiredUploadUrl, type PickedImage, preCheck } from '@/lib/uploadPolicy';
 import { xhrUploadFetch } from '@/lib/uploadTransport';
 import { useToast } from '@/stores/toast';
@@ -47,9 +51,9 @@ import { useToast } from '@/stores/toast';
  * ## Offline
  *
  * While the device is offline the row shows `Pending` and nothing is sent; the upload starts
- * when connectivity returns (§5.4 "Uploads: queued"). This is an in-memory queue for the
- * life of the screen, not the durable outbox: image bytes are not an intent the SQLite
- * outbox can carry, and ADR-057 froze the native projections. Recorded in the batch state.
+ * when connectivity returns (§5.4 "Uploads: queued"). Bytes stay out of SQLite domain rows
+ * (ADR-057); the pick-queue itself lives in a process journal so a remount keeps the
+ * placeholder and Retry.
  */
 
 export type UploadStatus = 'queued' | 'uploading' | 'confirming' | 'done' | 'failed';
@@ -96,6 +100,7 @@ export interface UploadDeps {
   readonly isOnline: () => boolean;
   readonly subscribeOnline: (listener: (online: boolean) => void) => () => void;
   readonly newKey: () => string;
+  readonly journal: PendingAttachmentJournal<AttachmentUpload>;
 }
 
 const UPLOAD_FAILED = "Couldn't upload that photo.";
@@ -146,6 +151,7 @@ const defaultDeps: UploadDeps = {
   isOnline: () => onlineManager.isOnline(),
   subscribeOnline: (listener) => onlineManager.subscribe(listener),
   newKey: () => randomUUID(),
+  journal: pendingAttachmentJournal as PendingAttachmentJournal<AttachmentUpload>,
 };
 
 export function useAttachmentUpload(
@@ -161,10 +167,12 @@ export function useAttachmentUpload(
     [options.deps],
   );
   const { activityId, onConfirmed } = options;
+  const ownerKey = activityId ?? '_compose';
   const [uploads, setUploads] = useState<readonly AttachmentUpload[]>([]);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const bytesRef = useRef(new Map<string, Uint8Array>());
   const running = useRef(new Set<string>());
+  const hydrated = useRef(false);
   const onConfirmedRef = useRef(onConfirmed);
   onConfirmedRef.current = onConfirmed;
 
@@ -182,7 +190,9 @@ export function useAttachmentUpload(
       const bytes = bytesRef.current.get(localId);
       if (bytes === undefined || running.current.has(localId)) return;
       if (!deps.isOnline()) {
-        patch(localId, { status: 'queued', progress: 0 });
+        const queued = { ...upload, status: 'queued' as const, progress: 0 };
+        patch(localId, queued);
+        deps.journal.save(ownerKey, { upload: queued, bytes });
         return;
       }
       running.current.add(localId);
@@ -242,14 +252,21 @@ export function useAttachmentUpload(
           deps.newKey(),
         );
         patch(localId, { status: 'done', attachment });
+        deps.journal.remove(ownerKey, localId);
         onConfirmedRef.current?.(attachment);
       } catch (error) {
         const failure = describeApiFailure(error, UPLOAD_FAILED);
-        patch(localId, {
+        const failed: AttachmentUpload = {
+          ...upload,
           status: 'failed',
           error: failure.message,
           ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
-        });
+        };
+        patch(localId, failed);
+        const failedBytes = bytesRef.current.get(localId);
+        if (failedBytes !== undefined) {
+          deps.journal.save(ownerKey, { upload: failed, bytes: failedBytes });
+        }
         useToast.getState().show({
           message: failure.message,
           tone: 'error',
@@ -260,7 +277,7 @@ export function useAttachmentUpload(
         running.current.delete(localId);
       }
     },
-    [activityId, deps, patch],
+    [activityId, deps, ownerKey, patch],
   );
 
   const uploadsRef = useRef(uploads);
@@ -275,6 +292,29 @@ export function useAttachmentUpload(
   );
   const retryRef = useRef(retry);
   retryRef.current = retry;
+
+  useEffect(() => {
+    if (hydrated.current) return;
+    hydrated.current = true;
+    const restored = deps.journal.load(ownerKey);
+    if (restored.length === 0) return;
+    const next: AttachmentUpload[] = [];
+    for (const record of restored) {
+      bytesRef.current.set(record.upload.localId, record.bytes);
+      if (record.upload.status === 'done') {
+        deps.journal.remove(ownerKey, record.upload.localId);
+        continue;
+      }
+      const upload =
+        record.upload.status === 'uploading' || record.upload.status === 'confirming'
+          ? { ...record.upload, status: 'failed' as const, error: UPLOAD_FAILED }
+          : record.upload;
+      next.push(upload);
+      deps.journal.save(ownerKey, { upload, bytes: record.bytes });
+    }
+    setUploads(next);
+    uploadsRef.current = next;
+  }, [deps.journal, ownerKey]);
 
   /** Back online: everything that was waiting starts, in pick order. */
   useEffect(
@@ -312,17 +352,22 @@ export function useAttachmentUpload(
         progress: 0,
       };
       bytesRef.current.set(upload.localId, bytes);
+      deps.journal.save(ownerKey, { upload, bytes });
       setUploads((current) => [...current, upload]);
       uploadsRef.current = [...uploadsRef.current, upload];
       void run(upload);
     },
-    [deps, run],
+    [deps, ownerKey, run],
   );
 
-  const remove = useCallback((localId: string) => {
-    bytesRef.current.delete(localId);
-    setUploads((current) => current.filter((upload) => upload.localId !== localId));
-  }, []);
+  const remove = useCallback(
+    (localId: string) => {
+      bytesRef.current.delete(localId);
+      deps.journal.remove(ownerKey, localId);
+      setUploads((current) => current.filter((upload) => upload.localId !== localId));
+    },
+    [deps.journal, ownerKey],
+  );
 
   return useMemo(
     () => ({

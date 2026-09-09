@@ -4,6 +4,7 @@ import type { List, ListFeatureConfig } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { hashUndoToken, mintUndoToken } from '../lib/undoToken.js';
+import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
   getListMeta,
   type ListAccessGrant,
@@ -162,9 +163,11 @@ export async function patchListSettings(
       : {}),
   };
   if (Object.keys(changed).length === 0) {
-    throw new AppError('validation_failed', NOTHING_TO_CHANGE, [
-      { path: 'title', message: NOTHING_TO_CHANGE },
-    ]);
+    const result: ListSettingsResult = { list };
+    if (options.receiptFor !== undefined) {
+      await writeReceiptOnly(options.receiptFor(result));
+    }
+    return result;
   }
 
   const clearsDefault = 'slot' in changed ? profileDefaultToClear(list) : undefined;

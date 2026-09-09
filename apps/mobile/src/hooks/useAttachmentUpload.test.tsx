@@ -1,6 +1,7 @@
 import type { HttpClient } from '@od/shared/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPendingAttachmentJournal } from '@/lib/pendingAttachmentUploads';
 import type { PickedImage } from '@/lib/uploadPolicy';
 import { useToast } from '@/stores/toast';
 import { type UploadDeps, useAttachmentUpload } from './useAttachmentUpload';
@@ -112,6 +113,7 @@ function harness(
       keys += 1;
       return `key-${keys}`;
     },
+    journal: createPendingAttachmentJournal(),
   };
   return { deps, request, uploadFetch, online, issued };
 }
@@ -320,6 +322,33 @@ describe('offline', () => {
     });
     await waitFor(() => expect(result.current.uploads[0]?.status).toBe('done'));
     expect(h.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('remount', () => {
+  it('restores a pending placeholder and Retry after the screen unmounts', async () => {
+    const h = harness({ online: false });
+    const first = renderHook(() =>
+      useAttachmentUpload({ activityId: ACT, deps: h.deps }),
+    );
+    await act(() => first.result.current.pick('library'));
+    expect(first.result.current.uploads[0]?.status).toBe('queued');
+    first.unmount();
+
+    const second = renderHook(() =>
+      useAttachmentUpload({ activityId: ACT, deps: h.deps }),
+    );
+    await waitFor(() => expect(second.result.current.uploads).toHaveLength(1));
+    expect(second.result.current.uploads[0]).toMatchObject({
+      status: 'queued',
+      uri: 'file:///tmp/photo.jpg',
+    });
+
+    h.online.value = true;
+    act(() =>
+      second.result.current.retry(second.result.current.uploads[0]?.localId ?? ''),
+    );
+    await waitFor(() => expect(second.result.current.uploads[0]?.status).toBe('done'));
   });
 });
 

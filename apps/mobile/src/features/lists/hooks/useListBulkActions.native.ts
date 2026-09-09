@@ -97,13 +97,22 @@ export function useListBulkActions(onChanged: () => void): ListBulkActions {
                         inverse.undoId,
                       );
                     } else {
-                      await service.patchItem(transaction, {
-                        listId,
-                        itemId: inverse.itemId,
-                        intentId: inverse.undoId,
-                        idempotencyKey: inverse.undoId,
-                        input: { state: 'done' },
-                      });
+                      try {
+                        await service.patchItem(transaction, {
+                          listId,
+                          itemId: inverse.itemId,
+                          intentId: inverse.undoId,
+                          idempotencyKey: inverse.undoId,
+                          input: { state: 'done' },
+                        });
+                      } catch (error) {
+                        if (
+                          !(error instanceof Error) ||
+                          error.message !== 'The item is no longer available locally.'
+                        ) {
+                          throw error;
+                        }
+                      }
                     }
                   }
                 }, 'interactive')

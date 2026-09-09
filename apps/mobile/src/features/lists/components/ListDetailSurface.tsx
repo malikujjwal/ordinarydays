@@ -1,5 +1,5 @@
 import type { List, ListItemView } from '@od/shared/types';
-import { EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
+import { Button, EmptyState, ScreenShell, Skeleton, Text, useTheme } from '@od/ui';
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 import { View } from 'react-native';
@@ -29,6 +29,11 @@ export interface ListDetailSurfaceProps {
   onOpenPlan?: (activityId: string) => void;
   complete: boolean;
   status: 'pending' | 'success' | 'error';
+  /** Next page is in flight; one skeleton row at the foot, never a blocking overlay. */
+  isLoadingMore?: boolean;
+  /** Cached rows are on screen and a refresh failed; rows stay, recovery is offered. */
+  refreshFailed?: boolean;
+  onDismissRefreshError?: () => void;
   requestId?: string;
   onBack: () => void;
   onOpenMenu: () => void;
@@ -54,6 +59,9 @@ export function ListDetailSurface({
   onOpenPlan,
   complete,
   status,
+  isLoadingMore = false,
+  refreshFailed = false,
+  onDismissRefreshError,
   requestId,
   onBack,
   onOpenMenu,
@@ -124,10 +132,51 @@ export function ListDetailSurface({
     >
       <View style={{ gap: theme.space[3] }}>
         {/*
-         * Connectivity and refresh state live in the header's cloud glyph (founder,
-         * 2026-08-31): inline lines here reflowed the rows every time they appeared. Only
-         * the empty-failure class keeps the body — there is nothing else to show.
+         * In-flight connectivity stays in the header cloud glyph so a refresh spinner does
+         * not reflow rows (founder, 2026-08-31). A failed refresh with cached rows is the
+         * opposite case: `interaction-contract.md` §5.3 requires a dismissible banner and
+         * Try again, and the empty-failure class still owns a zero-item load.
          */}
+        {refreshFailed && items.length > 0 ? (
+          <View
+            testID="list-detail-refresh-error"
+            accessible
+            accessibilityRole="alert"
+            accessibilityLiveRegion="polite"
+            style={{ gap: theme.space[2] }}
+          >
+            <Text variant="subhead" color="textPrimary">
+              Couldn't refresh.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: theme.space[2] }}>
+              <Button
+                label="Try again"
+                variant="secondary"
+                onPress={onRetry}
+                testID="list-detail-refresh-retry"
+              />
+              {onDismissRefreshError === undefined ? null : (
+                <Button
+                  label="Dismiss"
+                  variant="ghost"
+                  onPress={onDismissRefreshError}
+                  testID="list-detail-refresh-dismiss"
+                />
+              )}
+            </View>
+            {requestId === undefined ? null : (
+              <Text
+                variant="footnote"
+                color="textSecondary"
+                selectable
+                testID="list-detail-request-id"
+              >
+                {requestId}
+              </Text>
+            )}
+          </View>
+        ) : null}
+
         {status === 'error' && items.length === 0 ? (
           <View testID="list-detail-error">
             <EmptyState
@@ -209,6 +258,11 @@ export function ListDetailSurface({
         ) : list === undefined || itemCount === 0 || addEditor !== undefined ? null : (
           <ListAddRow listName={list.title} onPress={onAdd} />
         )}
+        {isLoadingMore ? (
+          <View testID="list-detail-loading-more">
+            <Skeleton shape="row" count={1} />
+          </View>
+        ) : null}
       </View>
     </ScreenShell>
   );

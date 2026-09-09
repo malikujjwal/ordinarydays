@@ -254,9 +254,22 @@ async function applyChunk(
   return next;
 }
 
-function canonicalMeta(work: ListSchemaMigrationWork): StoredItem {
+function liveSourceActivityId(current: StoredItem | undefined): string | undefined {
+  return typeof current?.sourceActivityId === 'string'
+    ? current.sourceActivityId
+    : undefined;
+}
+
+function canonicalMeta(work: ListSchemaMigrationWork, current?: StoredItem): StoredItem {
   const converted = migrateLegacyListAggregate({ list: work.legacyList, items: [] });
-  const list: List = { ...converted.list, doneCount: work.doneCount };
+  const { sourceActivityId: snapshotSource, ...convertedList } = converted.list;
+  const sourceActivityId =
+    current === undefined ? snapshotSource : liveSourceActivityId(current);
+  const list: List = {
+    ...convertedList,
+    doneCount: work.doneCount,
+    ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
+  };
   return {
     ...listMeta(work.listId),
     entity: 'List',
@@ -266,7 +279,10 @@ function canonicalMeta(work: ListSchemaMigrationWork): StoredItem {
 }
 
 async function finish(work: ListSchemaMigrationWork): Promise<StoredItem> {
-  const meta = canonicalMeta(work);
+  const current = await getItem<StoredItem>(listMeta(work.listId), {
+    consistentRead: true,
+  });
+  const meta = canonicalMeta(work, current);
   await transactWrite(
     new TransactionBuilder('finishListSchemaMigration')
       .add(

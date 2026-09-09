@@ -1,0 +1,48 @@
+appId: app.ordinarydays.ios.local
+name: Gate AUD-APP-003 native completion follow-up
+jsEngine: graaljs
+tags: [gate, ios, release, follow-up]
+onFlowStart:
+  - runScript:
+      file: setup.js
+      env:
+        FLOW: gate-followup
+onFlowComplete:
+  - runScript: cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- runFlow:
+    when:
+      notVisible:
+        id: agenda-row-body
+        text: ${output.planTitle + ',.*'}
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: agenda-row-body
+            text: ${output.planTitle + ',.*'}
+          direction: DOWN
+          centerElement: true
+- tapOn:
+    id: agenda-row-body
+    text: ${output.planTitle + ',.*'}
+- assertVisible:
+    id: detail-content
+- scrollUntilVisible:
+    element:
+      id: detail-complete
+    direction: DOWN
+    centerElement: true
+- tapOn:
+    id: detail-complete
+- extendedWaitUntil:
+    visible: Outcome recorded
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: follow-up-keep
+    timeout: 15000
+- assertVisible: 1 one-off prep task is still open — keep it?

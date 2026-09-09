@@ -125,6 +125,10 @@ export function ListDetailScreen({
   const [addOpen, setAddOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
   const [pendingBulk, setPendingBulk] = useState<PendingBulkPreview>();
+  const [refreshErrorDismissed, setRefreshErrorDismissed] = useState(false);
+  useEffect(() => {
+    if (view.message === undefined) setRefreshErrorDismissed(false);
+  }, [view.message]);
   const openItem = view.items.find((candidate) => candidate.itemId === openItemId);
   const items = useListItemActions({
     onSaved: view.refresh,
@@ -230,6 +234,11 @@ export function ListDetailScreen({
         {...(onOpenActivity === undefined ? {} : { onOpenPlan: onOpenActivity })}
         complete={view.complete}
         status={view.status}
+        isLoadingMore={view.isLoadingMore}
+        refreshFailed={
+          view.items.length > 0 && view.message !== undefined && !refreshErrorDismissed
+        }
+        onDismissRefreshError={() => setRefreshErrorDismissed(true)}
         {...(view.requestId === undefined ? {} : { requestId: view.requestId })}
         onBack={onBack}
         onOpenMenu={() => setMenuOpen(true)}

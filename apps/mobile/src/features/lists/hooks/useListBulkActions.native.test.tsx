@@ -170,6 +170,36 @@ describe('durable native bulk actions', () => {
     });
   });
 
+  it('undoes surviving uncheck-all rows when another client deleted one item', async () => {
+    nativeStub([row('AA', 'done'), row('BB', 'done')]);
+    const mounted = renderHook(() => useListBulkActions(vi.fn()));
+    await act(async () => {
+      await mounted.result.current.uncheckAll(LIST_ID);
+    });
+
+    service.patchItem.mockImplementation(async (_transaction, variables) => {
+      if (
+        variables.itemId === row('AA', 'done').itemId &&
+        variables.input?.state === 'done'
+      ) {
+        throw new Error('The item is no longer available locally.');
+      }
+      return {};
+    });
+
+    act(() => useToast.getState().undo());
+
+    await waitFor(() => expect(service.patchItem).toHaveBeenCalledTimes(4));
+    expect(service.patchItem).toHaveBeenNthCalledWith(4, TRANSACTION, {
+      listId: LIST_ID,
+      itemId: row('BB', 'done').itemId,
+      intentId: 'id-4',
+      idempotencyKey: 'id-4',
+      input: { state: 'done' },
+    });
+    await waitFor(() => expect(useToast.getState().current).toBeUndefined());
+  });
+
   it('does nothing at all for a list with no checked rows', async () => {
     const built = nativeStub([row('AA', 'open')]);
     const mounted = renderHook(() => useListBulkActions(vi.fn()));

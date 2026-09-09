@@ -336,6 +336,37 @@ describe('the configuration-driven List detail', () => {
     expect(screen.queryByRole('button', { name: 'Add an item' })).toBeNull();
   });
 
+  it('shows one footer skeleton while the next page is loading', () => {
+    setView({
+      complete: false,
+      isLoadingMore: true,
+      itemCount: 80,
+    });
+    mount();
+
+    expect(screen.getByTestId('list-detail-loading-more')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Write tests' })).toBeTruthy();
+    expect(screen.queryByTestId('list-detail-error')).toBeNull();
+  });
+
+  it('keeps cached rows and offers retry when a refresh fails', () => {
+    setView({
+      status: 'success',
+      message: 'Something went wrong.',
+      requestId: 'req_list_refresh_9',
+    });
+    mount();
+
+    expect(screen.getByText("Couldn't refresh.")).toBeTruthy();
+    expect(screen.getByText('req_list_refresh_9')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Write tests' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(mocks.view.refetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText("Couldn't refresh.")).toBeNull();
+    expect(screen.getByRole('button', { name: 'Write tests' })).toBeTruthy();
+  });
+
   it('keeps a failed zero-item load exclusive from the successful empty state', () => {
     setView({
       status: 'error',

@@ -6,7 +6,9 @@ import { type ActivityScope, scopeToWire } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useRef, useState } from 'react';
 import { useClock } from '@/hooks/useClock';
+import { useFollowUpActions } from '@/hooks/useFollowUp';
 import { nextCanonicalId } from '@/lib/canonicalIds';
+import { waitForCompletionFollowUp } from '@/lib/completionFollowUp';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 import {
@@ -18,21 +20,24 @@ import {
 } from '../model/activityActions';
 
 /**
- * Follow-ups (P3-44) are not offered on native yet: the SQLite coordinator acknowledges a
- * completion without the server's response body, which is where the one follow-up lives.
+ * Native completion is accepted locally first; the one follow-up arrives when the serialized
+ * owner acknowledges the server body (P3-44). The Undo toast is already showing, so the
+ * follow-up attaches to that same confirmation rather than replacing it.
  */
 export function useActivityActions(
   activityId: string,
-  _options: ActivityActionsOptions = {},
+  options: ActivityActionsOptions = {},
 ): ActivityActions {
   const state = requireActiveNativeState();
   const clock = useClock();
+  const followUp = useFollowUpActions(options.followUp);
   const [busy, setBusy] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const [error, setError] = useState<string>();
   const lastCompletion = useRef<string | undefined>(undefined);
   const retryRef = useRef<(() => void) | undefined>(undefined);
+  const resolutionToastId = useRef<number | undefined>(undefined);
 
   const fail = useCallback((retry?: () => void, message = ACTION_FAILED) => {
     retryRef.current = retry;
@@ -193,6 +198,15 @@ export function useActivityActions(
       setCompleting(true);
       setError(undefined);
       try {
+        let pendingFollowUp: unknown;
+        const stopWait = waitForCompletionFollowUp(intentId, (carried) => {
+          const toastId = resolutionToastId.current;
+          if (toastId === undefined) {
+            pendingFollowUp = carried;
+            return;
+          }
+          followUp.present(carried, { activityId, activityType: undefined }, toastId);
+        });
         const result = await state.coordinator.complete(
           activityId,
           intentId,
@@ -201,10 +215,13 @@ export function useActivityActions(
           restoredStatus,
           projectionClock(),
         );
-        if (!resultOk(result, retry)) return;
+        if (!resultOk(result, retry)) {
+          stopWait();
+          return;
+        }
         retryRef.current = undefined;
         onProjected(true);
-        useToast.getState().showUndo({
+        const toastId = useToast.getState().showUndo({
           message: OUTCOME_RECORDED,
           onCommit: () => undefined,
           onUndo: () => {
@@ -227,6 +244,14 @@ export function useActivityActions(
             );
           },
         });
+        resolutionToastId.current = toastId;
+        if (pendingFollowUp !== undefined) {
+          followUp.present(
+            pendingFollowUp,
+            { activityId, activityType: undefined },
+            toastId,
+          );
+        }
       } catch {
         fail(retry);
       } finally {
