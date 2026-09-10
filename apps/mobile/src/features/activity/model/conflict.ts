@@ -32,8 +32,8 @@ import type { Activity } from '@od/shared/types';
  * bug this shape exists to prevent.
  */
 
-/** The fields a client may patch from the detail screen in Phase 1. */
-const MERGEABLE_FIELDS = ['title', 'notes'] as const;
+/** The fields a client may patch from the detail screen. */
+const MERGEABLE_FIELDS = ['title', 'notes', 'details', 'sourceUrl'] as const;
 
 type MergeableField = (typeof MERGEABLE_FIELDS)[number];
 
@@ -41,6 +41,8 @@ type MergeableField = (typeof MERGEABLE_FIELDS)[number];
 const FIELD_LABELS: Record<MergeableField, string> = {
   title: 'Title',
   notes: 'Notes',
+  details: 'Details',
+  sourceUrl: 'Link',
 };
 
 export interface ConflictResolution {
@@ -53,7 +55,32 @@ export interface ConflictResolution {
 }
 
 function differs(a: unknown, b: unknown): boolean {
-  return (a ?? undefined) !== (b ?? undefined);
+  return canonicalJson(a) !== canonicalJson(b);
+}
+
+/**
+ * Structural comparison for mergeable fields. `details` is an object: a refetch always
+ * produces a new reference, so `!==` would classify every details edit as theirs and drop
+ * it. Key order is sorted; `null` and `undefined` are the same absence.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(normalize(value)) ?? 'null';
+}
+
+function normalize(value: unknown): unknown {
+  if (value === undefined || value === null) return null;
+  if (Array.isArray(value)) return value.map(normalize);
+  if (typeof value === 'object') {
+    const input = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(input).sort()) {
+      const inner = input[key];
+      if (inner === undefined) continue;
+      out[key] = normalize(inner);
+    }
+    return out;
+  }
+  return value;
 }
 
 export function resolveConflict(

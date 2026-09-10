@@ -1303,10 +1303,11 @@ explicit action-colored `Add notes` or `Edit notes` button. Its inline editor us
 bordered Field with a persistent label. Save/Cancel belong to the keyboard-aware screen
 footer, with wrapping actions for larger text. This supersedes the generic disclosure rule
 below only for Activity notes; other sections, including Related plan, are unchanged.
-The existing `Add to this plan` entry actions — `Prep task`, `List`, and `Photo` —
-remain reachable by ordinary vertical scrolling on compact screens; the notes editor does
-not replace or remove them. Empty capabilities use these named chips, while populated
-sections retain their own Add action. Photo entry remains owner-only, per
+The existing `Add to this plan` entry actions — `Prep task`, `List`, and `Photo`, plus the
+type-fact chips (`Recipe`, `Episode` / `Streaming service`, `Booking`, `Tickets`,
+`Description`, `Link`) — remain reachable by ordinary vertical scrolling on compact screens;
+the notes editor does not replace or remove them. Empty capabilities use these named chips,
+while populated sections retain their own Add action. Photo entry remains owner-only, per
 `plans-and-lists.md` §2.1. Small-screen verification must exercise these entry actions and
 their return paths, not only the notes editor.
 The approved Add controls use an outlined `md` boundary, the existing Plus icon and
@@ -1409,10 +1410,16 @@ hint `Tap to edit`, and is immediately followed by the combined recurrence/remin
 The bottom time-actions block contains `Edit recurrence` when recurrence is available.
 Delete remains only in the `⋯` menu.
 
-**Capability order**, when each is built: Notes, Reminder, People, Preparation, Related lists,
-Expenses, Attachments. A task shows only Notes, Reminder when scheduled, and Related plan and
+**Capability order**, when each is built: Notes, Reminder, People, type-fact sections
+(Recipe / Watching / Description / Reservation / Tickets / Link), Preparation, Related lists,
+Expenses, Attachments. Type-fact sections sit after the settings group and before
+Preparation. **Above the type sections everything is a control (`SettingRow`); inside a type
+section everything is content** — no chevrons, not individually tappable, so a link row still
+opens the link. Editing is section-level: one `Edit` in the `SectionFrame` trailing slot, in
+the action colour, opening one sheet per type (plus a Link sheet that patches `sourceUrl`
+alone). A task shows only Notes, Reminder when scheduled, Related plan, and Link, and
 renders no placeholder for anything it lacks — a Task is not a Plan with things hidden
-(`today-and-tasks.md` §5.6).
+(`today-and-tasks.md` §5.6). Its empty Link is an `Add to this task` chip, Link only.
 
 ---
 

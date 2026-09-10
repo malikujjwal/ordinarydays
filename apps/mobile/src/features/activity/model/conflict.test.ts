@@ -120,6 +120,59 @@ describe('resolveConflict', () => {
     expect(result.ifMatch).toBe('2026-08-08T11:00:00.000Z');
     expect(result.ifMatch).not.toBe(base.updatedAt);
   });
+
+  it('re-applies a details edit after a title-only remote change', () => {
+    const result = resolveConflict(base, fresh({ title: 'Their title' }), {
+      details: { kind: 'event', description: 'Doors at 7.' },
+    });
+
+    expect(result.reapply).toEqual({
+      details: { kind: 'event', description: 'Doors at 7.' },
+    });
+    expect(result.dropped).toEqual([]);
+  });
+
+  it('does not treat a refetched details object as theirs when the contents match', () => {
+    const result = resolveConflict(base, fresh({ details: { kind: 'event' } }), {
+      details: { kind: 'event', description: 'Doors at 7.' },
+    });
+
+    expect(result.dropped).toEqual([]);
+    expect(result.reapply).toEqual({
+      details: { kind: 'event', description: 'Doors at 7.' },
+    });
+  });
+
+  it('drops a details edit after a remote details change, and names it Details', () => {
+    const result = resolveConflict(
+      base,
+      fresh({ details: { kind: 'event', description: 'Theirs' } }),
+      { details: { kind: 'event', description: 'Mine' } },
+    );
+
+    expect(result.reapply).toBeUndefined();
+    expect(result.dropped).toEqual(['Details']);
+  });
+
+  it('re-applies a sourceUrl edit after a title-only remote change', () => {
+    const result = resolveConflict(base, fresh({ title: 'Their title' }), {
+      sourceUrl: 'https://www.example.com',
+    });
+
+    expect(result.reapply).toEqual({ sourceUrl: 'https://www.example.com' });
+    expect(result.dropped).toEqual([]);
+  });
+
+  it('drops a sourceUrl edit after a remote sourceUrl change, and names it Link', () => {
+    const result = resolveConflict(
+      base,
+      fresh({ sourceUrl: 'https://www.theirs.example' }),
+      { sourceUrl: 'https://www.mine.example' },
+    );
+
+    expect(result.reapply).toBeUndefined();
+    expect(result.dropped).toEqual(['Link']);
+  });
 });
 
 describe('the messages', () => {

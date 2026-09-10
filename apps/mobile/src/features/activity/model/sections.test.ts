@@ -5,6 +5,7 @@ import {
   planToTaskBlockers,
   sectionsFor,
   subtitleFor,
+  typeDetailChips,
   typeDetailSectionsFor,
 } from './sections';
 
@@ -465,6 +466,73 @@ describe('typeDetailSectionsFor', () => {
         }),
       ),
     ).toEqual(['watching']);
+  });
+});
+
+describe('typeDetailChips', () => {
+  it('offers Recipe and Link on an empty Meal, and hides Recipe once filled', () => {
+    expect(
+      typeDetailChips(activity({ type: 'meal', details: { kind: 'meal' } })),
+    ).toEqual([
+      { key: 'recipe', label: 'Recipe' },
+      { key: 'link', label: 'Link' },
+    ]);
+    expect(
+      typeDetailChips(
+        activity({
+          type: 'meal',
+          details: {
+            kind: 'meal',
+            recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          },
+        }),
+      ),
+    ).toEqual([{ key: 'link', label: 'Link' }]);
+  });
+
+  it('labels an empty movie Watching chip Streaming service, and a show Episode', () => {
+    expect(
+      typeDetailChips(
+        activity({
+          type: 'watch',
+          details: { kind: 'watch', mediaTitle: 'Past Lives', mediaKind: 'movie' },
+        }),
+      ),
+    ).toEqual([
+      { key: 'watching', label: 'Streaming service' },
+      { key: 'link', label: 'Link' },
+    ]);
+    expect(
+      typeDetailChips(
+        activity({
+          type: 'watch',
+          details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show' },
+        }),
+      ),
+    ).toEqual([
+      { key: 'watching', label: 'Episode' },
+      { key: 'link', label: 'Link' },
+    ]);
+  });
+
+  it('offers only Link on a Task, never Prep or type groups', () => {
+    expect(typeDetailChips(task())).toEqual([{ key: 'link', label: 'Link' }]);
+    expect(
+      typeDetailChips(
+        activity({
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          sourceUrl: 'https://www.thetrainline.com/book',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('offers only Link on a General plan', () => {
+    expect(
+      typeDetailChips(activity({ type: 'custom', details: { kind: 'custom' } })),
+    ).toEqual([{ key: 'link', label: 'Link' }]);
   });
 });
 

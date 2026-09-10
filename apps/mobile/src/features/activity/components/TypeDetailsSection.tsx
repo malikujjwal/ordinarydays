@@ -19,41 +19,77 @@ import type { PendingActivity } from '@/lib/pendingActivity';
 type DisplayActivity = Activity | PendingActivity;
 
 /**
- * Read-only type-fact sections on Activity detail (mock v2 agreeing subset).
+ * Type-fact sections on Activity detail (mock v2 agreeing subset).
  *
  * Topic-named `SectionFrame` content after settings and before PREPARATION. Empty groups
- * omit the section. There is no Edit trailing action and no chip row in this slice.
+ * omit the section and are offered as chips. Filled groups carry section-level Edit in
+ * the trailing slot when the notes editor would also be writable.
  */
-export function TypeDetailsSection({ activity }: { activity: DisplayActivity }) {
+export function TypeDetailsSection({
+  activity,
+  onEditType,
+  onEditLink,
+}: {
+  activity: DisplayActivity;
+  onEditType?: () => void;
+  onEditLink?: () => void;
+}) {
   const keys = typeDetailSectionsFor(activity);
   if (keys.length === 0) return null;
   return (
     <>
       {keys.map((key) => (
-        <TypeDetailGroup activity={activity} sectionKey={key} key={key} />
+        <TypeDetailGroup
+          activity={activity}
+          sectionKey={key}
+          onEditType={onEditType}
+          onEditLink={onEditLink}
+          key={key}
+        />
       ))}
     </>
   );
 }
 
+function trailingEdit(label: string, onPress: (() => void) | undefined) {
+  if (onPress === undefined) return {};
+  return {
+    trailing: 'Edit',
+    trailingAccessibilityLabel: `Edit ${label.toLowerCase()}`,
+    onTrailingPress: onPress,
+  };
+}
+
 function TypeDetailGroup({
   activity,
   sectionKey,
+  onEditType,
+  onEditLink,
 }: {
   activity: DisplayActivity;
   sectionKey: TypeDetailSectionKey;
+  onEditType?: () => void;
+  onEditLink?: () => void;
 }) {
   const { details } = activity;
   switch (sectionKey) {
     case 'recipe':
       return details.kind === 'meal' && details.recipeUrl !== undefined ? (
-        <SectionFrame label="Recipe" testID="section-recipe">
+        <SectionFrame
+          label="Recipe"
+          testID="section-recipe"
+          {...trailingEdit('Recipe', onEditType)}
+        >
           <LinkFact label="Recipe link" url={details.recipeUrl} />
         </SectionFrame>
       ) : null;
     case 'watching':
       return details.kind === 'watch' ? (
-        <SectionFrame label="Watching" testID="section-watching">
+        <SectionFrame
+          label="Watching"
+          testID="section-watching"
+          {...trailingEdit('Watching', onEditType)}
+        >
           <WatchingFacts details={details} />
         </SectionFrame>
       ) : null;
@@ -61,7 +97,11 @@ function TypeDetailGroup({
       const description =
         details.kind === 'event' ? shownFreeText(details.description) : undefined;
       return description === undefined ? null : (
-        <SectionFrame label="Description" testID="section-description">
+        <SectionFrame
+          label="Description"
+          testID="section-description"
+          {...trailingEdit('Description', onEditType)}
+        >
           {activity.visibility === 'shared' ? (
             <Text variant="footnote" color="textSecondary" testID="description-privacy">
               Everyone you invite can read this.
@@ -75,13 +115,21 @@ function TypeDetailGroup({
     }
     case 'reservation':
       return details.kind === 'event' && details.reservation !== undefined ? (
-        <SectionFrame label="Reservation" testID="section-reservation">
+        <SectionFrame
+          label="Reservation"
+          testID="section-reservation"
+          {...trailingEdit('Reservation', onEditType)}
+        >
           <ReservationFacts reservation={details.reservation} />
         </SectionFrame>
       ) : null;
     case 'tickets':
       return details.kind === 'event' ? (
-        <SectionFrame label="Tickets" testID="section-tickets">
+        <SectionFrame
+          label="Tickets"
+          testID="section-tickets"
+          {...trailingEdit('Tickets', onEditType)}
+        >
           {details.priceCents === undefined ? null : (
             <DataFact
               label="Price"
@@ -100,7 +148,11 @@ function TypeDetailGroup({
     case 'link': {
       const url = shownSourceUrl(activity);
       return url === undefined ? null : (
-        <SectionFrame label="Link" testID="section-link">
+        <SectionFrame
+          label="Link"
+          testID="section-link"
+          {...trailingEdit('Link', onEditLink)}
+        >
           <LinkFact label="Opens" url={url} />
         </SectionFrame>
       );

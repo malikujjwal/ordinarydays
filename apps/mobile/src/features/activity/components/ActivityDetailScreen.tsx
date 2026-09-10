@@ -50,6 +50,7 @@ import {
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { TypeDetailsSection } from '@/features/activity/components/TypeDetailsSection';
+import { TypeDetailsSheet } from '@/features/activity/components/TypeDetailsSheet';
 import { UpdatesSection } from '@/features/activity/components/UpdatesSection';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
@@ -84,6 +85,7 @@ import {
   sectionsFor,
   subtitleFor,
   TYPE_DETAIL_SECTION_KEYS,
+  typeDetailChips,
 } from '@/features/activity/model/sections';
 import { useClock } from '@/hooks/useClock';
 import type { FollowUpNavigation } from '@/hooks/useFollowUp';
@@ -1191,6 +1193,9 @@ function Loaded({
   onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
+  const [detailsSheet, setDetailsSheet] = useState<'type' | 'link' | undefined>(
+    undefined,
+  );
   /** The viewer's zone, for stamping update instants onto the viewer's own calendar days. */
   const timezone = resolveViewerTimezone(useQueryClient());
   /**
@@ -1260,7 +1265,9 @@ function Loaded({
     attachmentsWired: onAddAttachment !== undefined,
     updateCount,
   });
-  const chips = addToPlanChips({
+  /** Same gate as the Notes editor: a pending create has no writable actions. */
+  const canEditDetails = !pending;
+  const planChips = addToPlanChips({
     children,
     sourceLists,
     attachmentCount: attachments.length,
@@ -1270,6 +1277,22 @@ function Loaded({
       attachment: addAttachment !== undefined,
     },
   });
+  const chips = [
+    ...(planChips.prepTask && onAddPrepTask !== undefined
+      ? [{ key: 'prepTask', label: 'Prep task', onPress: onAddPrepTask }]
+      : []),
+    ...(planChips.list && onAddList !== undefined
+      ? [{ key: 'list', label: 'List', onPress: () => onAddList(activity.title) }]
+      : []),
+    ...(planChips.attachment && addAttachment !== undefined
+      ? [{ key: 'attachment', label: 'Photo', onPress: addAttachment }]
+      : []),
+    ...(canEditDetails ? typeDetailChips(activity) : []).map((chip) => ({
+      key: chip.key,
+      label: chip.label,
+      onPress: () => setDetailsSheet(chip.key === 'link' ? 'link' : 'type'),
+    })),
+  ];
 
   return (
     <View style={{ gap: theme.space[6] }} testID="detail-content">
@@ -1747,7 +1770,16 @@ function Loaded({
        * Type facts (RECIPE / WATCHING / DESCRIPTION / RESERVATION / TICKETS / LINK) sit
        * after settings and before PREPARATION. Empty groups omit the section.
        */}
-      <TypeDetailsSection activity={activity} />
+      <TypeDetailsSection
+        activity={activity}
+        {...(canEditDetails &&
+        (activity.details.kind === 'meal' ||
+          activity.details.kind === 'watch' ||
+          activity.details.kind === 'event')
+          ? { onEditType: () => setDetailsSheet('type') }
+          : {})}
+        {...(canEditDetails ? { onEditLink: () => setDetailsSheet('link') } : {})}
+      />
 
       {/**
        * The content sections (P3-37, §2.1 amended): each exists only because `sectionsFor`
@@ -1829,16 +1861,21 @@ function Loaded({
               })}
         />
       ) : null}
-      {activity.objectKind === 'plan' && !pending ? (
-        <AddToPlanRow
-          chips={chips}
-          {...(onAddPrepTask === undefined ? {} : { onAddPrepTask })}
-          {...(onAddList === undefined
-            ? {}
-            : { onAddList: () => onAddList(activity.title) })}
-          {...(addAttachment === undefined ? {} : { onAddAttachment: addAttachment })}
-        />
-      ) : null}
+      <AddToPlanRow
+        chips={chips}
+        {...(activity.objectKind === 'task'
+          ? { label: 'Add to this task', objectKind: 'task' as const }
+          : {})}
+      />
+      <TypeDetailsSheet
+        open={detailsSheet !== undefined}
+        mode={detailsSheet ?? 'type'}
+        activity={activity}
+        onClose={() => setDetailsSheet(undefined)}
+        onSave={detail.patch}
+        busy={detail.isSaving}
+        {...(detail.editError === undefined ? {} : { error: detail.editError })}
+      />
       <AttachmentViewer
         open={viewerIndex !== undefined}
         attachments={attachments}

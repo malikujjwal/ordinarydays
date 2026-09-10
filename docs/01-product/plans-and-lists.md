@@ -451,6 +451,11 @@ Sections render in this fixed order and a section with nothing in it collapses t
 > | Notes over two lines | Clamped to two, the accessible name carrying the whole text. |
 > | A capability not yet built | `Coming later`, subordinate, no chevron, no tap (§2.2). |
 >
+> **Amended 2026-09-09.** Type-specific empty groups join `Prep task`, `List`, and `Photo` in
+> the same `Add to this plan` chip row: `Recipe`, `Episode` (or `Streaming service` on a
+> movie), `Booking`, `Tickets`, `Description`, and `Link`. Each opens the type sheet or the
+> Link sheet. A Task's chip row reads `Add to this task` and offers only `Link`.
+>
 > **The completion action stays directly under the schedule line**, keeping §7.5: the screen's
 > hero is the thing you came to do, and ten sections must not push it below the fold.
 >
@@ -539,8 +544,9 @@ inherits the creator's, and the owner cannot set one for anyone else.
 > People, Prep, Lists and Attachments as non-interactive discovery rows ending in
 > `Coming later`; a Meal may also show Ingredients this way until Phase 3 builds its
 > interaction. Those rows have no chevron, disabled action, expansion or tap behaviour.
-> Recipe, Expenses and Updates remain absent until their own product conditions and
-> implementation are available.
+> Expenses and Updates remain absent until their own product conditions and implementation
+> are available. Recipe is stored on a Meal and now renders as a type-fact section, or as a
+> Recipe chip while empty.
 
 > **Amended 2026-08-25 by §2.1.** The table below still governs *whether a capability is
 > available at all*. What changed is the empty case: a section holding nothing no longer

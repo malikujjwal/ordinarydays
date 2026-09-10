@@ -616,7 +616,7 @@ describe('type-specific details', () => {
     expect(screen.queryByText(recipeUrl)).toBeNull();
   });
 
-  it('omits RECIPE when a meal has no recipeUrl', async () => {
+  it('omits RECIPE when a meal has no recipeUrl and offers a Recipe chip instead', async () => {
     stubFetch({
       status: 200,
       body: detailBody(plan({ type: 'meal', details: { kind: 'meal' } })),
@@ -625,7 +625,8 @@ describe('type-specific details', () => {
     await loaded();
 
     expect(screen.queryByTestId('section-recipe')).toBeNull();
-    expect(screen.queryByText('Recipe')).toBeNull();
+    expect(screen.getByTestId('add-to-plan-recipe')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Edit recipe' })).toBeNull();
   });
 
   it('spells Season 2 Episode 4 in WATCHING and keeps the streaming service inert', async () => {
@@ -877,6 +878,137 @@ describe('type-specific details', () => {
     expect(screen.queryByTestId('notes-privacy')).toBeNull();
     expect(screen.queryByText('Everyone you invite can read this.')).toBeNull();
     expect(screen.queryByText('Private to you.')).toBeNull();
+  });
+});
+
+describe('type-details editing', () => {
+  const ingredients = [
+    { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+    {
+      ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+      name: 'Tortillas',
+      quantity: '8',
+    },
+    {
+      ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3',
+      name: 'Salsa',
+      addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1B1',
+    },
+  ];
+
+  it('shows Edit on a filled Meal and hides the Recipe chip', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'meal',
+          details: {
+            kind: 'meal',
+            recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('add-to-plan-recipe')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Edit recipe' })).toBeDefined();
+  });
+
+  it('opens the type sheet from Edit and saves the full details with ingredients retained', async () => {
+    const current = plan({
+      type: 'meal',
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+        ingredients,
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(current) },
+      {
+        status: 200,
+        body: {
+          data: {
+            ...current,
+            details: {
+              kind: 'meal',
+              mealSlot: 'dinner',
+              recipeUrl: 'https://www.example.com/tacos',
+              ingredients: [
+                { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+                {
+                  ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+                  name: 'Tortillas',
+                  quantity: '8',
+                },
+                { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Salsa' },
+              ],
+            },
+            updatedAt: '2026-08-08T11:00:00.000Z',
+          },
+          meta: { requestId: 'req_test' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit recipe' }));
+    await screen.findByTestId('type-details-sheet');
+    fireEvent.change(screen.getByLabelText('Recipe link'), {
+      target: { value: 'https://www.example.com/tacos' },
+    });
+    fireEvent.click(screen.getByTestId('type-details-save'));
+
+    await waitFor(() => expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1));
+    const patch = sent.find((s) => s.method === 'PATCH');
+    expect(patch?.headers['If-Match']).toBe('2026-08-08T10:00:00.000Z');
+    expect(patch?.body).toEqual({
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        recipeUrl: 'https://www.example.com/tacos',
+        ingredients: [
+          { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+          {
+            ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+            name: 'Tortillas',
+            quantity: '8',
+          },
+          { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Salsa' },
+        ],
+      },
+    });
+  });
+
+  it('opens the LINK sheet from the chip and patches sourceUrl only', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(task()) },
+      {
+        status: 200,
+        body: {
+          data: task({ sourceUrl: 'https://www.thetrainline.com/book' }),
+          meta: { requestId: 'req_test' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('add-to-plan-link'));
+    await screen.findByTestId('link-sheet');
+    fireEvent.change(screen.getByTestId('type-details-source-url'), {
+      target: { value: 'https://www.thetrainline.com/book' },
+    });
+    fireEvent.click(screen.getByTestId('link-save'));
+
+    await waitFor(() => expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1));
+    const patch = sent.find((s) => s.method === 'PATCH');
+    expect(patch?.headers['If-Match']).toBe('2026-08-08T10:00:00.000Z');
+    expect(patch?.body).toEqual({ sourceUrl: 'https://www.thetrainline.com/book' });
   });
 });
 
@@ -3505,11 +3637,15 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.queryByText(/unfinished|incomplete/i)).toBeNull();
   });
 
-  it('renders a task with no plan sections and no chip row', async () => {
+  it('renders a task with no plan sections and a Link-only chip row', async () => {
     mountAnatomy({ children: [child(1)] }, task());
     await screen.findByTestId('detail-content');
     expect(screen.queryByTestId('section-prep')).toBeNull();
-    expect(screen.queryByTestId('add-to-plan')).toBeNull();
+    expect(screen.getByText('Add to this task')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
+    expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
+    expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
+    expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
     expect(screen.queryByTestId('section-people')).toBeNull();
   });
 });

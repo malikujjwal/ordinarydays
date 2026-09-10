@@ -10,6 +10,8 @@ import { View } from 'react-native';
 export interface SectionFrameProps {
   label: string;
   trailing?: string;
+  /** Spoken name for a tappable trailing control; defaults to `trailing`. */
+  trailingAccessibilityLabel?: string;
   onTrailingPress?: () => void;
   children: ReactNode;
   testID?: string;
@@ -18,6 +20,7 @@ export interface SectionFrameProps {
 export function SectionFrame({
   label,
   trailing,
+  trailingAccessibilityLabel,
   onTrailingPress,
   children,
   testID,
@@ -44,7 +47,7 @@ export function SectionFrame({
         ) : (
           <Touchable
             accessibilityRole="button"
-            accessibilityLabel={trailing}
+            accessibilityLabel={trailingAccessibilityLabel ?? trailing}
             onPress={onTrailingPress}
             style={{
               minHeight: theme.layout.hitTarget,
@@ -53,7 +56,7 @@ export function SectionFrame({
               maxWidth: '100%',
             }}
           >
-            <Text variant="footnoteStrong" color="textSecondary">
+            <Text variant="footnoteStrong" color="textAction">
               {trailing}
             </Text>
           </Touchable>

@@ -2,50 +2,45 @@ import { Plus, SectionHeader, Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
 
 /**
- * The one `Add to this plan` row of named chips (§2.1 amended): how an empty section is
- * discovered without an empty heading. `People · coming later` renders as its own row above,
- * not here — the pre-build treatment is unchanged. Updates has no chip by design: its
- * visible section always carries its own composer (see `AddToPlanChips`).
+ * The one `Add to this plan` / `Add to this task` row of named chips (§2.1 amended): how an
+ * empty section is discovered without an empty heading. `People · coming later` renders as
+ * its own row above, not here — the pre-build treatment is unchanged. Updates has no chip
+ * by design: its visible section always carries its own composer (see `AddToPlanChips`).
+ *
+ * Type-fact chips (`Recipe`, `Link`, …) sit in the same row. A Task uses this component
+ * with `label="Add to this task"` and only `Link` — never a Task-only primitive.
  */
+export interface AddToPlanChip {
+  readonly key: string;
+  readonly label: string;
+  readonly onPress: () => void;
+}
+
 export interface AddToPlanRowProps {
-  chips: { prepTask: boolean; list: boolean; attachment: boolean };
-  onAddPrepTask?: () => void;
-  onAddList?: () => void;
-  /** `Photo` (P3-41): opens the picker with this plan fixed as the target. */
-  onAddAttachment?: () => void;
+  chips: ReadonlyArray<AddToPlanChip>;
+  /** Default `Add to this plan`. Task detail passes `Add to this task`. */
+  label?: string;
+  /** `plan` or `task` — used in each chip's accessibility name. */
+  objectKind?: 'plan' | 'task';
 }
 
 export function AddToPlanRow({
   chips,
-  onAddPrepTask,
-  onAddList,
-  onAddAttachment,
+  label = 'Add to this plan',
+  objectKind = 'plan',
 }: AddToPlanRowProps) {
   const theme = useTheme();
-  const entries = [
-    chips.prepTask && onAddPrepTask !== undefined
-      ? { label: 'Prep task', onPress: onAddPrepTask }
-      : undefined,
-    chips.list && onAddList !== undefined
-      ? { label: 'List', onPress: onAddList }
-      : undefined,
-    chips.attachment && onAddAttachment !== undefined
-      ? { label: 'Photo', onPress: onAddAttachment }
-      : undefined,
-  ].filter(
-    (entry): entry is { label: string; onPress: () => void } => entry !== undefined,
-  );
-  if (entries.length === 0) return null;
+  if (chips.length === 0) return null;
 
   return (
     <View style={{ gap: theme.space[3] }} testID="add-to-plan">
-      <SectionHeader title="Add to this plan" />
+      <SectionHeader title={label} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[2] }}>
-        {entries.map((entry) => (
+        {chips.map((entry) => (
           <Touchable
-            key={entry.label}
+            key={entry.key}
             accessibilityRole="button"
-            accessibilityLabel={`Add ${entry.label.toLowerCase()} to this plan`}
+            accessibilityLabel={`Add ${entry.label.toLowerCase()} to this ${objectKind}`}
             onPress={entry.onPress}
             testID={`add-to-plan-${entry.label.toLowerCase().replaceAll(' ', '-')}`}
             style={{

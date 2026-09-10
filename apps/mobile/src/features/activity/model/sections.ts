@@ -21,6 +21,20 @@ export const TYPE_DETAIL_SECTION_KEYS = [
 
 export type TypeDetailSectionKey = (typeof TYPE_DETAIL_SECTION_KEYS)[number];
 
+const TYPE_DETAIL_CHIP_LABEL: Record<TypeDetailSectionKey, string> = {
+  recipe: 'Recipe',
+  watching: 'Episode',
+  description: 'Description',
+  reservation: 'Booking',
+  tickets: 'Tickets',
+  link: 'Link',
+};
+
+export interface TypeDetailChip {
+  readonly key: TypeDetailSectionKey;
+  readonly label: string;
+}
+
 const MEAL_SLOT_LABEL = {
   breakfast: 'Breakfast',
   lunch: 'Lunch',
@@ -183,8 +197,8 @@ export function sectionsFor(
 
 /**
  * Type-fact sections that currently hold something, in anatomy order, after settings and
- * before PREPARATION. Empty groups are omitted (chips are a later slice). `shortcutId` is
- * never a section.
+ * before PREPARATION. Empty groups are omitted here and offered as chips by
+ * {@link typeDetailChips}. `shortcutId` is never a section.
  */
 export function typeDetailSectionsFor(activity: DisplayActivity): TypeDetailSectionKey[] {
   const keys: TypeDetailSectionKey[] = [];
@@ -213,6 +227,53 @@ export function typeDetailSectionsFor(activity: DisplayActivity): TypeDetailSect
   }
   if (shownSourceUrl(activity) !== undefined) keys.push('link');
   return keys;
+}
+
+/**
+ * Empty type-fact groups that have a sheet, as chips for the `Add to this plan` row.
+ * A chip exists only when the group is empty **and** a sheet is wired for it: meal, watch
+ * and event get a type sheet; every kind including Task and General can get Link.
+ */
+export function typeDetailChips(activity: DisplayActivity): readonly TypeDetailChip[] {
+  const filled = new Set(typeDetailSectionsFor(activity));
+  const chips: TypeDetailChip[] = [];
+  for (const key of typeDetailChipGroups(activity.details.kind)) {
+    if (filled.has(key)) continue;
+    chips.push({ key, label: typeDetailChipLabel(activity, key) });
+  }
+  return chips;
+}
+
+function typeDetailChipGroups(
+  kind: ActivityDetails['kind'],
+): readonly TypeDetailSectionKey[] {
+  switch (kind) {
+    case 'meal':
+      return ['recipe', 'link'];
+    case 'watch':
+      return ['watching', 'link'];
+    case 'event':
+      return ['description', 'reservation', 'tickets', 'link'];
+    case 'task':
+    case 'custom':
+      return ['link'];
+    default:
+      return assertNever(kind, 'ActivityDetails.kind');
+  }
+}
+
+function typeDetailChipLabel(
+  activity: DisplayActivity,
+  key: TypeDetailSectionKey,
+): string {
+  if (
+    key === 'watching' &&
+    activity.details.kind === 'watch' &&
+    activity.details.mediaKind === 'movie'
+  ) {
+    return 'Streaming service';
+  }
+  return TYPE_DETAIL_CHIP_LABEL[key];
 }
 
 /**

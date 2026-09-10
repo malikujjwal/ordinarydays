@@ -605,9 +605,11 @@ control, and the functional Reminder, Notes and
 standard complete, skip and snooze set (§4, §§5.3–5.4). It has no People, Expenses,
 Updates, or Attachments sections: tasks are solo (§5.1), so the coordination sections do
 not exist for them, and the screen renders no disabled placeholders for anything it lacks.
-If the Task was converted from a Plan, its prior updates remain available through the API as
-read-only conversion history; omitting the Updates section does not delete that user content,
-and the Task accepts no new entries.
+Empty `Link` is discovered through an `Add to this task` chip row that offers **only**
+`Link` — never Prep task, List, or Photo (founder, 2026-09-09). A stored source URL renders
+as the Link section with section-level Edit. If the Task was converted from a Plan, its prior
+updates remain available through the API as read-only conversion history; omitting the Updates
+section does not delete that user content, and the Task accepts no new entries.
 Each functional capability is a single disclosure row with a trailing chevron and accessible
 expanded state; opening it shows either its current content or the real add controls.
 
