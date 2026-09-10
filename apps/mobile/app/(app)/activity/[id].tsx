@@ -1,8 +1,8 @@
 import type { ActivityDetailTarget } from '@od/shared/types';
-import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { usePreventRemove } from 'expo-router/react-navigation';
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';

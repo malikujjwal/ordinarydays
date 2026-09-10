@@ -21,7 +21,7 @@
     "jsdom": "30.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-native": "0.85.3",
+    "react-native": "0.86.3",
     "react-native-safe-area-context": "5.7.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "0.21.2",
@@ -30,7 +30,7 @@
   "peerDependencies": {
     "@react-native-community/datetimepicker": "9.1.0",
     "react": "19.2.3",
-    "react-native": "0.85.3",
+    "react-native": "0.86.3",
     "react-native-safe-area-context": "5.7.0"
   }
 }

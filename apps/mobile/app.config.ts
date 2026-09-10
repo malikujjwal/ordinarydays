@@ -45,15 +45,13 @@ const MEDIA: Record<Profile, string> = {
   prod: 'https://media.ordinarydays.app',
 };
 
-// SDK 55's ExpoConfig type dropped this key; keep the runtime flag through hops 55/56.
-const config: ExpoConfig & { newArchEnabled: true } = {
+const config: ExpoConfig = {
   name: PROFILE === 'prod' ? 'Ordinary Days' : `Ordinary Days (${PROFILE})`,
   slug: 'ordinarydays',
   scheme: PROFILE === 'prod' ? 'ordinarydays' : `ordinarydays-${PROFILE}`,
   version: '0.1.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
-  newArchEnabled: true,
   ios: {
     bundleIdentifier:
       PROFILE === 'prod' ? 'app.ordinarydays.ios' : `app.ordinarydays.ios.${PROFILE}`,
