@@ -3169,6 +3169,102 @@ describe('removing the time', () => {
   });
 });
 
+describe('named parent and source list', () => {
+  const PARENT = {
+    activityId: 'act_01J0000000000000000000000P',
+    title: 'Sunday roast',
+  };
+  const FROM = {
+    listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD',
+    title: 'Weekly shop',
+  };
+
+  function mountNamed(extras: Partial<ActivityDetail> = {}, activity: Activity = task()) {
+    stubFetch({
+      status: 200,
+      body: detailBody(activity, [], undefined, undefined, undefined, extras),
+    });
+    const onOpenActivity = vi.fn();
+    const onOpenList = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    registerActivityMutationDefaults(queryClient);
+    render(
+      <SafeAreaProvider>
+        <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+          <ThemeProvider scheme="light">
+            <QueryClientProvider client={queryClient}>
+              <ActivityDetailScreen
+                target={{ kind: 'activity', activityId: ID }}
+                today={TODAY}
+                onBack={() => {}}
+                onOpenActivity={onOpenActivity}
+                onOpenList={onOpenList}
+              />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
+      </SafeAreaProvider>,
+    );
+    return { onOpenActivity, onOpenList };
+  }
+
+  it('names Related plan and navigates when the envelope has parent', async () => {
+    const { onOpenActivity } = mountNamed(
+      { parent: PARENT },
+      task({ parentActivityId: PARENT.activityId }),
+    );
+    await loaded();
+
+    expect(screen.queryByText('Part of a plan')).toBeNull();
+    expect(screen.getByText('Sunday roast')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /^Related plan/ }));
+    expect(onOpenActivity).toHaveBeenCalledExactlyOnceWith(PARENT.activityId);
+  });
+
+  it('keeps the boolean Related plan row when parent is absent', async () => {
+    const { onOpenActivity } = mountNamed({}, task());
+    await loaded();
+
+    expect(screen.getByTestId('section-related').textContent).toContain('None');
+    fireEvent.click(screen.getByTestId('section-related'));
+    expect(onOpenActivity).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('section-from-list')).toBeNull();
+    expect(screen.queryByText('From a list')).toBeNull();
+  });
+
+  it('keeps Part of a plan when parentActivityId is set but parent is unnamed', async () => {
+    const { onOpenActivity } = mountNamed(
+      {},
+      task({ parentActivityId: PARENT.activityId }),
+    );
+    await loaded();
+
+    expect(screen.getByTestId('section-related').textContent).toContain('Part of a plan');
+    fireEvent.click(screen.getByTestId('section-related'));
+    expect(onOpenActivity).not.toHaveBeenCalled();
+  });
+
+  it('mounts From <list> only when sourceList is present', async () => {
+    const { onOpenList } = mountNamed({ sourceList: FROM }, plan());
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: `From ${FROM.title}` }));
+    expect(onOpenList).toHaveBeenCalledExactlyOnceWith(FROM.listId);
+    expect(screen.queryByText('From a list')).toBeNull();
+  });
+
+  it('omits From <list> when sourceList is absent', async () => {
+    mountNamed({}, plan());
+    await loaded();
+
+    expect(screen.queryByTestId('section-from-list')).toBeNull();
+    expect(screen.queryByText('From a list')).toBeNull();
+    expect(screen.queryByText(/^From /)).toBeNull();
+  });
+});
+
 /**
  * The reconciled Plan-detail anatomy (P3-37, `plans-and-lists.md` §2.1–§2.2 amended
  * 2026-08-25): settings always render; sections exist only once they hold something;

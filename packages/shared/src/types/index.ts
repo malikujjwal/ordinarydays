@@ -27,6 +27,8 @@ export type {
   ActivityChild,
   ActivityDetail,
   ActivityDetailTarget,
+  ActivityParentSummary,
+  ActivitySourceList,
   OccurrenceDetailProjection,
   SourceListSummary,
 } from './activityDetail.js';

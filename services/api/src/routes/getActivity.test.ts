@@ -783,13 +783,107 @@ describe('reminders are the caller’s own', () => {
   });
 });
 
+describe('named parent and source list on the detail envelope', () => {
+  const PARENT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1P1';
+  const parentRow = () => ({
+    ...meta({
+      activityId: PARENT,
+      title: 'Sunday roast',
+      objectKind: 'plan',
+      type: 'meal',
+      details: { kind: 'meal' },
+    }),
+    pk: `ACT#${PARENT}`,
+  });
+
+  it('hydrates parent title from parent META in the hydration batch', async () => {
+    seed([
+      meta({
+        objectKind: 'task',
+        type: 'task',
+        details: { kind: 'task' },
+        title: 'Peel potatoes',
+        parentActivityId: PARENT,
+      }),
+    ]);
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: { 'od-main-local': [parentRow()] as never },
+    });
+
+    const body = await (await get(createApp())).json();
+
+    expect(body.data.parent).toEqual({ activityId: PARENT, title: 'Sunday roast' });
+    expect(
+      ddbMock.commandCalls(BatchGetCommand)[0]?.args[0].input.RequestItems?.[
+        'od-main-local'
+      ]?.Keys,
+    ).toEqual(expect.arrayContaining([{ pk: `ACT#${PARENT}`, sk: 'META' }]));
+  });
+
+  it('omits parent when parent META is missing', async () => {
+    seed([
+      meta({
+        objectKind: 'task',
+        type: 'task',
+        details: { kind: 'task' },
+        title: 'Peel potatoes',
+        parentActivityId: PARENT,
+      }),
+    ]);
+    ddbMock.on(BatchGetCommand).resolves({ Responses: { 'od-main-local': [] as never } });
+
+    const body = await (await get(createApp())).json();
+
+    expect(body.data).not.toHaveProperty('parent');
+  });
+
+  it('includes sourceList only when the caller has list access', async () => {
+    seed([
+      meta({
+        listId: LIST,
+        listItemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1XD',
+      }),
+    ]);
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: { 'od-main-local': [privateListMeta(), listPointer(DEV)] as never },
+    });
+
+    const body = await (await get(createApp())).json();
+
+    expect(body.data.sourceList).toEqual({
+      listId: LIST,
+      title: 'Owner private packing',
+    });
+    expect(body.data.activity).not.toHaveProperty('listId');
+    expect(body.data.activity).not.toHaveProperty('listItemId');
+    expect(JSON.stringify(body.data.activity)).not.toContain('lst_');
+    expect(JSON.stringify(body.data.activity)).not.toContain('itm_');
+  });
+
+  it('withholds sourceList when list access fails', async () => {
+    seed([
+      meta({
+        listId: LIST,
+        listItemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1XD',
+      }),
+    ]);
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: { 'od-main-local': [privateListMeta()] as never },
+    });
+
+    const body = await (await get(createApp())).json();
+
+    expect(body.data).not.toHaveProperty('sourceList');
+    expect(JSON.stringify(body.data.activity)).not.toContain('lst_');
+    expect(JSON.stringify(body)).not.toContain('Owner private packing');
+  });
+});
+
 /**
- * `listId` and `listItemId` are gated by `assertListAccess`, which arrives with lists in
- * Phase 3 (`api-contract.md` §2.3). Until it exists the condition for returning them cannot
- * be met, so they are not returned — and this test is what stops them being added back
- * without the check.
+ * `listId` and `listItemId` stay off `Activity`. The gated named reverse link is optional
+ * envelope `sourceList`, included only after list access (`api-contract.md` §2.3).
  */
-describe('the list reverse-link is not returned yet', () => {
+describe('the list reverse-link is not returned on Activity', () => {
   it('omits listId and listItemId even when the stored row carries them', async () => {
     seed([
       meta({

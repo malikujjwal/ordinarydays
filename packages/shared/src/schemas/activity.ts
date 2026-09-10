@@ -507,6 +507,22 @@ export const sourceListSummary = z
   })
   .meta({ id: 'SourceListSummary' });
 
+/** Named parent plan; omitted unless a title could be hydrated. */
+export const activityParentSummary = z
+  .strictObject({
+    activityId: ulidId('act'),
+    title,
+  })
+  .meta({ id: 'ActivityParentSummary' });
+
+/** Named origin List; present only after list access and a title are available. */
+export const activitySourceList = z
+  .strictObject({
+    listId: ulidId('lst'),
+    title,
+  })
+  .meta({ id: 'ActivitySourceList' });
+
 export const activityDetail = z
   .object({
     activity,
@@ -537,6 +553,10 @@ export const activityDetail = z
     children: z.array(activityChild).max(MAX_PREP_TASKS_PER_PLAN).optional(),
     /** Every List this Plan explicitly created, in stored order (P3-37, P3-39). */
     sourceLists: z.array(sourceListSummary).optional(),
+    /** Prep-task parent, named only when a title could be hydrated. */
+    parent: activityParentSummary.optional(),
+    /** Origin List, named only after list access and a title are available. */
+    sourceList: activitySourceList.optional(),
   })
   .meta({ id: 'ActivityDetail' });
 

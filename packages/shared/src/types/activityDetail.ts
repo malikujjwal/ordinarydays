@@ -27,6 +27,21 @@ export interface SourceListSummary {
   doneCount: number;
 }
 
+/** Named parent plan for the Related plan row. Absent unless a title could be hydrated. */
+export interface ActivityParentSummary {
+  activityId: string;
+  title: string;
+}
+
+/**
+ * Named List this Activity was planned from. Present only after list access is proven
+ * and a title is available — never an ungated `listId` on `Activity`.
+ */
+export interface ActivitySourceList {
+  listId: string;
+  title: string;
+}
+
 /** An activity read is either the stored series/one-off or one named virtual occurrence. */
 export type ActivityDetailTarget =
   | { readonly kind: 'activity'; readonly activityId: string }
@@ -117,4 +132,15 @@ export interface ActivityDetail {
   children?: ActivityChild[];
   /** Every List this Plan explicitly created, in stored order (P3-37, P3-39). */
   sourceLists?: SourceListSummary[];
+  /**
+   * Prep-task parent, named for Related plan. Omitted when there is no parent or its
+   * title cannot be produced — never a navigation target without a title.
+   */
+  parent?: ActivityParentSummary;
+  /**
+   * Origin List this Activity was planned from. Omitted when the caller fails list
+   * access or a title cannot be produced; `Activity` still does not carry `listId` /
+   * `listItemId`.
+   */
+  sourceList?: ActivitySourceList;
 }

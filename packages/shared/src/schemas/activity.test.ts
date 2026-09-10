@@ -1,12 +1,18 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import type { Activity, ActivityDetails } from '../types/activity.js';
-import type { ActivityDetail } from '../types/activityDetail.js';
+import type {
+  ActivityDetail,
+  ActivityParentSummary,
+  ActivitySourceList,
+} from '../types/activityDetail.js';
 import {
   activity,
   activityCompletionResult,
   activityDetail,
   type activityDetails,
+  type activityParentSummary,
+  type activitySourceList,
   completeActivityInput,
   completionFollowUp,
   createActivityInput,
@@ -34,6 +40,18 @@ describe('the schema and the interface are the same shape', () => {
 
   it('ActivityDetail is assignable both ways', () => {
     expectTypeOf<z.infer<typeof activityDetail>>().toEqualTypeOf<ActivityDetail>();
+  });
+
+  it('ActivityParentSummary is assignable both ways', () => {
+    expectTypeOf<
+      z.infer<typeof activityParentSummary>
+    >().toEqualTypeOf<ActivityParentSummary>();
+  });
+
+  it('ActivitySourceList is assignable both ways', () => {
+    expectTypeOf<
+      z.infer<typeof activitySourceList>
+    >().toEqualTypeOf<ActivitySourceList>();
   });
 });
 
@@ -74,6 +92,44 @@ describe('the activity detail projection', () => {
         capabilities: { complete: true, skip: true, snooze: true },
         reminders: [],
         completedOccurrenceCount: count,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts optional named parent and origin list', () => {
+    expect(
+      activityDetail.safeParse({
+        activity: task,
+        capabilities: { complete: true, skip: true, snooze: true },
+        reminders: [],
+        parent: {
+          activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X9',
+          title: 'Sunday roast',
+        },
+        sourceList: {
+          listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD',
+          title: 'Weekly shop',
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a parent or origin list without a title', () => {
+    const envelope = {
+      activity: task,
+      capabilities: { complete: true, skip: true, snooze: true },
+      reminders: [],
+    };
+    expect(
+      activityDetail.safeParse({
+        ...envelope,
+        parent: { activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X9', title: '' },
+      }).success,
+    ).toBe(false);
+    expect(
+      activityDetail.safeParse({
+        ...envelope,
+        sourceList: { listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD', title: '' },
       }).success,
     ).toBe(false);
   });

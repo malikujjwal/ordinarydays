@@ -1122,17 +1122,12 @@ describe('projectDetail', () => {
   /**
    * **The two exceptions to "project every field", and the reason is the contract.**
    *
-   * `api-contract.md` §2.3 includes `listId` and `listItemId` "only when the caller also
-   * passes `assertListAccess`; a Plan participant outside the list receives no reverse link."
-   * That check arrives with lists in Phase 3, so the condition cannot currently be met — and
-   * a field whose gate is unimplemented is omitted rather than emitted.
-   *
-   * Nothing is lost today: no Phase 1 activity can carry either field. **Amended in P1-12**,
-   * which is the task that ships the endpoint the projection serves; the fixture above
-   * carried both and this asserts they do not come out. Phase 3 adds them back *with* the
-   * check, and this test is what stops them being added back without it.
+   * `api-contract.md` §2.3 keeps `listId` and `listItemId` off `Activity`. The gated named
+   * reverse link is optional envelope `sourceList`, hydrated only after list access. This
+   * projection helper does not hydrate that field; it still must not leak the ids on
+   * `Activity` or under another name.
    */
-  it('omits listId and listItemId, whose access check does not exist yet', () => {
+  it('omits listId and listItemId on Activity even when the stored row carries them', () => {
     const withLinks: StoredItem = {
       ...meta,
       listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD',
@@ -1143,9 +1138,10 @@ describe('projectDetail', () => {
 
     expect(detail.activity).not.toHaveProperty('listId');
     expect(detail.activity).not.toHaveProperty('listItemId');
+    expect(detail).not.toHaveProperty('sourceList');
     // Serialised too, so a field added under another name is caught as well.
-    expect(JSON.stringify(detail)).not.toContain('lst_');
-    expect(JSON.stringify(detail)).not.toContain('itm_');
+    expect(JSON.stringify(detail.activity)).not.toContain('lst_');
+    expect(JSON.stringify(detail.activity)).not.toContain('itm_');
   });
 
   /** …and omits each of them when the stored row has none, rather than emitting undefined. */

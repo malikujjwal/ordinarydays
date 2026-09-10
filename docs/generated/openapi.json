@@ -3056,6 +3056,12 @@
             "items": {
               "$ref": "#/components/schemas/SourceListSummary"
             }
+          },
+          "parent": {
+            "$ref": "#/components/schemas/ActivityParentSummary"
+          },
+          "sourceList": {
+            "$ref": "#/components/schemas/ActivitySourceList"
           }
         },
         "required": [
@@ -3234,6 +3240,44 @@
           "icon",
           "itemCount",
           "doneCount"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityParentSummary": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "activityId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "ActivitySourceList": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "listId",
+          "title"
         ],
         "additionalProperties": false
       },

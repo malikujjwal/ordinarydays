@@ -639,6 +639,7 @@ function ActivityDetailBody({
           onOpenChild={(id) =>
             notes.requestLeave(() => (onOpenChild ?? onOpenActivity)(id))
           }
+          onOpenActivity={(id) => notes.requestLeave(() => onOpenActivity(id))}
           onToggleChild={actions.setChildCompletion}
           {...(actions.errorMessage === undefined
             ? {}
@@ -1056,6 +1057,8 @@ interface LoadedProps {
   today: WallDate;
   /** Opens a prep child's own detail (P3-37); the child is an ordinary Activity. */
   onOpenChild: (activityId: string) => void;
+  /** Opens the named parent plan from Related plan. */
+  onOpenActivity: (activityId: string) => void;
   /** Complete or uncomplete one Prep task through the platform action owner. */
   onToggleChild: (child: ActivityChild, completed: boolean) => Promise<boolean>;
   /** A public action failed after the detail loaded; keep it visible and retryable in place. */
@@ -1148,6 +1151,7 @@ function Loaded({
   detail,
   today,
   onOpenChild,
+  onOpenActivity,
   onToggleChild,
   actionErrorMessage,
   actionErrorRequestId,
@@ -1196,6 +1200,8 @@ function Loaded({
    */
   const children = detail.detail?.children ?? [];
   const sourceLists = detail.detail?.sourceLists ?? [];
+  const relatedParent = detail.detail?.parent;
+  const fromList = detail.detail?.sourceList;
   const attachments = detail.detail?.attachments ?? [];
   /**
    * The viewer, the cover and deletion (P3-42). The owner sees the long-press actions; a
@@ -1694,7 +1700,21 @@ function Loaded({
 
           if (section.key !== 'relatedPlan') return null;
 
-          // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
+          // Related plan — named navigation when the envelope can title the parent;
+          // otherwise the existing boolean row (`today-and-tasks.md` §5.5).
+          if (relatedParent !== undefined) {
+            return (
+              <SettingRow
+                key={section.key}
+                label="Related plan"
+                value={relatedParent.title}
+                onPress={() => onOpenActivity(relatedParent.activityId)}
+                opens
+                testID="section-related"
+              />
+            );
+          }
+
           return (
             <DisclosureRow
               key={section.key}
@@ -1712,6 +1732,15 @@ function Loaded({
             </DisclosureRow>
           );
         })}
+        {fromList === undefined ? null : (
+          <SettingRow
+            label={`From ${fromList.title}`}
+            {...(onOpenList === undefined
+              ? {}
+              : { onPress: () => onOpenList(fromList.listId), opens: true })}
+            testID="section-from-list"
+          />
+        )}
       </RowGroup>
 
       {/**

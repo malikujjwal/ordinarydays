@@ -698,6 +698,8 @@ export interface UserListEntry {
 export interface DetailBatchHydration {
   readonly sourceLists: Map<string, SourceListSummary>;
   readonly childRestoredStatuses: Map<string, 'saved' | 'scheduled'>;
+  /** Titles for activity META rows fetched in this batch (legacy children and parent). */
+  readonly activityTitles: Map<string, string>;
 }
 
 /**
@@ -715,7 +717,11 @@ export async function batchGetDetailHydration(
   const unique = [...new Set(listIds)];
   const uniqueChildren = [...new Set(legacyChildActivityIds)];
   if (unique.length === 0 && uniqueChildren.length === 0) {
-    return { sourceLists: new Map(), childRestoredStatuses: new Map() };
+    return {
+      sourceLists: new Map(),
+      childRestoredStatuses: new Map(),
+      activityTitles: new Map(),
+    };
   }
   const rows = await batchGetItems<StoredItem>(
     [
@@ -735,10 +741,12 @@ export async function batchGetDetailHydration(
   const summaries = new Map<string, SourceListSummary>();
   const requestedChildren = new Set(uniqueChildren);
   const childRestoredStatuses = new Map<string, 'saved' | 'scheduled'>();
+  const activityTitles = new Map<string, string>();
   for (const row of rows) {
     if (row.entity === 'Activity') {
       const child = activitySchema.safeParse(row);
       if (child.success && requestedChildren.has(child.data.activityId)) {
+        activityTitles.set(child.data.activityId, child.data.title);
         childRestoredStatuses.set(
           child.data.activityId,
           child.data.schedule === undefined ? 'saved' : 'scheduled',
@@ -758,7 +766,7 @@ export async function batchGetDetailHydration(
       doneCount: typeof row.doneCount === 'number' ? row.doneCount : 0,
     });
   }
-  return { sourceLists: summaries, childRestoredStatuses };
+  return { sourceLists: summaries, childRestoredStatuses, activityTitles };
 }
 
 /** One model-bounded strong page of id-only source-list projections. */

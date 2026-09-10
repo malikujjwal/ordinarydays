@@ -1985,8 +1985,18 @@ export async function getActivityDetail(
       const legacyChildIds = storedChildren
         .filter((child) => child.restoredStatus === undefined)
         .map((child) => child.childActivityId);
+      const originListId = activity.listId;
+      const hydrationListIds =
+        originListId === undefined || sourceListIds.includes(originListId)
+          ? sourceListIds
+          : [...sourceListIds, originListId];
+      const parentActivityId = activity.parentActivityId;
+      const hydrationActivityIds =
+        parentActivityId === undefined
+          ? legacyChildIds
+          : [...legacyChildIds, parentActivityId];
       const [hydration, attachments] = await Promise.all([
-        batchGetDetailHydration(userId, sourceListIds, legacyChildIds),
+        batchGetDetailHydration(userId, hydrationListIds, hydrationActivityIds),
         listAttachments(target.activityId),
       ]);
       return {
@@ -2028,6 +2038,28 @@ export async function getActivityDetail(
   const sourceLists = sourceListIds
     .map((listId) => hydration.sourceLists.get(listId))
     .filter((summary): summary is SourceListSummary => summary !== undefined);
+  const parentActivityId = activity.parentActivityId;
+  const parentTitle =
+    parentActivityId === undefined
+      ? undefined
+      : hydration.activityTitles.get(parentActivityId);
+  /** Hold the row when the parent META is gone or unparseable — never navigate unnamed. */
+  const parent =
+    parentActivityId !== undefined && parentTitle !== undefined
+      ? { activityId: parentActivityId, title: parentTitle }
+      : undefined;
+  const originListId = activity.listId;
+  const originSummary =
+    originListId === undefined ? undefined : hydration.sourceLists.get(originListId);
+  /**
+   * `hydration.sourceLists` only contains Lists whose caller pointer was in the batch —
+   * the same grant `assertListAccess(..., 'read')` uses. Missing grant or title withholds
+   * the field; `toActivity` still omits `listId` / `listItemId`.
+   */
+  const sourceList =
+    originSummary === undefined
+      ? undefined
+      : { listId: originSummary.listId, title: originSummary.title };
 
   return {
     activity: projectedActivity,
@@ -2052,6 +2084,8 @@ export async function getActivityDetail(
     attachments,
     children,
     sourceLists,
+    ...(parent === undefined ? {} : { parent }),
+    ...(sourceList === undefined ? {} : { sourceList }),
   };
 }
 
@@ -2341,17 +2375,11 @@ function projectStoredSchedule(
  *
  * ## `listId` and `listItemId` are deliberately absent
  *
- * `api-contract.md` §2.3 gates them: they are "included only when the caller also passes
- * `assertListAccess`; a Plan participant outside the list receives no reverse link." That
- * check is Phase 3 and does not exist, so the condition for including them cannot currently
- * be met — and a field whose gate is unimplemented is omitted, not emitted.
- *
- * Nothing is lost today: no Phase 1 activity can carry either field. `POST /v1/activities`
- * rejects both, and the only endpoint permitted to set them —
- * `POST /v1/lists/:id/items/:itemId/schedule` — arrives with lists in Phase 3. Adding the
- * lines now would mean Phase 3 inherits two fields already leaving the building unchecked,
- * which is the wrong direction for a default to point. **Phase 3 adds them back with the
- * access check, not before**, and the test below fails if they are added without it.
+ * `api-contract.md` §2.3 gates the reverse link: a Plan participant outside the list
+ * receives no `listId` / `listItemId`. Those fields stay off this projection. The gated
+ * named link is optional `ActivityDetail.sourceList`, hydrated only after the caller
+ * proves list access (the same pointer grant `assertListAccess` uses). Emitting the ids
+ * here would bypass that gate. The test below fails if they are added without it.
  */
 function toActivity(stored: ParsedActivity): Activity {
   const projected = {
