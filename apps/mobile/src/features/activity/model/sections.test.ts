@@ -5,6 +5,7 @@ import {
   planToTaskBlockers,
   sectionsFor,
   subtitleFor,
+  typeDetailSectionsFor,
 } from './sections';
 
 const activity = (patch: Partial<Activity>): Activity =>
@@ -188,6 +189,255 @@ describe('subtitleFor', () => {
 
   it('names the Plan kind and the share state', () => {
     expect(subtitleFor(activity({}), 'Event')).toBe('Event · Just you');
+  });
+
+  it('puts a meal slot in the middle when it is set', () => {
+    expect(
+      subtitleFor(
+        activity({
+          type: 'meal',
+          details: { kind: 'meal', mealSlot: 'dinner' },
+        }),
+        'Meal',
+      ),
+    ).toBe('Meal · Dinner · Just you');
+    expect(
+      subtitleFor(activity({ type: 'meal', details: { kind: 'meal' } }), 'Meal'),
+    ).toBe('Meal · Just you');
+  });
+
+  it('spells S2 E4 only when both watch fields are set, and never for a movie', () => {
+    expect(
+      subtitleFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Severance',
+            mediaKind: 'show',
+            season: 2,
+            episode: 4,
+          },
+        }),
+        'Watch',
+      ),
+    ).toBe('Watch · S2 E4 · Just you');
+    expect(
+      subtitleFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'The Bear',
+            mediaKind: 'show',
+            season: 3,
+          },
+        }),
+        'Watch',
+      ),
+    ).toBe('Watch · Show · Just you');
+    expect(
+      subtitleFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Past Lives',
+            mediaKind: 'movie',
+            season: 2,
+            episode: 4,
+          },
+        }),
+        'Watch',
+      ),
+    ).toBe('Watch · Movie · Just you');
+  });
+
+  it('names an event organiser when set and does not fall back to location', () => {
+    expect(
+      subtitleFor(
+        activity({
+          location: { label: 'Barbican Centre' },
+          details: { kind: 'event', organiser: 'Barbican Presents' },
+        }),
+        'Event',
+      ),
+    ).toBe('Event · Barbican Presents · Just you');
+    expect(
+      subtitleFor(
+        activity({ location: { label: 'Noble Rot' }, details: { kind: 'event' } }),
+        'Event',
+      ),
+    ).toBe('Event · Just you');
+  });
+});
+
+describe('typeDetailSectionsFor', () => {
+  it('inserts type facts after settings and before Preparation', () => {
+    expect(
+      sectionsFor(
+        activity({
+          type: 'meal',
+          sourceUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          details: {
+            kind: 'meal',
+            recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          },
+        }),
+        { childCount: 1, sourceListCount: 0, attachmentCount: 0, updateCount: 0 },
+      ).map((section) => section.key),
+    ).toEqual([
+      'whenWhere',
+      'notes',
+      'people',
+      'recipe',
+      'prep',
+      'attachments-coming-later',
+    ]);
+  });
+
+  it('omits LINK when sourceUrl equals recipeUrl or ticketUrl', () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'meal',
+          sourceUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          details: {
+            kind: 'meal',
+            recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          },
+        }),
+      ),
+    ).toEqual(['recipe']);
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          sourceUrl: 'https://www.ticketmaster.co.uk/event/48213',
+          details: {
+            kind: 'event',
+            ticketUrl: 'https://www.ticketmaster.co.uk/event/48213',
+          },
+        }),
+      ),
+    ).toEqual(['tickets']);
+  });
+
+  it('gives a Task only LINK, never a type section', () => {
+    expect(typeDetailSectionsFor(task())).toEqual([]);
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          sourceUrl: 'https://www.thetrainline.com/book',
+        }),
+      ),
+    ).toEqual(['link']);
+  });
+
+  it('never renders shortcutId on a General plan', () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'custom',
+          details: {
+            kind: 'custom',
+            shortcutId: 'sct_01J0000000000000000000000C',
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      subtitleFor(activity({ type: 'custom', details: { kind: 'custom' } }), 'General'),
+    ).toBe('General · Just you');
+  });
+
+  it('keeps LINK when sourceUrl is a different destination', () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'meal',
+          sourceUrl: 'https://www.instagram.com/p/Cx9pQ2v',
+          details: {
+            kind: 'meal',
+            recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+          },
+        }),
+      ),
+    ).toEqual(['recipe', 'link']);
+  });
+
+  it('omits empty description and empty reservation objects', () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          details: { kind: 'event', description: '', reservation: {} },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('treats episode-only watch progress as a watching section without S3 in the header', () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'The Bear',
+            mediaKind: 'show',
+            episode: 4,
+          },
+        }),
+      ),
+    ).toEqual(['watching']);
+    expect(
+      subtitleFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'The Bear',
+            mediaKind: 'show',
+            episode: 4,
+          },
+        }),
+        'Watch',
+      ),
+    ).toBe('Watch · Show · Just you');
+  });
+
+  it("suppresses a movie's stored season from the watching section when nothing else is set", () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Past Lives',
+            mediaKind: 'movie',
+            season: 2,
+            episode: 4,
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Past Lives',
+            mediaKind: 'movie',
+            season: 2,
+            episode: 4,
+            service: 'Netflix',
+          },
+        }),
+      ),
+    ).toEqual(['watching']);
   });
 });
 

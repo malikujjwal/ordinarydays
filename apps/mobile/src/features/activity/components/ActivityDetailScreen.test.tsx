@@ -590,6 +590,241 @@ describe('the sections', () => {
   });
 });
 
+describe('type-specific details', () => {
+  it('shows a meal recipe host and omits LINK when the pasted URL is the recipe', async () => {
+    const recipeUrl = 'https://www.bbcgoodfood.com/recipes/chicken-tacos';
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'meal',
+          title: 'Chicken tacos',
+          sourceUrl: recipeUrl,
+          details: { kind: 'meal', mealSlot: 'dinner', recipeUrl },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-subtitle').textContent).toBe(
+      'Meal · Dinner · Just you',
+    );
+    expect(screen.getByTestId('section-recipe')).toBeDefined();
+    expect(screen.getByText('bbcgoodfood.com')).toBeDefined();
+    expect(screen.queryByTestId('section-link')).toBeNull();
+    expect(screen.queryByText(recipeUrl)).toBeNull();
+  });
+
+  it('omits RECIPE when a meal has no recipeUrl', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ type: 'meal', details: { kind: 'meal' } })),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('section-recipe')).toBeNull();
+    expect(screen.queryByText('Recipe')).toBeNull();
+  });
+
+  it('spells Season 2 Episode 4 in WATCHING and keeps the streaming service inert', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'watch',
+          title: 'Severance — finale night',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Severance',
+            mediaKind: 'show',
+            season: 2,
+            episode: 4,
+            episodeTitle: 'Chikhai Bardo',
+            service: 'Apple TV+',
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-subtitle').textContent).toBe(
+      'Watch · S2 E4 · Just you',
+    );
+    expect(screen.getByTestId('section-watching').textContent).toContain(
+      'Season 2 · Episode 4',
+    );
+    expect(screen.getByText('Chikhai Bardo')).toBeDefined();
+    expect(screen.getByText('Streaming service')).toBeDefined();
+    expect(screen.getByText('Apple TV+')).toBeDefined();
+    expect(screen.queryByRole('button', { name: /Streaming service/ })).toBeNull();
+    expect(screen.queryByText('Watchlist title')).toBeNull();
+    expect(screen.queryByText('Saved as')).toBeNull();
+  });
+
+  it("never renders a movie's stored season or episode", async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'watch',
+          title: 'Past Lives',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Past Lives',
+            mediaKind: 'movie',
+            season: 2,
+            episode: 4,
+            service: 'Netflix',
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-subtitle').textContent).toBe(
+      'Watch · Movie · Just you',
+    );
+    expect(screen.queryByText('Season 2')).toBeNull();
+    expect(screen.queryByText('Episode 4')).toBeNull();
+    expect(screen.getByText('Netflix')).toBeDefined();
+  });
+
+  it('opens a distinct LINK and an event reservation without inventing a time', async () => {
+    const opened = vi.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          title: 'Dinner at Noble Rot',
+          sourceUrl: 'https://www.instagram.com/p/Cx9pQ2v',
+          details: {
+            kind: 'event',
+            reservation: {
+              name: 'Sarah Mendes',
+              partySize: 2,
+              reference: 'NR-7741',
+            },
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('section-reservation').textContent).toContain(
+      'Sarah Mendes',
+    );
+    expect(screen.getByTestId('section-reservation').textContent).toContain('2 people');
+    expect(screen.getByTestId('section-reservation').textContent).toContain(
+      'Ref NR-7741',
+    );
+    expect(screen.getByTestId('section-link')).toBeDefined();
+    expect(screen.getByText('instagram.com')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Opens, instagram.com' }));
+    expect(opened).toHaveBeenCalledWith('https://www.instagram.com/p/Cx9pQ2v');
+  });
+
+  it('renders a stored zero price as 0.00 GBP, not Free', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          details: { kind: 'event', priceCents: 0, currency: 'GBP' },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('section-tickets').textContent).toContain('0.00 GBP');
+    expect(screen.queryByText('Free')).toBeNull();
+  });
+
+  it('gives a Task no type section, only LINK when a source URL is stored', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(task({ sourceUrl: 'https://www.thetrainline.com/book' })),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-subtitle').textContent).toBe('Task');
+    expect(screen.queryByTestId('section-recipe')).toBeNull();
+    expect(screen.queryByTestId('section-watching')).toBeNull();
+    expect(screen.queryByTestId('section-description')).toBeNull();
+    expect(screen.queryByTestId('section-reservation')).toBeNull();
+    expect(screen.queryByTestId('section-tickets')).toBeNull();
+    expect(screen.getByTestId('section-link')).toBeDefined();
+    expect(screen.getByText('thetrainline.com')).toBeDefined();
+  });
+
+  it('never shows shortcutId on a General plan', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'custom',
+          title: 'Weekend admin',
+          details: {
+            kind: 'custom',
+            shortcutId: 'sct_01J0000000000000000000000C',
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.queryByText('sct_01J0000000000000000000000C')).toBeNull();
+    expect(screen.queryByTestId('section-recipe')).toBeNull();
+    expect(screen.queryByTestId('section-link')).toBeNull();
+  });
+
+  it('states public-vs-private copy only on a shared activity', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          visibility: 'shared',
+          details: {
+            kind: 'event',
+            description: 'Doors at 7.',
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('description-privacy').textContent).toBe(
+      'Everyone you invite can read this.',
+    );
+    expect(screen.getByTestId('notes-privacy').textContent).toBe('Private to you.');
+  });
+
+  it('omits privacy lines on a private activity', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          details: { kind: 'event', description: 'Doors at 7.' },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('description-privacy')).toBeNull();
+    expect(screen.queryByTestId('notes-privacy')).toBeNull();
+    expect(screen.queryByText('Everyone you invite can read this.')).toBeNull();
+    expect(screen.queryByText('Private to you.')).toBeNull();
+  });
+});
+
 describe('caller-owned reminders', () => {
   it('adds a reminder with a fresh idempotency key and updates the open row', async () => {
     const added = reminder('rem_01J0000000000000000000000C', -15);

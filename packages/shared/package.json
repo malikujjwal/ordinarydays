@@ -69,6 +69,11 @@
       "react-native": "./src/rank/index.ts",
       "default": "./dist/rank/index.js"
     },
+    "./money": {
+      "types": "./dist/money/format.d.ts",
+      "react-native": "./src/money/format.ts",
+      "default": "./dist/money/format.js"
+    },
     "./test-fixtures": {
       "types": "./dist/test-fixtures/index.d.ts",
       "react-native": "./src/test-fixtures/index.ts",

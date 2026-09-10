@@ -49,6 +49,7 @@ import {
 } from '@/features/activity/components/ReminderSheet';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
+import { TypeDetailsSection } from '@/features/activity/components/TypeDetailsSection';
 import { UpdatesSection } from '@/features/activity/components/UpdatesSection';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
@@ -79,7 +80,11 @@ import {
   relativeUpdateTime,
 } from '@/features/activity/model/planSections';
 import { endRepeatSeries } from '@/features/activity/model/repeat';
-import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
+import {
+  sectionsFor,
+  subtitleFor,
+  TYPE_DETAIL_SECTION_KEYS,
+} from '@/features/activity/model/sections';
 import { useClock } from '@/hooks/useClock';
 import type { FollowUpNavigation } from '@/hooks/useFollowUp';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
@@ -1603,7 +1608,8 @@ function Loaded({
             section.key === 'lists' ||
             section.key === 'ingredients' ||
             section.key === 'attachments' ||
-            section.key === 'updates'
+            section.key === 'updates' ||
+            (TYPE_DETAIL_SECTION_KEYS as readonly string[]).includes(section.key)
           ) {
             return null;
           }
@@ -1664,6 +1670,9 @@ function Loaded({
                 value={activity.notes ?? ''}
                 kind={activity.objectKind}
                 pending={pending}
+                {...(activity.visibility === 'shared'
+                  ? { privacyNote: 'Private to you.' }
+                  : {})}
               />
             );
           }
@@ -1682,6 +1691,8 @@ function Loaded({
               />
             );
           }
+
+          if (section.key !== 'relatedPlan') return null;
 
           // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
           return (
@@ -1702,6 +1713,12 @@ function Loaded({
           );
         })}
       </RowGroup>
+
+      {/**
+       * Type facts (RECIPE / WATCHING / DESCRIPTION / RESERVATION / TICKETS / LINK) sit
+       * after settings and before PREPARATION. Empty groups omit the section.
+       */}
+      <TypeDetailsSection activity={activity} />
 
       {/**
        * The content sections (P3-37, §2.1 amended): each exists only because `sectionsFor`

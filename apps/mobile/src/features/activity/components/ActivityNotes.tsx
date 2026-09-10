@@ -10,11 +10,14 @@ export function ActivityNotes({
   value,
   kind,
   pending,
+  privacyNote,
 }: {
   notes: NotesDraft;
   value: string;
   kind: 'task' | 'plan';
   pending: boolean;
+  /** Shared activities only — privately there is nobody to distinguish from. */
+  privacyNote?: string;
 }) {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -52,6 +55,11 @@ export function ActivityNotes({
         }}
       >
         <Text variant="subhead">Notes</Text>
+        {privacyNote === undefined ? null : (
+          <Text variant="footnote" color="textSecondary" testID="notes-privacy">
+            {privacyNote}
+          </Text>
+        )}
         {pending ? (
           value.trim() ? (
             <Button

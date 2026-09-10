@@ -1,8 +1,27 @@
-import type { Activity } from '@od/shared/types';
+import type { Activity, ActivityDetails, EventReservation } from '@od/shared/types';
 import { updatesSectionVisible } from '@/features/activity/model/planSections';
 import type { PendingActivity } from '@/lib/pendingActivity';
 
 type DisplayActivity = Activity | PendingActivity;
+
+/** Topic-named type-fact sections, in render order. Absent when empty. */
+export const TYPE_DETAIL_SECTION_KEYS = [
+  'recipe',
+  'watching',
+  'description',
+  'reservation',
+  'tickets',
+  'link',
+] as const;
+
+export type TypeDetailSectionKey = (typeof TYPE_DETAIL_SECTION_KEYS)[number];
+
+const MEAL_SLOT_LABEL = {
+  breakfast: 'Breakfast',
+  lunch: 'Lunch',
+  dinner: 'Dinner',
+  snack: 'Snack',
+} as const;
 
 /**
  * Which sections the detail screen renders, and in which state (P1-26).
@@ -94,13 +113,16 @@ export function sectionsFor(
   const schedule =
     activity.schedule === undefined ? [] : [{ key: 'repeat' }, { key: 'reminders' }];
 
+  const typeFacts = typeDetailSectionsFor(activity).map((key) => ({ key }));
+
   if (activity.objectKind === 'task') {
-    // §5.6's list, and nothing else. No placeholders.
+    // §5.6's list, plus LINK when a source URL is stored. No placeholders.
     return [
       { key: 'whenWhere' },
       { key: 'notes', label: 'Notes' },
       ...schedule,
       { key: 'relatedPlan', label: 'Related plan' },
+      ...typeFacts,
     ];
   }
 
@@ -114,6 +136,7 @@ export function sectionsFor(
       summary: 'Sharing and participants',
       state: 'coming-later',
     },
+    ...typeFacts,
     ...(content.childCount > 0 ? [{ key: 'prep' }] : []),
     ...(content.sourceListCount > 0 ? [{ key: 'lists' }] : []),
     /**
@@ -154,7 +177,78 @@ export function sectionsFor(
 }
 
 /**
- * The header's second line: `Event · Just you`, `Task`.
+ * Type-fact sections that currently hold something, in anatomy order, after settings and
+ * before PREPARATION. Empty groups are omitted (chips are a later slice). `shortcutId` is
+ * never a section.
+ */
+export function typeDetailSectionsFor(activity: DisplayActivity): TypeDetailSectionKey[] {
+  const keys: TypeDetailSectionKey[] = [];
+  const { details } = activity;
+  switch (details.kind) {
+    case 'meal':
+      if (details.recipeUrl !== undefined) keys.push('recipe');
+      break;
+    case 'watch':
+      if (watchSectionVisible(details)) keys.push('watching');
+      break;
+    case 'event':
+      if (details.description !== undefined && details.description !== '') {
+        keys.push('description');
+      }
+      if (reservationVisible(details.reservation)) keys.push('reservation');
+      if (details.priceCents !== undefined || details.ticketUrl !== undefined) {
+        keys.push('tickets');
+      }
+      break;
+    case 'task':
+    case 'custom':
+      break;
+  }
+  if (shownSourceUrl(activity) !== undefined) keys.push('link');
+  return keys;
+}
+
+/**
+ * The pasted link is not shown twice. Saving it into `recipeUrl` or `ticketUrl` is the
+ * common path; two host rows for one destination is the reported bug.
+ */
+export function shownSourceUrl(activity: DisplayActivity): string | undefined {
+  const url = activity.sourceUrl;
+  if (url === undefined) return undefined;
+  const { details } = activity;
+  if (details.kind === 'meal' && details.recipeUrl === url) return undefined;
+  if (details.kind === 'event' && details.ticketUrl === url) return undefined;
+  return url;
+}
+
+function watchSectionVisible(
+  details: Extract<ActivityDetails, { kind: 'watch' }>,
+): boolean {
+  if (details.mediaKind !== 'movie') {
+    if (details.season !== undefined || details.episode !== undefined) return true;
+  }
+  return details.episodeTitle !== undefined || details.service !== undefined;
+}
+
+function reservationVisible(reservation: EventReservation | undefined): boolean {
+  if (reservation === undefined) return false;
+  return (
+    reservation.name !== undefined ||
+    reservation.time !== undefined ||
+    reservation.partySize !== undefined ||
+    reservation.reference !== undefined
+  );
+}
+
+/**
+ * The header's second line: `Meal · Dinner · Just you`, `Watch · S2 E4 · Just you`, `Task`.
+ *
+ * Identity belongs here (`design-system.md` §7.5 rule 1). Slot / both-set watch progress /
+ * organiser ride in the middle when set. A movie never contributes season or episode, even
+ * if stored. Partial watch progress does not become `S3` — that is a held founder call, so
+ * the line falls back to mediaKind. An event without organiser does not fall back to
+ * locationLabel; the location already renders below. Today-row `deriveSubtitle` copies are
+ * untouched.
  *
  * Phase 1 has no participants, so the share state is always "just you" on a Plan and is
  * omitted entirely on a Task — a Task has no sharing state to describe, not even a solo one
@@ -162,7 +256,31 @@ export function sectionsFor(
  */
 export function subtitleFor(activity: DisplayActivity, planKindLabel: string): string {
   if (activity.objectKind === 'task') return 'Task';
-  return `${planKindLabel} · Just you`;
+  const parts = [planKindLabel];
+  const middle = subtitleMiddle(activity.details);
+  if (middle !== undefined) parts.push(middle);
+  parts.push('Just you');
+  return parts.join(' · ');
+}
+
+function subtitleMiddle(details: ActivityDetails): string | undefined {
+  if (details.kind === 'meal') {
+    return details.mealSlot === undefined ? undefined : MEAL_SLOT_LABEL[details.mealSlot];
+  }
+  if (details.kind === 'watch') {
+    if (
+      details.mediaKind !== 'movie' &&
+      details.season !== undefined &&
+      details.episode !== undefined
+    ) {
+      return `S${details.season} E${details.episode}`;
+    }
+    if (details.mediaKind === 'movie') return 'Movie';
+    if (details.mediaKind === 'show') return 'Show';
+    return undefined;
+  }
+  if (details.kind === 'event') return details.organiser;
+  return undefined;
 }
 
 /**
