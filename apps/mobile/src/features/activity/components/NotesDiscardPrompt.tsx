@@ -1,12 +1,13 @@
-import { Button, Sheet, Text } from '@od/ui';
 import type { NotesDraft } from './ActivityNotes';
+import { DiscardChangesPrompt } from './DiscardChangesPrompt';
 
 export function NotesDiscardPrompt({ notes }: { notes: NotesDraft }) {
   return (
-    <Sheet
+    <DiscardChangesPrompt
       open={notes.confirming}
-      title="Discard changes?"
-      onClose={notes.keepEditing}
+      message="Your notes have unsaved changes."
+      onKeepEditing={notes.keepEditing}
+      onDiscard={notes.discard}
       onClosed={() => {
         notes.promptClosed();
         requestAnimationFrame(() => {
@@ -14,19 +15,6 @@ export function NotesDiscardPrompt({ notes }: { notes: NotesDraft }) {
           else notes.focusAction();
         });
       }}
-      actions={
-        <>
-          <Button contentSized label="Keep editing" onPress={notes.keepEditing} />
-          <Button
-            contentSized
-            label="Discard changes"
-            variant="secondary"
-            onPress={notes.discard}
-          />
-        </>
-      }
-    >
-      <Text numberOfLines={0}>Your notes have unsaved changes.</Text>
-    </Sheet>
+    />
   );
 }

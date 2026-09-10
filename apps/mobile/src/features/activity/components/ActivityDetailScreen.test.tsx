@@ -1010,6 +1010,47 @@ describe('type-details editing', () => {
     expect(patch?.headers['If-Match']).toBe('2026-08-08T10:00:00.000Z');
     expect(patch?.body).toEqual({ sourceUrl: 'https://www.thetrainline.com/book' });
   });
+
+  it('keeps the type-details draft after a failed save', async () => {
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(
+          plan({
+            type: 'meal',
+            details: {
+              kind: 'meal',
+              recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+            },
+          }),
+        ),
+      },
+      {
+        status: 500,
+        body: {
+          error: { code: 'internal', message: 'boom', requestId: 'req_failed' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit recipe' }));
+    await screen.findByTestId('type-details-sheet');
+    fireEvent.change(screen.getByLabelText('Recipe link'), {
+      target: { value: 'https://www.example.com/tacos' },
+    });
+    fireEvent.click(screen.getByTestId('type-details-save'));
+
+    await waitFor(() =>
+      expect(screen.getAllByText('Something went wrong.').length).toBeGreaterThan(0),
+    );
+    expect((screen.getByLabelText('Recipe link') as HTMLInputElement).value).toBe(
+      'https://www.example.com/tacos',
+    );
+    expect(screen.getByTestId('type-details-sheet')).toBeDefined();
+    expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1);
+  });
 });
 
 describe('caller-owned reminders', () => {
@@ -2027,6 +2068,85 @@ describe('a 409 conflict', () => {
     expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1);
     // The field shows the other person's value, not the dropped one.
     await waitFor(() => expect(fieldValue('Title')).toBe('Their title'));
+  });
+
+  it('drops an overlapping details edit and names Details', async () => {
+    const current = plan({
+      type: 'meal',
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(current) },
+      {
+        status: 409,
+        body: { error: { code: 'conflict', message: 'stale', requestId: 'req_c' } },
+      },
+      {
+        status: 200,
+        body: detailBody(
+          plan({
+            type: 'meal',
+            details: {
+              kind: 'meal',
+              mealSlot: 'lunch',
+              recipeUrl: 'https://www.theirs.example/tacos',
+            },
+            updatedAt: '2026-08-08T11:00:00.000Z',
+          }),
+        ),
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit recipe' }));
+    await screen.findByTestId('type-details-sheet');
+    fireEvent.change(screen.getByLabelText('Recipe link'), {
+      target: { value: 'https://www.example.com/tacos' },
+    });
+    fireEvent.click(screen.getByTestId('type-details-save'));
+
+    await waitFor(() => expect(screen.getByTestId('detail-conflict')).toBeDefined());
+    expect(screen.getByText('This plan changed. Review the update.')).toBeDefined();
+    expect(screen.getByText('Your change to Details was not applied.')).toBeDefined();
+    expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1);
+  });
+
+  it('drops an overlapping sourceUrl edit and names Link', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(task()) },
+      {
+        status: 409,
+        body: { error: { code: 'conflict', message: 'stale', requestId: 'req_c' } },
+      },
+      {
+        status: 200,
+        body: detailBody(
+          task({
+            sourceUrl: 'https://www.theirs.example/book',
+            updatedAt: '2026-08-08T11:00:00.000Z',
+          }),
+        ),
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('add-to-plan-link'));
+    await screen.findByTestId('link-sheet');
+    fireEvent.change(screen.getByTestId('type-details-source-url'), {
+      target: { value: 'https://www.thetrainline.com/book' },
+    });
+    fireEvent.click(screen.getByTestId('link-save'));
+
+    await waitFor(() => expect(screen.getByTestId('detail-conflict')).toBeDefined());
+    expect(screen.getByText('This plan changed. Review the update.')).toBeDefined();
+    expect(screen.getByText('Your change to Link was not applied.')).toBeDefined();
+    expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1);
   });
 });
 

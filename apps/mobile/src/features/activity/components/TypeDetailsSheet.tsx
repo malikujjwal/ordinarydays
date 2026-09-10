@@ -9,13 +9,14 @@ import {
 } from '@od/shared/schemas';
 import type { Activity, ActivityDetails } from '@od/shared/types';
 import { Button, Field, SegmentedControl, Sheet, Text, useTheme } from '@od/ui';
-import { useEffect, useState } from 'react';
-import { Keyboard, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Keyboard, View } from 'react-native';
 import {
   buildDetailsPatch,
   type DetailsEdits,
 } from '@/features/activity/model/buildDetailsPatch';
 import type { PendingActivity } from '@/lib/pendingActivity';
+import { DiscardChangesPrompt } from './DiscardChangesPrompt';
 
 type DisplayActivity = Activity | PendingActivity;
 
@@ -118,9 +119,10 @@ function sheetTitle(mode: TypeDetailsSheetMode, kind: ActivityDetails['kind']): 
 }
 
 /**
- * One sheet per type (`meal`, `watch`, `event`) plus LINK. Cancel discards without a
- * keep-editing prompt — that confirmation is a later slice. Save sends the wholesale
- * `details` replacement (or `sourceUrl` alone on LINK).
+ * One sheet per type (`meal`, `watch`, `event`) plus LINK. Save sends the wholesale
+ * `details` replacement (or `sourceUrl` alone on LINK) through the same `detail.patch`
+ * owner as every other field. Failed saves keep the draft; dirty cancel uses the notes
+ * confirmation (`activities.md` §6.1).
  */
 export function TypeDetailsSheet({
   open,
@@ -134,27 +136,71 @@ export function TypeDetailsSheet({
   const theme = useTheme();
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const seed = open ? `${activity.activityId}:${activity.updatedAt}:${mode}` : '';
+  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const original = useRef<Draft>(EMPTY_DRAFT);
+  const inFlight = useRef(false);
+  const seed = open ? `${activity.activityId}:${mode}` : '';
+  const blocked = busy || saving;
+  const dirty = open && !sameDraft(draft, original.current);
 
-  // `activity` is read at the seed's version; re-seeding on every parent render would
-  // wipe in-progress typing.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: seed captures identity + version
+  // Seed on open / identity / mode only. A 409 refetch moves `updatedAt` and must not
+  // wipe the typed draft the user is about to retry.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seed captures identity + mode
   useEffect(() => {
-    if (!open) return;
-    setDraft(draftFrom(activity));
+    if (!open) {
+      setConfirming(false);
+      setSaving(false);
+      return;
+    }
+    const next = draftFrom(activity);
+    original.current = next;
+    setDraft(next);
     setFieldErrors({});
+    setConfirming(false);
   }, [open, seed]);
+
+  const statusMessage = blocked ? 'Saving…' : (error ?? fieldErrors.form);
+  useEffect(() => {
+    if (statusMessage !== undefined) {
+      AccessibilityInfo.announceForAccessibility(statusMessage);
+    }
+  }, [statusMessage]);
 
   function close() {
     Keyboard.dismiss();
+    setConfirming(false);
     onClose();
+  }
+
+  function requestLeave() {
+    if (inFlight.current || blocked) return;
+    if (dirty) {
+      Keyboard.dismiss();
+      setConfirming(true);
+      return;
+    }
+    close();
   }
 
   function patchDraft(patch: Partial<Draft>) {
     setDraft((current) => ({ ...current, ...patch }));
   }
 
+  async function persist(input: PatchActivityInput) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSaving(true);
+    try {
+      if (await onSave(input)) close();
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
+    }
+  }
+
   async function save() {
+    if (inFlight.current || blocked) return;
     setFieldErrors({});
     if (mode === 'link') {
       const parsed = parseOptionalUrl(draft.sourceUrl);
@@ -162,10 +208,9 @@ export function TypeDetailsSheet({
         setFieldErrors({ sourceUrl: 'Enter a valid link.' });
         return;
       }
-      const ok = await onSave({
+      await persist({
         sourceUrl: parsed.value === undefined ? null : parsed.value,
       });
-      if (ok) close();
       return;
     }
 
@@ -177,8 +222,7 @@ export function TypeDetailsSheet({
       setFieldErrors({ form: parsed.error.issues[0]?.message ?? 'Check the details.' });
       return;
     }
-    const ok = await onSave({ details: parsed.data });
-    if (ok) close();
+    await persist({ details: parsed.data });
   }
 
   const kind = activity.details.kind;
@@ -186,68 +230,88 @@ export function TypeDetailsSheet({
   const showMovieProgress = draft.mediaKind !== 'movie';
 
   return (
-    <Sheet
-      open={open}
-      onClose={close}
-      title={title}
-      detent={mode === 'link' || kind === 'meal' ? 'fit' : 'large'}
-      testID={mode === 'link' ? 'link-sheet' : 'type-details-sheet'}
-      actions={
-        <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
-          <Button
-            label="Cancel"
-            variant="ghost"
-            onPress={close}
-            testID="type-details-cancel"
-          />
-          <View style={{ flex: 1 }}>
+    <>
+      <Sheet
+        open={open}
+        onClose={requestLeave}
+        dirty={dirty}
+        onDiscardRequest={requestLeave}
+        title={title}
+        detent={mode === 'link' || kind === 'meal' ? 'fit' : 'large'}
+        testID={mode === 'link' ? 'link-sheet' : 'type-details-sheet'}
+        actions={
+          <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
             <Button
-              label="Save"
-              fullWidth
-              loading={busy}
-              onPress={() => void save()}
-              testID={mode === 'link' ? 'link-save' : 'type-details-save'}
+              label="Cancel"
+              variant="ghost"
+              disabled={blocked}
+              onPress={requestLeave}
+              testID="type-details-cancel"
             />
+            <View style={{ flex: 1 }}>
+              <Button
+                label="Save"
+                fullWidth
+                loading={blocked}
+                onPress={() => void save()}
+                testID={mode === 'link' ? 'link-save' : 'type-details-save'}
+              />
+            </View>
           </View>
-        </View>
-      }
-    >
-      {error === undefined && fieldErrors.form === undefined ? null : (
-        <Text variant="footnote" color="danger">
-          {error ?? fieldErrors.form}
-        </Text>
-      )}
-      {mode === 'link' ? (
-        <Field
-          label="Link"
-          value={draft.sourceUrl}
-          onChangeText={(sourceUrl) => patchDraft({ sourceUrl })}
-          keyboardType="url"
-          placeholder="https://"
-          hint="Where this came from. Clear it to remove the link."
-          testID="type-details-source-url"
-          {...(fieldErrors.sourceUrl === undefined
-            ? {}
-            : { error: fieldErrors.sourceUrl })}
-        />
-      ) : kind === 'meal' ? (
-        <MealFields draft={draft} fieldErrors={fieldErrors} onChange={patchDraft} />
-      ) : kind === 'watch' ? (
-        <WatchFields
-          draft={draft}
-          showProgress={showMovieProgress}
-          fieldErrors={fieldErrors}
-          onChange={patchDraft}
-        />
-      ) : kind === 'event' ? (
-        <EventFields
-          draft={draft}
-          shared={activity.visibility === 'shared'}
-          fieldErrors={fieldErrors}
-          onChange={patchDraft}
-        />
-      ) : null}
-    </Sheet>
+        }
+      >
+        {statusMessage === undefined ? null : (
+          <Text
+            variant="footnote"
+            color={blocked ? 'textSecondary' : 'danger'}
+            numberOfLines={0}
+            accessibilityLiveRegion="polite"
+          >
+            {statusMessage}
+          </Text>
+        )}
+        {mode === 'link' ? (
+          <Field
+            label="Link"
+            value={draft.sourceUrl}
+            onChangeText={(sourceUrl) => patchDraft({ sourceUrl })}
+            keyboardType="url"
+            placeholder="https://"
+            hint="Where this came from. Clear it to remove the link."
+            testID="type-details-source-url"
+            {...(fieldErrors.sourceUrl === undefined
+              ? {}
+              : { error: fieldErrors.sourceUrl })}
+          />
+        ) : kind === 'meal' ? (
+          <MealFields draft={draft} fieldErrors={fieldErrors} onChange={patchDraft} />
+        ) : kind === 'watch' ? (
+          <WatchFields
+            draft={draft}
+            showProgress={showMovieProgress}
+            fieldErrors={fieldErrors}
+            onChange={patchDraft}
+          />
+        ) : kind === 'event' ? (
+          <EventFields
+            draft={draft}
+            shared={activity.visibility === 'shared'}
+            fieldErrors={fieldErrors}
+            onChange={patchDraft}
+          />
+        ) : null}
+      </Sheet>
+      <DiscardChangesPrompt
+        open={confirming}
+        message={
+          mode === 'link'
+            ? 'Your link has unsaved changes.'
+            : 'Your details have unsaved changes.'
+        }
+        onKeepEditing={() => setConfirming(false)}
+        onDiscard={close}
+      />
+    </>
   );
 }
 
@@ -610,4 +674,10 @@ function trimmed(value: string): string | undefined {
 
 function hasKeys(value: object): boolean {
   return Object.keys(value).length > 0;
+}
+
+function sameDraft(left: Draft, right: Draft): boolean {
+  return (Object.keys(EMPTY_DRAFT) as Array<keyof Draft>).every(
+    (key) => left[key] === right[key],
+  );
 }
