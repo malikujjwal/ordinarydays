@@ -3648,6 +3648,48 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
     expect(screen.queryByTestId('section-people')).toBeNull();
   });
+
+  it('keeps a production-wired task chip row Link-only', async () => {
+    stubFetch({ status: 200, body: detailBody(task()) });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    registerActivityMutationDefaults(queryClient);
+    queryClient.setQueryData(['me'], {
+      userId: 'usr_01J0000000000000000000000B',
+      displayName: 'Dev',
+      timezone: 'America/New_York',
+      currency: 'USD',
+      weekStartsOn: 1,
+    });
+    render(
+      <SafeAreaProvider>
+        <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+          <ThemeProvider scheme="light">
+            <QueryClientProvider client={queryClient}>
+              <ActivityDetailScreen
+                target={{ kind: 'activity', activityId: ID }}
+                today={TODAY}
+                onBack={() => {}}
+                onOpenActivity={() => {}}
+                onOpenList={() => {}}
+                onOpenChild={() => {}}
+                onAddPrepTask={() => {}}
+                onAddList={() => {}}
+                onAddAttachment={() => {}}
+              />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
+      </SafeAreaProvider>,
+    );
+    await screen.findByTestId('detail-content');
+    expect(screen.getByText('Add to this task')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
+    expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
+    expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
+    expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
+  });
 });
 
 /**

@@ -1267,16 +1267,23 @@ function Loaded({
   });
   /** Same gate as the Notes editor: a pending create has no writable actions. */
   const canEditDetails = !pending;
-  const planChips = addToPlanChips({
-    children,
-    sourceLists,
-    attachmentCount: attachments.length,
-    wired: {
-      prepTask: onAddPrepTask !== undefined,
-      list: onAddList !== undefined,
-      attachment: addAttachment !== undefined,
-    },
-  });
+  /**
+   * Prep task / List / Photo are Plan chips. The production route always wires those
+   * handlers, so gating on the callback would leak them onto Task detail (§5.6).
+   */
+  const planChips =
+    activity.objectKind === 'plan'
+      ? addToPlanChips({
+          children,
+          sourceLists,
+          attachmentCount: attachments.length,
+          wired: {
+            prepTask: onAddPrepTask !== undefined,
+            list: onAddList !== undefined,
+            attachment: addAttachment !== undefined,
+          },
+        })
+      : { prepTask: false, list: false, attachment: false };
   const chips = [
     ...(planChips.prepTask && onAddPrepTask !== undefined
       ? [{ key: 'prepTask', label: 'Prep task', onPress: onAddPrepTask }]
