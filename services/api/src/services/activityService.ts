@@ -650,6 +650,16 @@ function staleEdit(currentUpdatedAt: string): AppError {
 }
 
 /**
+ * The same `validation_failed` shape `checkDetailsMatchType` produces on create: path
+ * `details.kind`, message naming the stored type. PATCH cannot run that refinement unless
+ * `type` is also in the body, so a details-only mismatch has to be refused here.
+ */
+function detailsKindMismatch(type: string): AppError {
+  const message = `details.kind must be "${type}" to match the activity type`;
+  return new AppError('validation_failed', message, [{ path: 'details.kind', message }]);
+}
+
+/**
  * Applies a kind change, or returns the activity's current target unchanged.
  *
  * The mapping itself is `changeActivityKind` in `packages/shared` (P1-17) — the same function
@@ -950,6 +960,20 @@ export async function patchActivity(
    * as whatever its cover happened to name.
    */
   await assertCoverIsLinked(activityId, patch.primaryAttachmentId);
+
+  /**
+   * `patchActivityInput` only calls `checkDetailsMatchType` when `type` is present. A
+   * details-only body can therefore name a `kind` that disagrees with the stored type, and
+   * merge would write it. Kind-change still carries `type`, so the schema already checked
+   * that path.
+   */
+  if (
+    patch.details !== undefined &&
+    patch.type === undefined &&
+    patch.details.kind !== current.type
+  ) {
+    throw detailsKindMismatch(current.type);
+  }
 
   const correctionDate = sameDayCorrectionDate(current, patch, now);
   const change = applyKindChange(current, patch, log);

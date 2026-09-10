@@ -448,6 +448,34 @@ describe('changing the object or Plan kind', () => {
   });
 });
 
+/**
+ * Schema `checkDetailsMatchType` only runs when the PATCH also names `type`. A well-formed
+ * watch details object on a meal must still 400 here, or the write stores a row GET cannot
+ * parse.
+ */
+describe('details-only kind', () => {
+  it('400s a mismatched details-only patch, and writes nothing', async () => {
+    seed(
+      meta({
+        objectKind: 'plan',
+        type: 'meal',
+        title: 'Tacos',
+        details: { kind: 'meal' },
+      }),
+    );
+
+    const res = await patch(createApp(), {
+      details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show' },
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe('validation_failed');
+    expect(body.error.details?.[0]?.path).toBe('details.kind');
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+});
+
 describe('what a patch may not set', () => {
   it.each([
     'ownerId',

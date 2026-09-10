@@ -1903,6 +1903,119 @@ describe('patchActivity', () => {
 
     expect(repository.patchActivity).not.toHaveBeenCalled();
   });
+
+  /**
+   * A details-only PATCH never reaches `checkDetailsMatchType`: the schema runs that
+   * refinement only when `type` is also present. Without a service guard, merge would write
+   * a meal as a watch and GET would then 500 on parse.
+   */
+  describe('details-only kind', () => {
+    const INGREDIENT_ID = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MA';
+    const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1MB';
+    const KIND_MISMATCH = 'details.kind must be "meal" to match the activity type';
+
+    const meal = () =>
+      stored({
+        objectKind: 'plan',
+        type: 'meal',
+        title: 'Tacos',
+        details: {
+          kind: 'meal',
+          mealSlot: 'dinner',
+          ingredients: [
+            {
+              ingredientId: INGREDIENT_ID,
+              name: 'Tomatoes',
+              quantity: '2',
+              addedToListId: LIST_ID,
+            },
+          ],
+        },
+      });
+
+    it('refuses a mismatched details-only patch, and writes nothing', async () => {
+      seed(meal());
+
+      await expect(
+        patchActivity(
+          USER,
+          PLAN,
+          { details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show' } },
+          VERSION,
+          LATER,
+        ),
+      ).rejects.toMatchObject({
+        code: 'validation_failed',
+        message: KIND_MISMATCH,
+        details: [{ path: 'details.kind', message: KIND_MISMATCH }],
+      });
+
+      expect(repository.patchActivity).not.toHaveBeenCalled();
+    });
+
+    it('keeps addedToListId when same-kind details replace ingredients', async () => {
+      seed(meal());
+
+      const result = await patchActivity(
+        USER,
+        PLAN,
+        {
+          details: {
+            kind: 'meal',
+            mealSlot: 'lunch',
+            recipeUrl: 'https://example.com/recipe',
+            ingredients: [
+              {
+                ingredientId: INGREDIENT_ID,
+                name: 'Tomatoes',
+                quantity: '3',
+              },
+            ],
+          },
+        },
+        VERSION,
+        LATER,
+      );
+
+      expect(result.details).toEqual({
+        kind: 'meal',
+        mealSlot: 'lunch',
+        recipeUrl: 'https://example.com/recipe',
+        ingredients: [
+          {
+            ingredientId: INGREDIENT_ID,
+            name: 'Tomatoes',
+            quantity: '3',
+            addedToListId: LIST_ID,
+          },
+        ],
+      });
+      expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+    });
+
+    it('still converts when objectKind, type and details travel together', async () => {
+      seed(meal());
+
+      const result = await patchActivity(
+        USER,
+        PLAN,
+        {
+          objectKind: 'plan',
+          type: 'watch',
+          details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show' },
+        },
+        VERSION,
+        LATER,
+      );
+
+      expect(result).toMatchObject({
+        objectKind: 'plan',
+        type: 'watch',
+        details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show' },
+      });
+      expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('convertRecurrence', () => {
