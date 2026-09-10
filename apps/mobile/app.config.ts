@@ -45,7 +45,8 @@ const MEDIA: Record<Profile, string> = {
   prod: 'https://media.ordinarydays.app',
 };
 
-const config: ExpoConfig = {
+// SDK 55's ExpoConfig type dropped this key; keep the runtime flag through hops 55/56.
+const config: ExpoConfig & { newArchEnabled: true } = {
   name: PROFILE === 'prod' ? 'Ordinary Days' : `Ordinary Days (${PROFILE})`,
   slug: 'ordinarydays',
   scheme: PROFILE === 'prod' ? 'ordinarydays' : `ordinarydays-${PROFILE}`,
