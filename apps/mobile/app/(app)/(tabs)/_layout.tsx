@@ -126,9 +126,7 @@ export default function TabsLayout() {
               options={{
                 title: tab.label,
                 // The label carries the meaning; the icon is a recognition aid beside it.
-                tabBarIcon: ({ color }: { color: string }) => (
-                  <Icon size={22} color={color} />
-                ),
+                tabBarIcon: ({ color }) => <Icon size={22} color={color as string} />,
               }}
             />
           );
