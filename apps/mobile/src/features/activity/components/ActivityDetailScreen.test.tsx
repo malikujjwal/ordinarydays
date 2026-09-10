@@ -728,6 +728,61 @@ describe('type-specific details', () => {
     expect(opened).toHaveBeenCalledWith('https://www.instagram.com/p/Cx9pQ2v');
   });
 
+  it('names a nameless reservation from the remaining facts only', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          details: { kind: 'event', reservation: { partySize: 2 } },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByLabelText('Reservation: 2 people')).toBeDefined();
+    expect(screen.queryByLabelText(/^Reservation: ,/)).toBeNull();
+  });
+
+  it('treats blank free-text type facts as absent', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'watch',
+          title: 'Past Lives',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Past Lives',
+            mediaKind: 'movie',
+            episodeTitle: '',
+            service: '',
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('section-watching')).toBeNull();
+  });
+
+  it('does not put a blank organiser in the subtitle or invent a reservation', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          details: { kind: 'event', organiser: '', reservation: { name: '' } },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-subtitle').textContent).toBe('Event · Just you');
+    expect(screen.queryByTestId('section-reservation')).toBeNull();
+  });
+
   it('renders a stored zero price as 0.00 GBP, not Free', async () => {
     stubFetch({
       status: 200,

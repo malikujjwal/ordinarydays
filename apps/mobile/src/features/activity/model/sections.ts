@@ -1,4 +1,9 @@
-import type { Activity, ActivityDetails, EventReservation } from '@od/shared/types';
+import {
+  type Activity,
+  type ActivityDetails,
+  assertNever,
+  type EventReservation,
+} from '@od/shared/types';
 import { updatesSectionVisible } from '@/features/activity/model/planSections';
 import type { PendingActivity } from '@/lib/pendingActivity';
 
@@ -203,6 +208,8 @@ export function typeDetailSectionsFor(activity: DisplayActivity): TypeDetailSect
     case 'task':
     case 'custom':
       break;
+    default:
+      assertNever(details, 'ActivityDetails');
   }
   if (shownSourceUrl(activity) !== undefined) keys.push('link');
   return keys;
@@ -221,22 +228,27 @@ export function shownSourceUrl(activity: DisplayActivity): string | undefined {
   return url;
 }
 
+/** `freeText` allows `''`; blank is the same as absent for type-fact visibility. */
+function presentFreeText(value: string | undefined): value is string {
+  return value !== undefined && value !== '';
+}
+
 function watchSectionVisible(
   details: Extract<ActivityDetails, { kind: 'watch' }>,
 ): boolean {
   if (details.mediaKind !== 'movie') {
     if (details.season !== undefined || details.episode !== undefined) return true;
   }
-  return details.episodeTitle !== undefined || details.service !== undefined;
+  return presentFreeText(details.episodeTitle) || presentFreeText(details.service);
 }
 
 function reservationVisible(reservation: EventReservation | undefined): boolean {
   if (reservation === undefined) return false;
   return (
-    reservation.name !== undefined ||
+    presentFreeText(reservation.name) ||
     reservation.time !== undefined ||
     reservation.partySize !== undefined ||
-    reservation.reference !== undefined
+    presentFreeText(reservation.reference)
   );
 }
 
@@ -279,7 +291,9 @@ function subtitleMiddle(details: ActivityDetails): string | undefined {
     if (details.mediaKind === 'show') return 'Show';
     return undefined;
   }
-  if (details.kind === 'event') return details.organiser;
+  if (details.kind === 'event') {
+    return presentFreeText(details.organiser) ? details.organiser : undefined;
+  }
   return undefined;
 }
 

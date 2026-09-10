@@ -70,9 +70,9 @@
       "default": "./dist/rank/index.js"
     },
     "./money": {
-      "types": "./dist/money/format.d.ts",
-      "react-native": "./src/money/format.ts",
-      "default": "./dist/money/format.js"
+      "types": "./dist/money/index.d.ts",
+      "react-native": "./src/money/index.ts",
+      "default": "./dist/money/index.js"
     },
     "./test-fixtures": {
       "types": "./dist/test-fixtures/index.d.ts",

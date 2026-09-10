@@ -1,5 +1,10 @@
 import { formatMinorUnits } from '@od/shared/money';
-import type { Activity, ActivityDetails, EventReservation } from '@od/shared/types';
+import {
+  type Activity,
+  type ActivityDetails,
+  assertNever,
+  type EventReservation,
+} from '@od/shared/types';
 import { Text, Touchable, useTheme } from '@od/ui';
 import { Linking, View } from 'react-native';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
@@ -52,8 +57,10 @@ function TypeDetailGroup({
           <WatchingFacts details={details} />
         </SectionFrame>
       ) : null;
-    case 'description':
-      return details.kind === 'event' && details.description !== undefined ? (
+    case 'description': {
+      const description =
+        details.kind === 'event' ? shownFreeText(details.description) : undefined;
+      return description === undefined ? null : (
         <SectionFrame label="Description" testID="section-description">
           {activity.visibility === 'shared' ? (
             <Text variant="footnote" color="textSecondary" testID="description-privacy">
@@ -61,10 +68,11 @@ function TypeDetailGroup({
             </Text>
           ) : null}
           <Text variant="body" color="textPrimary" numberOfLines={0}>
-            {details.description}
+            {description}
           </Text>
         </SectionFrame>
-      ) : null;
+      );
+    }
     case 'reservation':
       return details.kind === 'event' && details.reservation !== undefined ? (
         <SectionFrame label="Reservation" testID="section-reservation">
@@ -97,6 +105,8 @@ function TypeDetailGroup({
         </SectionFrame>
       );
     }
+    default:
+      return assertNever(sectionKey, 'TypeDetailSectionKey');
   }
 }
 
@@ -108,6 +118,8 @@ function WatchingFacts({
   const movie = details.mediaKind === 'movie';
   const season = movie ? undefined : details.season;
   const episode = movie ? undefined : details.episode;
+  const episodeTitle = shownFreeText(details.episodeTitle);
+  const service = shownFreeText(details.service);
   const mediaParts: string[] = [];
   if (season !== undefined) mediaParts.push(`Season ${season}`);
   if (episode !== undefined) mediaParts.push(`Episode ${episode}`);
@@ -115,28 +127,27 @@ function WatchingFacts({
   return (
     <>
       {mediaLine === undefined ? (
-        details.episodeTitle === undefined ? null : (
-          <DataFact label="Episode title" value={details.episodeTitle} />
+        episodeTitle === undefined ? null : (
+          <DataFact label="Episode title" value={episodeTitle} />
         )
       ) : (
         <FactBlock
           primary={mediaLine}
-          secondary={details.episodeTitle}
+          secondary={episodeTitle}
           accessibilityLabel={
-            details.episodeTitle === undefined
-              ? mediaLine
-              : `${mediaLine}, ${details.episodeTitle}`
+            episodeTitle === undefined ? mediaLine : `${mediaLine}, ${episodeTitle}`
           }
         />
       )}
-      {details.service === undefined ? null : (
-        <DataFact label="Streaming service" value={details.service} />
+      {service === undefined ? null : (
+        <DataFact label="Streaming service" value={service} />
       )}
     </>
   );
 }
 
 function ReservationFacts({ reservation }: { reservation: EventReservation }) {
+  const name = shownFreeText(reservation.name);
   const rest: string[] = [];
   if (reservation.time !== undefined) rest.push(formatWallTime(reservation.time));
   if (reservation.partySize !== undefined) {
@@ -144,11 +155,14 @@ function ReservationFacts({ reservation }: { reservation: EventReservation }) {
       `${reservation.partySize} ${reservation.partySize === 1 ? 'person' : 'people'}`,
     );
   }
-  if (reservation.reference !== undefined) rest.push(`Ref ${reservation.reference}`);
+  const reference = shownFreeText(reservation.reference);
+  if (reference !== undefined) rest.push(`Ref ${reference}`);
   const restLine = rest.join(' · ');
-  const primary = reservation.name ?? restLine;
-  const secondary = reservation.name === undefined ? undefined : restLine;
-  const spoken = [reservation.name, restLine].filter((part) => part !== '').join(', ');
+  const primary = name ?? restLine;
+  const secondary = name === undefined ? undefined : restLine;
+  const spoken = [name, restLine]
+    .filter((part) => part !== undefined && part !== '')
+    .join(', ');
   return (
     <FactBlock
       primary={primary}
@@ -244,6 +258,11 @@ function LinkFact({ label, url }: { label: string; url: string }) {
       </Text>
     </Touchable>
   );
+}
+
+/** `freeText` allows `''`; blank is the same as absent on the type-fact rows. */
+function shownFreeText(value: string | undefined): string | undefined {
+  return value === undefined || value === '' ? undefined : value;
 }
 
 function hostFromUrl(url: string): string {

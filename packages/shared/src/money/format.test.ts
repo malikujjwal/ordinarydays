@@ -21,4 +21,14 @@ describe('formatMinorUnits', () => {
     expect(formatMinorUnits(1234, 'BHD', 3)).toBe('1.234 BHD');
     expect(formatMinorUnits(4200, 'GBP', 2)).toBe('42.00 GBP');
   });
+
+  it('omits the decimal point when minorUnits is 0', () => {
+    expect(formatMinorUnits(42, 'JPY', 0)).toBe('42 JPY');
+    expect(formatMinorUnits(0, undefined, 0)).toBe('0');
+  });
+
+  it('prefixes a minus and uses an absolute remainder for negative amounts', () => {
+    expect(formatMinorUnits(-5)).toBe('-0.05');
+    expect(formatMinorUnits(-3750, 'GBP')).toBe('-37.50 GBP');
+  });
 });

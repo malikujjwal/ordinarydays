@@ -378,6 +378,33 @@ describe('typeDetailSectionsFor', () => {
     ).toEqual([]);
   });
 
+  it('treats blank free-text type facts as absent', () => {
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Past Lives',
+            mediaKind: 'movie',
+            episodeTitle: '',
+            service: '',
+          },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      typeDetailSectionsFor(
+        activity({
+          details: { kind: 'event', reservation: { name: '' } },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      subtitleFor(activity({ details: { kind: 'event', organiser: '' } }), 'Event'),
+    ).toBe('Event · Just you');
+  });
+
   it('treats episode-only watch progress as a watching section without S3 in the header', () => {
     expect(
       typeDetailSectionsFor(
