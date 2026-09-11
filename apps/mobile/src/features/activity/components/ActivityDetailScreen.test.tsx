@@ -367,6 +367,20 @@ describe('reading', () => {
     expect(fieldValue('Notes for this plan')).toBe('Check-in is after 3 PM.');
   });
 
+  /** Device report 2026-09-11: the title's own 4 pt inset is the title → subtitle space. */
+  it('centres the editable title in its target and stacks the subtitle under it', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const title = screen.getByLabelText('Title');
+    expect(getComputedStyle(title).paddingTop).toBe('4px');
+    expect(getComputedStyle(title).paddingBottom).toBe('4px');
+    const titleGroup = screen.getByTestId('detail-subtitle').parentElement as HTMLElement;
+    // No gap of its own: `normal` (none set) or an explicit 0.
+    expect(['normal', '0px']).toContain(getComputedStyle(titleGroup).rowGap);
+  });
+
   it('uses icon-only header controls with complete accessible names', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();

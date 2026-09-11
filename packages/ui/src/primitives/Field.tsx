@@ -87,6 +87,15 @@ export interface FieldProps {
   appearance?: 'boxed' | 'bare' | 'underline';
   /** The type variant for the value. `body` unless the field *is* the screen's title. */
   textVariant?: TypeVariant;
+  /**
+   * A `bare` field's vertical inset. `control` (the default) pads the value by `space[2]`
+   * inside a 44 pt minimum, the form-row measure. `target` centres the value in exactly the
+   * 44 pt hit target and no more — for a screen title, where `control` left 9 pt of box under
+   * a single line and pushed the subtitle a line's worth away (device report, 2026-09-11).
+   * The target is still 44 pt of layout, so it holds on web, where `hitSlop` does not exist.
+   * Ignored unless `appearance` is `bare`.
+   */
+  density?: 'control' | 'target';
   testID?: string;
 }
 
@@ -113,6 +122,7 @@ export function Field({
   hideLabel = false,
   appearance = 'boxed',
   textVariant = 'body',
+  density = 'control',
   testID,
 }: FieldProps) {
   const theme = useTheme();
@@ -120,6 +130,11 @@ export function Field({
   const bare = appearance === 'bare';
   const underline = appearance === 'underline';
   const quiet = bare || underline;
+  /** The 1 pt border is drawn on every side, so it counts toward the 44 pt target too. */
+  const quietInset =
+    bare && density === 'target'
+      ? Math.max(0, (theme.layout.hitTarget - theme.type[textVariant].lineHeight - 2) / 2)
+      : theme.space[2];
 
   return (
     <View style={{ gap: theme.space[2] }}>
@@ -158,7 +173,7 @@ export function Field({
               {
                 opacity: 0,
                 minHeight: theme.layout.hitTarget,
-                paddingVertical: theme.space[2],
+                paddingVertical: quietInset,
                 borderWidth: 1,
                 borderColor: 'transparent',
               },
@@ -219,7 +234,7 @@ export function Field({
               backgroundColor: quiet ? 'transparent' : theme.colors.surfaceInput,
               borderRadius: quiet ? theme.radius.none : theme.radius.lg,
               paddingHorizontal: quiet ? theme.space[0] : theme.space[5],
-              paddingVertical: quiet ? theme.space[2] : theme.space[4],
+              paddingVertical: quiet ? quietInset : theme.space[4],
               ...(multiline && bare
                 ? ({
                     position: 'absolute',

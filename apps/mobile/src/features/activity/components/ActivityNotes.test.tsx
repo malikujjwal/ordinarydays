@@ -83,3 +83,60 @@ it('renders written notes under a Notes heading with a trailing Edit', () => {
   // The privacy note stays with the editor.
   expect(screen.getByTestId('notes-privacy').textContent).toBe('Private to you.');
 });
+
+/** Device report 2026-09-11: `Add notes` sits flush right, like every trailing action. */
+it('renders Add notes as a flush-right text action that keeps focus return', () => {
+  const { result } = renderHook(() => useNotesDraft('', vi.fn()));
+  render(
+    <ThemeProvider scheme="light">
+      <ActivityNotes notes={result.current} value="" kind="task" pending={false} />
+    </ThemeProvider>,
+  );
+  const add = screen.getByRole('button', { name: 'Add notes' });
+  expect(add.getAttribute('data-testid')).toBe('notes-edit');
+  expect(getComputedStyle(add).paddingRight).toBe('0px');
+  expect(getComputedStyle(add).paddingLeft).toBe('0px');
+  expect(result.current.actionRef.current).toBe(add);
+});
+
+/** Device report 2026-09-11: Notes closes on a hairline, except while editing. */
+it('closes empty and written notes on a rule, but not the editor', () => {
+  const { result } = renderHook(() => useNotesDraft('', vi.fn()));
+  const view = render(
+    <ThemeProvider scheme="light">
+      <ActivityNotes notes={result.current} value="" kind="task" pending={false} />
+    </ThemeProvider>,
+  );
+  expect(getComputedStyle(screen.getByTestId('section-notes')).borderBottomWidth).toBe(
+    '1px',
+  );
+
+  const written = renderHook(() => useNotesDraft('Bring limes.', vi.fn()));
+  view.rerender(
+    <ThemeProvider scheme="light">
+      <ActivityNotes
+        notes={written.result.current}
+        value="Bring limes."
+        kind="task"
+        pending={false}
+      />
+    </ThemeProvider>,
+  );
+  expect(
+    getComputedStyle(screen.getByTestId('notes-preview-rule')).borderBottomWidth,
+  ).toBe('1px');
+
+  act(() => fireEvent.click(screen.getByRole('button', { name: 'Edit notes' })));
+  view.rerender(
+    <ThemeProvider scheme="light">
+      <ActivityNotes
+        notes={written.result.current}
+        value="Bring limes."
+        kind="task"
+        pending={false}
+      />
+    </ThemeProvider>,
+  );
+  expect(screen.queryByTestId('notes-preview-rule')).toBeNull();
+  expect(screen.getByLabelText('Notes for this task')).toBeDefined();
+});

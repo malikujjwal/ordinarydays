@@ -1425,60 +1425,74 @@ function Loaded({
             )
           }
         />
-        {/** Title and type/audience are one header unit, not two unrelated form rows. */}
-        <View style={{ gap: theme.space[2] }}>
-          {pending ? (
-            <Text variant="display" color="textPrimary" testID="detail-title">
-              {activity.title}
-            </Text>
-          ) : (
-            <InlineText
-              label="Title"
-              value={activity.title}
-              hideLabel
-              appearance="bare"
-              textVariant="display"
-              multiline
-              onCommit={async (title) => {
-                await detail.patch({ title });
-              }}
-              testID="detail-title"
-            />
-          )}
-          <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
-            {subtitleFor(
-              activity,
-              activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
+        {/**
+         * **The header's rhythm comes from its text, not from stacked boxes** (device report,
+         * 2026-09-11): title → subtitle 4 pt, subtitle → date 12 pt, date → summary 4 pt,
+         * → place 8 pt, → primary 16 pt. On the phone the old `space[5]` gap sat on top of
+         * the title field's control padding and the when/where rows' 44 pt minimum heights.
+         * The editable title now centres in exactly its 44 pt target (`density="target"`), so
+         * its own 4 pt inset is the title → subtitle space; `WhenWhereBlock` keeps its targets
+         * with `hitSlop` rather than layout on native.
+         */}
+        <View style={{ gap: theme.space[4] }}>
+          {/** Title and type/audience are one header unit, not two unrelated form rows. */}
+          <View style={{ gap: pending ? theme.space[2] : 0 }}>
+            {pending ? (
+              <Text variant="display" color="textPrimary" testID="detail-title">
+                {activity.title}
+              </Text>
+            ) : (
+              <InlineText
+                label="Title"
+                value={activity.title}
+                hideLabel
+                appearance="bare"
+                density="target"
+                textVariant="display"
+                multiline
+                onCommit={async (title) => {
+                  await detail.patch({ title });
+                }}
+                testID="detail-title"
+              />
             )}
-          </Text>
-
-          {detail.editError === undefined ? null : (
-            <Text variant="footnote" color="danger" testID="detail-edit-error">
-              {detail.editError}
+            <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
+              {subtitleFor(
+                activity,
+                activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
+              )}
             </Text>
-          )}
-        </View>
 
-        {/** U4: the schedule remains a tap target and never becomes an inline field. */}
-        <WhenWhereBlock
-          schedule={shownSchedule}
-          location={activity.location}
-          reminders={detail.detail?.reminders ?? []}
-          {...(activity.schedule === undefined
-            ? {}
-            : activity.recurrence === undefined
+            {detail.editError === undefined ? null : (
+              <View style={{ marginTop: theme.space[2] }}>
+                <Text variant="footnote" color="danger" testID="detail-edit-error">
+                  {detail.editError}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/** U4: the schedule remains a tap target and never becomes an inline field. */}
+          <WhenWhereBlock
+            schedule={shownSchedule}
+            location={activity.location}
+            reminders={detail.detail?.reminders ?? []}
+            {...(activity.schedule === undefined
               ? {}
-              : {
-                  recurrenceDescription: describeRecurrence(activity.recurrence, today),
-                })}
-          today={today}
-          onPressDate={pending ? undefined : onOpenReschedule}
-          onPressAddress={
-            activity.location === undefined
-              ? undefined
-              : () => void openInMaps(activity.location)
-          }
-        />
+              : activity.recurrence === undefined
+                ? {}
+                : {
+                    recurrenceDescription: describeRecurrence(activity.recurrence, today),
+                  })}
+            today={today}
+            onPressDate={pending ? undefined : onOpenReschedule}
+            onPressAddress={
+              activity.location === undefined
+                ? undefined
+                : () => void openInMaps(activity.location)
+            }
+          />
+        </View>
 
         {/**
          * A passed-plan prompt replaces the primary action in the same visual position — so it
@@ -1857,6 +1871,7 @@ function InlineText({
   placeholder,
   hideLabel = false,
   appearance,
+  density,
   textVariant,
   testID,
 }: {
@@ -1867,6 +1882,7 @@ function InlineText({
   placeholder?: string;
   hideLabel?: boolean;
   appearance?: 'boxed' | 'bare';
+  density?: 'control' | 'target';
   /** `display` is the detail header's serif title (`design-system.md` §7.5). */
   textVariant?: 'body' | 'title' | 'display';
   testID?: string;
@@ -1882,6 +1898,7 @@ function InlineText({
       multiline={multiline}
       hideLabel={hideLabel}
       {...(appearance === undefined ? {} : { appearance })}
+      {...(density === undefined ? {} : { density })}
       {...(textVariant === undefined ? {} : { textVariant })}
       {...(placeholder === undefined ? {} : { placeholder })}
       onBlur={() => {

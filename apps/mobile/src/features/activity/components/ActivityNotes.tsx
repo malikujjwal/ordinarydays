@@ -1,4 +1,4 @@
-import { Button, Field, Text, useTheme } from '@od/ui';
+import { Field, Text, Touchable, useTheme } from '@od/ui';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, View } from 'react-native';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
@@ -57,7 +57,16 @@ export function ActivityNotes({
 
   if (!hasText && !notes.editing) {
     return (
-      <View testID="section-notes" style={{ gap: theme.space[1] }}>
+      <View
+        testID="section-notes"
+        style={{
+          gap: theme.space[1],
+          // The approved mock closes Notes on a hairline, like every Details row above it.
+          borderBottomWidth: 1,
+          borderBottomColor: theme.colors.border,
+          ...(privacy === null ? {} : { paddingBottom: theme.space[3] }),
+        }}
+      >
         <View
           style={{
             flexDirection: 'row',
@@ -70,15 +79,28 @@ export function ActivityNotes({
           <Text color="textMuted" testID="notes-preview">
             No notes
           </Text>
+          {/**
+           * The `SectionFrame` trailing-action treatment, not a ghost `Button`: the button's
+           * own horizontal padding inset `Add notes` from the right edge every other trailing
+           * value on the screen lines up on (device report, 2026-09-11).
+           */}
           {pending ? null : (
-            <Button
-              contentSized
-              elementRef={notes.actionRef}
-              label="Add notes"
-              variant="ghost"
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Add notes"
               onPress={notes.edit}
+              elementRef={notes.actionRef}
               testID="notes-edit"
-            />
+              style={{
+                minHeight: theme.layout.hitTarget,
+                justifyContent: 'center',
+                flexShrink: 1,
+              }}
+            >
+              <Text variant="footnoteStrong" color="textAction">
+                Add notes
+              </Text>
+            </Touchable>
           )}
         </View>
         {privacy}
@@ -124,13 +146,23 @@ export function ActivityNotes({
               : {})}
           />
         ) : (
-          <Text
-            color="textSecondary"
-            numberOfLines={pending && expanded ? 0 : 2}
-            testID="notes-preview"
+          /* The preview closes on its own rule, like a Details row; the editor has a border. */
+          <View
+            testID="notes-preview-rule"
+            style={{
+              paddingBottom: theme.space[4],
+              borderBottomWidth: 1,
+              borderBottomColor: theme.colors.border,
+            }}
           >
-            {value}
-          </Text>
+            <Text
+              color="textSecondary"
+              numberOfLines={pending && expanded ? 0 : 2}
+              testID="notes-preview"
+            >
+              {value}
+            </Text>
+          </View>
         )}
       </View>
     </SectionFrame>

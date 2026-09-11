@@ -1,6 +1,6 @@
 import type { Reminder } from '@od/shared/types';
 import { Text, Touchable, useTheme } from '@od/ui';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import {
   formatReminderOffset,
   formatSchedule,
@@ -33,6 +33,24 @@ import {
  * server gave it, which are already filtered to the caller — no count, no avatars, and no
  * hint that anybody else has one. The row is hidden entirely when the plan has no date,
  * because there is nothing to count back from (§2.2).
+ *
+ * ## 44 pt targets, not 44 pt of layout (device report, 2026-09-11)
+ *
+ * `Touchable` enforces its target as `minHeight`, so a one-line place was a 44 pt box around
+ * 21 pt of text and the header read far looser on the phone than the approved rhythm (date →
+ * place 8 pt, place → primary 16 pt). On native the two rows now take their text's height and
+ * make the target up with `hitSlop`, sized from the same tokens as the text they hold.
+ *
+ * Fabric only hit-tests a child outside its parent's bounds when the parent has layout
+ * overflow, and `hitSlop` is not layout — slop that pokes out of this block's own box would
+ * silently never receive a touch. So the block's box is grown by the largest slop with
+ * padding and handed back with an equal negative margin: the layout is unchanged and every
+ * slop lies inside a real view. The surrounding header keeps at least that much space on each
+ * side. Where the date's and place's slop meet in the 8 pt between them, the place (drawn
+ * later) takes the overlap; each still measures 44 pt.
+ *
+ * Web keeps `minHeight`: React Native Web has no `hitSlop`, and 44 CSS px of layout is the only
+ * way to hold the target there.
  */
 export interface WhenWhereBlockProps {
   schedule: { date: string; time?: string; endTime?: string } | undefined;
@@ -63,8 +81,32 @@ export function WhenWhereBlock({
       ? undefined
       : location.address;
 
+  /** Native rows take their text's height and make the 44 pt target up with `hitSlop`. */
+  const slopTargets = Platform.OS !== 'web';
+  const target = theme.layout.hitTarget;
+  const slopFor = (height: number) =>
+    slopTargets ? Math.max(0, Math.ceil((target - height) / 2)) : 0;
+  const dateSlop = slopFor(
+    theme.type.bodyStrong.lineHeight +
+      theme.space[1] +
+      (onPressDate === undefined ? 0 : 1) +
+      (summary === undefined ? 0 : theme.space[2] + theme.type.footnote.lineHeight),
+  );
+  const placeSlop =
+    location === undefined || location.label === ''
+      ? 0
+      : slopFor(
+          theme.type.body.lineHeight +
+            (address === undefined ? 0 : theme.type.footnote.lineHeight),
+        );
+  const blockSlop = Math.max(dateSlop, placeSlop);
+  const rowStyle = slopTargets ? { minHeight: 0 } : undefined;
+
   return (
-    <View testID="when-where">
+    <View
+      testID="when-where"
+      style={{ marginVertical: -blockSlop, paddingVertical: blockSlop }}
+    >
       <View style={{ gap: theme.space[3] }}>
         <Touchable
           square={false}
@@ -76,6 +118,8 @@ export function WhenWhereBlock({
           }
           disabled={onPressDate === undefined}
           onPress={onPressDate}
+          hitSlop={{ top: dateSlop, bottom: dateSlop }}
+          style={rowStyle}
           testID="when-where-date"
         >
           <View style={{ gap: theme.space[2] }}>
@@ -142,6 +186,8 @@ export function WhenWhereBlock({
             }
             disabled={onPressAddress === undefined}
             onPress={onPressAddress}
+            hitSlop={{ top: placeSlop, bottom: placeSlop }}
+            style={rowStyle}
             testID="when-where-location"
           >
             <Text variant="body" color="textSecondary">

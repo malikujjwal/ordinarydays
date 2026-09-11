@@ -163,6 +163,34 @@ describe('every primitive renders', () => {
     ).toBe(96);
   });
 
+  it('centres a target-density bare Field in exactly the hit target', () => {
+    wrap(
+      <>
+        <Field
+          label="Title"
+          value="Chicken tacos"
+          multiline
+          appearance="bare"
+          textVariant="display"
+          density="target"
+        />
+        <Field label="Notes" value="" multiline appearance="bare" />
+      </>,
+    );
+    const title = screen.getByLabelText('Title');
+    const inset = Number.parseFloat(getComputedStyle(title).paddingTop);
+    // display is 34 pt of line; 34 + 2 × 1 pt border + 2 × inset is the 44 pt target.
+    expect(34 + 2 + 2 * inset).toBe(layout.hitTarget);
+    expect(getComputedStyle(title).paddingBottom).toBe(
+      getComputedStyle(title).paddingTop,
+    );
+    // The mirror that sizes a bare multiline field carries the same inset.
+    const mirror = title.parentElement?.firstElementChild as HTMLElement;
+    expect(getComputedStyle(mirror).paddingTop).toBe(`${inset}px`);
+    // Opt-in: the default bare field keeps the control row's `space[2]`.
+    expect(getComputedStyle(screen.getByLabelText('Notes')).paddingTop).toBe('4px');
+  });
+
   it('keeps every side of a boxed Field boundary visible', () => {
     wrap(<Field label="Title" value="" />);
 

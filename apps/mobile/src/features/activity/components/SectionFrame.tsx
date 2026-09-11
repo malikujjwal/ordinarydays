@@ -45,12 +45,25 @@ export function SectionFrame({
       style={{ gap: ruled ? 0 : theme.space[2] }}
       {...(testID === undefined ? {} : { testID })}
     >
+      {/**
+       * **The label's box always has a definite width** (device report, 2026-09-11). The
+       * 2026-09-10 version sat the heading in a `flexShrink: 1` wrapper inside a nested
+       * baseline row so `meta` could hug it. On iOS every heading on the screen vanished:
+       * `SectionHeader` gives its caption a `flex: 1` box, which Yoga resolves to a zero flex
+       * basis, so a content-sized parent measures it at 0 pt wide and the caption lays out
+       * into nothing. The browser (and so every jsdom test) sizes the same tree from the
+       * text's max-content width, which is why only the phone showed it. So the heading gets
+       * a `flex: 1` box of its own, `meta` follows it in a plain row, and rows centre rather
+       * than baseline-align — Yoga's baseline walks nested views and is the least
+       * predictable of the alignments. `meta`'s bottom inset mirrors `SectionHeader`'s own,
+       * so the two centre on the same line.
+       */}
       <View
         style={{
           flexDirection: 'row',
           flexWrap: 'wrap',
           justifyContent: 'space-between',
-          alignItems: 'baseline',
+          alignItems: 'center',
           gap: theme.space[2],
           ...(ruled
             ? { borderBottomWidth: 1, borderBottomColor: theme.colors.border }
@@ -62,17 +75,23 @@ export function SectionFrame({
             flex: 1,
             minWidth: 0,
             flexDirection: 'row',
-            alignItems: 'baseline',
+            alignItems: 'center',
             gap: theme.space[3],
           }}
         >
-          <View style={{ flexShrink: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <SectionHeader title={label} />
           </View>
           {meta === undefined ? null : (
-            <Text variant="footnote" color="textMuted">
-              {meta}
-            </Text>
+            <View style={{ paddingBottom: theme.space[2] }}>
+              <Text
+                variant="footnote"
+                color="textMuted"
+                {...(testID === undefined ? {} : { testID: `${testID}-meta` })}
+              >
+                {meta}
+              </Text>
+            </View>
           )}
         </View>
         {trailing === undefined ? null : onTrailingPress === undefined ? (

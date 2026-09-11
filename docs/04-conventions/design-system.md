@@ -602,7 +602,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
 | `Sheet` | `open`, `onClose`, `title?`, `detent` (`fit` \| `medium` \| `large`), `actions?`, `dismissible`, and exactly one body owner: ordinary `children` or `virtualizedBody` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. A paginated choice list supplies its own `FlatList` through `virtualizedBody`; the Sheet forwards scroll position for pull-to-dismiss and never nests that list in a `ScrollView`. **Behaviour is fixed by §6.1, not by the screen.** |
 | `AlertDialog` | `open`, `label`, `onRequestClose`, `initialFocusTestID?`, `children` | Always centred and scrim-modal. The scrim never dismisses it. The safe action receives initial focus; focus is trapped and returns to the trigger on close. Reduce Motion removes the native fade. Geometry and focus behaviour belong to the primitive, not a feature screen. |
-| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength`, `appearance` (`boxed` \| `bare` \| `underline`) | default, focused, filled, error, disabled. `boxed` uses `surfaceInput`, `radius.lg`, **`borderStrong` at rest** and the accessible `focusRing` on focus. `bare` is content-like inline editing. `underline` is the persistent-boundary rapid-entry treatment. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
+| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength`, `appearance` (`boxed` \| `bare` \| `underline`), `density?` (`control` \| `target`, `bare` only) | default, focused, filled, error, disabled. `boxed` uses `surfaceInput`, `radius.lg`, **`borderStrong` at rest** and the accessible `focusRing` on focus. `bare` is content-like inline editing; `density="target"` centres its value in exactly the 44 pt target instead of the control row's `space[2]` padding (the Activity detail title, 2026-09-11). `underline` is the persistent-boundary rapid-entry treatment. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
 | `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderStrong` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
@@ -1476,6 +1476,18 @@ renders no placeholder for anything it lacks — a Task is not a Plan with thing
 > (`Repeats daily · Reminder 1 hour before`, `Reminder at the time`) and is omitted when
 > neither is; the Settings rows still report `Does not repeat` / `None`. A location whose
 > label and address are the same text (trimmed, case-insensitive) renders once.
+>
+> **Amended 2026-09-11 (device report).** The header's rhythm is measured on its text, not on
+> stacked boxes: title → subtitle 4 pt, subtitle → date 12 pt, date → summary 4 pt, → place
+> 8 pt, → primary action 16 pt. The editable title uses `Field` `density="target"`, so its own
+> centring inset is the title → subtitle space; on native the date and place rows take their
+> text's height and keep the 44 pt target with `hitSlop` (web keeps 44 px of layout, having no
+> `hitSlop`). Where the two rows' slop meets in the 8 pt between them, the place takes the
+> overlap — the one place this screen trades `interaction-contract.md` §2's 8 pt non-interactive
+> separation for the approved rhythm. Section headings keep a definite-width caption box
+> (`flex: 1`) with any count beside it at the end of the label area; a content-sized box around
+> `SectionHeader` measures 0 pt wide on iOS. Notes closes on a hairline in every state except
+> the editor, and `Add notes` uses the section trailing-action treatment so it sits flush right.
 
 ---
 
