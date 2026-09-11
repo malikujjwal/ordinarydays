@@ -38,7 +38,11 @@ import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import { type NeedsDateRowData, usePlans } from '../hooks/usePlans';
 import { usePlansBoundaryNavigation } from '../hooks/usePlansBoundaryNavigation';
-import { calendarListLandingRecovery } from '../model/calendarListLanding';
+import {
+  CALENDAR_LANDING_WINDOW_MS,
+  calendarListLandingDeadline,
+  calendarListLandingRecovery,
+} from '../model/calendarListLanding';
 import { calendarListWindow } from '../model/calendarListWindow';
 import {
   type PastDay,
@@ -465,7 +469,7 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
     const land = (scroll: () => void) => {
       pendingScroll.current = scroll;
       landingAttempts.current = 0;
-      landingDeadline.current = performance.now() + 256;
+      landingDeadline.current = performance.now() + CALENDAR_LANDING_WINDOW_MS;
       scroll();
       setLanding(undefined);
     };
@@ -748,6 +752,11 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
               performance.now() >= landingDeadline.current
             )
               return;
+            landingDeadline.current = calendarListLandingDeadline(
+              info,
+              performance.now(),
+              landingDeadline.current,
+            );
             onScrollToIndexFailed(
               upcomingList.current,
               info,
@@ -813,6 +822,11 @@ export function PlansScreen({ onOpen, onAdd, followUp }: PlansScreenProps) {
         onScrollToIndexFailed={(info) => {
           if (!currentHeaderReady.current || performance.now() >= landingDeadline.current)
             return;
+          landingDeadline.current = calendarListLandingDeadline(
+            info,
+            performance.now(),
+            landingDeadline.current,
+          );
           onScrollToIndexFailed(
             pastList.current,
             info,
