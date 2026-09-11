@@ -456,6 +456,19 @@ Sections render in this fixed order and a section with nothing in it collapses t
 > movie), `Booking`, `Tickets`, `Description`, and `Link`. Each opens the type sheet or the
 > Link sheet. A Task's chip row reads `Add to this task` and offers only `Link`.
 >
+> **Amended 2026-09-10 (founder) — supersedes the 2026-09-09 chip list and the settings-first
+> order.** Type facts no longer render as topic sections: they are rows in one **Details**
+> group with a single `Edit`, directly under the header (the full row list and heading
+> grammar are in [`../04-conventions/design-system.md`](../04-conventions/design-system.md)
+> §7.5). The type chips shrink to three: **`Ingredients`** on a Meal with no ingredient rows
+> (opens the meal sheet), **`Details`** on a Meal / Watch / Event whose Details group is absent
+> (opens the type sheet), and **`Link`** on a Task or General plan with no Details group.
+> `Prep task`, `List` and `Photo` are unchanged. Below the header the order is Details, the
+> content sections (Ingredients, Prep, Lists, Attachments), Notes, the chip row, then a
+> **Settings** group — Repeat, Reminder, `People · Coming later` — and Updates last. Settings
+> still always render (subject to the date rule), but at the foot rather than above the
+> content. The header's repeat/reminder summary states only what is set.
+>
 > **The completion action stays directly under the schedule line**, keeping §7.5: the screen's
 > hero is the thing you came to do, and ten sections must not push it below the fold.
 >
@@ -545,8 +558,9 @@ inherits the creator's, and the owner cannot set one for anyone else.
 > `Coming later`; a Meal may also show Ingredients this way until Phase 3 builds its
 > interaction. Those rows have no chevron, disabled action, expansion or tap behaviour.
 > Expenses and Updates remain absent until their own product conditions and implementation
-> are available. Recipe is stored on a Meal and now renders as a type-fact section, or as a
-> Recipe chip while empty.
+> are available. Recipe is stored on a Meal and renders as the `Recipe` row of the Details
+> group (amended 2026-09-10; it was a type-fact section, or a Recipe chip while empty). A meal
+> with no Details group is reached through the `Details` chip.
 
 > **Amended 2026-08-25 by §2.1.** The table below still governs *whether a capability is
 > available at all*. What changed is the empty case: a section holding nothing no longer
@@ -566,7 +580,7 @@ inherits the creator's, and the owner cannot set one for anyone else.
 | Prep | Never hidden. Empty state is `+ Add prep task` alone. |
 | Lists | Never hidden. Empty state is `Add list` alone. |
 | Expenses | Hidden when the plan has < 2 participants and 0 expenses |
-| Notes | Explicit `Add notes` / `Edit notes` action and a two-line preview. Inline bordered draft editor with Save/Cancel; the Activity-specific exception in [`activities.md`](activities.md) §6.1 supersedes generic setting/disclosure behavior. |
+| Notes | Explicit `Add notes` / `Edit notes` action and a two-line preview. Inline bordered draft editor with Save/Cancel; the Activity-specific exception in [`activities.md`](activities.md) §6.1 supersedes generic setting/disclosure behavior. Amended 2026-09-10: sits after the content sections; empty is one line (`No notes` · `Add notes`), and written notes carry a `Notes` caption with `Edit` (spoken `Edit notes`) in its trailing slot. |
 | Attachments | Never hidden once the picker exists (P3-41, built 2026-09-01): while empty it is discovered through the `Photo` chip in the `Add to this plan` row, and once it holds content the section carries its own `+ Add photo`, like Prep and Lists. Picking a photo shows its row at once — thumbnail, `Uploading n%`, `Pending` while offline, `Retry` on failure — and the row reads `Added` when the confirm lands. Tapping a thumbnail opens the full-screen viewer at that photo, swiping between the plan's images (P3-42); long-pressing one offers the owner `Set as cover` (additive, standard undo) and `Delete` (confirms, no undo). The 2026-08-13 pre-build discovery row (`Attachments · Photos and files · Coming later`) remains only for a caller that has not wired the picker. |
 | Updates | Hidden when `visibility === 'private'` and there are no entries. **Exception to the 2026-08-25 empty-case note (recorded by P3-40):** when this row makes the section visible with zero entries — a shared plan before anything has happened — it renders as the section itself carrying `+ Write an update`, not as a chip. The feed's entry point lives at the feed's foot wherever the feed may show, so there is no Update chip in the `Add to this plan` row at all; on a private plan with no entries the deliberate consequence is no entry point until a system entry exists. |
 | Completion button | Hidden when `status` is `completed`, `skipped` or `cancelled` — replaced by the outcome and an `Undo` affordance — **and hidden for everyone but the owner**, who is the only person who can complete, skip or snooze a shared plan. A participant sees the outcome when there is one and nothing where the button would be. |
@@ -1610,6 +1624,18 @@ The flow, exactly:
 
 Nothing in this flow happens automatically. Creating a meal with ingredients writes zero
 grocery items until step 3.
+
+> **Amended 2026-09-10 (founder).** On the **detail screen**, steps 1–2 read differently from
+> the creation form. The rows come first; the destination is one quiet line at the section's
+> foot (`To Groceries ▾`, opening the same chooser), and the `Add <n> to <list name>` action
+> appears beside it **only once at least one row is selected** — there is no disabled
+> `Add 0 …` bar and no separate `Add ingredients to:` label above the rows. The creation form
+> keeps the layout above. **Ingredients are editable after creation:** the section's `Edit`
+> (or the `Ingredients` chip on a meal with none) opens the meal sheet, where rows can be
+> renamed, re-quantified, added and removed. Existing rows keep their stored `ingredientId`,
+> new rows mint one, blank names are dropped, and the save is the ordinary wholesale
+> `details` PATCH — the server re-attaches `addedToListId` by `ingredientId`, so a kept row
+> still reads `Added` and a removed row takes its marker with it.
 
 ### 7.4 Completion
 

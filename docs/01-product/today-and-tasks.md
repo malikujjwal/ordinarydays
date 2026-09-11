@@ -613,6 +613,17 @@ section does not delete that user content, and the Task accepts no new entries.
 Each functional capability is a single disclosure row with a trailing chevron and accessible
 expanded state; opening it shows either its current content or the real add controls.
 
+> **Amended 2026-09-10 (founder).** The parent link is no longer a `Related plan` setting row.
+> A prep task shows it as a **`Part of`** row in the Activity detail **Details** group — the
+> parent plan's title with a chevron that opens it, or `A plan` (inert) when the title cannot
+> be read. **A task with no parent shows no row at all**; the `Related plan · None` disclosure
+> is gone. A stored source URL is the Details group's `Link` row (host `↗`, opens the link),
+> and the group's one `Edit` opens the Link sheet. The `Add to this task` chip row offers
+> `Link` only while the task has no Details group. The screen order is the shared one in
+> [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.5: header,
+> Details, Notes, the chip row, then Settings (Repeat and Reminder, when scheduled). The
+> header's repeat/reminder summary states only what is set and is omitted when neither is.
+
 ---
 
 ## 6. Recurring tasks

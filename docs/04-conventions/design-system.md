@@ -1422,6 +1422,51 @@ alone). A task shows only Notes, Reminder when scheduled, Related plan, and Link
 renders no placeholder for anything it lacks — a Task is not a Plan with things hidden
 (`today-and-tasks.md` §5.6). Its empty Link is an `Add to this task` chip, Link only.
 
+> **Amended 2026-09-10 (founder) — one Details group, settings at the foot.** The founder
+> found the screen crowded with no flow; the approved reflow supersedes the capability order
+> above, the notes-first refinement of 2026-08-13 and the notes-as-first-setting part of the
+> 2026-09-05 notes exception. Below the header (unchanged: title, subtitle, when/where, the
+> primary action with snooze/skip/resolution) the screen reads **what it is, what it holds,
+> what you wrote, how it behaves**:
+>
+> 1. **Details** — one `SectionFrame` captioned `Details`, with one trailing `Edit` in the
+>    action colour. It replaces the six topic sections (Recipe / Watching / Description /
+>    Reservation / Tickets / Link) and the `Related plan` and `From <list>` setting rows.
+>    Rows are label-left (`subhead`, `textSecondary`) / value-right, about 48 pt, closed by
+>    their own rule; a row that opens something is the whole target and inks its value in
+>    `textAction`. Meal: `Recipe` → host `↗`. Watch: `Episode` → `S2 · E4` with the episode
+>    title beneath (never season/episode on a movie), `Service`. Event: `Booking` →
+>    `name · time` over `2 people · Ref X`, `Tickets` → formatted price and ticket host `↗`,
+>    `Organiser`, `Description` as a full-width paragraph under a small caption. Every kind:
+>    `Link` (the source URL, still de-duplicated against `recipeUrl` / `ticketUrl`), `Part of`
+>    → the parent plan with a chevron (`A plan`, inert, when it cannot be titled; **no row
+>    when there is no parent**), `From` → the source List with a chevron. The group renders
+>    only with at least one row. `Edit` opens the type sheet on Meal / Watch / Event — which
+>    now ends with the `Link` field, so one Edit edits every detail — and the Link sheet on a
+>    Task or General plan.
+> 2. **Content sections**, in this order: Ingredients (count beside the label, e.g. `4` or
+>    `1 of 4 on a list`, and a trailing `Edit` into the meal sheet), Preparation, Lists,
+>    Attachments.
+> 3. **Notes.** Empty is one compact line — muted `No notes` left, `Add notes` right — not a
+>    heading over `No notes yet.` With text: a `Notes` caption with `Edit` in the trailing
+>    slot, then the two-line preview. The inline editor is unchanged.
+> 4. **The `Add to this plan` / `Add to this task` chip row.** `Prep task`, `List` and
+>    `Photo` keep their gating. The type chips shrink to three: `Ingredients` on a Meal with
+>    no rows, `Details` on a Meal / Watch / Event with no Details group, `Link` on a Task or
+>    General plan with no Details group. There are no per-fact chips (`Recipe`, `Episode`,
+>    `Booking`, `Tickets`, `Description`) — once Details exists its `Edit` reaches them.
+> 5. **Settings** — a `Settings` caption over the ruled `SettingRow`s Repeat, Reminder (only
+>    when scheduled) and, on a Plan, `People · Coming later`, at `SettingRow`'s existing
+>    `compact` density. Absent when it has no row.
+> 6. **Updates**, last.
+>
+> Top-level groups sit `space[8]` (32 pt) apart. Details, Ingredients, written Notes and
+> Settings share one heading grammar: a caption heading closed by a hairline, then rows that
+> each close on their own rule. The **summary line under the date shows only what is set**
+> (`Repeats daily · Reminder 1 hour before`, `Reminder at the time`) and is omitted when
+> neither is; the Settings rows still report `Does not repeat` / `None`. A location whose
+> label and address are the same text (trimmed, case-insensitive) renders once.
+
 ---
 
 ## 8. Responsive
