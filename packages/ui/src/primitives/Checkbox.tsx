@@ -124,7 +124,7 @@ export function Checkbox({
             justifyContent: 'center',
             backgroundColor: fill.interpolate({
               inputRange: [0, 1],
-              outputRange: ['rgba(0,0,0,0)', theme.colors.success],
+              outputRange: [theme.colors.transparent, theme.colors.success],
             }),
             borderWidth: fill.interpolate({
               inputRange: [0, 1],

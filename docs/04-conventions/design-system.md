@@ -425,6 +425,7 @@ independently contrast-checked.
 | `surfaceInput` | `#F0EBE3` | `#1C1B18` | — | Fields, selects and native/web picker surfaces |
 | `surfaceSunken` | `#ECE7DE` | `#1C1B18` | — | Rail selection pill, segmented-control track, grouped areas, icon squircles' base, skeletons |
 | `scrim` | `rgba(38,42,40,0.40)` | `rgba(0,0,0,0.60)` | — | Behind a modal sheet |
+| `transparent` | `rgba(0,0,0,0)` | `rgba(0,0,0,0)` | — | The clear start of a fill that animates in (the checkbox's `success` fill); `Animated` needs a parseable colour at both ends, and no component writes one raw |
 | `textDisplay` | `#292621` | `#F4F0E8` | 12.9:1 / 15.9:1 | Serif display and title ink — the darkest thing on any screen |
 | `textPrimary` | `#292621` | `#F4F0E8` | 12.9:1 / 15.9:1 | Row titles and body copy |
 | `textSecondary` | `#6E675F` | `#D0C9BE` | 4.8:1 / 11.0:1 | Subtitles, metadata and times |
