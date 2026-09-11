@@ -1306,7 +1306,9 @@ and the reference for every later task that adds a capability to this screen.
 > case. Rule 2's warning still stands for the case it was written about — a collapsed row must
 > never render a long value in full.
 
-**Activity notes exception (approved 2026-09-05).** Notes remains the first setting, with a
+**Activity notes exception (approved 2026-09-05).** *Position, the Related plan row and the
+type-fact chip list in this paragraph are superseded by the 2026-09-10 amendment below; the
+editor behaviour stands.* Notes remains the first setting, with a
 visible heading, a two-line preview (full text available to assistive technology), and an
 explicit action-colored `Add notes` or `Edit notes` button. Its inline editor uses the shared
 bordered Field with a persistent label. Save/Cancel belong to the keyboard-aware screen

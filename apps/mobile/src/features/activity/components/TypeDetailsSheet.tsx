@@ -217,19 +217,28 @@ export function TypeDetailsSheet({
   async function save() {
     if (inFlight.current || blocked) return;
     setFieldErrors({});
+    /**
+     * The stored link is validated only once the user changes it. The server accepts any
+     * scheme (`z.url()`), so a stored `mailto:` would otherwise block every save of a field
+     * the user never touched — and the only way past it would be deleting their link.
+     */
+    const linkChanged = draft.sourceUrl.trim() !== (activity.sourceUrl ?? '');
+    const link: ReturnType<typeof parseOptionalUrl> = linkChanged
+      ? parseOptionalUrl(draft.sourceUrl)
+      : { ok: true };
     if (mode === 'link') {
-      const parsed = parseOptionalUrl(draft.sourceUrl);
-      if (!parsed.ok) {
+      if (!link.ok) {
         setFieldErrors({ sourceUrl: 'Enter a valid link.' });
         return;
       }
-      await persist({
-        sourceUrl: parsed.value === undefined ? null : parsed.value,
-      });
+      if (!linkChanged) {
+        close();
+        return;
+      }
+      await persist({ sourceUrl: link.value ?? null });
       return;
     }
 
-    const link = parseOptionalUrl(draft.sourceUrl);
     const edits = editsFromDraft(activity.details.kind, draft, setFieldErrors);
     if (!link.ok) {
       setFieldErrors((current) => ({ ...current, sourceUrl: 'Enter a valid link.' }));
@@ -242,16 +251,17 @@ export function TypeDetailsSheet({
       setFieldErrors({ form: parsed.error.issues[0]?.message ?? 'Check the details.' });
       return;
     }
-    const sourceUrlChanged = (link.value ?? '') !== (activity.sourceUrl ?? '');
     await persist({
       details: parsed.data,
-      ...(sourceUrlChanged ? { sourceUrl: link.value ?? null } : {}),
+      ...(linkChanged ? { sourceUrl: link.value ?? null } : {}),
     });
   }
 
   const kind = activity.details.kind;
   const title = sheetTitle(mode, kind);
   const showMovieProgress = draft.mediaKind !== 'movie';
+  const storedIngredientCount =
+    activity.details.kind === 'meal' ? (activity.details.ingredients?.length ?? 0) : 0;
   const linkField = (
     <Field
       label="Link"
@@ -273,8 +283,10 @@ export function TypeDetailsSheet({
         dirty={dirty}
         onDiscardRequest={requestLeave}
         title={title}
+        // Sized from the stored rows, not the draft, so adding the first ingredient does not
+        // jump the sheet from `fit` to `large` mid-edit; `fit` grows with its content anyway.
         detent={
-          mode === 'link' || (kind === 'meal' && draft.ingredients.length === 0)
+          mode === 'link' || (kind === 'meal' && storedIngredientCount === 0)
             ? 'fit'
             : 'large'
         }

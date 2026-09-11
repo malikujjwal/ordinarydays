@@ -180,6 +180,17 @@ describe('TypeDetailsSheet', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  /** Review 2026-09-11: the server accepts any URL scheme, so an untouched link never blocks. */
+  it('saves details without re-validating an untouched non-http link', async () => {
+    const { onSave } = mount(activity({ sourceUrl: 'mailto:host@venue.com' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Lunch' }));
+    fireEvent.click(screen.getByTestId('type-details-save'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toEqual({
+      details: { kind: 'meal', mealSlot: 'lunch' },
+    });
+  });
+
   it('does not treat an added blank ingredient row as an unsaved change', () => {
     const { onClose } = mount(activity());
     fireEvent.click(screen.getByRole('button', { name: 'Add an ingredient' }));
