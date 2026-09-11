@@ -207,7 +207,7 @@ form changes the allow-list; it does not ask the model which form would fit.
 | Start time | `schedule.time` | |
 | End time | `schedule.endTime` | Only when the source states one. Never inferred from a typical duration. |
 | Location | `location.label`, `location.address` | Label is the venue name; address only if fully written on the source |
-| Reservation | `details.reservation.{name,time,partySize,reference}` | Only fields explicitly present on the source; the reservation name and time otherwise keep the form defaults |
+| Reservation | `details.reservation.{name,time,partySize,reference}` | Only fields explicitly present on the source; any other reservation field stays empty (the form has no reservation defaults — `activities.md` §4.4, amended 2026-09-10). The start time is never copied into the reservation time. |
 | Description | `details.description` | Trimmed to 1000 characters, with the tail dropped rather than summarised |
 | Price | `details.priceCents`, `details.currency` | Only when a single unambiguous price is stated. A range (`$25–$60`) or a qualifier (`from $25`) yields confidence `< 0.4` and lands in `Couldn't read`. |
 | Ticket / registration link | `details.ticketUrl` | Includes a URL printed as text; excludes a QR code, which is not decoded in v1 |

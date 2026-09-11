@@ -228,38 +228,52 @@ describe('back', () => {
   });
 });
 
+/**
+ * Founder decision 2026-09-10: reservation fields never pre-fill. A reservation is stored only
+ * from what the user types; the price currency is still a profile default.
+ */
 describe('Event reservation defaults', () => {
-  it('pre-fills reservation name and price currency from the profile', () => {
+  it('leaves the reservation name empty even when the profile has a display name', () => {
+    // A profile-shaped value, including the retired `reservationName` key a stale caller
+    // might still pass: neither may reach the reservation.
+    const profile = { displayName: 'Dev', reservationName: 'Dev', currency: 'usd' };
     draft().chooseObject('plan');
-    draft().choosePlanKind('event', { reservationName: 'Ada', currency: 'usd' });
+    draft().choosePlanKind('event', profile);
 
-    expect(draft().details.reservation.name).toBe('Ada');
+    expect(draft().details.reservation.name).toBe('');
+  });
+
+  it('still defaults the price currency from the profile', () => {
+    draft().chooseObject('plan');
+    draft().choosePlanKind('event', { currency: 'usd' });
+
     expect(draft().details.currency).toBe('USD');
   });
 
-  it('tracks the Event start time until a distinct reservation time is entered', () => {
+  it('never copies the Event start time into the reservation time', () => {
     draft().chooseObject('plan');
     draft().choosePlanKind('event');
-    draft().setTime('19:00');
-    expect(draft().details.reservation.time).toBe('19:00');
+    draft().setDate('2026-08-12');
+    draft().setTime('23:30');
 
-    draft().setDetails({
-      reservation: { ...draft().details.reservation, time: '19:30' },
-    });
-    draft().setTime('20:00');
-    expect(draft().details.reservation.time).toBe('19:30');
+    expect(draft().schedule.time).toBe('23:30');
+    expect(draft().details.reservation.time).toBe('');
   });
 
-  it('clears a reservation time that was inherited when the date is cleared', () => {
+  it('keeps a reservation time the user typed when the Event time changes', () => {
     draft().chooseObject('plan');
     draft().choosePlanKind('event');
     draft().setDate('2026-08-12');
     draft().setTime('19:00');
+    draft().setDetails({
+      reservation: { ...draft().details.reservation, time: '19:30' },
+    });
+
+    draft().setTime('20:00');
+    expect(draft().details.reservation.time).toBe('19:30');
 
     draft().setDate(undefined);
-
-    expect(draft().schedule.time).toBeUndefined();
-    expect(draft().details.reservation.time).toBe('');
+    expect(draft().details.reservation.time).toBe('19:30');
   });
 
   it('clears recurrence with its required date', () => {

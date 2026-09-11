@@ -50,9 +50,13 @@ export type ComposeStep = 'object' | 'planKind' | 'audience' | 'form';
 /** The only audience this phase accepts; Phase 6 widens the union, not the rule. */
 export type DraftAudience = { mode: 'just_me' };
 
-/** Profile-backed values that belong to a newly chosen Event draft. */
+/**
+ * Profile-backed values that belong to a newly chosen Event draft.
+ *
+ * Reservation fields are deliberately absent: they never pre-fill (founder, 2026-09-10), so a
+ * reservation is stored only from values the user typed.
+ */
 export interface EventDraftDefaults {
-  reservationName?: string;
   currency?: string;
 }
 
@@ -262,18 +266,8 @@ function withEventDefaults(
 ): DraftDetails {
   if (type !== 'event' || defaults === undefined) return details;
 
-  const reservationName = defaults.reservationName?.trim();
   const currency = defaults.currency?.trim().toUpperCase();
-  return {
-    ...details,
-    ...(details.currency === '' && currency ? { currency } : {}),
-    reservation: {
-      ...details.reservation,
-      ...(details.reservation.name === '' && reservationName
-        ? { name: reservationName }
-        : {}),
-    },
-  };
+  return details.currency === '' && currency ? { ...details, currency } : details;
 }
 
 export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
@@ -539,17 +533,6 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     set((state) =>
       edited({
         schedule: date === undefined ? EMPTY_SCHEDULE : { ...state.schedule, date },
-        ...(date === undefined &&
-        state.target?.objectKind === 'plan' &&
-        state.target.type === 'event' &&
-        state.details.reservation.time === state.schedule.time
-          ? {
-              details: {
-                ...state.details,
-                reservation: { ...state.details.reservation, time: '' },
-              },
-            }
-          : {}),
         ...(date === undefined
           ? { reminderOffset: undefined, recurrence: undefined }
           : {}),
@@ -572,20 +555,6 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
           // An end time needs a start time (§3 rule 4).
           ...(time === undefined ? { endTime: undefined } : {}),
         },
-        ...(state.target?.objectKind === 'plan' && state.target.type === 'event'
-          ? {
-              details: {
-                ...state.details,
-                reservation: {
-                  ...state.details.reservation,
-                  ...(state.details.reservation.time === '' ||
-                  state.details.reservation.time === state.schedule.time
-                    ? { time: time ?? '' }
-                    : {}),
-                },
-              },
-            }
-          : {}),
         // The two pickers offer different lists; keep only an offset the new one shows.
         reminderOffset: reconcileReminder(state.reminderOffset, time !== undefined),
       }),
