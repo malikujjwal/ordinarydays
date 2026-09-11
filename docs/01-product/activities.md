@@ -484,6 +484,20 @@ Tasks never expose People, sharing, or expenses. If a to-do needs coordination, 
 creates or explicitly changes it to **Plan → General**; the app never changes it because a
 name was typed.
 
+> **Amended 2026-09-11 (founder) — location is editable after creation.** Every Task and
+> Plan kind can add, change or remove its place from Activity detail → **Details → Edit**
+> (or the `Details` chip while the Details group is absent). The sheet carries `Place`
+> (label, 0–120) and `Address` (optional, 0–300) above `Link` on every kind — the type
+> sheet on a Meal / Watch / Event, a `Details` sheet holding just Place, Address and Link on
+> a Task or General plan. Save sends `location` in the same `PATCH` as the sheet's other
+> fields, and only when it changed; the value is validated only then. Clearing Place and
+> Address sends `location: null`. An address with no place is a field error (`Name the place
+> so the address has something to belong to.`), the creation form's rule: a location
+> without a label identifies nothing and the header never shows one. A capture pin
+> (`lat`/`lng`/`mapUrl`) survives a rename of the place and is dropped when the address
+> changes. The header keeps showing the place, its address still opens Maps, and the
+> Details group has no Place row. §6.1's rule stands: participants may not edit location.
+
 ---
 
 ## 5. Lifecycle and completion

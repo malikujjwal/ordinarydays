@@ -561,11 +561,12 @@ describe('typeDetailChips — only what Details cannot reach', () => {
     expect(typeDetailChips(activity({}), { hasSourceList: true })).toEqual([]);
   });
 
-  it('offers only Link on a Task or General plan with no Details group', () => {
-    expect(typeDetailChips(task())).toEqual([{ key: 'link', label: 'Link' }]);
+  /** 2026-09-11: the Task / General chip is `Details` (Place + Address + Link), not `Link`. */
+  it('offers only Details on a Task or General plan with no Details group', () => {
+    expect(typeDetailChips(task())).toEqual([{ key: 'details', label: 'Details' }]);
     expect(
       typeDetailChips(activity({ type: 'custom', details: { kind: 'custom' } })),
-    ).toEqual([{ key: 'link', label: 'Link' }]);
+    ).toEqual([{ key: 'details', label: 'Details' }]);
     expect(
       typeDetailChips(
         activity({

@@ -35,7 +35,7 @@ const activity = (patch: Record<string, unknown> = {}): Activity =>
 
 function mount(
   current: Activity,
-  mode: 'type' | 'link' = 'type',
+  mode: 'type' | 'common' = 'type',
   options: {
     onSave?: ReturnType<typeof vi.fn>;
     error?: string;
@@ -330,7 +330,7 @@ describe('TypeDetailsSheet', () => {
   });
 
   it('asks before discarding a dirty link via Close', () => {
-    const { onClose } = mount(activity(), 'link');
+    const { onClose } = mount(activity(), 'common');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(screen.queryByRole('button', { name: 'Keep editing' })).toBeNull();
@@ -341,10 +341,152 @@ describe('TypeDetailsSheet', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText('Your link has unsaved changes.')).toBeDefined();
+    expect(screen.getByText('Your details have unsaved changes.')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(
       (screen.getByTestId('type-details-source-url') as HTMLInputElement).value,
     ).toBe('https://www.thetrainline.com/book');
+  });
+
+  /** Founder decision 2026-09-11: Place is editable after creation, on every kind's sheet. */
+  describe('Place and Address', () => {
+    const placed = (patch: Record<string, unknown> = {}) =>
+      activity({
+        objectKind: 'task',
+        type: 'task',
+        details: { kind: 'task' },
+        location: {
+          label: 'Noble Rot',
+          address: '51 Lamb’s Conduit St',
+          lat: 51.52,
+          lng: -0.12,
+        },
+        ...patch,
+      });
+
+    it('titles the Task / General sheet Details and seeds Place, Address and Link', () => {
+      mount(placed({ sourceUrl: 'https://noblerot.co.uk' }), 'common');
+      expect(screen.getByRole('heading', { name: 'Details' })).toBeDefined();
+      expect((screen.getByLabelText('Place') as HTMLInputElement).value).toBe(
+        'Noble Rot',
+      );
+      expect((screen.getByLabelText('Address') as HTMLInputElement).value).toBe(
+        '51 Lamb’s Conduit St',
+      );
+      expect(
+        (screen.getByTestId('type-details-source-url') as HTMLInputElement).value,
+      ).toBe('https://noblerot.co.uk');
+    });
+
+    it('closes without a write when nothing changed', () => {
+      const { onSave, onClose } = mount(placed(), 'common');
+      fireEvent.click(screen.getByTestId('details-save'));
+      expect(onSave).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('sends location alone when only the place changed, keeping the pin on a rename', async () => {
+      const { onSave } = mount(placed(), 'common');
+      fireEvent.change(screen.getByLabelText('Place'), {
+        target: { value: '  Noble Rot Soho ' },
+      });
+      fireEvent.click(screen.getByTestId('details-save'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+      expect(onSave.mock.calls[0]?.[0]).toEqual({
+        location: {
+          label: 'Noble Rot Soho',
+          address: '51 Lamb’s Conduit St',
+          lat: 51.52,
+          lng: -0.12,
+        },
+      });
+    });
+
+    it('drops the pin when the address changes', async () => {
+      const { onSave } = mount(placed(), 'common');
+      fireEvent.change(screen.getByLabelText('Address'), {
+        target: { value: '2 Greek St' },
+      });
+      fireEvent.click(screen.getByTestId('details-save'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+      expect(onSave.mock.calls[0]?.[0]).toEqual({
+        location: { label: 'Noble Rot', address: '2 Greek St' },
+      });
+    });
+
+    it('clears the location with null when Place and Address are both cleared', async () => {
+      const { onSave } = mount(placed(), 'common');
+      fireEvent.change(screen.getByLabelText('Place'), { target: { value: '' } });
+      fireEvent.change(screen.getByLabelText('Address'), { target: { value: ' ' } });
+      fireEvent.click(screen.getByTestId('details-save'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+      expect(onSave.mock.calls[0]?.[0]).toEqual({ location: null });
+    });
+
+    it('refuses an address with no place, as a field error, and keeps the draft', () => {
+      const { onSave } = mount(placed(), 'common');
+      fireEvent.change(screen.getByLabelText('Place'), { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('details-save'));
+      expect(onSave).not.toHaveBeenCalled();
+      expect(
+        screen.getByText('Name the place so the address has something to belong to.'),
+      ).toBeDefined();
+      expect((screen.getByLabelText('Address') as HTMLInputElement).value).toBe(
+        '51 Lamb’s Conduit St',
+      );
+    });
+
+    it('rides in the same PATCH as details on the type sheet, only when it changed', async () => {
+      const onSave = vi.fn<TypeDetailsSheetProps['onSave']>(async () => false);
+      mount(
+        activity({
+          type: 'event',
+          details: { kind: 'event', organiser: 'Barbican' },
+          location: { label: 'Barbican Hall' },
+        }),
+        'type',
+        { onSave },
+      );
+      fireEvent.click(screen.getByTestId('type-details-save'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0]?.[0]).toEqual({
+        details: { kind: 'event', organiser: 'Barbican' },
+      });
+
+      fireEvent.change(screen.getByLabelText('Place'), {
+        target: { value: 'Milton Court' },
+      });
+      fireEvent.click(screen.getByTestId('type-details-save'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+      expect(onSave.mock.calls[1]?.[0]).toEqual({
+        details: { kind: 'event', organiser: 'Barbican' },
+        location: { label: 'Milton Court' },
+      });
+      // A failed save keeps the typed place for the retry.
+      expect((screen.getByLabelText('Place') as HTMLInputElement).value).toBe(
+        'Milton Court',
+      );
+    });
+
+    it('adds a place to a meal that had none', async () => {
+      const { onSave } = mount(activity());
+      fireEvent.change(screen.getByLabelText('Place'), { target: { value: 'Home' } });
+      fireEvent.click(screen.getByTestId('type-details-save'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+      expect(onSave.mock.calls[0]?.[0]).toEqual({
+        details: { kind: 'meal', mealSlot: 'dinner' },
+        location: { label: 'Home' },
+      });
+    });
+
+    it('asks before discarding a changed place', () => {
+      const { onClose } = mount(placed(), 'common');
+      fireEvent.change(screen.getByLabelText('Place'), {
+        target: { value: 'Elsewhere' },
+      });
+      fireEvent.click(screen.getByTestId('type-details-cancel'));
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByText('Your details have unsaved changes.')).toBeDefined();
+    });
   });
 });

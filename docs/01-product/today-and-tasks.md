@@ -623,6 +623,12 @@ expanded state; opening it shows either its current content or the real add cont
 > [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.5: header,
 > Details, Notes, the chip row, then Settings (Repeat and Reminder, when scheduled). The
 > header's repeat/reminder summary states only what is set and is omitted when neither is.
+>
+> **Amended 2026-09-11 (founder).** The task's chip is **`Details`**, not `Link`: it and the
+> Details group's `Edit` open a sheet titled `Details` with `Place`, `Address` and `Link`,
+> because a task's place is now editable after creation
+> ([`activities.md`](activities.md) §4.7). The chip still appears only while the task has no
+> Details group, and still never alongside Prep task, List or Photo.
 
 ---
 

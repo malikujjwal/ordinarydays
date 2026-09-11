@@ -50,7 +50,10 @@ import {
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
-import { TypeDetailsSheet } from '@/features/activity/components/TypeDetailsSheet';
+import {
+  TypeDetailsSheet,
+  type TypeDetailsSheetMode,
+} from '@/features/activity/components/TypeDetailsSheet';
 import { UpdatesSection } from '@/features/activity/components/UpdatesSection';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
@@ -1192,7 +1195,7 @@ function Loaded({
   onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
-  const [detailsSheet, setDetailsSheet] = useState<'type' | 'link' | undefined>(
+  const [detailsSheet, setDetailsSheet] = useState<TypeDetailsSheetMode | undefined>(
     undefined,
   );
   /** The viewer's zone, for stamping update instants onto the viewer's own calendar days. */
@@ -1270,14 +1273,15 @@ function Loaded({
   const canEditDetails = !pending;
   /**
    * The Details group's one `Edit` (2026-09-10): Meal / Watch / Event open their type sheet,
-   * which now ends with the Link field; Task and General have only the link to edit.
+   * which ends with Place, Address and Link; Task and General open the common `Details`
+   * sheet holding just those three (Place editable after creation, founder 2026-09-11).
    */
-  const detailsSheetMode: 'type' | 'link' =
+  const detailsSheetMode: TypeDetailsSheetMode =
     activity.details.kind === 'meal' ||
     activity.details.kind === 'watch' ||
     activity.details.kind === 'event'
       ? 'type'
-      : 'link';
+      : 'common';
   /**
    * Prep task / List / Photo are Plan chips. The production route always wires those
    * handlers, so gating on the callback would leak them onto Task detail (§5.6).
@@ -1311,7 +1315,8 @@ function Loaded({
     ).map((chip) => ({
       key: chip.key,
       label: chip.label,
-      onPress: () => setDetailsSheet(chip.key === 'link' ? 'link' : 'type'),
+      onPress: () =>
+        setDetailsSheet(chip.key === 'ingredients' ? 'type' : detailsSheetMode),
     })),
   ];
 

@@ -982,10 +982,10 @@ describe('type-specific details', () => {
     expect(screen.getByTestId('detail-subtitle').textContent).toBe('Task');
     const details = screen.getByTestId('section-details');
     expect(details.textContent).toBe('DetailsEditLinkthetrainline.com ↗');
-    // Details exists, so no Link chip; its Edit opens the Link sheet.
-    expect(screen.queryByTestId('add-to-plan-link')).toBeNull();
+    // Details exists, so no Details chip; its Edit opens the common Details sheet.
+    expect(screen.queryByTestId('add-to-plan-details')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Edit details' }));
-    await screen.findByTestId('link-sheet');
+    await screen.findByTestId('details-sheet');
   });
 
   it('never shows shortcutId on a General plan', async () => {
@@ -1007,7 +1007,7 @@ describe('type-specific details', () => {
 
     expect(screen.queryByText('sct_01J0000000000000000000000C')).toBeNull();
     expect(screen.queryByTestId('section-details')).toBeNull();
-    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-details')).toBeDefined();
   });
 
   it('states public-vs-private copy only on a shared activity', async () => {
@@ -1162,7 +1162,7 @@ describe('type-details editing', () => {
     });
   });
 
-  it('opens the LINK sheet from the chip and patches sourceUrl only', async () => {
+  it('opens the common Details sheet from the chip and patches sourceUrl only', async () => {
     stubFetch(
       { status: 200, body: detailBody(task()) },
       {
@@ -1176,17 +1176,58 @@ describe('type-details editing', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByTestId('add-to-plan-link'));
-    await screen.findByTestId('link-sheet');
+    fireEvent.click(screen.getByTestId('add-to-plan-details'));
+    await screen.findByTestId('details-sheet');
+    expect(screen.getByRole('heading', { name: 'Details' })).toBeDefined();
     fireEvent.change(screen.getByTestId('type-details-source-url'), {
       target: { value: 'https://www.thetrainline.com/book' },
     });
-    fireEvent.click(screen.getByTestId('link-save'));
+    fireEvent.click(screen.getByTestId('details-save'));
 
     await waitFor(() => expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1));
     const patch = sent.find((s) => s.method === 'PATCH');
     expect(patch?.headers['If-Match']).toBe('2026-08-08T10:00:00.000Z');
     expect(patch?.body).toEqual({ sourceUrl: 'https://www.thetrainline.com/book' });
+  });
+
+  /** Founder decision 2026-09-11: Place is editable after creation, from Details. */
+  it('edits the place from the Details chip and shows it in the header', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(task({ location: undefined })) },
+      {
+        status: 200,
+        body: {
+          data: task({
+            location: { label: 'Dr Patel', address: '12 Harley St' },
+            updatedAt: '2026-08-08T11:00:00.000Z',
+          }),
+          meta: { requestId: 'req_test' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+    expect(screen.queryByTestId('when-where-location')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('add-to-plan-details'));
+    await screen.findByTestId('details-sheet');
+    fireEvent.change(screen.getByLabelText('Place'), { target: { value: 'Dr Patel' } });
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '12 Harley St' },
+    });
+    fireEvent.click(screen.getByTestId('details-save'));
+
+    await waitFor(() => expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1));
+    expect(sent.find((s) => s.method === 'PATCH')?.body).toEqual({
+      location: { label: 'Dr Patel', address: '12 Harley St' },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-location').textContent).toBe(
+        'Dr Patel12 Harley St',
+      ),
+    );
+    // No Place row in Details: the header already says it.
+    expect(screen.queryByTestId('section-details')).toBeNull();
   });
 
   it('keeps the type-details draft after a failed save', async () => {
@@ -2310,12 +2351,12 @@ describe('a 409 conflict', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByTestId('add-to-plan-link'));
-    await screen.findByTestId('link-sheet');
+    fireEvent.click(screen.getByTestId('add-to-plan-details'));
+    await screen.findByTestId('details-sheet');
     fireEvent.change(screen.getByTestId('type-details-source-url'), {
       target: { value: 'https://www.thetrainline.com/book' },
     });
-    fireEvent.click(screen.getByTestId('link-save'));
+    fireEvent.click(screen.getByTestId('details-save'));
 
     await waitFor(() => expect(screen.getByTestId('detail-conflict')).toBeDefined());
     expect(screen.getByText('This plan changed. Review the update.')).toBeDefined();
@@ -3939,19 +3980,19 @@ describe('the Plan detail anatomy (P3-37)', () => {
     expect(screen.queryByText(/unfinished|incomplete/i)).toBeNull();
   });
 
-  it('renders a task with no plan sections and a Link-only chip row', async () => {
+  it('renders a task with no plan sections and a Details-only chip row', async () => {
     mountAnatomy({ children: [child(1)] }, task());
     await screen.findByTestId('detail-content');
     expect(screen.queryByTestId('section-prep')).toBeNull();
     expect(screen.getByText('Add to this task')).toBeDefined();
-    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-details')).toBeDefined();
     expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
     expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
     expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
     expect(screen.queryByTestId('section-people')).toBeNull();
   });
 
-  it('keeps a production-wired task chip row Link-only', async () => {
+  it('keeps a production-wired task chip row Details-only', async () => {
     stubFetch({ status: 200, body: detailBody(task()) });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -3987,7 +4028,7 @@ describe('the Plan detail anatomy (P3-37)', () => {
     );
     await screen.findByTestId('detail-content');
     expect(screen.getByText('Add to this task')).toBeDefined();
-    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-details')).toBeDefined();
     expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
     expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
     expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();

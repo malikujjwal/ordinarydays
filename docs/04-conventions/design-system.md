@@ -1488,6 +1488,15 @@ renders no placeholder for anything it lacks — a Task is not a Plan with thing
 > (`flex: 1`) with any count beside it at the end of the label area; a content-sized box around
 > `SectionHeader` measures 0 pt wide on iOS. Notes closes on a hairline in every state except
 > the editor, and `Add notes` uses the section trailing-action treatment so it sits flush right.
+>
+> **Amended 2026-09-11 (founder) — Place is editable from Details.** Every details sheet ends
+> `Place`, `Address`, `Link`: the type sheet on a Meal / Watch / Event, and on a Task or
+> General plan a sheet titled `Details` holding only those three (it was the Link sheet). So
+> item 4's third chip is **`Details`** on a Task or General plan with no Details group, not
+> `Link`, and item 1's `Edit` opens that sheet. The header still shows the place and its
+> address still opens Maps; the Details group gains no Place row, which would repeat the
+> header. Behaviour is canonical in [`../01-product/activities.md`](../01-product/activities.md)
+> §4.7.
 
 ---
 

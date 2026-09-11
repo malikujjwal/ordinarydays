@@ -1,13 +1,14 @@
-import { MAX_FREE_TEXT_LEN, MAX_NOTES_LEN } from '@od/shared/constants';
+import { MAX_ADDRESS_LEN, MAX_FREE_TEXT_LEN, MAX_NOTES_LEN } from '@od/shared/constants';
 import { formatMinorUnits, parseMinorUnits } from '@od/shared/money';
 import {
   activityDetailsInput,
+  activityLocation,
   hhmm,
   type PatchActivityInput,
   watchEpisode,
   watchSeason,
 } from '@od/shared/schemas';
-import type { Activity, ActivityDetails } from '@od/shared/types';
+import type { Activity, ActivityDetails, ActivityLocation } from '@od/shared/types';
 import { Button, Field, SegmentedControl, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Keyboard, View } from 'react-native';
@@ -25,7 +26,11 @@ type DisplayActivity = Activity | PendingActivity;
 const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
 const WATCH_KINDS = ['movie', 'show'] as const;
 
-export type TypeDetailsSheetMode = 'type' | 'link';
+/**
+ * `type` is the Meal / Watch / Event sheet; `common` is the Task / General one, which holds
+ * only the fields every kind shares — Place, Address and Link.
+ */
+export type TypeDetailsSheetMode = 'type' | 'common';
 
 export interface TypeDetailsSheetProps {
   open: boolean;
@@ -56,6 +61,8 @@ interface Draft {
   reservationTime: string;
   partySize: string;
   reservationReference: string;
+  placeLabel: string;
+  placeAddress: string;
   sourceUrl: string;
 }
 
@@ -77,6 +84,8 @@ const EMPTY_DRAFT: Draft = {
   reservationTime: '',
   partySize: '',
   reservationReference: '',
+  placeLabel: '',
+  placeAddress: '',
   sourceUrl: '',
 };
 
@@ -84,6 +93,8 @@ function draftFrom(activity: DisplayActivity): Draft {
   const { details } = activity;
   const next: Draft = {
     ...EMPTY_DRAFT,
+    placeLabel: activity.location?.label ?? '',
+    placeAddress: activity.location?.address ?? '',
     sourceUrl: activity.sourceUrl ?? '',
   };
   if (details.kind === 'meal') {
@@ -122,7 +133,7 @@ function draftFrom(activity: DisplayActivity): Draft {
 }
 
 function sheetTitle(mode: TypeDetailsSheetMode, kind: ActivityDetails['kind']): string {
-  if (mode === 'link') return 'Link';
+  if (mode === 'common') return 'Details';
   if (kind === 'meal') return 'Meal details';
   if (kind === 'watch') return 'Watch details';
   if (kind === 'event') return 'Event details';
@@ -130,14 +141,22 @@ function sheetTitle(mode: TypeDetailsSheetMode, kind: ActivityDetails['kind']): 
 }
 
 /**
- * One sheet per type (`meal`, `watch`, `event`) plus LINK. Save sends the wholesale
- * `details` replacement (or `sourceUrl` alone on LINK) through the same `detail.patch`
- * owner as every other field. Failed saves keep the draft; dirty cancel uses the notes
- * confirmation (`activities.md` §6.1).
+ * One sheet per type (`meal`, `watch`, `event`) plus the common `Details` sheet a Task or
+ * General plan opens. Save sends the wholesale `details` replacement (on the type sheet)
+ * through the same `detail.patch` owner as every other field. Failed saves keep the draft;
+ * dirty cancel uses the notes confirmation (`activities.md` §6.1).
  *
  * **One Edit edits every detail** (2026-09-10): the type sheet ends with the same `Link`
  * field, so the Details group's single `Edit` reaches the source link too. It rides in the
  * same PATCH as `details`, and only when it changed (`null` clears it).
+ *
+ * **Place is editable after creation** (founder, 2026-09-11): every sheet carries `Place` and
+ * `Address` above `Link`. `location` rides in the same PATCH only when it changed, is
+ * validated only then (the stored-link rule), and is built through the shared
+ * `activityLocation` schema. Clearing both fields sends `location: null`; an address with no
+ * place is a field error, because a location without a label identifies nothing and the
+ * header would never show it. Capture's pin (`lat`/`lng`/`mapUrl`) survives a rename and is
+ * dropped when the address changes, since it would point at the old one.
  */
 export function TypeDetailsSheet({
   open,
@@ -226,22 +245,31 @@ export function TypeDetailsSheet({
     const link: ReturnType<typeof parseOptionalUrl> = linkChanged
       ? parseOptionalUrl(draft.sourceUrl)
       : { ok: true };
-    if (mode === 'link') {
-      if (!link.ok) {
-        setFieldErrors({ sourceUrl: 'Enter a valid link.' });
+    const place = placeFromDraft(draft, activity.location);
+    const commonErrors: Record<string, string> = {
+      ...(link.ok ? {} : { sourceUrl: 'Enter a valid link.' }),
+      ...(place.ok ? {} : place.errors),
+    };
+    const common: PatchActivityInput = {
+      ...(link.ok && linkChanged ? { sourceUrl: link.value ?? null } : {}),
+      ...(place.ok && place.change !== undefined ? { location: place.change } : {}),
+    };
+    if (mode === 'common') {
+      if (hasKeys(commonErrors)) {
+        setFieldErrors(commonErrors);
         return;
       }
-      if (!linkChanged) {
+      if (!hasKeys(common)) {
         close();
         return;
       }
-      await persist({ sourceUrl: link.value ?? null });
+      await persist(common);
       return;
     }
 
     const edits = editsFromDraft(activity.details.kind, draft, setFieldErrors);
-    if (!link.ok) {
-      setFieldErrors((current) => ({ ...current, sourceUrl: 'Enter a valid link.' }));
+    if (hasKeys(commonErrors)) {
+      setFieldErrors((current) => ({ ...current, ...commonErrors }));
       return;
     }
     if (edits === undefined) return;
@@ -251,10 +279,7 @@ export function TypeDetailsSheet({
       setFieldErrors({ form: parsed.error.issues[0]?.message ?? 'Check the details.' });
       return;
     }
-    await persist({
-      details: parsed.data,
-      ...(linkChanged ? { sourceUrl: link.value ?? null } : {}),
-    });
+    await persist({ details: parsed.data, ...common });
   }
 
   const kind = activity.details.kind;
@@ -262,6 +287,9 @@ export function TypeDetailsSheet({
   const showMovieProgress = draft.mediaKind !== 'movie';
   const storedIngredientCount =
     activity.details.kind === 'meal' ? (activity.details.ingredients?.length ?? 0) : 0;
+  const placeFields = (
+    <PlaceFields draft={draft} fieldErrors={fieldErrors} onChange={patchDraft} />
+  );
   const linkField = (
     <Field
       label="Link"
@@ -286,11 +314,11 @@ export function TypeDetailsSheet({
         // Sized from the stored rows, not the draft, so adding the first ingredient does not
         // jump the sheet from `fit` to `large` mid-edit; `fit` grows with its content anyway.
         detent={
-          mode === 'link' || (kind === 'meal' && storedIngredientCount === 0)
+          mode === 'common' || (kind === 'meal' && storedIngredientCount === 0)
             ? 'fit'
             : 'large'
         }
-        testID={mode === 'link' ? 'link-sheet' : 'type-details-sheet'}
+        testID={mode === 'common' ? 'details-sheet' : 'type-details-sheet'}
         actions={
           <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
             <Button
@@ -306,7 +334,7 @@ export function TypeDetailsSheet({
                 fullWidth
                 loading={blocked}
                 onPress={() => void save()}
-                testID={mode === 'link' ? 'link-save' : 'type-details-save'}
+                testID={mode === 'common' ? 'details-save' : 'type-details-save'}
               />
             </View>
           </View>
@@ -322,8 +350,11 @@ export function TypeDetailsSheet({
             {statusMessage}
           </Text>
         )}
-        {mode === 'link' ? (
-          linkField
+        {mode === 'common' ? (
+          <View style={{ gap: theme.space[6] }}>
+            {placeFields}
+            {linkField}
+          </View>
         ) : (
           <View style={{ gap: theme.space[6] }}>
             {kind === 'meal' ? (
@@ -343,22 +374,108 @@ export function TypeDetailsSheet({
                 onChange={patchDraft}
               />
             ) : null}
+            {placeFields}
             {linkField}
           </View>
         )}
       </Sheet>
       <DiscardChangesPrompt
         open={confirming}
-        message={
-          mode === 'link'
-            ? 'Your link has unsaved changes.'
-            : 'Your details have unsaved changes.'
-        }
+        message="Your details have unsaved changes."
         onKeepEditing={() => setConfirming(false)}
         onDiscard={close}
       />
     </>
   );
+}
+
+/**
+ * `Place` and `Address`, on every kind's sheet (founder, 2026-09-11). The label is marked
+ * required as soon as an address is typed, the creation form's `LocationControl` rule.
+ */
+function PlaceFields({
+  draft,
+  fieldErrors,
+  onChange,
+}: {
+  draft: Draft;
+  fieldErrors: Record<string, string>;
+  onChange: (patch: Partial<Draft>) => void;
+}) {
+  const theme = useTheme();
+  const addressTyped = draft.placeAddress.trim() !== '';
+  return (
+    <View style={{ gap: theme.space[6] }}>
+      <Field
+        label="Place"
+        value={draft.placeLabel}
+        onChangeText={(placeLabel) => onChange({ placeLabel })}
+        maxLength={MAX_FREE_TEXT_LEN}
+        required={addressTyped}
+        hint="Clear it, and the address, to remove the place."
+        testID="type-details-place"
+        {...(fieldErrors.placeLabel === undefined
+          ? {}
+          : { error: fieldErrors.placeLabel })}
+      />
+      <Field
+        label="Address"
+        value={draft.placeAddress}
+        onChangeText={(placeAddress) => onChange({ placeAddress })}
+        maxLength={MAX_ADDRESS_LEN}
+        optional
+        testID="type-details-address"
+        {...(fieldErrors.placeAddress === undefined
+          ? {}
+          : { error: fieldErrors.placeAddress })}
+      />
+    </View>
+  );
+}
+
+/** The shared schema's own output shape, so the PATCH carries exactly what it parsed. */
+type PlaceChange = NonNullable<PatchActivityInput['location']>;
+
+const PLACE_NEEDS_LABEL = 'Name the place so the address has something to belong to.';
+
+/**
+ * The `location` change, if any. `change` absent is "leave it alone"; `null` clears it.
+ * Compared trimmed, so re-typing the same place is not an edit.
+ */
+function placeFromDraft(
+  draft: Draft,
+  stored: ActivityLocation | undefined,
+):
+  | { ok: true; change?: PlaceChange | null }
+  | { ok: false; errors: Record<string, string> } {
+  const label = draft.placeLabel.trim();
+  const address = draft.placeAddress.trim();
+  const storedAddress = stored?.address?.trim() ?? '';
+  if (label === (stored?.label.trim() ?? '') && address === storedAddress) {
+    return { ok: true };
+  }
+  if (label === '') {
+    if (address !== '') return { ok: false, errors: { placeLabel: PLACE_NEEDS_LABEL } };
+    return stored === undefined ? { ok: true } : { ok: true, change: null };
+  }
+  const keepPin = stored !== undefined && address === storedAddress;
+  const parsed = activityLocation.safeParse({
+    label,
+    ...(address === '' ? {} : { address }),
+    ...(keepPin && stored.lat !== undefined ? { lat: stored.lat } : {}),
+    ...(keepPin && stored.lng !== undefined ? { lng: stored.lng } : {}),
+    ...(keepPin && stored.mapUrl !== undefined ? { mapUrl: stored.mapUrl } : {}),
+  });
+  if (!parsed.success) {
+    const onAddress = parsed.error.issues.some((issue) => issue.path[0] === 'address');
+    return {
+      ok: false,
+      errors: onAddress
+        ? { placeAddress: `Use ${String(MAX_ADDRESS_LEN)} characters or fewer.` }
+        : { placeLabel: `Use ${String(MAX_FREE_TEXT_LEN)} characters or fewer.` },
+    };
+  }
+  return { ok: true, change: parsed.data };
 }
 
 function MealFields({

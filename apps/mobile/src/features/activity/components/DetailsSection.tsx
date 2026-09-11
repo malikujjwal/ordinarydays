@@ -37,7 +37,7 @@ export interface DetailsSectionProps {
   sourceList: ActivitySourceList | undefined;
   onOpenParent?: (activityId: string) => void;
   onOpenList?: (listId: string) => void;
-  /** The one `Edit`: the type sheet on Meal / Watch / Event, the Link sheet otherwise. */
+  /** The one `Edit`: the type sheet on Meal / Watch / Event, the common Details sheet otherwise. */
   onEdit?: () => void;
 }
 

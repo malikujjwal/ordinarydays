@@ -469,6 +469,14 @@ Sections render in this fixed order and a section with nothing in it collapses t
 > still always render (subject to the date rule), but at the foot rather than above the
 > content. The header's repeat/reminder summary states only what is set.
 >
+> **Amended 2026-09-11 (founder).** The third type chip is **`Details`** on a Task or General
+> plan with no Details group (it was `Link`); it opens a `Details` sheet with `Place`,
+> `Address` and `Link`, and every Meal / Watch / Event type sheet carries the same three at
+> its end, because the place is now editable after creation
+> ([`activities.md`](activities.md) §4.7). Row 2 is unchanged: the when/where block is still
+> never inline-editable, the address still opens Maps, and the place is edited only through
+> that sheet.
+>
 > **The completion action stays directly under the schedule line**, keeping §7.5: the screen's
 > hero is the thing you came to do, and ten sections must not push it below the fold.
 >

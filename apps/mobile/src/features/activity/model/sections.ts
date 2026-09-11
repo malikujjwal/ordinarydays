@@ -41,7 +41,7 @@ export interface DetailRowContext {
 const NO_CONTEXT: DetailRowContext = { hasSourceList: false };
 
 /** `Add to this plan` type chips. Each opens a sheet; none is a section of its own. */
-export type TypeDetailChipKey = 'ingredients' | 'details' | 'link';
+export type TypeDetailChipKey = 'ingredients' | 'details';
 
 export interface TypeDetailChip {
   readonly key: TypeDetailChipKey;
@@ -260,12 +260,13 @@ export function detailRowsFor(
 }
 
 /**
- * The type chips for the `Add to this …` row (2026-09-10). Only three, and only where the
+ * The type chips for the `Add to this …` row (2026-09-10). Only two, and only where the
  * thing they add is otherwise unreachable:
  *
  * - `Ingredients` on a Meal with no ingredient rows — opens the meal sheet.
- * - `Details` on a Meal / Watch / Event whose Details group is absent — opens the type sheet.
- * - `Link` on a Task / General with no Details group — opens the Link sheet.
+ * - `Details` on any kind whose Details group is absent — the type sheet on a Meal / Watch /
+ *   Event, the common Place + Address + Link sheet on a Task / General (amended 2026-09-11:
+ *   this chip was `Link` until Place became editable after creation).
  *
  * Once the Details group exists, its one `Edit` reaches every type fact, so no per-fact
  * chip (`Recipe`, `Episode`, `Booking`, …) is offered alongside it.
@@ -290,7 +291,7 @@ export function typeDetailChips(
       break;
     case 'task':
     case 'custom':
-      if (!detailsPresent) chips.push({ key: 'link', label: 'Link' });
+      if (!detailsPresent) chips.push({ key: 'details', label: 'Details' });
       break;
     default:
       assertNever(details, 'ActivityDetails');

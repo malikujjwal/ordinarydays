@@ -4,24 +4,24 @@ import { describe, expect, it, vi } from 'vitest';
 import { AddToPlanRow } from './AddToPlanRow';
 
 describe('AddToPlanRow', () => {
-  it('renders a Task row with Link only', () => {
+  it('renders a Task row with Details only', () => {
     const onPress = vi.fn();
     render(
       <ThemeProvider scheme="light">
         <AddToPlanRow
           label="Add to this task"
           objectKind="task"
-          chips={[{ key: 'link', label: 'Link', onPress }]}
+          chips={[{ key: 'details', label: 'Details', onPress }]}
         />
       </ThemeProvider>,
     );
 
     expect(screen.getByText('Add to this task')).toBeDefined();
-    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-details')).toBeDefined();
     expect(screen.queryByTestId('add-to-plan-prep-task')).toBeNull();
     expect(screen.queryByTestId('add-to-plan-list')).toBeNull();
     expect(screen.queryByTestId('add-to-plan-photo')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Add link to this task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add details to this task' }));
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
