@@ -7,6 +7,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { describe, expect, it, vi } from 'vitest';
 import { TypeDetailsSheet, type TypeDetailsSheetProps } from './TypeDetailsSheet';
 
+/** A new ingredient row mints its `ing_` id from the device CSPRNG; jsdom has none. */
+vi.mock('expo-crypto', () => ({
+  getRandomBytes: (count: number) => Uint8Array.from({ length: count }, (_, i) => i),
+}));
+
 const activity = (patch: Record<string, unknown> = {}): Activity =>
   ({
     activityId: 'act_01J0000000000000000000000A',
@@ -67,6 +72,69 @@ describe('TypeDetailsSheet', () => {
     fireEvent.click(screen.getByTestId('type-details-save'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0]?.[0]).toEqual({ details: { kind: 'meal' } });
+  });
+
+  /**
+   * Founder bug 2026-09-10: ingredients could not be changed after the meal was created. The
+   * sheet reuses the compose rows; existing rows keep their stored id, a new row mints one,
+   * and the save sends the edited list with no server-owned `addedToListId`.
+   */
+  it('round-trips an ingredient rename, removal and addition into the PATCH', async () => {
+    const { onSave } = mount(
+      activity({
+        details: {
+          kind: 'meal',
+          mealSlot: 'dinner',
+          ingredients: [
+            { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+            {
+              ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+              name: 'Salsa',
+              addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1B1',
+            },
+          ],
+        },
+      }),
+    );
+
+    expect((screen.getByLabelText('Ingredient 1') as HTMLInputElement).value).toBe(
+      'Chicken',
+    );
+    fireEvent.change(screen.getByLabelText('Ingredient 2'), {
+      target: { value: 'Hot salsa' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove ingredient 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add an ingredient' }));
+    fireEvent.change(screen.getByLabelText('Ingredient 2'), {
+      target: { value: 'Limes' },
+    });
+    fireEvent.change(screen.getByLabelText('Quantity 2'), { target: { value: '3' } });
+    // A blank row is dropped on save rather than refused.
+    fireEvent.click(screen.getByRole('button', { name: 'Add an ingredient' }));
+    fireEvent.click(screen.getByTestId('type-details-save'));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const sent = onSave.mock.calls[0]?.[0] as {
+      details: { kind: 'meal'; ingredients: { ingredientId: string }[] };
+    };
+    expect(sent.details.kind).toBe('meal');
+    expect(sent.details.ingredients).toHaveLength(2);
+    expect(sent.details.ingredients[0]).toEqual({
+      ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+      name: 'Hot salsa',
+    });
+    expect(sent.details.ingredients[1]).toMatchObject({ name: 'Limes', quantity: '3' });
+    expect(sent.details.ingredients[1]?.ingredientId).toMatch(
+      /^ing_[0-9A-HJKMNP-TV-Z]{26}$/,
+    );
+    expect(JSON.stringify(sent)).not.toContain('addedToListId');
+  });
+
+  it('does not treat an added blank ingredient row as an unsaved change', () => {
+    const { onClose } = mount(activity());
+    fireEvent.click(screen.getByRole('button', { name: 'Add an ingredient' }));
+    fireEvent.click(screen.getByTestId('type-details-cancel'));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('hides season and episode for a movie without wiping stored values', async () => {

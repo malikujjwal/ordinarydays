@@ -15,6 +15,8 @@ import {
   buildDetailsPatch,
   type DetailsEdits,
 } from '@/features/activity/model/buildDetailsPatch';
+import { IngredientsControl } from '@/features/compose/controls/FormControls';
+import type { DraftIngredient } from '@/features/compose/model/draft';
 import type { PendingActivity } from '@/lib/pendingActivity';
 import { DiscardChangesPrompt } from './DiscardChangesPrompt';
 
@@ -38,6 +40,8 @@ export interface TypeDetailsSheetProps {
 interface Draft {
   mealSlot: (typeof MEAL_SLOTS)[number] | undefined;
   recipeUrl: string;
+  /** Existing rows keep their stored `ing_` id; only a row added here mints one. */
+  ingredients: DraftIngredient[];
   mediaKind: 'movie' | 'show' | undefined;
   season: string;
   episode: string;
@@ -58,6 +62,7 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   mealSlot: undefined,
   recipeUrl: '',
+  ingredients: [],
   mediaKind: undefined,
   season: '',
   episode: '',
@@ -84,6 +89,12 @@ function draftFrom(activity: DisplayActivity): Draft {
   if (details.kind === 'meal') {
     next.mealSlot = details.mealSlot;
     next.recipeUrl = details.recipeUrl ?? '';
+    next.ingredients = (details.ingredients ?? []).map((row) => ({
+      id: row.ingredientId,
+      name: row.name,
+      quantity: row.quantity ?? '',
+      selected: false,
+    }));
   }
   if (details.kind === 'watch') {
     next.mediaKind = details.mediaKind;
@@ -237,7 +248,11 @@ export function TypeDetailsSheet({
         dirty={dirty}
         onDiscardRequest={requestLeave}
         title={title}
-        detent={mode === 'link' || kind === 'meal' ? 'fit' : 'large'}
+        detent={
+          mode === 'link' || (kind === 'meal' && draft.ingredients.length === 0)
+            ? 'fit'
+            : 'large'
+        }
         testID={mode === 'link' ? 'link-sheet' : 'type-details-sheet'}
         actions={
           <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
@@ -344,6 +359,15 @@ function MealFields({
           }}
         />
       </View>
+      {/**
+       * The compose control, reused rather than rebuilt (2026-09-10): the same rows, the same
+       * cap at `MAX_INGREDIENTS`, the same `newIngredient()` minting for a new row. A row
+       * loaded from the meal keeps its stored id, so the server can carry its `Added` marker.
+       */}
+      <IngredientsControl
+        rows={draft.ingredients}
+        onChange={(ingredients) => onChange({ ingredients })}
+      />
       <Field
         label="Recipe link"
         value={draft.recipeUrl}
@@ -550,6 +574,11 @@ function editsFromDraft(
       kind: 'meal',
       ...(draft.mealSlot === undefined ? {} : { mealSlot: draft.mealSlot }),
       ...(recipe === undefined ? {} : { recipeUrl: recipe }),
+      ingredients: draft.ingredients.map((row) => ({
+        ingredientId: row.id,
+        name: row.name,
+        quantity: row.quantity,
+      })),
     };
   }
   if (kind === 'watch') {
@@ -683,7 +712,21 @@ function hasKeys(value: object): boolean {
 }
 
 function sameDraft(left: Draft, right: Draft): boolean {
-  return (Object.keys(EMPTY_DRAFT) as Array<keyof Draft>).every(
-    (key) => left[key] === right[key],
+  return (Object.keys(EMPTY_DRAFT) as Array<keyof Draft>).every((key) =>
+    key === 'ingredients'
+      ? sameIngredients(left.ingredients, right.ingredients)
+      : left[key] === right[key],
   );
+}
+
+/**
+ * Compared as they would be saved: a blank row is dropped on save, so adding one and leaving
+ * it empty is not an unsaved change worth a discard prompt.
+ */
+function sameIngredients(left: DraftIngredient[], right: DraftIngredient[]): boolean {
+  const saved = (rows: DraftIngredient[]) =>
+    rows
+      .filter((row) => row.name.trim() !== '')
+      .map((row) => [row.id, row.name.trim(), row.quantity.trim()]);
+  return JSON.stringify(saved(left)) === JSON.stringify(saved(right));
 }

@@ -1989,6 +1989,69 @@ describe('patchActivity', () => {
       expect(repository.patchActivity).toHaveBeenCalledTimes(1);
     });
 
+    /**
+     * 2026-09-10: the meal sheet edits ingredient rows after creation. A details PATCH that
+     * renames a kept row, drops another and adds a new one is accepted; the kept id keeps
+     * its marker, the new id has none, and the removed row takes its marker with it.
+     */
+    it('accepts added and removed rows, keeping provenance only for kept ids', async () => {
+      const KEPT_ID = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MC';
+      const NEW_ID = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MD';
+      seed(
+        stored({
+          objectKind: 'plan',
+          type: 'meal',
+          title: 'Tacos',
+          details: {
+            kind: 'meal',
+            ingredients: [
+              { ingredientId: INGREDIENT_ID, name: 'Tomatoes', addedToListId: LIST_ID },
+              { ingredientId: KEPT_ID, name: 'Salsa', addedToListId: LIST_ID },
+            ],
+          },
+        }),
+      );
+
+      const result = await patchActivity(
+        USER,
+        PLAN,
+        {
+          details: {
+            kind: 'meal',
+            ingredients: [
+              { ingredientId: KEPT_ID, name: 'Hot salsa' },
+              { ingredientId: NEW_ID, name: 'Limes', quantity: '3' },
+            ],
+          },
+        },
+        VERSION,
+        LATER,
+      );
+
+      expect(result.details).toEqual({
+        kind: 'meal',
+        ingredients: [
+          { ingredientId: KEPT_ID, name: 'Hot salsa', addedToListId: LIST_ID },
+          { ingredientId: NEW_ID, name: 'Limes', quantity: '3' },
+        ],
+      });
+      expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears every row when the details PATCH omits ingredients', async () => {
+      seed(meal());
+
+      const result = await patchActivity(
+        USER,
+        PLAN,
+        { details: { kind: 'meal', mealSlot: 'dinner' } },
+        VERSION,
+        LATER,
+      );
+
+      expect(result.details).toEqual({ kind: 'meal', mealSlot: 'dinner' });
+    });
+
     it('still converts when objectKind, type and details travel together', async () => {
       seed(meal());
 

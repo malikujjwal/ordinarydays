@@ -74,6 +74,47 @@ describe('buildDetailsPatch', () => {
     });
   });
 
+  /** 2026-09-10: ingredients are editable after creation, through the meal sheet. */
+  it('sends the edited rows in order, keeping stored ids and never addedToListId', () => {
+    const patch = buildDetailsPatch(meal(), {
+      kind: 'meal',
+      mealSlot: 'dinner',
+      ingredients: [
+        // Salsa renamed, keeping its id — the server reattaches its Added marker.
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: ' Hot salsa ' },
+        // Tortillas kept with a trimmed quantity; Chicken removed.
+        {
+          ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+          name: 'Tortillas',
+          quantity: ' 10 ',
+        },
+        // A new row and a blank one: the blank is dropped.
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A9', name: 'Limes', quantity: '' },
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1AA', name: '   ' },
+      ],
+    });
+
+    expect(patch).toEqual({
+      kind: 'meal',
+      mealSlot: 'dinner',
+      ingredients: [
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Hot salsa' },
+        {
+          ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+          name: 'Tortillas',
+          quantity: '10',
+        },
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A9', name: 'Limes' },
+      ],
+    });
+  });
+
+  it('omits ingredients entirely when every row was removed', () => {
+    expect(
+      buildDetailsPatch(meal(), { kind: 'meal', mealSlot: 'dinner', ingredients: [] }),
+    ).toEqual({ kind: 'meal', mealSlot: 'dinner' });
+  });
+
   it('keeps mediaTitle and stored season when a movie edit omits neither identity nor progress', () => {
     const patch = buildDetailsPatch(
       {

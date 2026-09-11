@@ -3,15 +3,31 @@ import type { ActivityDetails, EventReservation, MealIngredient } from '@od/shar
 
 type DetailsPatch = NonNullable<PatchActivityInput['details']>;
 
+/** One ingredient row as the meal sheet edits it: its stored identity, a name, a quantity. */
+export interface EditedIngredient {
+  /** The row's `ing_` id — the stored one for an existing row, never re-minted. */
+  ingredientId: string;
+  name: string;
+  quantity?: string;
+}
+
 /**
- * The type-sheet's own fields. Absence of an optional key is a clear, not "leave it".
- * `kind` must match `current.kind`; ingredients and `mediaTitle` are never edited here.
+ * The type-sheet's own fields. Absence of an optional key is a clear, not "leave it" —
+ * with one exception: a meal edit that omits `ingredients` did not touch the rows, so the
+ * stored rows are carried. `kind` must match `current.kind`; `mediaTitle` is never edited
+ * here.
  */
 export type DetailsEdits =
   | {
       kind: 'meal';
       mealSlot?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
       recipeUrl?: string;
+      /**
+       * The edited rows in order (2026-09-10: ingredients are editable after creation).
+       * Blank names are dropped and quantities trimmed here, so the sheet can hand over
+       * exactly what it holds.
+       */
+      ingredients?: readonly EditedIngredient[];
     }
   | {
       kind: 'watch';
@@ -58,7 +74,10 @@ function mealPatch(
   current: Extract<ActivityDetails, { kind: 'meal' }>,
   edits: Extract<DetailsEdits, { kind: 'meal' }>,
 ): DetailsPatch {
-  const ingredients = (current.ingredients ?? []).map(withoutAddedToListId);
+  const ingredients =
+    edits.ingredients === undefined
+      ? (current.ingredients ?? []).map(withoutAddedToListId)
+      : edits.ingredients.flatMap(cleanIngredient);
   return {
     kind: 'meal',
     ...(edits.mealSlot === undefined ? {} : { mealSlot: edits.mealSlot }),
@@ -114,11 +133,25 @@ function pickMeal(current: Extract<ActivityDetails, { kind: 'meal' }>): {
   };
 }
 
-function withoutAddedToListId(row: MealIngredient): {
-  ingredientId: string;
-  name: string;
-  quantity?: string;
-} {
+/**
+ * An edited row as the input schema takes it, or nothing when its name is blank. Edited rows
+ * never carry `addedToListId` — the server reattaches it by `ingredientId` (P3-17), so a
+ * renamed row keeps its `Added` marker and a removed row takes its marker with it.
+ */
+function cleanIngredient(row: EditedIngredient): EditedIngredient[] {
+  const name = row.name.trim();
+  if (name === '') return [];
+  const quantity = row.quantity?.trim() ?? '';
+  return [
+    {
+      ingredientId: row.ingredientId,
+      name,
+      ...(quantity === '' ? {} : { quantity }),
+    },
+  ];
+}
+
+function withoutAddedToListId(row: MealIngredient): EditedIngredient {
   return {
     ingredientId: row.ingredientId,
     name: row.name,
