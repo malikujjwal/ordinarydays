@@ -545,10 +545,11 @@ function editsFromDraft(
       setFieldErrors(errors);
       return undefined;
     }
+    const recipe = recipeUrl.ok ? recipeUrl.value : undefined;
     return {
       kind: 'meal',
       ...(draft.mealSlot === undefined ? {} : { mealSlot: draft.mealSlot }),
-      ...(recipeUrl.value === undefined ? {} : { recipeUrl: recipeUrl.value }),
+      ...(recipe === undefined ? {} : { recipeUrl: recipe }),
     };
   }
   if (kind === 'watch') {
@@ -560,11 +561,13 @@ function editsFromDraft(
       setFieldErrors(errors);
       return undefined;
     }
+    const seasonNumber = season.ok ? season.value : undefined;
+    const episodeNumber = episode.ok ? episode.value : undefined;
     return {
       kind: 'watch',
       ...(draft.mediaKind === undefined ? {} : { mediaKind: draft.mediaKind }),
-      ...(season.value === undefined ? {} : { season: season.value }),
-      ...(episode.value === undefined ? {} : { episode: episode.value }),
+      ...(seasonNumber === undefined ? {} : { season: seasonNumber }),
+      ...(episodeNumber === undefined ? {} : { episode: episodeNumber }),
       ...(trimmed(draft.episodeTitle) === undefined
         ? {}
         : { episodeTitle: draft.episodeTitle.trim() }),
@@ -590,12 +593,15 @@ function editsFromDraft(
       setFieldErrors(errors);
       return undefined;
     }
+    const party = partySize.ok ? partySize.value : undefined;
+    const priceCents = price.ok ? price.value : undefined;
+    const ticket = ticketUrl.ok ? ticketUrl.value : undefined;
     const reservation = {
       ...(trimmed(draft.reservationName) === undefined
         ? {}
         : { name: draft.reservationName.trim() }),
       ...(time === '' ? {} : { time }),
-      ...(partySize.value === undefined ? {} : { partySize: partySize.value }),
+      ...(party === undefined ? {} : { partySize: party }),
       ...(trimmed(draft.reservationReference) === undefined
         ? {}
         : { reference: draft.reservationReference.trim() }),
@@ -605,9 +611,9 @@ function editsFromDraft(
       ...(trimmed(draft.description) === undefined
         ? {}
         : { description: draft.description.trim() }),
-      ...(price.value === undefined ? {} : { priceCents: price.value }),
+      ...(priceCents === undefined ? {} : { priceCents }),
       ...(currency === '' ? {} : { currency }),
-      ...(ticketUrl.value === undefined ? {} : { ticketUrl: ticketUrl.value }),
+      ...(ticket === undefined ? {} : { ticketUrl: ticket }),
       ...(trimmed(draft.organiser) === undefined
         ? {}
         : { organiser: draft.organiser.trim() }),

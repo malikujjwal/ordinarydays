@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { AccessibilityInfo } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { describe, expect, it, vi } from 'vitest';
-import { TypeDetailsSheet } from './TypeDetailsSheet';
+import { TypeDetailsSheet, type TypeDetailsSheetProps } from './TypeDetailsSheet';
 
 const activity = (patch: Record<string, unknown> = {}): Activity =>
   ({
@@ -109,7 +109,7 @@ describe('TypeDetailsSheet', () => {
 
   it('keeps a failed draft for retry after the activity refreshes', async () => {
     const announce = vi.spyOn(AccessibilityInfo, 'announceForAccessibility');
-    const onSave = vi.fn(async () => false);
+    const onSave = vi.fn<TypeDetailsSheetProps['onSave']>(async () => false);
     const current = activity({
       details: {
         kind: 'meal',

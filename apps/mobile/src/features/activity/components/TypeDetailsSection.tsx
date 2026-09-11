@@ -42,8 +42,8 @@ export function TypeDetailsSection({
         <TypeDetailGroup
           activity={activity}
           sectionKey={key}
-          onEditType={onEditType}
-          onEditLink={onEditLink}
+          {...(onEditType === undefined ? {} : { onEditType })}
+          {...(onEditLink === undefined ? {} : { onEditLink })}
           key={key}
         />
       ))}
@@ -185,7 +185,7 @@ function WatchingFacts({
       ) : (
         <FactBlock
           primary={mediaLine}
-          secondary={episodeTitle}
+          {...(episodeTitle === undefined ? {} : { secondary: episodeTitle })}
           accessibilityLabel={
             episodeTitle === undefined ? mediaLine : `${mediaLine}, ${episodeTitle}`
           }
@@ -218,7 +218,7 @@ function ReservationFacts({ reservation }: { reservation: EventReservation }) {
   return (
     <FactBlock
       primary={primary}
-      secondary={secondary === '' ? undefined : secondary}
+      {...(secondary === undefined || secondary === '' ? {} : { secondary })}
       accessibilityLabel={`Reservation: ${spoken}`}
     />
   );
