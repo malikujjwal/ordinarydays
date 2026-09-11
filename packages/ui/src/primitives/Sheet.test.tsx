@@ -19,6 +19,21 @@ vi.mock('../theme/keyboard', () => ({
 }));
 
 /**
+ * What the body ScrollView is actually handed. React Native Web drops iOS-only props before
+ * the DOM, so `automaticallyAdjustKeyboardInsets` is only observable at the component boundary.
+ */
+const bodyScroll = vi.hoisted(() => ({ props: [] as Record<string, unknown>[] }));
+vi.mock('react-native', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-native')>();
+  const { createElement, forwardRef } = await import('react');
+  const ScrollView = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
+    bodyScroll.props.push(props);
+    return createElement(actual.ScrollView as React.ElementType, { ...props, ref });
+  });
+  return { ...actual, ScrollView };
+});
+
+/**
  * Motion and width are the two inputs the lifecycle tests at the bottom steer: Reduce Motion
  * resolves every duration to `0`, and the breakpoint chooses the bottom sheet or the dialog.
  * Everything else in the theme is the real thing.
@@ -27,11 +42,19 @@ const motionState = vi.hoisted(() => ({
   reduced: false,
   breakpoint: 'compact' as string,
 }));
+/** The footer height `Sheet` hands scroll-to-focused on each render (its fifth argument). */
+const focusFooter = vi.hoisted(() => ({ values: [] as number[] }));
 vi.mock('../theme/index', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../theme/index')>();
   const { motion } = await import('../theme/tokens');
   return {
     ...actual,
+    useScrollToFocusedInput: (
+      ...args: Parameters<typeof actual.useScrollToFocusedInput>
+    ) => {
+      focusFooter.values.push(args[4] ?? 0);
+      actual.useScrollToFocusedInput(...args);
+    },
     useMotion: () =>
       motionState.reduced
         ? {
@@ -53,6 +76,13 @@ vi.mock('../theme/index', async (importOriginal) => {
 const { Sheet } = await import('./Sheet');
 const { Button } = await import('./Button');
 
+/** React Native Web parks `onLayout` on the node; jsdom has no ResizeObserver to call it. */
+type LayoutElement = HTMLElement & {
+  __reactLayoutHandler?: (event: {
+    nativeEvent: { layout: { x: number; y: number; width: number; height: number } };
+  }) => void;
+};
+
 const mount = (node: ReactNode) =>
   render(<ThemeProvider scheme="light">{node}</ThemeProvider>);
 
@@ -73,6 +103,8 @@ beforeEach(() => {
   keyboardInset.value = 0;
   motionState.reduced = false;
   motionState.breakpoint = 'compact';
+  bodyScroll.props = [];
+  focusFooter.values = [];
 });
 
 afterEach(() => {
@@ -103,6 +135,62 @@ describe('Sheet — the keyboard contract (§20)', () => {
     expect(surface.style.paddingBottom).toBe('24px');
     expect((surface.parentElement as HTMLElement).style.paddingBottom).toBe('336px');
     expect(screen.getByTestId('sheet-actions')).toBeDefined();
+  });
+
+  /**
+   * **The keyboard is handled once.** The surface is already lifted, so a body that also asks
+   * iOS for keyboard insets is corrected twice: iOS judges the overlap against the pre-lift
+   * frame and scrolls a short `fit` body's only field out of sight (founder report, the Link
+   * sheet on Activity detail: title and buttons, no text box).
+   */
+  it('does not let the body ScrollView add its own keyboard inset under a lifted surface', () => {
+    keyboardInset.value = 336;
+    mount(sheet(<Button label="Save link" onPress={() => {}} />));
+
+    const body = bodyScroll.props.at(-1);
+    expect(body).toBeDefined();
+    expect(body?.automaticallyAdjustKeyboardInsets).not.toBe(true);
+  });
+
+  /**
+   * An unlifted surface — the centred dialog — has nothing to double, so the platform keeps
+   * the job it had there.
+   */
+  it('leaves platform keyboard insets to the centred dialog, which does not lift', () => {
+    motionState.breakpoint = 'medium';
+    keyboardInset.value = 336;
+    mount(sheet(<Button label="Save link" onPress={() => {}} />));
+
+    expect(bodyScroll.props.at(-1)?.automaticallyAdjustKeyboardInsets).toBe(true);
+    expect(focusFooter.values.at(-1)).toBe(0);
+  });
+
+  /**
+   * With the platform out of it, scroll-to-focused keeps a field in a long body visible, and
+   * it has to know what sits between the body and the keyboard: the measured actions slot and
+   * the surface's own bottom padding. A zero footer is the value that silently disables it.
+   */
+  it('feeds the measured actions slot and the bottom padding to scroll-to-focused', () => {
+    keyboardInset.value = 336;
+    mount(sheet(<Button label="Save link" onPress={() => {}} />));
+
+    const actions = screen.getByTestId('sheet-actions') as LayoutElement;
+    expect(actions.__reactLayoutHandler).toBeTypeOf('function');
+    act(() => {
+      actions.__reactLayoutHandler?.({
+        nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 76 } },
+      });
+    });
+
+    // 76 measured + 24 (`space[7]`); the home indicator is under the keyboard.
+    expect(focusFooter.values.at(-1)).toBe(100);
+  });
+
+  it('still counts the bottom padding when the sheet has no actions', () => {
+    keyboardInset.value = 336;
+    mount(sheet());
+
+    expect(focusFooter.values.at(-1)).toBe(24);
   });
 
   it('keeps the body scrollable and the actions outside it', () => {

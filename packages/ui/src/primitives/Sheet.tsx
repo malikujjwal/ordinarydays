@@ -151,8 +151,28 @@ export function Sheet({
   const motion = useMotion();
   const bodyRef = useRef<RNScrollView | null>(null);
   const { height: viewportHeight } = useWindowDimensions();
-  useScrollToFocusedInput(bodyRef, keyboard, viewportHeight);
   const centred = breakpoint !== 'compact';
+  // The home indicator is irrelevant while the keyboard covers it.
+  const surfacePaddingBottom =
+    theme.space[7] + (centred || keyboard > 0 ? 0 : insets.bottom);
+  const [actionsHeight, setActionsHeight] = useState(0);
+  /**
+   * **The keyboard is handled once** (§6.2). A bottom sheet lifts its whole surface, so its body
+   * takes no platform keyboard inset; keeping a focused field visible is scroll-to-focused's job,
+   * and it has to know what sits between the body and the keyboard — the actions slot and the
+   * surface's bottom padding. The centred dialog does not lift, so the platform keeps that job
+   * there and the footer stays `0`.
+   */
+  const liftsForKeyboard = !centred;
+  useScrollToFocusedInput(
+    bodyRef,
+    keyboard,
+    viewportHeight,
+    0,
+    liftsForKeyboard
+      ? (actions === undefined ? 0 : actionsHeight) + surfacePaddingBottom
+      : 0,
+  );
 
   /** Only a bottom sheet drags, and only when it is allowed to close at all. */
   const draggable = !centred && dismissible;
@@ -442,7 +462,7 @@ export function Sheet({
           flex: 1,
           justifyContent: centred ? 'center' : 'flex-end',
           alignItems: centred ? 'center' : 'stretch',
-          paddingBottom: centred ? 0 : keyboard,
+          paddingBottom: liftsForKeyboard ? keyboard : 0,
           // A leaving sheet is not a target: a second tap on a row mid-exit dispatches nothing.
           pointerEvents: phase === 'dismissing' ? 'none' : 'auto',
         }}
@@ -485,9 +505,7 @@ export function Sheet({
                */
               paddingHorizontal: theme.space[6],
               paddingTop: theme.space[5],
-              // The home indicator is irrelevant while the keyboard covers it.
-              paddingBottom:
-                theme.space[7] + (centred || keyboard > 0 ? 0 : insets.bottom),
+              paddingBottom: surfacePaddingBottom,
               ...height,
               ...(centred
                 ? { width: 480, maxWidth: '92%', borderRadius: theme.radius.sheet }
@@ -561,6 +579,11 @@ export function Sheet({
            * The body scrolls; the header above and the actions below do not, so the commit stays
            * reachable however long the content is. Keyboard handling lives here rather than in
            * each modal, for the same reason the height does.
+           *
+           * **No platform keyboard inset under a lifted surface.** iOS would judge the overlap
+           * against the body's pre-lift frame and shift the content by the focused field's
+           * distance below the keyboard's top; a short `fit` body is smaller than that shift, so
+           * its only field scrolled out of sight while the title and buttons stayed.
            */}
           {virtualizedBody === undefined ? (
             <ScrollView
@@ -568,7 +591,7 @@ export function Sheet({
               nativeID={testID === undefined ? undefined : `${testID}-owned-scroll-body`}
               style={{ flexGrow: detent === 'fit' ? 0 : 1, flexShrink: 1 }}
               contentContainerStyle={{ gap: theme.space[6] }}
-              automaticallyAdjustKeyboardInsets
+              automaticallyAdjustKeyboardInsets={!liftsForKeyboard}
               keyboardDismissMode={
                 Platform.OS === 'ios'
                   ? 'interactive'
@@ -594,6 +617,7 @@ export function Sheet({
 
           {actions === undefined ? null : (
             <View
+              onLayout={(event) => setActionsHeight(event.nativeEvent.layout.height)}
               style={{ gap: theme.space[3], paddingTop: theme.space[6] }}
               testID={testID === undefined ? undefined : `${testID}-actions`}
             >
