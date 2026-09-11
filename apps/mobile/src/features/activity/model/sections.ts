@@ -9,31 +9,47 @@ import type { PendingActivity } from '@/lib/pendingActivity';
 
 type DisplayActivity = Activity | PendingActivity;
 
-/** Topic-named type-fact sections, in render order. Absent when empty. */
-export const TYPE_DETAIL_SECTION_KEYS = [
+/**
+ * The rows of the one `Details` group, in render order (founder, 2026-09-10).
+ *
+ * The six topic sections (RECIPE / WATCHING / DESCRIPTION / RESERVATION / TICKETS / LINK)
+ * and the `Related plan` / `From <list>` setting rows became one label-left / value-right
+ * group with a single `Edit`. A row exists only when it holds something; the group exists
+ * only when it has at least one row.
+ */
+export const DETAIL_ROW_KEYS = [
   'recipe',
-  'watching',
-  'description',
-  'reservation',
+  'episode',
+  'service',
+  'booking',
   'tickets',
+  'organiser',
+  'description',
   'link',
+  'partOf',
+  'from',
 ] as const;
 
-export type TypeDetailSectionKey = (typeof TYPE_DETAIL_SECTION_KEYS)[number];
+export type DetailRowKey = (typeof DETAIL_ROW_KEYS)[number];
 
-const TYPE_DETAIL_CHIP_LABEL: Record<TypeDetailSectionKey, string> = {
-  recipe: 'Recipe',
-  watching: 'Episode',
-  description: 'Description',
-  reservation: 'Booking',
-  tickets: 'Tickets',
-  link: 'Link',
-};
+/** Envelope facts the Details group needs beyond the Activity itself. */
+export interface DetailRowContext {
+  /** The detail envelope named this activity's source List. */
+  readonly hasSourceList: boolean;
+}
+
+const NO_CONTEXT: DetailRowContext = { hasSourceList: false };
+
+/** `Add to this plan` type chips. Each opens a sheet; none is a section of its own. */
+export type TypeDetailChipKey = 'ingredients' | 'details' | 'link';
 
 export interface TypeDetailChip {
-  readonly key: TypeDetailSectionKey;
+  readonly key: TypeDetailChipKey;
   readonly label: string;
 }
+
+/** The ruled rows under the `Settings` heading, at the foot of the screen. */
+export const SETTINGS_SECTION_KEYS = ['repeat', 'reminders', 'people'] as const;
 
 const MEAL_SLOT_LABEL = {
   breakfast: 'Breakfast',
@@ -51,7 +67,7 @@ const MEAL_SLOT_LABEL = {
  * ## Task detail is not Plan detail with things hidden
  *
  * [`today-and-tasks.md`](../../../../../docs/01-product/today-and-tasks.md) §5.6 is explicit:
- * a Task shows title, schedule, repeat, reminder, notes and `Related plan`, and **renders no
+ * a Task shows title, schedule, repeat, reminder, notes and its parent plan, and **renders no
  * disabled placeholders for anything it lacks**. Tasks are solo, so the coordination sections
  * do not exist for them — showing People greyed out on a Task would teach the user that a
  * Task is a lesser Plan, which is the opposite of the model.
@@ -77,8 +93,7 @@ const MEAL_SLOT_LABEL = {
  *
  * Unbuilt Plan capabilities return as **noninteractive discovery rows** saying `Coming later`.
  * They carry neither a disabled Add button nor a chevron, so they show the Plan's intended
- * shape without claiming an action exists. Ingredients joins those rows for Meal plans: the
- * activity model already stores them, while the interactive detail flow is owned by Phase 3.
+ * shape without claiming an action exists.
  */
 
 export interface DetailSection {
@@ -100,6 +115,8 @@ export interface PlanSectionContent {
   /** The picker is reachable (P3-41), so an empty section needs no discovery row. */
   readonly attachmentsWired?: boolean;
   readonly updateCount: number;
+  /** The envelope named a source List, so the Details group carries a `From` row. */
+  readonly hasSourceList?: boolean;
 }
 
 const EMPTY_CONTENT: PlanSectionContent = {
@@ -112,62 +129,59 @@ const EMPTY_CONTENT: PlanSectionContent = {
 /**
  * The sections for one activity, in render order.
  *
- * Notes-first order is the founder's 2026-08-13 refinement to the canonical detail anatomy.
- * The 2026-08-25 amendment reshaped the Plan half: **settings always render; sections do not
- * exist until they hold something** — no empty PREP heading, no chevron to a blank screen.
- * Empty capabilities are discoverable through the `Add to this plan` chip row the screen
- * renders after these. `People` keeps its pre-build `Coming later` row (that treatment is
- * explicitly unchanged by the amendment), as does Meal's Ingredients until P3-43 wires it.
+ * **Amended 2026-09-10 (founder): what it is, what it holds, what you wrote, how it
+ * behaves.** The header, then `Details`, then the content sections (Ingredients,
+ * Preparation, Lists, Attachments), then Notes, then — rendered by the screen, not listed
+ * here — the `Add to this …` chip row, then the `Settings` group, then Updates last. This
+ * reverses the earlier notes-first order with settings above the type facts.
+ *
+ * The 2026-08-25 rule still holds: **sections do not exist until they hold something** — no
+ * empty PREP heading, no chevron to a blank screen. Empty capabilities are discoverable
+ * through the chip row. `People` keeps its pre-build `Coming later` row, now inside Settings.
  */
 export function sectionsFor(
   activity: DisplayActivity,
   content: PlanSectionContent = EMPTY_CONTENT,
 ): DetailSection[] {
   /**
-   * `repeat` and `reminders` are **setting rows** and sit together, in the frames' order:
-   * the two things about *when* this happens, stated by value, each opening its own sheet.
-   * Both need a date to hang off — there is nothing to repeat or to count back from without
-   * one — so both appear only when the activity is scheduled.
+   * `repeat` and `reminders` are **setting rows** and sit together: the two things about
+   * *when* this happens, stated by value, each opening its own sheet. Both need a date to
+   * hang off — there is nothing to repeat or to count back from without one — so both
+   * appear only when the activity is scheduled.
    */
   const schedule =
     activity.schedule === undefined ? [] : [{ key: 'repeat' }, { key: 'reminders' }];
 
-  const typeFacts = typeDetailSectionsFor(activity).map((key) => ({ key }));
+  const details =
+    detailRowsFor(activity, { hasSourceList: content.hasSourceList === true }).length > 0
+      ? [{ key: 'details', label: 'Details' }]
+      : [];
 
   if (activity.objectKind === 'task') {
-    // §5.6's list, plus LINK when a source URL is stored. No placeholders.
+    // §5.6's list. The parent plan is a `Part of` Details row, absent when there is none.
     return [
       { key: 'whenWhere' },
+      ...details,
       { key: 'notes', label: 'Notes' },
       ...schedule,
-      { key: 'relatedPlan', label: 'Related plan' },
-      ...typeFacts,
     ];
   }
 
   return [
     { key: 'whenWhere' },
-    { key: 'notes', label: 'Notes' },
-    ...schedule,
-    {
-      key: 'people',
-      label: 'People',
-      summary: 'Sharing and participants',
-      state: 'coming-later',
-    },
-    ...typeFacts,
-    ...(content.childCount > 0 ? [{ key: 'prep' }] : []),
-    ...(content.sourceListCount > 0 ? [{ key: 'lists' }] : []),
+    ...details,
     /**
      * INGREDIENTS (P3-43): a Meal whose stored details carry ingredient rows renders the
      * picker — selection checkboxes, the resolved destination, `Add n to <list>`. A Meal
-     * with no rows has nothing to add and shows no section; the rows are edited on the form.
+     * with no rows shows no section; the `Ingredients` chip opens the meal sheet instead.
      */
     ...(activity.type === 'meal' &&
     activity.details.kind === 'meal' &&
     (activity.details.ingredients?.length ?? 0) > 0
       ? [{ key: 'ingredients' as const }]
       : []),
+    ...(content.childCount > 0 ? [{ key: 'prep' }] : []),
+    ...(content.sourceListCount > 0 ? [{ key: 'lists' }] : []),
     /**
      * Attachments exists once it holds content; while empty it is discovered through the
      * `Photo` chip in the `Add to this plan` row (§2.1 amended, P3-41). The §2.2 pre-build
@@ -188,6 +202,14 @@ export function sectionsFor(
               state: 'coming-later' as const,
             },
           ]),
+    { key: 'notes', label: 'Notes' },
+    ...schedule,
+    {
+      key: 'people',
+      label: 'People',
+      summary: 'Sharing and participants',
+      state: 'coming-later',
+    },
     // §2.2's one owner of the rule: hidden while private with no entries (P3-40).
     ...(updatesSectionVisible(activity.visibility, content.updateCount)
       ? [{ key: 'updates' }]
@@ -196,28 +218,34 @@ export function sectionsFor(
 }
 
 /**
- * Type-fact sections that currently hold something, in anatomy order, after settings and
- * before PREPARATION. Empty groups are omitted here and offered as chips by
- * {@link typeDetailChips}. `shortcutId` is never a section.
+ * The Details group's rows that currently hold something, in render order. Empty facts are
+ * omitted; `shortcutId` is never a row. A movie never shows season or episode.
+ *
+ * `partOf` exists whenever the activity has a parent — named when the envelope could title
+ * it, `A plan` otherwise. A task or plan with no parent has **no** row: the old
+ * `Related plan · None` disclosure is gone.
  */
-export function typeDetailSectionsFor(activity: DisplayActivity): TypeDetailSectionKey[] {
-  const keys: TypeDetailSectionKey[] = [];
+export function detailRowsFor(
+  activity: DisplayActivity,
+  context: DetailRowContext = NO_CONTEXT,
+): DetailRowKey[] {
+  const keys: DetailRowKey[] = [];
   const { details } = activity;
   switch (details.kind) {
     case 'meal':
       if (details.recipeUrl !== undefined) keys.push('recipe');
       break;
     case 'watch':
-      if (watchSectionVisible(details)) keys.push('watching');
+      if (watchEpisodeVisible(details)) keys.push('episode');
+      if (presentFreeText(details.service)) keys.push('service');
       break;
     case 'event':
-      if (details.description !== undefined && details.description !== '') {
-        keys.push('description');
-      }
-      if (reservationVisible(details.reservation)) keys.push('reservation');
+      if (reservationVisible(details.reservation)) keys.push('booking');
       if (details.priceCents !== undefined || details.ticketUrl !== undefined) {
         keys.push('tickets');
       }
+      if (presentFreeText(details.organiser)) keys.push('organiser');
+      if (presentFreeText(details.description)) keys.push('description');
       break;
     case 'task':
     case 'custom':
@@ -226,54 +254,48 @@ export function typeDetailSectionsFor(activity: DisplayActivity): TypeDetailSect
       assertNever(details, 'ActivityDetails');
   }
   if (shownSourceUrl(activity) !== undefined) keys.push('link');
+  if (activity.parentActivityId !== undefined) keys.push('partOf');
+  if (context.hasSourceList) keys.push('from');
   return keys;
 }
 
 /**
- * Empty type-fact groups that have a sheet, as chips for the `Add to this plan` row.
- * A chip exists only when the group is empty **and** a sheet is wired for it: meal, watch
- * and event get a type sheet; every kind including Task and General can get Link.
+ * The type chips for the `Add to this …` row (2026-09-10). Only three, and only where the
+ * thing they add is otherwise unreachable:
+ *
+ * - `Ingredients` on a Meal with no ingredient rows — opens the meal sheet.
+ * - `Details` on a Meal / Watch / Event whose Details group is absent — opens the type sheet.
+ * - `Link` on a Task / General with no Details group — opens the Link sheet.
+ *
+ * Once the Details group exists, its one `Edit` reaches every type fact, so no per-fact
+ * chip (`Recipe`, `Episode`, `Booking`, …) is offered alongside it.
  */
-export function typeDetailChips(activity: DisplayActivity): readonly TypeDetailChip[] {
-  const filled = new Set(typeDetailSectionsFor(activity));
+export function typeDetailChips(
+  activity: DisplayActivity,
+  context: DetailRowContext = NO_CONTEXT,
+): readonly TypeDetailChip[] {
+  const detailsPresent = detailRowsFor(activity, context).length > 0;
+  const { details } = activity;
   const chips: TypeDetailChip[] = [];
-  for (const key of typeDetailChipGroups(activity.details.kind)) {
-    if (filled.has(key)) continue;
-    chips.push({ key, label: typeDetailChipLabel(activity, key) });
-  }
-  return chips;
-}
-
-function typeDetailChipGroups(
-  kind: ActivityDetails['kind'],
-): readonly TypeDetailSectionKey[] {
-  switch (kind) {
+  switch (details.kind) {
     case 'meal':
-      return ['recipe', 'link'];
+      if ((details.ingredients?.length ?? 0) === 0) {
+        chips.push({ key: 'ingredients', label: 'Ingredients' });
+      }
+      if (!detailsPresent) chips.push({ key: 'details', label: 'Details' });
+      break;
     case 'watch':
-      return ['watching', 'link'];
     case 'event':
-      return ['description', 'reservation', 'tickets', 'link'];
+      if (!detailsPresent) chips.push({ key: 'details', label: 'Details' });
+      break;
     case 'task':
     case 'custom':
-      return ['link'];
+      if (!detailsPresent) chips.push({ key: 'link', label: 'Link' });
+      break;
     default:
-      return assertNever(kind, 'ActivityDetails.kind');
+      assertNever(details, 'ActivityDetails');
   }
-}
-
-function typeDetailChipLabel(
-  activity: DisplayActivity,
-  key: TypeDetailSectionKey,
-): string {
-  if (
-    key === 'watching' &&
-    activity.details.kind === 'watch' &&
-    activity.details.mediaKind === 'movie'
-  ) {
-    return 'Streaming service';
-  }
-  return TYPE_DETAIL_CHIP_LABEL[key];
+  return chips;
 }
 
 /**
@@ -294,13 +316,13 @@ function presentFreeText(value: string | undefined): value is string {
   return value !== undefined && value !== '';
 }
 
-function watchSectionVisible(
+function watchEpisodeVisible(
   details: Extract<ActivityDetails, { kind: 'watch' }>,
 ): boolean {
   if (details.mediaKind !== 'movie') {
     if (details.season !== undefined || details.episode !== undefined) return true;
   }
-  return presentFreeText(details.episodeTitle) || presentFreeText(details.service);
+  return presentFreeText(details.episodeTitle);
 }
 
 function reservationVisible(reservation: EventReservation | undefined): boolean {

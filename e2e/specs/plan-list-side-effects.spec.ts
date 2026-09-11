@@ -334,9 +334,12 @@ test('meal detail: the ingredients section adds only the selected rows, then mar
 
   await page.goto(`/activity/${activityId}`);
   await expect(testId(page, 'section-ingredients')).toBeVisible();
+  // Detail's footer layout (2026-09-10): one quiet `To Groceries ▾` line at the foot.
   await expect(testId(page, 'ingredient-picker-destination-name')).toHaveText(
-    'Groceries',
+    'To Groceries',
   );
+  // The add action appears only once a row is selected.
+  await expect(testId(page, 'ingredient-picker-add')).toHaveCount(0);
   for (const name of ['Chicken', 'Tortillas (8)', 'Sour cream']) {
     await expect(page.getByRole('checkbox', { name })).toHaveAttribute(
       'aria-checked',

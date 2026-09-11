@@ -130,6 +130,56 @@ describe('TypeDetailsSheet', () => {
     expect(JSON.stringify(sent)).not.toContain('addedToListId');
   });
 
+  /** One Edit edits every detail (2026-09-10): the type sheet ends with the Link field. */
+  it('sends sourceUrl in the same PATCH as details, only when it changed', async () => {
+    const onSave = vi.fn<TypeDetailsSheetProps['onSave']>(async () => false);
+    mount(
+      activity({
+        type: 'event',
+        sourceUrl: 'https://www.instagram.com/p/Cx9pQ2v',
+        details: { kind: 'event', organiser: 'Barbican' },
+      }),
+      'type',
+      { onSave },
+    );
+
+    fireEvent.click(screen.getByTestId('type-details-save'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toEqual({
+      details: { kind: 'event', organiser: 'Barbican' },
+    });
+
+    fireEvent.change(screen.getByTestId('type-details-source-url'), {
+      target: { value: 'https://www.barbican.org.uk/whats-on' },
+    });
+    fireEvent.click(screen.getByTestId('type-details-save'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onSave.mock.calls[1]?.[0]).toEqual({
+      details: { kind: 'event', organiser: 'Barbican' },
+      sourceUrl: 'https://www.barbican.org.uk/whats-on',
+    });
+
+    fireEvent.change(screen.getByTestId('type-details-source-url'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByTestId('type-details-save'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(3));
+    expect(onSave.mock.calls[2]?.[0]).toEqual({
+      details: { kind: 'event', organiser: 'Barbican' },
+      sourceUrl: null,
+    });
+  });
+
+  it('refuses an invalid link in the type sheet without saving', () => {
+    const { onSave } = mount(activity());
+    fireEvent.change(screen.getByTestId('type-details-source-url'), {
+      target: { value: 'not a link' },
+    });
+    fireEvent.click(screen.getByTestId('type-details-save'));
+    expect(screen.getByText('Enter a valid link.')).toBeDefined();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('does not treat an added blank ingredient row as an unsaved change', () => {
     const { onClose } = mount(activity());
     fireEvent.click(screen.getByRole('button', { name: 'Add an ingredient' }));

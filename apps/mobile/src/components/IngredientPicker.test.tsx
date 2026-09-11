@@ -94,6 +94,30 @@ describe('IngredientPicker', () => {
     expect(action.getAttribute('aria-disabled')).toBe('true');
   });
 
+  /** Activity detail's layout (2026-09-10): the action appears only once a row is selected. */
+  it('in the footer layout, hides the add action until a row is selected', () => {
+    mount({ layout: 'footer' });
+    expect(screen.queryByRole('button', { name: /^Add \d/ })).toBeNull();
+    expect(screen.queryByText('Add ingredients to:')).toBeNull();
+    expect(screen.getByTestId('ingredient-picker-destination-name').textContent).toBe(
+      'To Groceries',
+    );
+    expect(screen.getByText('Added')).toBeDefined();
+  });
+
+  it('in the footer layout, names the count and list beside the destination', () => {
+    const { onAdd, onChangeDestination } = mount({
+      layout: 'footer',
+      selected: new Set(['ing_01J8XKQ2M4N5P6R7S8T9V0W1A1']),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1 to Groceries' }));
+    expect(onAdd).toHaveBeenCalledWith(['ing_01J8XKQ2M4N5P6R7S8T9V0W1A1']);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add ingredients to: Groceries. Change' }),
+    );
+    expect(onChangeDestination).toHaveBeenCalledOnce();
+  });
+
   it('reports toggles by stable id', () => {
     const { onToggle } = mount();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Tomatoes' }));

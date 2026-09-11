@@ -26,6 +26,14 @@ import {
  * Used by the Meal's detail screen (writes through P3-17's action) and by the Meal creation
  * form (where the save carries the write). Neither path constructs provenance or calls the
  * ordinary bulk route — the server does that from the selected `ingredientId`s.
+ *
+ * ## Two layouts (2026-09-10)
+ *
+ * `stacked` — the creation form's: the labelled destination field above the rows, and the
+ * action (when there is one) full width below. `footer` — Activity detail's: the rows
+ * first, then one line at the section's foot with a quiet `To Groceries ▾` destination
+ * control and, **only once at least one row is selected**, a secondary `Add n to <list>`
+ * button beside it. No disabled `Add 0 to …` bar, no separate lead label above the rows.
  */
 export interface IngredientRow {
   readonly ingredientId: string;
@@ -58,6 +66,8 @@ export interface IngredientPickerProps {
   addedLabel?: string;
   /** The destination row's lead; the creation form passes its §4 table label. */
   lead?: string;
+  /** `stacked` (default, the creation form) or `footer` (Activity detail). */
+  layout?: 'stacked' | 'footer';
   testID?: string;
 }
 
@@ -72,6 +82,7 @@ export function IngredientPicker({
   busy = false,
   addedLabel = 'Added',
   lead = destinationLead('groceries'),
+  layout = 'stacked',
   testID = 'ingredient-picker',
 }: IngredientPickerProps) {
   const theme = useTheme();
@@ -82,45 +93,57 @@ export function IngredientPicker({
   const count = chosen.length;
   const placeholder = destinationState === 'ask' ? CHOOSE_A_LIST : CHOOSE_OR_CREATE;
 
+  const footer = layout === 'footer';
+  const addLabel =
+    destinationTitle === undefined
+      ? addSelectedPendingLabel(count)
+      : addSelectedLabel(count, destinationTitle);
+  const add = () =>
+    destinationTitle === undefined
+      ? onChangeDestination()
+      : onAdd?.(chosen.map((row) => row.ingredientId));
+
   return (
     <View style={{ gap: theme.space[4] }} testID={testID}>
       {/** The destination row: always visible, always changeable, always specific (§5.8). */}
-      <Touchable
-        accessibilityRole="button"
-        accessibilityLabel={
-          destinationTitle === undefined
-            ? placeholder
-            : `${lead} ${destinationTitle}. Change`
-        }
-        onPress={onChangeDestination}
-        testID={`${testID}-destination`}
-      >
-        <View style={{ gap: theme.space[1] }}>
-          <Text variant="footnoteStrong" color="textSecondary">
-            {lead}
-          </Text>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              minHeight: theme.layout.hitTarget,
-              paddingHorizontal: theme.space[4],
-              borderRadius: theme.radius.md,
-              backgroundColor: theme.colors.surfaceInput,
-            }}
-          >
-            <Text
-              variant="body"
-              color={destinationTitle === undefined ? 'textAction' : 'textPrimary'}
-              testID={`${testID}-destination-name`}
-            >
-              {destinationTitle ?? placeholder}
+      {footer ? null : (
+        <Touchable
+          accessibilityRole="button"
+          accessibilityLabel={
+            destinationTitle === undefined
+              ? placeholder
+              : `${lead} ${destinationTitle}. Change`
+          }
+          onPress={onChangeDestination}
+          testID={`${testID}-destination`}
+        >
+          <View style={{ gap: theme.space[1] }}>
+            <Text variant="footnoteStrong" color="textSecondary">
+              {lead}
             </Text>
-            <ChevronDown size={20} color={theme.colors.textSecondary} />
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                minHeight: theme.layout.hitTarget,
+                paddingHorizontal: theme.space[4],
+                borderRadius: theme.radius.md,
+                backgroundColor: theme.colors.surfaceInput,
+              }}
+            >
+              <Text
+                variant="body"
+                color={destinationTitle === undefined ? 'textAction' : 'textPrimary'}
+                testID={`${testID}-destination-name`}
+              >
+                {destinationTitle ?? placeholder}
+              </Text>
+              <ChevronDown size={20} color={theme.colors.textSecondary} />
+            </View>
           </View>
-        </View>
-      </Touchable>
+        </Touchable>
+      )}
 
       <View style={{ gap: theme.space[2] }}>
         {rows.map((row) => {
@@ -175,13 +198,60 @@ export function IngredientPicker({
         })}
       </View>
 
-      {onAdd === undefined ? null : (
+      {footer ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: theme.space[3],
+          }}
+        >
+          {/** Still always visible and changeable (§5.8) — just one quiet line now. */}
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel={
+              destinationTitle === undefined
+                ? placeholder
+                : `${lead} ${destinationTitle}. Change`
+            }
+            onPress={onChangeDestination}
+            testID={`${testID}-destination`}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.space[2],
+              minHeight: theme.layout.hitTarget,
+              flexShrink: 1,
+            }}
+          >
+            <Text
+              variant="subhead"
+              color={destinationTitle === undefined ? 'textAction' : 'textSecondary'}
+              testID={`${testID}-destination-name`}
+            >
+              {destinationTitle === undefined ? placeholder : `To ${destinationTitle}`}
+            </Text>
+            <ChevronDown size={16} color={theme.colors.textSecondary} />
+          </Touchable>
+          {onAdd === undefined || count === 0 ? null : (
+            <Button
+              label={addLabel}
+              variant="secondary"
+              contentSized
+              disabled={
+                (destinationTitle === undefined && destinationState !== 'ask') || busy
+              }
+              loading={busy}
+              onPress={add}
+              testID={`${testID}-add`}
+            />
+          )}
+        </View>
+      ) : onAdd === undefined ? null : (
         <Button
-          label={
-            destinationTitle === undefined
-              ? addSelectedPendingLabel(count)
-              : addSelectedLabel(count, destinationTitle)
-          }
+          label={addLabel}
           size="lg"
           fullWidth
           disabled={
@@ -190,11 +260,7 @@ export function IngredientPicker({
             busy
           }
           loading={busy}
-          onPress={() =>
-            destinationTitle === undefined
-              ? onChangeDestination()
-              : onAdd(chosen.map((row) => row.ingredientId))
-          }
+          onPress={add}
           testID={`${testID}-add`}
         />
       )}

@@ -134,6 +134,10 @@ function sheetTitle(mode: TypeDetailsSheetMode, kind: ActivityDetails['kind']): 
  * `details` replacement (or `sourceUrl` alone on LINK) through the same `detail.patch`
  * owner as every other field. Failed saves keep the draft; dirty cancel uses the notes
  * confirmation (`activities.md` §6.1).
+ *
+ * **One Edit edits every detail** (2026-09-10): the type sheet ends with the same `Link`
+ * field, so the Details group's single `Edit` reaches the source link too. It rides in the
+ * same PATCH as `details`, and only when it changed (`null` clears it).
  */
 export function TypeDetailsSheet({
   open,
@@ -225,7 +229,12 @@ export function TypeDetailsSheet({
       return;
     }
 
+    const link = parseOptionalUrl(draft.sourceUrl);
     const edits = editsFromDraft(activity.details.kind, draft, setFieldErrors);
+    if (!link.ok) {
+      setFieldErrors((current) => ({ ...current, sourceUrl: 'Enter a valid link.' }));
+      return;
+    }
     if (edits === undefined) return;
     const details = buildDetailsPatch(activity.details, edits);
     const parsed = activityDetailsInput.safeParse(details);
@@ -233,12 +242,28 @@ export function TypeDetailsSheet({
       setFieldErrors({ form: parsed.error.issues[0]?.message ?? 'Check the details.' });
       return;
     }
-    await persist({ details: parsed.data });
+    const sourceUrlChanged = (link.value ?? '') !== (activity.sourceUrl ?? '');
+    await persist({
+      details: parsed.data,
+      ...(sourceUrlChanged ? { sourceUrl: link.value ?? null } : {}),
+    });
   }
 
   const kind = activity.details.kind;
   const title = sheetTitle(mode, kind);
   const showMovieProgress = draft.mediaKind !== 'movie';
+  const linkField = (
+    <Field
+      label="Link"
+      value={draft.sourceUrl}
+      onChangeText={(sourceUrl) => patchDraft({ sourceUrl })}
+      keyboardType="url"
+      placeholder="https://"
+      hint="Where this came from. Clear it to remove the link."
+      testID="type-details-source-url"
+      {...(fieldErrors.sourceUrl === undefined ? {} : { error: fieldErrors.sourceUrl })}
+    />
+  );
 
   return (
     <>
@@ -286,35 +311,29 @@ export function TypeDetailsSheet({
           </Text>
         )}
         {mode === 'link' ? (
-          <Field
-            label="Link"
-            value={draft.sourceUrl}
-            onChangeText={(sourceUrl) => patchDraft({ sourceUrl })}
-            keyboardType="url"
-            placeholder="https://"
-            hint="Where this came from. Clear it to remove the link."
-            testID="type-details-source-url"
-            {...(fieldErrors.sourceUrl === undefined
-              ? {}
-              : { error: fieldErrors.sourceUrl })}
-          />
-        ) : kind === 'meal' ? (
-          <MealFields draft={draft} fieldErrors={fieldErrors} onChange={patchDraft} />
-        ) : kind === 'watch' ? (
-          <WatchFields
-            draft={draft}
-            showProgress={showMovieProgress}
-            fieldErrors={fieldErrors}
-            onChange={patchDraft}
-          />
-        ) : kind === 'event' ? (
-          <EventFields
-            draft={draft}
-            shared={activity.visibility === 'shared'}
-            fieldErrors={fieldErrors}
-            onChange={patchDraft}
-          />
-        ) : null}
+          linkField
+        ) : (
+          <View style={{ gap: theme.space[6] }}>
+            {kind === 'meal' ? (
+              <MealFields draft={draft} fieldErrors={fieldErrors} onChange={patchDraft} />
+            ) : kind === 'watch' ? (
+              <WatchFields
+                draft={draft}
+                showProgress={showMovieProgress}
+                fieldErrors={fieldErrors}
+                onChange={patchDraft}
+              />
+            ) : kind === 'event' ? (
+              <EventFields
+                draft={draft}
+                shared={activity.visibility === 'shared'}
+                fieldErrors={fieldErrors}
+                onChange={patchDraft}
+              />
+            ) : null}
+            {linkField}
+          </View>
+        )}
       </Sheet>
       <DiscardChangesPrompt
         open={confirming}

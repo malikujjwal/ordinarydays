@@ -7,8 +7,11 @@ import { View } from 'react-native';
  * its own row above, not here — the pre-build treatment is unchanged. Updates has no chip
  * by design: its visible section always carries its own composer (see `AddToPlanChips`).
  *
- * Type-fact chips (`Recipe`, `Link`, …) sit in the same row. A Task uses this component
- * with `label="Add to this task"` and only `Link` — never a Task-only primitive.
+ * The type chips shrank on 2026-09-10 to three: `Ingredients` on a Meal with no rows,
+ * `Details` on a Meal / Watch / Event with no Details group, and `Link` on a Task / General
+ * with none — once the Details group exists its one `Edit` reaches every fact
+ * (`typeDetailChips`). A Task uses this component with `label="Add to this task"` —
+ * never a Task-only primitive.
  */
 export interface AddToPlanChip {
   readonly key: string;

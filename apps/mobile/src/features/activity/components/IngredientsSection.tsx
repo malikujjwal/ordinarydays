@@ -14,6 +14,10 @@ import { useDestination } from '@/hooks/useDestination';
  *
  * A refused write — the meal's rows changed under the selection — is the whole action
  * refused, never a partial add (§5.3): the toast's `Reopen` refetches the meal.
+ *
+ * 2026-09-10 (founder): the count sits beside the label (`4`, `1 of 4 on a list`), a
+ * trailing `Edit` opens the meal sheet where the rows themselves are edited, and the add
+ * action appears at the section's foot only once a row is selected.
  */
 export interface IngredientsSectionProps {
   activityId: string;
@@ -21,6 +25,8 @@ export interface IngredientsSectionProps {
   /** This operation's one-off destination from the picker; the route keeps it. */
   destinationOverride: string | undefined;
   onChangeDestination: () => void;
+  /** Opens the meal sheet to rename, add or remove rows. Absent while pending. */
+  onEdit?: () => void;
 }
 
 export function IngredientsSection({
@@ -28,6 +34,7 @@ export function IngredientsSection({
   ingredients,
   destinationOverride,
   onChangeDestination,
+  onEdit,
 }: IngredientsSectionProps) {
   const destination = useDestination('groceries', destinationOverride);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -40,11 +47,20 @@ export function IngredientsSection({
   return (
     <SectionFrame
       label="Ingredients"
-      trailing={
+      meta={
         addedCount === 0
           ? String(ingredients.length)
-          : `${addedCount} of ${ingredients.length} added`
+          : `${addedCount} of ${ingredients.length} on a list`
       }
+      ruled
+      {...(onEdit === undefined
+        ? {}
+        : {
+            trailing: 'Edit',
+            trailingAccessibilityLabel: 'Edit ingredients',
+            onTrailingPress: onEdit,
+            trailingTestID: 'ingredients-edit',
+          })}
       testID="section-ingredients"
     >
       <IngredientPicker
@@ -67,6 +83,7 @@ export function IngredientsSection({
           add.mutate({ listId, ingredientIds });
         }}
         busy={add.isPending}
+        layout="footer"
       />
     </SectionFrame>
   );

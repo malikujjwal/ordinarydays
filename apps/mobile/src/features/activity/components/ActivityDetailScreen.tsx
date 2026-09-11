@@ -14,7 +14,6 @@ import { type ActivityScope, activityScope, occurrenceScope } from '@od/shared/t
 import {
   Button,
   ChevronLeft,
-  DisclosureRow,
   EmptyState,
   Field,
   IconButton,
@@ -39,6 +38,7 @@ import { SnoozeSheet } from '@/components/SnoozeSheet';
 import { AddToPlanRow } from '@/features/activity/components/AddToPlanRow';
 import { AttachmentsSection } from '@/features/activity/components/AttachmentsSection';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
+import { DetailsSection } from '@/features/activity/components/DetailsSection';
 import { IngredientsSection } from '@/features/activity/components/IngredientsSection';
 import { ListsSection } from '@/features/activity/components/ListsSection';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
@@ -49,7 +49,7 @@ import {
 } from '@/features/activity/components/ReminderSheet';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
-import { TypeDetailsSection } from '@/features/activity/components/TypeDetailsSection';
+import { SectionFrame } from '@/features/activity/components/SectionFrame';
 import { TypeDetailsSheet } from '@/features/activity/components/TypeDetailsSheet';
 import { UpdatesSection } from '@/features/activity/components/UpdatesSection';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
@@ -84,7 +84,6 @@ import { endRepeatSeries } from '@/features/activity/model/repeat';
 import {
   sectionsFor,
   subtitleFor,
-  TYPE_DETAIL_SECTION_KEYS,
   typeDetailChips,
 } from '@/features/activity/model/sections';
 import { useClock } from '@/hooks/useClock';
@@ -1059,7 +1058,7 @@ interface LoadedProps {
   today: WallDate;
   /** Opens a prep child's own detail (P3-37); the child is an ordinary Activity. */
   onOpenChild: (activityId: string) => void;
-  /** Opens the named parent plan from Related plan. */
+  /** Opens the named parent plan from the Details group's `Part of` row. */
   onOpenActivity: (activityId: string) => void;
   /** Complete or uncomplete one Prep task through the platform action owner. */
   onToggleChild: (child: ActivityChild, completed: boolean) => Promise<boolean>;
@@ -1264,9 +1263,21 @@ function Loaded({
     attachmentCount: attachments.length,
     attachmentsWired: onAddAttachment !== undefined,
     updateCount,
+    hasSourceList: fromList !== undefined,
   });
+  const has = (key: string) => sections.some((section) => section.key === key);
   /** Same gate as the Notes editor: a pending create has no writable actions. */
   const canEditDetails = !pending;
+  /**
+   * The Details group's one `Edit` (2026-09-10): Meal / Watch / Event open their type sheet,
+   * which now ends with the Link field; Task and General have only the link to edit.
+   */
+  const detailsSheetMode: 'type' | 'link' =
+    activity.details.kind === 'meal' ||
+    activity.details.kind === 'watch' ||
+    activity.details.kind === 'event'
+      ? 'type'
+      : 'link';
   /**
    * Prep task / List / Photo are Plan chips. The production route always wires those
    * handlers, so gating on the callback would leak them onto Task detail (§5.6).
@@ -1294,7 +1305,10 @@ function Loaded({
     ...(planChips.attachment && addAttachment !== undefined
       ? [{ key: 'attachment', label: 'Photo', onPress: addAttachment }]
       : []),
-    ...(canEditDetails ? typeDetailChips(activity) : []).map((chip) => ({
+    ...(canEditDetails
+      ? typeDetailChips(activity, { hasSourceList: fromList !== undefined })
+      : []
+    ).map((chip) => ({
       key: chip.key,
       label: chip.label,
       onPress: () => setDetailsSheet(chip.key === 'link' ? 'link' : 'type'),
@@ -1302,7 +1316,7 @@ function Loaded({
   ];
 
   return (
-    <View style={{ gap: theme.space[6] }} testID="detail-content">
+    <View style={{ gap: theme.space[8] }} testID="detail-content">
       {/**
        * The explanation, above everything it explains (§5.4, §5.5).
        *
@@ -1630,31 +1644,111 @@ function Loaded({
       </View>
 
       {/**
-       * Capabilities and the bottom time action are **one ruled list**. They were two blocks
-       * with a gap between them, and since every row carries its own rule that rendered as two
-       * horizontal lines with an empty band trapped between — which reads as a mistake rather
-       * than as a grouping. Each row closes itself with a bottom rule, per the frames.
+       * **What it is, what it holds, what you wrote, how it behaves** (founder, 2026-09-10).
+       * Below the header: the one `Details` group, the content sections (Ingredients,
+       * Preparation, Lists, Attachments), Notes, the `Add to this …` chip row, the `Settings`
+       * group, and Updates last. Each section exists only because `sectionsFor` said it holds
+       * something; the chip row keeps the empty capabilities discoverable.
        */}
-      <RowGroup testID="detail-sections">
-        {sections.map((section) => {
-          if (section.key === 'whenWhere') return null;
-          /** Content sections render below the ruled settings group, in anatomy order. */
-          if (
-            section.key === 'prep' ||
-            section.key === 'lists' ||
-            section.key === 'ingredients' ||
-            section.key === 'attachments' ||
-            section.key === 'updates' ||
-            (TYPE_DETAIL_SECTION_KEYS as readonly string[]).includes(section.key)
-          ) {
-            return null;
-          }
+      {has('details') ? (
+        <DetailsSection
+          activity={activity}
+          parent={relatedParent}
+          sourceList={fromList}
+          onOpenParent={onOpenActivity}
+          {...(onOpenList === undefined ? {} : { onOpenList })}
+          {...(canEditDetails ? { onEdit: () => setDetailsSheet(detailsSheetMode) } : {})}
+        />
+      ) : null}
+      {has('ingredients') && activity.details.kind === 'meal' ? (
+        <IngredientsSection
+          activityId={activity.activityId}
+          ingredients={activity.details.ingredients ?? []}
+          destinationOverride={ingredientDestination}
+          onChangeDestination={() => onChooseIngredientDestination?.()}
+          {...(canEditDetails ? { onEdit: () => setDetailsSheet('type') } : {})}
+        />
+      ) : null}
+      {has('prep') ? (
+        <PrepSection
+          prepTasks={children}
+          onOpenChild={onOpenChild}
+          {...(pending ? {} : { onToggleChild })}
+          {...(onAddPrepTask === undefined || pending ? {} : { onAddPrepTask })}
+        />
+      ) : null}
+      {has('lists') && onOpenList !== undefined ? (
+        <ListsSection
+          sourceLists={sourceLists}
+          onOpenList={onOpenList}
+          {...(onAddList === undefined || pending
+            ? {}
+            : { onAddList: () => onAddList(activity.title) })}
+        />
+      ) : null}
+      {has('attachments-coming-later') ? (
+        // RowGroup, never a naked SettingRow: rows own their bottom hairline, and a bare
+        // one draws an orphaned rule between two framed sections (RowGroup's own warning).
+        <RowGroup>
+          <SettingRow
+            label="Attachments"
+            summary="Photos and files"
+            note="Coming later"
+            testID="section-attachments-coming-later"
+          />
+        </RowGroup>
+      ) : null}
+      {has('attachments') ? (
+        <AttachmentsSection
+          attachments={attachments}
+          coverAttachmentId={activity.primaryAttachmentId}
+          onOpen={setViewerIndex}
+          {...(manageAttachments ? { onActions: attachmentActions.open } : {})}
+          {...(addAttachment === undefined ? {} : { onAdd: addAttachment })}
+        />
+      ) : null}
 
-          /** Reminder and Repeat are setting rows: value on the right, sheet on tap. */
-          if (section.key === 'reminders') {
-            return (
+      <ActivityNotes
+        notes={notes}
+        value={activity.notes ?? ''}
+        kind={activity.objectKind}
+        pending={pending}
+        {...(activity.visibility === 'shared' ? { privacyNote: 'Private to you.' } : {})}
+      />
+
+      <AddToPlanRow
+        chips={chips}
+        {...(activity.objectKind === 'task'
+          ? { label: 'Add to this task', objectKind: 'task' as const }
+          : {})}
+      />
+
+      {/**
+       * **Settings sit at the foot** (2026-09-10): how this behaves — Repeat, Reminder, and on
+       * a Plan `People · Coming later` — under one caption heading, as one ruled list. Each
+       * row closes itself with a bottom rule, so the group needs no container rule. Absent
+       * when it has no row (an undated Task).
+       */}
+      {has('repeat') || has('reminders') || has('people') ? (
+        <SectionFrame label="Settings" ruled testID="detail-settings">
+          <RowGroup testID="detail-sections">
+            {has('repeat') ? (
               <SettingRow
-                key={section.key}
+                label="Repeat"
+                value={
+                  activity.recurrence === undefined
+                    ? 'Does not repeat'
+                    : describeRecurrence(activity.recurrence, today)
+                }
+                {...(pending ? {} : { onPress: onOpenRepeat })}
+                opens={!pending}
+                density="compact"
+                testID="detail-edit-recurrence"
+              />
+            ) : null}
+            {/** Reminder and Repeat are setting rows: value on the right, sheet on tap. */}
+            {has('reminders') ? (
+              <SettingRow
                 label={
                   activity.objectKind === 'plan' && activity.visibility === 'shared'
                     ? 'Your reminders'
@@ -1676,171 +1770,27 @@ function Loaded({
                 }
                 {...(pending ? {} : { onPress: onOpenReminders })}
                 opens={!pending}
+                density="compact"
                 testID="section-reminders"
               />
-            );
-          }
-
-          if (section.key === 'repeat') {
-            return (
-              <SettingRow
-                key={section.key}
-                label="Repeat"
-                value={
-                  activity.recurrence === undefined
-                    ? 'Does not repeat'
-                    : describeRecurrence(activity.recurrence, today)
-                }
-                {...(pending ? {} : { onPress: onOpenRepeat })}
-                opens={!pending}
-                testID="detail-edit-recurrence"
-              />
-            );
-          }
-
-          if (section.key === 'notes') {
-            return (
-              <ActivityNotes
-                key={section.key}
-                notes={notes}
-                value={activity.notes ?? ''}
-                kind={activity.objectKind}
-                pending={pending}
-                {...(activity.visibility === 'shared'
-                  ? { privacyNote: 'Private to you.' }
-                  : {})}
-              />
-            );
-          }
-
-          if (section.state === 'coming-later') {
-            // Attachments' discovery row belongs at its §2.1 slot (section 8, after
-            // Lists), not among the settings rows — rendered in the lower stack below.
-            if (section.key === 'attachments-coming-later') return null;
-            return (
-              <SettingRow
-                key={section.key}
-                label={section.label ?? ''}
-                summary={section.summary ?? ''}
-                note="Coming later"
-                testID={`section-${section.key}`}
-              />
-            );
-          }
-
-          if (section.key !== 'relatedPlan') return null;
-
-          // Related plan — named navigation when the envelope can title the parent;
-          // otherwise the existing boolean row (`today-and-tasks.md` §5.5).
-          if (relatedParent !== undefined) {
-            return (
-              <SettingRow
-                key={section.key}
-                label="Related plan"
-                value={relatedParent.title}
-                onPress={() => onOpenActivity(relatedParent.activityId)}
-                opens
-                testID="section-related"
-              />
-            );
-          }
-
-          return (
-            <DisclosureRow
-              key={section.key}
-              label="Related plan"
-              summary={
-                activity.parentActivityId === undefined ? 'None' : 'Part of a plan'
-              }
-              testID="section-related"
-            >
-              <Text variant="body" color="textSecondary">
-                {activity.parentActivityId === undefined
-                  ? 'A related plan appears here when this task is added from a plan.'
-                  : 'This task is part of a plan.'}
-              </Text>
-            </DisclosureRow>
-          );
-        })}
-        {fromList === undefined ? null : (
-          <SettingRow
-            label={`From ${fromList.title}`}
-            {...(onOpenList === undefined
-              ? {}
-              : { onPress: () => onOpenList(fromList.listId), opens: true })}
-            testID="section-from-list"
-          />
-        )}
-      </RowGroup>
-
-      {/**
-       * Type facts (RECIPE / WATCHING / DESCRIPTION / RESERVATION / TICKETS / LINK) sit
-       * after settings and before PREPARATION. Empty groups omit the section.
-       */}
-      <TypeDetailsSection
-        activity={activity}
-        {...(canEditDetails &&
-        (activity.details.kind === 'meal' ||
-          activity.details.kind === 'watch' ||
-          activity.details.kind === 'event')
-          ? { onEditType: () => setDetailsSheet('type') }
-          : {})}
-        {...(canEditDetails ? { onEditLink: () => setDetailsSheet('link') } : {})}
-      />
-
-      {/**
-       * The content sections (P3-37, §2.1 amended): each exists only because `sectionsFor`
-       * said its collection is populated, in the anatomy's fixed order, followed by the one
-       * `Add to this plan` chip row that keeps the empty capabilities discoverable.
-       */}
-      {sections.some((section) => section.key === 'prep') ? (
-        <PrepSection
-          prepTasks={children}
-          onOpenChild={onOpenChild}
-          {...(pending ? {} : { onToggleChild })}
-          {...(onAddPrepTask === undefined || pending ? {} : { onAddPrepTask })}
-        />
+            ) : null}
+            {sections
+              .filter((section) => section.key === 'people')
+              .map((section) => (
+                <SettingRow
+                  key={section.key}
+                  label={section.label ?? ''}
+                  summary={section.summary ?? ''}
+                  note="Coming later"
+                  density="compact"
+                  testID={`section-${section.key}`}
+                />
+              ))}
+          </RowGroup>
+        </SectionFrame>
       ) : null}
-      {sections.some((section) => section.key === 'lists') && onOpenList !== undefined ? (
-        <ListsSection
-          sourceLists={sourceLists}
-          onOpenList={onOpenList}
-          {...(onAddList === undefined || pending
-            ? {}
-            : { onAddList: () => onAddList(activity.title) })}
-        />
-      ) : null}
-      {sections.some((section) => section.key === 'ingredients') &&
-      activity.details.kind === 'meal' ? (
-        <IngredientsSection
-          activityId={activity.activityId}
-          ingredients={activity.details.ingredients ?? []}
-          destinationOverride={ingredientDestination}
-          onChangeDestination={() => onChooseIngredientDestination?.()}
-        />
-      ) : null}
-      {sections.some((section) => section.key === 'attachments-coming-later') ? (
-        // RowGroup, never a naked SettingRow: rows own their bottom hairline, and a bare
-        // one draws an orphaned rule between two framed sections (RowGroup's own warning).
-        <RowGroup>
-          <SettingRow
-            label="Attachments"
-            summary="Photos and files"
-            note="Coming later"
-            testID="section-attachments-coming-later"
-          />
-        </RowGroup>
-      ) : null}
-      {sections.some((section) => section.key === 'attachments') ? (
-        <AttachmentsSection
-          attachments={attachments}
-          coverAttachmentId={activity.primaryAttachmentId}
-          onOpen={setViewerIndex}
-          {...(manageAttachments ? { onActions: attachmentActions.open } : {})}
-          {...(addAttachment === undefined ? {} : { onAdd: addAttachment })}
-        />
-      ) : null}
-      {sections.some((section) => section.key === 'updates') ? (
+
+      {has('updates') ? (
         <UpdatesSection
           updates={feed.updates}
           pending={feed.pending}
@@ -1868,12 +1818,6 @@ function Loaded({
               })}
         />
       ) : null}
-      <AddToPlanRow
-        chips={chips}
-        {...(activity.objectKind === 'task'
-          ? { label: 'Add to this task', objectKind: 'task' as const }
-          : {})}
-      />
       <TypeDetailsSheet
         open={detailsSheet !== undefined}
         mode={detailsSheet ?? 'type'}
