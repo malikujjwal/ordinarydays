@@ -762,9 +762,17 @@ Native Web's `Keyboard` module never fires; the browser reports the same fact th
 value. Sheet dismissal, `Cancel`, `Save` and keyboard dismissal are four distinct behaviours and
 are never bound to one event.
 
-> **Still open — 2026-08-13.** Scroll-to-focused-field currently relies on the platform
-> (`automaticallyAdjustKeyboardInsets` on iOS, the browser's native focus scrolling on web);
-> Android has no equivalent and needs an explicit measure-and-scroll. Dirty-state dismissal is
+**The keyboard is handled once.** A bottom `Sheet` lifts its surface, so its body takes no
+platform keyboard inset: iOS would judge the overlap against the pre-lift frame and scroll a
+short `fit` body's only field out of sight. `useScrollToFocusedInput` keeps a field in a long body
+visible instead, given the measured actions slot plus the surface's bottom padding as its footer.
+The centred dialog does not lift, so it keeps `automaticallyAdjustKeyboardInsets`.
+
+> **Still open — 2026-08-13.** Scroll-to-focused-field relies on the platform only where the
+> container does not lift (`automaticallyAdjustKeyboardInsets` in a footerless `ScreenShell` and
+> the centred dialog on iOS, the browser's native focus scrolling on web); a lifted `Sheet` and a
+> `ScreenShell` with a footer use the measured footer instead. Android has no equivalent and
+> needs an explicit measure-and-scroll. Dirty-state dismissal is
 > defined only for compose; every other sheet needs the §20 contract before drag-to-dismiss
 > lands, or `✕` and swipe will diverge.
 

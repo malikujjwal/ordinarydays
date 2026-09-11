@@ -7,7 +7,8 @@ const GAP = 16;
 /**
  * Scrolls an occluded input above the keyboard and any fixed footer.
  *
- * iOS automatic insets do not account for a fixed footer; that case uses the native
+ * iOS automatic insets do not account for a fixed footer, and double-count a container that has
+ * already lifted clear of the keyboard; those cases pass `footerHeight` and use the native
  * scroll responder after measuring occlusion. Android has no automatic correction: the inset its container adds makes the field *reachable*, but
  * nothing moves it, so the user is left scrolling blind for their own caret. That is §20's named
  * failure, and this closes it in the two containers that own layout rather than in each screen.
@@ -20,7 +21,10 @@ const GAP = 16;
 export function useScrollToFocusedInput(
   scrollRef: RefObject<Pick<
     ScrollView,
-    'getScrollableNode' | 'scrollTo' | 'scrollResponderScrollNativeHandleToKeyboard'
+    | 'getNativeScrollRef'
+    | 'getScrollableNode'
+    | 'scrollTo'
+    | 'scrollResponderScrollNativeHandleToKeyboard'
   > | null>,
   keyboardInset: number,
   /** The container's own visible height, so occlusion can be judged against it. */
@@ -43,11 +47,27 @@ export function useScrollToFocusedInput(
       const frame = requestAnimationFrame(() => {
         focused.measureInWindow((_x, y, _width, height) => {
           if (y + height <= viewportHeight - keyboardInset - footerHeight - GAP) return;
-          scroll.scrollResponderScrollNativeHandleToKeyboard(
-            focused,
-            footerHeight + GAP,
-            true,
-          );
+          /**
+           * **React Native's keyboard scroll assumes the scroll view starts at the top of the
+           * window** — its own comment says so: it measures the field against the content and
+           * the keyboard against the screen. A lifted `Sheet` body, or a `ScreenShell` body under
+           * a header, starts lower, and without its window top the field lands that many points
+           * short of the target — still under the footer. The measurement runs after the lift
+           * has been laid out, so `viewportHeight - keyboardInset - footerHeight` is the body's
+           * visible bottom and the offset below is measured against the same layout.
+           */
+          const scrollHost = scroll.getNativeScrollRef();
+          const scrollToKeyboard = (scrollTop: number) =>
+            scroll.scrollResponderScrollNativeHandleToKeyboard(
+              focused,
+              scrollTop + footerHeight + GAP,
+              true,
+            );
+          if (scrollHost === null) {
+            scrollToKeyboard(0);
+            return;
+          }
+          scrollHost.measureInWindow((_sx, scrollTop) => scrollToKeyboard(scrollTop));
         });
       });
       return () => cancelAnimationFrame(frame);
