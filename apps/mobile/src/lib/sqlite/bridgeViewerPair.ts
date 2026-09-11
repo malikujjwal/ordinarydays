@@ -13,6 +13,9 @@ export function bridgeViewerPair(
   plan: Pick<Activity, 'activityId' | 'objectKind' | 'type' | 'status' | 'schedule'>,
 ): ViewerPlanPair | undefined {
   if (link.activityId !== plan.activityId || plan.objectKind !== 'plan') return undefined;
+  // The schema pairs `objectKind: 'plan'` with a Plan type, but `Pick<Activity>` cannot carry
+  // that; a Plan with a Task type would be a mixed pair, so it gets none.
+  if (plan.type === 'task') return undefined;
   return {
     viewerLink: link,
     viewerPlan: {
