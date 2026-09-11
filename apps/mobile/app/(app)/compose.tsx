@@ -42,7 +42,7 @@ export default function ComposeRoute() {
         timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
         loadEventDefaults={async () => {
           const user = profile.data ?? (await queryClient.ensureQueryData(profileQuery));
-          return { reservationName: user.displayName, currency: user.currency };
+          return { currency: user.currency };
         }}
         listWriter={{
           save: (templateKey, title) => createList.create(templateKey, title),

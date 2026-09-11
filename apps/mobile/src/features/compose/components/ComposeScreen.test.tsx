@@ -518,12 +518,10 @@ describe('Plan', () => {
   });
 
   it('waits for a cold profile before opening Event and sends its currency', async () => {
-    let resolveDefaults:
-      | ((value: { reservationName: string; currency: string }) => void)
-      | undefined;
+    let resolveDefaults: ((value: { currency: string }) => void) | undefined;
     const loadEventDefaults = vi.fn(
       () =>
-        new Promise<{ reservationName: string; currency: string }>((resolve) => {
+        new Promise<{ currency: string }>((resolve) => {
           resolveDefaults = resolve;
         }),
     );
@@ -534,13 +532,14 @@ describe('Plan', () => {
     expect(loadEventDefaults).toHaveBeenCalledOnce();
     expect(screen.queryByLabelText('Title')).toBeNull();
 
-    resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
+    resolveDefaults?.({ currency: 'USD' });
     await waitFor(() => expect(screen.getByLabelText('Title')).toBeDefined());
 
     // Reservation and Tickets sit behind `More options` since P2-43.
     fireEvent.click(screen.getByRole('button', { name: /^More options/ }));
     tap('Reservation');
-    expect(screen.getByLabelText('Reservation name').getAttribute('value')).toBe('Ada');
+    // Founder decision 2026-09-10: reservation fields never pre-fill.
+    expect(screen.getByLabelText('Reservation name').getAttribute('value')).toBe('');
     tap('Tickets & details');
     fireEvent.change(screen.getByLabelText('Price'), { target: { value: '18.50' } });
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Concert' } });
@@ -554,18 +553,16 @@ describe('Plan', () => {
         kind: 'event',
         priceCents: 1850,
         currency: 'USD',
-        reservation: { name: 'Ada' },
       },
     });
+    expect(sent[0]?.body).not.toHaveProperty('details.reservation');
   });
 
   it('does not apply Event defaults after the user has chosen Task', async () => {
-    let resolveDefaults:
-      | ((value: { reservationName: string; currency: string }) => void)
-      | undefined;
+    let resolveDefaults: ((value: { currency: string }) => void) | undefined;
     const loadEventDefaults = vi.fn(
       () =>
-        new Promise<{ reservationName: string; currency: string }>((resolve) => {
+        new Promise<{ currency: string }>((resolve) => {
           resolveDefaults = resolve;
         }),
     );
@@ -580,7 +577,7 @@ describe('Plan', () => {
       type: 'task',
     });
 
-    resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
+    resolveDefaults?.({ currency: 'USD' });
     await waitFor(() => expect(loadEventDefaults).toHaveBeenCalledOnce());
     expect(useComposeDraft.getState().objectChoice).toBe('task');
     expect(useComposeDraft.getState().target).toEqual({
@@ -590,12 +587,10 @@ describe('Plan', () => {
   });
 
   it('does not apply Event defaults after the user has chosen another Plan kind', async () => {
-    let resolveDefaults:
-      | ((value: { reservationName: string; currency: string }) => void)
-      | undefined;
+    let resolveDefaults: ((value: { currency: string }) => void) | undefined;
     const loadEventDefaults = vi.fn(
       () =>
-        new Promise<{ reservationName: string; currency: string }>((resolve) => {
+        new Promise<{ currency: string }>((resolve) => {
           resolveDefaults = resolve;
         }),
     );
@@ -609,7 +604,7 @@ describe('Plan', () => {
       type: 'meal',
     });
 
-    resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
+    resolveDefaults?.({ currency: 'USD' });
     await waitFor(() => expect(loadEventDefaults).toHaveBeenCalledOnce());
     expect(useComposeDraft.getState().target).toEqual({
       objectKind: 'plan',

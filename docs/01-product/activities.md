@@ -426,6 +426,11 @@ from the item, list, or title.
 
 ### 4.4 Event
 
+> **Amended 2026-09-10 (founder):** reservation fields never pre-fill; a reservation is stored
+> only from values the user enters. The Reservation row previously defaulted the name to the
+> user's display name and the time to `schedule.time`, which stored a reservation on every
+> Event whether or not the disclosure was opened. Stored data is left as it is.
+
 | Field | Control | Req. | Validation | Default | Maps to |
 | --- | --- | --- | --- | --- | --- |
 | Title | Single-line text | Yes | 1–200 | Text from the Add screen | `title` |
@@ -436,7 +441,7 @@ from the item, list, or title.
 | Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | Location | Text label + optional address | No | Label 0–120, address 0–300 | Empty | `location.label`, `location.address` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
-| Reservation | Disclosure group: name, time, party size, reference | No | Party size 1–99; reservation time `HH:mm` | Reservation name = user's display name; reservation time = `schedule.time` | `details.reservation.{name,time,partySize,reference}` |
+| Reservation | Disclosure group: name, time, party size, reference | No | Party size 1–99; reservation time `HH:mm` | Empty — never pre-filled from the profile or the start time | `details.reservation.{name,time,partySize,reference}` |
 | Tickets & details | Disclosure group: Price, Ticket link, Organiser | No | Price ≥ 0 in integer minor units; ticket link is an absolute `http(s)` URL; organiser 0–120 | Empty; currency comes from profile | `details.priceCents`, `details.currency`, `details.ticketUrl`, `details.organiser` |
 | Description | Multi-line text | No | 0–4000 | Empty | `details.description` |
 | Source image / link | Attachment thumbnail + URL row | No | Image ≤ 10 MB, image MIME only | Populated by photo/link capture | `attachmentIds[]`, `sourceUrl` |

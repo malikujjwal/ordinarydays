@@ -1412,8 +1412,10 @@ inference:
   and episode fields render only for `Show`. The separate `Also add a list item to…` control
   is **off in every context**. Phase 3 resolves and visibly names a destination only after the
   user turns it on; a date, title, Watch kind, or capture result never enables it.
-- **Event:** the reservation disclosure defaults its name to the user's display name and its
-  time to `schedule.time`; the Tickets & details group holds Price, Ticket link, and Organiser.
+- **Event:** the reservation disclosure starts empty — no name or time is pre-filled
+  (**amended 2026-09-10, founder**: it previously defaulted to the display name and
+  `schedule.time`; see `activities.md` §4.4); the Tickets & details group holds Price, Ticket
+  link, and Organiser.
   `details.description` and `notes` are distinct — description is public on the invite page,
   notes never leave the owner's view.
 
