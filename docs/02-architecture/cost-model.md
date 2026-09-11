@@ -138,7 +138,10 @@ request charges, and it is cents. This is the trade the brief already made: on-d
 a little rather than requiring capacity planning that would throttle real users.
 
 `GSI1` uses an `INCLUDE` projection (`aws-services.md` §1.4) rather than `ALL`, which cuts
-both the index storage and the read units on the hottest query in the product.
+both the index storage and the read units on the hottest query in the product. Projecting
+`updatedAt` (`data-model.md` §3.5) means every Activity write also writes its GSI1 entry: at
+most it doubles the Activity share of the write column above, still well under a cent at
+personal scale.
 
 ### 2.5 Amazon S3
 

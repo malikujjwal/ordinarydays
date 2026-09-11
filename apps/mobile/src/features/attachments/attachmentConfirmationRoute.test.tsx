@@ -27,19 +27,18 @@ const harness = vi.hoisted(() => ({
 }));
 
 // Navigation is a native boundary; this test exercises attachment reconciliation only.
-vi.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ dispatch: vi.fn() }),
-  usePreventRemove: vi.fn(),
-}));
-
 vi.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ id: 'act_01J0000000000000000000000A' }),
+  useNavigation: () => ({ dispatch: vi.fn() }),
   useRouter: () => ({
     back: vi.fn(),
     push: vi.fn(),
     replace: vi.fn(),
     setParams: vi.fn(),
   }),
+}));
+vi.mock('expo-router/react-navigation', () => ({
+  usePreventRemove: vi.fn(),
 }));
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: harness.invalidate }),

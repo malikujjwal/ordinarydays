@@ -40,6 +40,12 @@ export interface SemanticColors {
   /** Translucent neutral squircle layered on a collection-card surface. */
   collectionIconSurface: string;
   scrim: string;
+  /**
+   * Fully clear: the start of a fill that animates in, such as the checkbox's sage. `Animated`
+   * colour interpolation needs a parseable colour at both ends, and the token rule keeps even
+   * this one out of components.
+   */
+  transparent: string;
 
   textDisplay: string;
   textPrimary: string;
@@ -98,6 +104,7 @@ const light: SemanticColors = {
   surfaceSunken: '#ECE7DE',
   collectionIconSurface: 'rgba(255,255,255,0.46)',
   scrim: 'rgba(38,42,40,0.40)',
+  transparent: 'rgba(0,0,0,0)',
 
   textDisplay: '#292621',
   textPrimary: '#292621',
@@ -151,6 +158,7 @@ const dark: SemanticColors = {
   surfaceSunken: '#1C1B18',
   collectionIconSurface: 'rgba(255,255,255,0.10)',
   scrim: 'rgba(0,0,0,0.60)',
+  transparent: 'rgba(0,0,0,0)',
 
   textDisplay: '#F4F0E8',
   textPrimary: '#F4F0E8',

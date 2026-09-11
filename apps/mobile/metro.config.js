@@ -1,8 +1,9 @@
 // Metro's config. Expo owns the monorepo defaults; the one resolver bridge below keeps the
 // shared package's Node ESM output and React Native source entry compatible.
 //
-// §3.3 prescribes three overrides for workspace support. Under Expo SDK 54 all three are
-// wrong, and `getDefaultConfig` already does the job, which was checked rather than assumed:
+// §3.3 prescribes three overrides for workspace support. Under Expo SDK 57 all three are
+// still wrong (re-checked against `getDefaultConfig` after the 57 hop), and `getDefaultConfig`
+// already does the job:
 //
 //   watchFolders             the default is the root `node_modules` plus every workspace
 //                            package, including `packages/shared`. The doc's `[workspaceRoot]`
@@ -16,9 +17,7 @@
 //                            repository's `node-linker=isolated`: under pnpm a package's own
 //                            dependencies live in `node_modules/.pnpm/<pkg>@<ver>/node_modules/`
 //                            and are reachable only by walking up from the importing file.
-//                            Setting it true makes every transitive dependency unresolvable —
-//                            `expo-router` importing `@react-navigation/native` is simply the
-//                            first to fail.
+//                            Setting it true makes every transitive dependency unresolvable.
 //
 // A future SDK's defaults are still worth re-checking against the three lines above.
 //

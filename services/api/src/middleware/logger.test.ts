@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppEnv } from '../app-env.js';
 
 const lines = vi.hoisted(() => ({ records: [] as Record<string, unknown>[] }));
 
@@ -25,7 +26,7 @@ describe('requestLogger', () => {
     vi.resetModules();
     lines.records = [];
     const { requestLogger } = await import('./logger.js');
-    const app = new Hono();
+    const app = new Hono<AppEnv>();
     app.use('*', async (c, next) => {
       c.set('requestId', 'req_log_1');
       c.set('userId', 'usr_local_dev');

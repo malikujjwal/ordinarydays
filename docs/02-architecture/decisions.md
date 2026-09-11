@@ -23,7 +23,7 @@ shared lists, and 45–51 the review resolutions of 2026-08-07.
 optional: concept §15 requires that people without the app can open an invite link, see a
 plan, and RSVP. A solo founder is building and maintaining both.
 
-**Decision.** One Expo (SDK 54+) codebase using React Native and React Native Web,
+**Decision.** One Expo (SDK 57+) codebase using React Native and React Native Web,
 TypeScript strict, Expo Router for file-based routing on both platforms. Ships to iOS via
 EAS Build and to the web as a static export served from S3 + CloudFront.
 

@@ -525,6 +525,45 @@ it('ignores a delayed unmeasured-row failure after the recovery deadline', async
   expect(responder).not.toHaveBeenCalled();
 });
 
+/**
+ * RN 0.86 on device (Expo SDK 57): the list remounted for a calendar date reports its first
+ * cell layouts ~250 ms after the tap, and every retry before that fails with nothing measured.
+ * A window counted from the tap expired first and stranded the list on its preceding row.
+ */
+it('keeps a landing alive while a freshly mounted list has measured nothing', async () => {
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+  let fail:
+    | ((info: {
+        index: number;
+        highestMeasuredFrameIndex: number;
+        averageItemLength: number;
+      }) => void)
+    | undefined;
+  const scrollToLocation = vi
+    .spyOn(SectionList.prototype, 'scrollToLocation')
+    .mockImplementation(function (this: SectionList<unknown>) {
+      fail = this.props.onScrollToIndexFailed;
+    });
+  stubFetch(initialBody({ upcoming: [plansDay('2026-09-04', [row(2)])] }));
+  mount();
+  await screen.findByTestId('plans-date-2026-09-04');
+  reportLayout('plans-header', 544);
+  const expand = screen.queryByRole('button', { name: 'Expand calendar' });
+  if (expand) fireEvent.click(expand);
+  fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+  fireEvent.click(screen.getByTestId('calendar-cell-2026-09-04'));
+  expect(fail).toBeTypeOf('function');
+  clock.mockReturnValue(1_130);
+  act(() => fail?.({ index: 2, highestMeasuredFrameIndex: 0, averageItemLength: 0 }));
+  // Past the tap's window, but the list only now measures its cells: the landing still owns it.
+  clock.mockReturnValue(1_300);
+  scrollToLocation.mockClear();
+  reportLayout('plans-header', 200);
+  expect(scrollToLocation).toHaveBeenLastCalledWith(
+    expect.objectContaining({ viewOffset: 200 }),
+  );
+});
+
 it.each(['stage', 'refresh'])(
   'mounts an unmeasured day and clears its anchor on %s',
   async (reset) => {
