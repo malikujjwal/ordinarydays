@@ -5,7 +5,13 @@ import { useListBulkActions } from './useListBulkActions.native';
 
 const service = vi.hoisted(() => ({
   deleteItem: vi.fn(async () => ({})),
-  patchItem: vi.fn(async () => ({})),
+  // Declares the two arguments so a test can branch on them in `mockImplementation`.
+  patchItem: vi.fn(
+    async (
+      _transaction: unknown,
+      _variables: { itemId: string; input?: { state?: string } },
+    ) => ({}),
+  ),
   undoDeletedItem: vi.fn(async () => ({ kind: 'queued' as const })),
   commitItemDeleteUndoOffer: vi.fn(async () => undefined),
 }));
