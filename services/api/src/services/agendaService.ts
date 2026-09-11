@@ -395,7 +395,11 @@ function observedProjectionVersions(
       observed.set(activity.activityId, activity.updatedAt);
     }
   }
-  return [...observed].map(([activityId, version]) => ({ activityId, version }));
+  // Hydration arrives in BatchGet order, which DynamoDB does not guarantee; sort so identical
+  // reads serialise identically and keep the agenda's body-hash ETag stable.
+  return [...observed]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([activityId, version]) => ({ activityId, version }));
 }
 
 /**

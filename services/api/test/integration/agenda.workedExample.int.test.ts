@@ -189,7 +189,8 @@ describe('the canonical worked-example day', () => {
       status: 'completed',
       outcome: 'attended',
     });
-    expect(JSON.stringify(await agendaResponse('2026-08-07'))).not.toContain(
+    // `projectionVersions` may still name the dentist: its index row was read, not emitted.
+    expect(JSON.stringify((await agendaResponse('2026-08-07')).days)).not.toContain(
       fixture.dentist.activityId,
     );
 

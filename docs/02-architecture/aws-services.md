@@ -143,7 +143,8 @@ under 400 ms (`tech-stack.md` §4.5).
 - Table `od-main-{env}`, billing mode `PAY_PER_REQUEST` (on-demand).
 - Partition key `pk` (S), sort key `sk` (S).
 - One GSI, `GSI1` (`gsi1pk`/`gsi1sk`), projection **`INCLUDE`** of the AgendaItem fields
-  only — not `ALL`. The agenda query is the hottest read in the product and a narrower
+  plus the `updatedAt` stamp that proves an index row caught up with META (`data-model.md`
+  §3.5) — not `ALL`. The agenda query is the hottest read in the product and a narrower
   projection means fewer RCUs and less GSI storage.
 - TTL attribute `ttl`, enabled. Used by invite tokens, idempotency records, and rate-limit
   counters.

@@ -157,6 +157,43 @@
       ]
     }
   ],
-  "projectionVersions": [],
+  "projectionVersions": [
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A1",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A2",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A3",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A4",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A5",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A6",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A7",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A8",
+      "version": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A9",
+      "version": "2026-08-01T10:00:00.000Z"
+    }
+  ],
   "warnings": []
 }

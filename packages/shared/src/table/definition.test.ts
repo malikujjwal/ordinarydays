@@ -44,6 +44,10 @@ describe('TABLE', () => {
     expect(GSI1_PROJECTED_ATTRIBUTES).toContain('timezone');
   });
 
+  it('projects updatedAt, the stamp agenda projection versions compare with META', () => {
+    expect(GSI1_PROJECTED_ATTRIBUTES).toContain('updatedAt');
+  });
+
   it('omits the AgendaItem fields that are computed at read time', () => {
     // Projecting these would mean storing a value that goes stale: they depend on
     // occurrence expansion or on the caller's today, not on the row.

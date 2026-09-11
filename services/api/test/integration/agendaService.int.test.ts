@@ -109,8 +109,9 @@ describe('overdue roll-forward', () => {
         overdueFromDate: '2026-08-04',
       }),
     ]);
-    expect(JSON.stringify(result)).not.toContain(tooOld.activityId);
-    expect(JSON.stringify(result)).not.toContain(event.activityId);
+    // `projectionVersions` may name an index row the read hydrated but did not emit.
+    expect(JSON.stringify(result.days)).not.toContain(tooOld.activityId);
+    expect(JSON.stringify(result.days)).not.toContain(event.activityId);
     expect(result.days[0]?.anytime).toContainEqual(
       expect.objectContaining({
         activity: expect.objectContaining({ activityId: recurring.activityId }),
@@ -133,6 +134,74 @@ describe('overdue roll-forward', () => {
       status: 'completed',
       completedAt,
       schedule: { date: '2026-08-04' },
+    });
+  });
+});
+
+/**
+ * The native agenda fences an acknowledged write until a response proves the index caught up,
+ * and the proof is the index row's `updatedAt` matching META. GSI1 must project that stamp:
+ * unit fakes hand back whole index rows, so a projection without it went unnoticed and every
+ * native fence stayed up for ever — recurring rows vanished from Today (2026-09-10).
+ */
+describe('projection versions', () => {
+  it('reports the stamp of each index row read back through GSI1', async () => {
+    const ownerId = 'usr_carol';
+    const dated = subject({
+      ownerId,
+      title: 'Dentist',
+      schedule: { date: '2026-08-06', time: '15:00', timezone: 'America/New_York' },
+    });
+    const series = subject({
+      ownerId,
+      title: 'Daily task',
+      schedule: { date: '2026-08-01', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    for (const row of [dated, series]) await activities.createActivity(ownerId, row);
+    const assemble = () =>
+      agenda.assembleAgenda(
+        {
+          userId: ownerId,
+          from: '2026-08-06',
+          to: '2026-08-06',
+          timezone: 'America/New_York',
+          now: '2026-08-06T12:00:00.000Z',
+          includeOverdue: true,
+        },
+        {
+          listBucket: activities.listByBucket,
+          listOverdue: activities.listOverdueTaskCandidates,
+          batchActivities: activities.batchGetActivityMeta,
+          listParticipants: activities.listParticipants,
+          batchAgendaRows: occurrences.batchGetAgendaRows,
+          batchOccurrences: occurrences.batchGetForPairs,
+          listReminders: reminders.listForUser,
+          expand: expandRecurrence,
+          warn: vi.fn(),
+        },
+      );
+
+    expect((await assemble()).projectionVersions).toEqual(
+      expect.arrayContaining([
+        { activityId: dated.activityId, version: dated.updatedAt },
+        { activityId: series.activityId, version: series.updatedAt },
+      ]),
+    );
+
+    const editedAt = '2026-08-06T12:05:00.000Z';
+    await activities.patchActivity(
+      ownerId,
+      { ...dated, title: 'Dentist, rebooked', updatedAt: editedAt },
+      dated.updatedAt,
+      { previous: dated },
+    );
+    expect((await assemble()).projectionVersions).toContainEqual({
+      activityId: dated.activityId,
+      version: editedAt,
     });
   });
 });

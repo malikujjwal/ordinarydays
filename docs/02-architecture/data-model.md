@@ -324,6 +324,15 @@ The bucket must be recomputed, and the index entry rewritten, whenever any input
 a date is set or cleared, `objectKind` is explicitly changed, or a recurrence is added or
 removed. Participant and `type` changes are not bucket inputs.
 
+**What GSI1 projects.** `INCLUDE` of the stored `AgendaItem` fields plus `updatedAt`
+(`GSI1_PROJECTED_ATTRIBUTES` in `packages/shared/src/table/definition.ts`). Every `IDX#` write
+copies META's `updatedAt`, and the agenda read reports `projectionVersions` only for index rows
+whose projected `updatedAt` equals the hydrated META — the proof a native client needs before
+an acknowledged write's projection fence may lift. Without `updatedAt` in the projection that
+proof never held: every fence stayed up and fenced recurring rows vanished from Today
+(found 2026-09-10). The cost is that every Activity write now also writes its GSI1 entry,
+because `updatedAt` changes on every write (`cost-model.md` §2.4).
+
 **`lastActivityAt` is a distinct field from `updatedAt`.** It is bumped by RSVP changes,
 posted updates and added expenses — anything that means "this plan is being discussed" —
 and it sorts the Needs-a-date list descending, so the plan people are actually talking

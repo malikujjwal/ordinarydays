@@ -44,6 +44,13 @@ export const GSI1_PROJECTED_ATTRIBUTES = [
   'participantCount',
   'locationLabel',
   'subtitle',
+  /**
+   * Not an `AgendaItem` field: the stamp that proves an index row caught up with META. The
+   * agenda read reports `projectionVersions` only where this equals the hydrated Activity's
+   * `updatedAt`, and native clients hold an acknowledged write's fence until it does. Left
+   * out, that proof never held and every fence stayed up (`data-model.md` §3.5).
+   */
+  'updatedAt',
 ] as const;
 
 export const TABLE = {
