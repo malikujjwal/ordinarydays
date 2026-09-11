@@ -279,6 +279,53 @@ describe('reading', () => {
     );
   });
 
+  /** 2026-09-10: a label and address that are the same text render once. */
+  it('renders a location once when its label and address match', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({ location: { label: 'Noble Rot', address: ' noble rot ' } }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    const location = screen.getByTestId('when-where-location');
+    expect(location.textContent).toBe('Noble Rot');
+    expect(location.getAttribute('aria-label')).toBe('Noble Rot');
+  });
+
+  it('keeps both lines when the address differs from the label', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('when-where-location').textContent).toBe(
+      'Zahav237 St James Place',
+    );
+  });
+
+  it('states repeat and reminder together on the summary line when both are set', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          recurrence: {
+            mode: 'fixed',
+            segments: [{ freq: 'daily', effectiveFrom: '2026-08-14', time: '19:00' }],
+          },
+        }),
+        [reminder('rem_01J0000000000000000000000C', -60)],
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('when-where-reminders').textContent).toBe(
+      'Repeats daily · Reminder 1 hour before',
+    );
+  });
+
   it('names caller-owned reminders explicitly on a shared plan', async () => {
     stubFetch({
       status: 200,
@@ -310,12 +357,12 @@ describe('reading', () => {
     expect(fieldValue('Title')).toBe('Zahav');
     expect(screen.getByText('Fri, Aug 14 · 7:00 PM')).toBeDefined();
     expect(screen.getAllByText('Tap to edit')).toHaveLength(1);
-    expect(screen.getByText('Does not repeat · No reminder')).toBeDefined();
-    expect(
-      screen
-        .getByTestId('when-where-date')
-        .contains(screen.getByText('Does not repeat · No reminder')),
-    ).toBe(true);
+    // 2026-09-10: the summary line states only what is set; neither is set here.
+    expect(screen.queryByTestId('when-where-reminders')).toBeNull();
+    expect(screen.queryByText(/No reminder/)).toBeNull();
+    expect(screen.getByTestId('notes-preview').textContent).toBe(
+      'Check-in is after 3 PM.',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
     expect(fieldValue('Notes for this plan')).toBe('Check-in is after 3 PM.');
   });
@@ -340,36 +387,94 @@ describe('reading', () => {
   });
 
   it('renders capability content as divided, unboxed sections', async () => {
-    stubFetch({ status: 200, body: detailBody(task()) });
+    stubFetch({
+      status: 200,
+      body: detailBody(task({ parentActivityId: 'act_01J0000000000000000000000P' })),
+    });
     mount();
     await loaded();
 
     // Each row closes itself, so the list ends on its last row rather than needing a rule
     // bolted onto the container — which is what produced two lines with a gap between them.
-    expect(screen.getByTestId('section-notes').style.borderBottomWidth).toBe('1px');
+    expect(screen.getByTestId('section-related').style.borderBottomWidth).toBe('1px');
+    expect(screen.getByTestId('section-reminders').style.borderBottomWidth).toBe('1px');
     fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
     expect(
       Number.parseFloat(
         getComputedStyle(screen.getByLabelText('Notes for this task')).borderTopWidth,
       ),
     ).toBeGreaterThan(0);
-    expect(screen.getByTestId('section-related').style.borderBottomWidth).toBe('1px');
   });
 
-  it('puts Notes first and keeps every capability on the same row rhythm', async () => {
-    stubFetch({ status: 200, body: detailBody(plan()) });
+  /**
+   * Founder, 2026-09-10: what it is, what it holds, what you wrote, how it behaves — Details,
+   * content, Notes, the chip row, then Settings, with Updates last.
+   */
+  it('orders Details, content, Notes, chips, Settings, then Updates', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'meal',
+          notes: 'Bring limes.',
+          details: {
+            kind: 'meal',
+            recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+            ingredients: [
+              { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+            ],
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    const order = [
+      'section-details',
+      'section-ingredients',
+      'section-notes',
+      'detail-settings',
+      'section-reminders',
+      'section-people',
+    ].map((id) => screen.getByTestId(id));
+    for (let index = 1; index < order.length; index += 1) {
+      const before = order[index - 1] as HTMLElement;
+      const after = order[index] as HTMLElement;
+      expect(
+        before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    }
+    expect(screen.getByTestId('detail-settings').textContent).toContain('Settings');
+  });
+
+  it('puts the chip row between Notes and Settings', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        task({ schedule: { date: '2026-08-14', timezone: 'America/New_York' } }),
+      ),
+    });
     mount();
     await loaded();
 
     const notes = screen.getByTestId('section-notes');
-    const reminders = screen.getByTestId('section-reminders');
-    const people = screen.getByTestId('section-people');
+    const chips = screen.getByTestId('add-to-plan');
+    const settings = screen.getByTestId('detail-settings');
+    expect(notes.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
     expect(
-      notes.compareDocumentPosition(reminders) & Node.DOCUMENT_POSITION_FOLLOWING,
+      chips.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(
-      reminders.compareDocumentPosition(people) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('spaces the top-level groups 32 pt apart', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-content').style.gap).toBe('32px');
   });
 
   it('says Not scheduled on an undated plan rather than hiding the row', async () => {
@@ -397,9 +502,9 @@ describe('reading', () => {
     mount();
     await loaded();
 
-    expect(
-      screen.getByText('Does not repeat · Reminder 15 minutes before'),
-    ).toBeDefined();
+    expect(screen.getByTestId('when-where-reminders').textContent).toBe(
+      'Reminder 15 minutes before',
+    );
     // The row states the current value; the choices live in the sheet it opens.
     expect(screen.getByTestId('section-reminders').textContent).toContain(
       '15 minutes before',
@@ -563,6 +668,50 @@ describe('the sections', () => {
     // No list has loaded in this harness, so the row offers creation rather than a guess.
     expect(screen.getByRole('button', { name: 'Choose or create a list' })).toBeDefined();
     expect(sent.filter((s) => s.method === 'POST')).toHaveLength(0);
+    // 2026-09-10: the count sits beside the label, and the add action waits for a selection.
+    expect(screen.getByTestId('section-ingredients').textContent).toContain(
+      'Ingredients2',
+    );
+    expect(screen.queryByTestId('ingredient-picker-add')).toBeNull();
+    expect(screen.queryByText(/Add 0/)).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Chicken' }));
+    expect(screen.getByTestId('ingredient-picker-add').textContent).toBe(
+      'Add 1 selected',
+    );
+  });
+
+  it('opens the meal sheet from the Ingredients Edit', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'meal',
+          details: {
+            kind: 'meal',
+            ingredients: [
+              { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
+              {
+                ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+                name: 'Salsa',
+                addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1B1',
+              },
+            ],
+          },
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('section-ingredients').textContent).toContain(
+      '1 of 2 on a list',
+    );
+    expect(
+      screen.getByTestId('ingredient-picker-added-ing_01J8XKQ2M4N5P6R7S8T9V0W1A2'),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit ingredients' }));
+    await screen.findByTestId('type-details-sheet');
+    expect(fieldValue('Ingredient 2')).toBe('Salsa');
   });
 
   it('renders no Ingredients section on a Meal without rows', async () => {
@@ -574,7 +723,8 @@ describe('the sections', () => {
     await loaded();
 
     expect(screen.queryByTestId('section-ingredients')).toBeNull();
-    expect(screen.queryByText('Ingredients')).toBeNull();
+    // The one way in is the chip, which opens the meal sheet.
+    expect(screen.getByTestId('add-to-plan-ingredients')).toBeDefined();
   });
 
   /** §5.6: a Task "renders no disabled placeholders for anything it lacks". */
@@ -586,7 +736,11 @@ describe('the sections', () => {
     expect(screen.queryByText('Add people')).toBeNull();
     expect(screen.queryByText('Add prep task')).toBeNull();
     expect(screen.queryByText('Add list')).toBeNull();
-    expect(screen.getByTestId('section-related')).toBeDefined();
+    // No parent, no row: the Related plan / None disclosure is gone (2026-09-10).
+    expect(screen.queryByTestId('section-related')).toBeNull();
+    expect(screen.queryByText('Related plan')).toBeNull();
+    expect(screen.queryByTestId('section-details')).toBeNull();
+    expect(screen.queryByTestId('section-people')).toBeNull();
   });
 });
 
@@ -610,13 +764,13 @@ describe('type-specific details', () => {
     expect(screen.getByTestId('detail-subtitle').textContent).toBe(
       'Meal · Dinner · Just you',
     );
-    expect(screen.getByTestId('section-recipe')).toBeDefined();
-    expect(screen.getByText('bbcgoodfood.com')).toBeDefined();
-    expect(screen.queryByTestId('section-link')).toBeNull();
+    expect(screen.getByTestId('details-recipe').textContent).toContain('Recipe');
+    expect(screen.getByText('bbcgoodfood.com ↗')).toBeDefined();
+    expect(screen.queryByTestId('details-link')).toBeNull();
     expect(screen.queryByText(recipeUrl)).toBeNull();
   });
 
-  it('omits RECIPE when a meal has no recipeUrl and offers a Recipe chip instead', async () => {
+  it('omits Details on a bare meal and offers Ingredients and Details chips instead', async () => {
     stubFetch({
       status: 200,
       body: detailBody(plan({ type: 'meal', details: { kind: 'meal' } })),
@@ -624,12 +778,17 @@ describe('type-specific details', () => {
     mount();
     await loaded();
 
-    expect(screen.queryByTestId('section-recipe')).toBeNull();
-    expect(screen.getByTestId('add-to-plan-recipe')).toBeDefined();
-    expect(screen.queryByRole('button', { name: 'Edit recipe' })).toBeNull();
+    expect(screen.queryByTestId('section-details')).toBeNull();
+    expect(screen.getByTestId('add-to-plan-ingredients')).toBeDefined();
+    expect(screen.getByTestId('add-to-plan-details')).toBeDefined();
+    expect(screen.queryByTestId('add-to-plan-recipe')).toBeNull();
+    expect(screen.queryByTestId('add-to-plan-link')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit details' })).toBeNull();
+    fireEvent.click(screen.getByTestId('add-to-plan-details'));
+    await screen.findByTestId('type-details-sheet');
   });
 
-  it('spells Season 2 Episode 4 in WATCHING and keeps the streaming service inert', async () => {
+  it('spells S2 · E4 on the Episode row and keeps the service inert', async () => {
     stubFetch({
       status: 200,
       body: detailBody(
@@ -654,13 +813,12 @@ describe('type-specific details', () => {
     expect(screen.getByTestId('detail-subtitle').textContent).toBe(
       'Watch · S2 E4 · Just you',
     );
-    expect(screen.getByTestId('section-watching').textContent).toContain(
-      'Season 2 · Episode 4',
+    expect(screen.getByTestId('details-episode').textContent).toBe(
+      'EpisodeS2 · E4Chikhai Bardo',
     );
-    expect(screen.getByText('Chikhai Bardo')).toBeDefined();
-    expect(screen.getByText('Streaming service')).toBeDefined();
-    expect(screen.getByText('Apple TV+')).toBeDefined();
-    expect(screen.queryByRole('button', { name: /Streaming service/ })).toBeNull();
+    expect(screen.getByTestId('details-service').textContent).toBe('ServiceApple TV+');
+    expect(screen.queryByRole('button', { name: /Service/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Service/ })).toBeNull();
     expect(screen.queryByText('Watchlist title')).toBeNull();
     expect(screen.queryByText('Saved as')).toBeNull();
   });
@@ -689,8 +847,9 @@ describe('type-specific details', () => {
     expect(screen.getByTestId('detail-subtitle').textContent).toBe(
       'Watch · Movie · Just you',
     );
-    expect(screen.queryByText('Season 2')).toBeNull();
-    expect(screen.queryByText('Episode 4')).toBeNull();
+    expect(screen.queryByText(/S2/)).toBeNull();
+    expect(screen.queryByText(/E4/)).toBeNull();
+    expect(screen.queryByTestId('details-episode')).toBeNull();
     expect(screen.getByText('Netflix')).toBeDefined();
   });
 
@@ -716,16 +875,13 @@ describe('type-specific details', () => {
     mount();
     await loaded();
 
-    expect(screen.getByTestId('section-reservation').textContent).toContain(
-      'Sarah Mendes',
+    // "name · time" over "2 people · Ref X"; no time is stored, so none is invented.
+    expect(screen.getByTestId('details-booking').textContent).toBe(
+      'BookingSarah Mendes2 people · Ref NR-7741',
     );
-    expect(screen.getByTestId('section-reservation').textContent).toContain('2 people');
-    expect(screen.getByTestId('section-reservation').textContent).toContain(
-      'Ref NR-7741',
-    );
-    expect(screen.getByTestId('section-link')).toBeDefined();
-    expect(screen.getByText('instagram.com')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Opens, instagram.com' }));
+    expect(screen.getByTestId('details-link')).toBeDefined();
+    expect(screen.getByText('instagram.com ↗')).toBeDefined();
+    fireEvent.click(screen.getByRole('link', { name: 'Link, instagram.com' }));
     expect(opened).toHaveBeenCalledWith('https://www.instagram.com/p/Cx9pQ2v');
   });
 
@@ -741,8 +897,8 @@ describe('type-specific details', () => {
     mount();
     await loaded();
 
-    expect(screen.getByLabelText('Reservation: 2 people')).toBeDefined();
-    expect(screen.queryByLabelText(/^Reservation: ,/)).toBeNull();
+    expect(screen.getByLabelText('Booking, 2 people')).toBeDefined();
+    expect(screen.queryByLabelText(/^Booking, ,/)).toBeNull();
   });
 
   it('treats blank free-text type facts as absent', async () => {
@@ -765,7 +921,7 @@ describe('type-specific details', () => {
     mount();
     await loaded();
 
-    expect(screen.queryByTestId('section-watching')).toBeNull();
+    expect(screen.queryByTestId('section-details')).toBeNull();
   });
 
   it('does not put a blank organiser in the subtitle or invent a reservation', async () => {
@@ -781,7 +937,8 @@ describe('type-specific details', () => {
     await loaded();
 
     expect(screen.getByTestId('detail-subtitle').textContent).toBe('Event · Just you');
-    expect(screen.queryByTestId('section-reservation')).toBeNull();
+    expect(screen.queryByTestId('details-booking')).toBeNull();
+    expect(screen.queryByTestId('details-organiser')).toBeNull();
   });
 
   it('renders a stored zero price as 0.00 GBP, not Free', async () => {
@@ -796,11 +953,11 @@ describe('type-specific details', () => {
     mount();
     await loaded();
 
-    expect(screen.getByTestId('section-tickets').textContent).toContain('0.00 GBP');
+    expect(screen.getByTestId('details-tickets').textContent).toContain('0.00 GBP');
     expect(screen.queryByText('Free')).toBeNull();
   });
 
-  it('gives a Task no type section, only LINK when a source URL is stored', async () => {
+  it('gives a Task no type rows, only Link when a source URL is stored', async () => {
     stubFetch({
       status: 200,
       body: detailBody(task({ sourceUrl: 'https://www.thetrainline.com/book' })),
@@ -809,13 +966,12 @@ describe('type-specific details', () => {
     await loaded();
 
     expect(screen.getByTestId('detail-subtitle').textContent).toBe('Task');
-    expect(screen.queryByTestId('section-recipe')).toBeNull();
-    expect(screen.queryByTestId('section-watching')).toBeNull();
-    expect(screen.queryByTestId('section-description')).toBeNull();
-    expect(screen.queryByTestId('section-reservation')).toBeNull();
-    expect(screen.queryByTestId('section-tickets')).toBeNull();
-    expect(screen.getByTestId('section-link')).toBeDefined();
-    expect(screen.getByText('thetrainline.com')).toBeDefined();
+    const details = screen.getByTestId('section-details');
+    expect(details.textContent).toBe('DetailsEditLinkthetrainline.com ↗');
+    // Details exists, so no Link chip; its Edit opens the Link sheet.
+    expect(screen.queryByTestId('add-to-plan-link')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }));
+    await screen.findByTestId('link-sheet');
   });
 
   it('never shows shortcutId on a General plan', async () => {
@@ -836,8 +992,8 @@ describe('type-specific details', () => {
     await loaded();
 
     expect(screen.queryByText('sct_01J0000000000000000000000C')).toBeNull();
-    expect(screen.queryByTestId('section-recipe')).toBeNull();
-    expect(screen.queryByTestId('section-link')).toBeNull();
+    expect(screen.queryByTestId('section-details')).toBeNull();
+    expect(screen.getByTestId('add-to-plan-link')).toBeDefined();
   });
 
   it('states public-vs-private copy only on a shared activity', async () => {
@@ -896,7 +1052,7 @@ describe('type-details editing', () => {
     },
   ];
 
-  it('shows Edit on a filled Meal and hides the Recipe chip', async () => {
+  it('shows one Edit on the Details group and no per-fact chip', async () => {
     stubFetch({
       status: 200,
       body: detailBody(
@@ -913,10 +1069,13 @@ describe('type-details editing', () => {
     await loaded();
 
     expect(screen.queryByTestId('add-to-plan-recipe')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Edit recipe' })).toBeDefined();
+    expect(screen.queryByTestId('add-to-plan-details')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Edit details' })).toHaveLength(1);
+    // A meal with no rows still offers the Ingredients chip.
+    expect(screen.getByTestId('add-to-plan-ingredients')).toBeDefined();
   });
 
-  it('opens the type sheet from Edit and saves the full details with ingredients retained', async () => {
+  it('opens the type sheet from Edit and saves the edited ingredients with the details', async () => {
     const current = plan({
       type: 'meal',
       details: {
@@ -956,29 +1115,34 @@ describe('type-details editing', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit recipe' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }));
     await screen.findByTestId('type-details-sheet');
     fireEvent.change(screen.getByLabelText('Recipe link'), {
       target: { value: 'https://www.example.com/tacos' },
     });
+    // Rename the added Salsa row and drop Chicken; ids are kept, never re-minted.
+    fireEvent.change(screen.getByLabelText('Ingredient 3'), {
+      target: { value: 'Hot salsa' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove ingredient 1' }));
     fireEvent.click(screen.getByTestId('type-details-save'));
 
     await waitFor(() => expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1));
     const patch = sent.find((s) => s.method === 'PATCH');
     expect(patch?.headers['If-Match']).toBe('2026-08-08T10:00:00.000Z');
+    // One PATCH, and no sourceUrl: the link field was not touched.
     expect(patch?.body).toEqual({
       details: {
         kind: 'meal',
         mealSlot: 'dinner',
         recipeUrl: 'https://www.example.com/tacos',
         ingredients: [
-          { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
           {
             ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
             name: 'Tortillas',
             quantity: '8',
           },
-          { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Salsa' },
+          { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Hot salsa' },
         ],
       },
     });
@@ -1035,7 +1199,7 @@ describe('type-details editing', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit recipe' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }));
     await screen.findByTestId('type-details-sheet');
     fireEvent.change(screen.getByLabelText('Recipe link'), {
       target: { value: 'https://www.example.com/tacos' },
@@ -1758,7 +1922,7 @@ describe('editing in place', () => {
     mount();
     await loaded();
 
-    expect(screen.getByText('Repeats daily · No reminder')).toBeDefined();
+    expect(screen.getByText('Repeats daily')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
     fireEvent.change(screen.getByTestId('repeat-option'), {
       target: { value: 'weekdays' },
@@ -1775,9 +1939,7 @@ describe('editing in place', () => {
         segments: [{ freq: 'weekdays', effectiveFrom: TODAY, time: '19:00' }],
       },
     });
-    await waitFor(() =>
-      expect(screen.getByText('Repeats every weekday · No reminder')).toBeDefined(),
-    );
+    await waitFor(() => expect(screen.getByText('Repeats every weekday')).toBeDefined());
   });
 
   it('keeps a one-off completion occurrence-scoped when Repeat turns it into a series', async () => {
@@ -1813,9 +1975,7 @@ describe('editing in place', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
-    await waitFor(() =>
-      expect(screen.getByText('Repeats daily · No reminder')).toBeDefined(),
-    );
+    await waitFor(() => expect(screen.getByText('Repeats daily')).toBeDefined());
     fireEvent.click(screen.getByTestId('detail-complete'));
 
     await waitFor(() =>
@@ -2103,7 +2263,7 @@ describe('a 409 conflict', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit recipe' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }));
     await screen.findByTestId('type-details-sheet');
     fireEvent.change(screen.getByLabelText('Recipe link'), {
       target: { value: 'https://www.example.com/tacos' },
@@ -3462,49 +3622,57 @@ describe('named parent and source list', () => {
     return { onOpenActivity, onOpenList };
   }
 
-  it('names Related plan and navigates when the envelope has parent', async () => {
+  /** 2026-09-10: the parent plan is a `Part of` row in the Details group. */
+  it('names the parent on a Part of row in Details and navigates', async () => {
     const { onOpenActivity } = mountNamed(
       { parent: PARENT },
       task({ parentActivityId: PARENT.activityId }),
     );
     await loaded();
 
-    expect(screen.queryByText('Part of a plan')).toBeNull();
-    expect(screen.getByText('Sunday roast')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /^Related plan/ }));
+    const row = screen.getByTestId('section-related');
+    expect(screen.getByTestId('section-details').contains(row)).toBe(true);
+    expect(row.textContent).toBe('Part ofSunday roast');
+    expect(screen.queryByText('Related plan')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Part of, Sunday roast' }));
     expect(onOpenActivity).toHaveBeenCalledExactlyOnceWith(PARENT.activityId);
   });
 
-  it('keeps the boolean Related plan row when parent is absent', async () => {
-    const { onOpenActivity } = mountNamed({}, task());
+  it('shows no Part of row, and no Related plan row, when there is no parent', async () => {
+    mountNamed({}, task());
     await loaded();
 
-    expect(screen.getByTestId('section-related').textContent).toContain('None');
-    fireEvent.click(screen.getByTestId('section-related'));
-    expect(onOpenActivity).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('section-related')).toBeNull();
+    expect(screen.queryByText('Related plan')).toBeNull();
     expect(screen.queryByTestId('section-from-list')).toBeNull();
     expect(screen.queryByText('From a list')).toBeNull();
   });
 
-  it('keeps Part of a plan when parentActivityId is set but parent is unnamed', async () => {
+  it('reads A plan, inert, when parentActivityId is set but the parent is unnamed', async () => {
     const { onOpenActivity } = mountNamed(
       {},
       task({ parentActivityId: PARENT.activityId }),
     );
     await loaded();
 
-    expect(screen.getByTestId('section-related').textContent).toContain('Part of a plan');
+    expect(screen.getByTestId('section-related').textContent).toBe('Part ofA plan');
+    expect(screen.queryByRole('button', { name: /^Part of/ })).toBeNull();
     fireEvent.click(screen.getByTestId('section-related'));
     expect(onOpenActivity).not.toHaveBeenCalled();
   });
 
-  it('mounts From <list> only when sourceList is present', async () => {
+  it('puts From <list> in Details and navigates to the list', async () => {
     const { onOpenList } = mountNamed({ sourceList: FROM }, plan());
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: `From ${FROM.title}` }));
+    const row = screen.getByTestId('section-from-list');
+    expect(screen.getByTestId('section-details').contains(row)).toBe(true);
+    expect(screen.getByTestId('detail-sections').contains(row)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: `From, ${FROM.title}` }));
     expect(onOpenList).toHaveBeenCalledExactlyOnceWith(FROM.listId);
     expect(screen.queryByText('From a list')).toBeNull();
+    // A From row alone is a Details group, so the Details chip is not offered.
+    expect(screen.queryByTestId('add-to-plan-details')).toBeNull();
   });
 
   it('omits From <list> when sourceList is absent', async () => {

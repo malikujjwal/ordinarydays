@@ -12,6 +12,11 @@ import {
  *
  * The compact schedule header: date/time, recurrence + caller reminder summary, then location.
  *
+ * **The summary line states only what is set** (founder, 2026-09-10): `Repeats daily · Reminder
+ * 1 hour before`, `Reminder at the time`, or nothing at all — never `Does not repeat · No
+ * reminder`. The Settings rows at the foot of the screen still report the unset states. A
+ * location whose label and address are the same text renders once.
+ *
  * ## The date row is a button, and the address row is a different button
  *
  * §2.1 is explicit that they are separate tap targets — the first opens the reschedule sheet
@@ -50,6 +55,13 @@ export function WhenWhereBlock({
 }: WhenWhereBlockProps) {
   const theme = useTheme();
   const scheduled = schedule !== undefined;
+  const summary = scheduled
+    ? scheduleSummary(recurrenceDescription, reminders)
+    : undefined;
+  const address =
+    location?.address === undefined || sameText(location.address, location.label)
+      ? undefined
+      : location.address;
 
   return (
     <View testID="when-where">
@@ -109,10 +121,10 @@ export function WhenWhereBlock({
               )}
             </View>
 
-            {!scheduled ? null : (
+            {summary === undefined ? null : (
               <View testID="when-where-reminders">
                 <Text variant="footnote" color="textSecondary">
-                  {`${repeatSummary(recurrenceDescription)} · ${reminderSummary(reminders)}`}
+                  {summary}
                 </Text>
               </View>
             )}
@@ -124,9 +136,9 @@ export function WhenWhereBlock({
             square={false}
             accessibilityRole="button"
             accessibilityLabel={
-              location.address === undefined
+              address === undefined
                 ? location.label
-                : `${location.label}, ${location.address}, open in Maps`
+                : `${location.label}, ${address}, open in Maps`
             }
             disabled={onPressAddress === undefined}
             onPress={onPressAddress}
@@ -135,9 +147,9 @@ export function WhenWhereBlock({
             <Text variant="body" color="textSecondary">
               {location.label}
             </Text>
-            {location.address === undefined ? null : (
+            {address === undefined ? null : (
               <Text variant="footnote" color="textSecondary">
-                {location.address}
+                {address}
               </Text>
             )}
           </Touchable>
@@ -147,13 +159,27 @@ export function WhenWhereBlock({
   );
 }
 
-function repeatSummary(description: string | undefined): string {
-  if (description === undefined) return 'Does not repeat';
-  return `Repeats ${description.charAt(0).toLowerCase()}${description.slice(1)}`;
+/** Only the set halves, joined; `undefined` when neither is set. */
+export function scheduleSummary(
+  recurrenceDescription: string | undefined,
+  reminders: Reminder[],
+): string | undefined {
+  const parts: string[] = [];
+  if (recurrenceDescription !== undefined) {
+    parts.push(
+      `Repeats ${recurrenceDescription.charAt(0).toLowerCase()}${recurrenceDescription.slice(1)}`,
+    );
+  }
+  if (reminders.length > 0) parts.push(reminderSummary(reminders));
+  return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/** Trimmed, case-insensitive: `Noble Rot` and `noble rot ` are one place, said once. */
+function sameText(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
 function reminderSummary(reminders: Reminder[]): string {
-  if (reminders.length === 0) return 'No reminder';
   if (reminders.length === 1) {
     return `Reminder ${formatReminderOffset(reminders[0]?.offsetMinutes ?? 0).toLowerCase()}`;
   }
