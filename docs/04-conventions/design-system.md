@@ -1470,9 +1470,10 @@ renders no placeholder for anything it lacks — a Task is not a Plan with thing
 >    `compact` density. Absent when it has no row.
 > 6. **Updates**, last.
 >
-> Top-level groups sit `space[8]` (32 pt) apart. Details, Ingredients, written Notes and
-> Settings share one heading grammar: a caption heading closed by a hairline, then rows that
-> each close on their own rule. The **summary line under the date shows only what is set**
+> Top-level groups sit `space[8]` (32 pt) apart. Details, Ingredients and Settings share one
+> heading grammar: a caption heading closed by a hairline, then rows that each close on their
+> own rule. (Written Notes shared it until 2026-09-11; see the last amendment below.) The
+> **summary line under the date shows only what is set**
 > (`Repeats daily · Reminder 1 hour before`, `Reminder at the time`) and is omitted when
 > neither is; the Settings rows still report `Does not repeat` / `None`. A location whose
 > label and address are the same text (trimmed, case-insensitive) renders once.
@@ -1497,6 +1498,13 @@ renders no placeholder for anything it lacks — a Task is not a Plan with thing
 > address still opens Maps; the Details group gains no Place row, which would repeat the
 > header. Behaviour is canonical in [`../01-product/activities.md`](../01-product/activities.md)
 > §4.7.
+>
+> **Amended 2026-09-11 (founder) — no rule under the Notes heading.** Written Notes keeps its
+> `Notes` caption and trailing `Edit`, but the heading is no longer closed by a hairline:
+> Notes uses the unruled `SectionFrame`, so the preview (and the editor) sits the ordinary
+> caption-to-content gap (`space[2]`) under the heading, with no extra below-the-rule inset.
+> The preview still closes on its own rule, and the empty compact line still closes on a
+> hairline. Details, Ingredients and Settings keep their ruled headings.
 
 ---
 

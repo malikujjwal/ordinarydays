@@ -7,8 +7,9 @@ import { View } from 'react-native';
  * caption header with a trailing figure, then its rows. Sections exist only once they hold
  * something; the frame never renders an empty heading because no section mounts it empty.
  *
- * `ruled` is the 2026-09-10 heading grammar for Details, Ingredients, Notes and Settings: a
- * caption heading closed by a hairline, then rows that each close on their own rule.
+ * `ruled` is the 2026-09-10 heading grammar for Details, Ingredients and Settings: a caption
+ * heading closed by a hairline, then rows that each close on their own rule. Notes dropped its
+ * heading rule on 2026-09-11 (founder) and uses the unruled frame.
  */
 export interface SectionFrameProps {
   label: string;

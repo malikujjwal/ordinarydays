@@ -99,6 +99,33 @@ it('renders Add notes as a flush-right text action that keeps focus return', () 
   expect(result.current.actionRef.current).toBe(add);
 });
 
+/**
+ * Founder, 2026-09-11: the `Notes` heading has no rule under it — Details, Ingredients and
+ * Settings keep theirs — and the preview sits the ordinary caption-to-content gap below it,
+ * with no extra below-the-rule inset.
+ */
+it('draws no rule under the Notes heading and spaces the preview like an unruled section', () => {
+  const { result } = renderHook(() => useNotesDraft('Bring limes.', vi.fn()));
+  render(
+    <ThemeProvider scheme="light">
+      <ActivityNotes
+        notes={result.current}
+        value="Bring limes."
+        kind="plan"
+        pending={false}
+      />
+    </ThemeProvider>,
+  );
+  const section = screen.getByTestId('section-notes');
+  const headingRow = section.firstElementChild as HTMLElement;
+  expect(headingRow.contains(screen.getByRole('heading', { name: 'Notes' }))).toBe(true);
+  expect(getComputedStyle(headingRow).borderBottomWidth).toBe('0px');
+  // `SectionFrame`'s unruled caption-to-content gap, `space[2]`.
+  expect(getComputedStyle(section).gap).toBe('4px');
+  const content = headingRow.nextElementSibling as HTMLElement;
+  expect(getComputedStyle(content).paddingTop).toBe('0px');
+});
+
 /** Device report 2026-09-11: Notes closes on a hairline, except while editing. */
 it('closes empty and written notes on a rule, but not the editor', () => {
   const { result } = renderHook(() => useNotesDraft('', vi.fn()));

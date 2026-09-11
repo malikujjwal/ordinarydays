@@ -12,7 +12,9 @@ export type NotesDraft = ReturnType<typeof useNotesDraft>;
  * - **Empty:** one compact line — muted `No notes` left, `Add notes` right — rather than a
  *   `Notes` heading over `No notes yet.`
  * - **With text:** the `Notes` caption heading with `Edit` in the trailing slot, then the
- *   two-line preview.
+ *   two-line preview. The heading is **not** ruled (founder, 2026-09-11) — unlike Details,
+ *   Ingredients and Settings — so the preview sits `SectionFrame`'s ordinary caption-to-content
+ *   gap below it and closes on its own rule.
  * - **Editing:** the approved inline editor, unchanged — explicit Save/Cancel in the footer,
  *   the draft kept on a failed save, `Private to you.` on a shared plan.
  */
@@ -124,8 +126,8 @@ export function ActivityNotes({
         };
 
   return (
-    <SectionFrame label="Notes" ruled testID="section-notes" {...trailing}>
-      <View style={{ gap: theme.space[3], paddingTop: theme.space[3] }}>
+    <SectionFrame label="Notes" testID="section-notes" {...trailing}>
+      <View style={{ gap: theme.space[3] }}>
         {privacy}
         {notes.editing ? (
           <Field
