@@ -634,7 +634,7 @@ it('flushes and dismisses before navigating through item provenance', async () =
   const onClose = vi.fn();
   const onSource = vi.fn();
   const subject = item({
-    sourceLabel: 'Sunday dinner',
+    sourceLabel: 'Chicken tacos',
     sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3',
   });
   render(
@@ -653,7 +653,7 @@ it('flushes and dismisses before navigating through item provenance', async () =
   fireEvent.change(screen.getByLabelText('Title'), {
     target: { value: 'Changed before navigation' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'From Sunday dinner' }));
+  fireEvent.click(screen.getByRole('button', { name: 'From Chicken tacos' }));
   await act(async () => undefined);
   expect(onClose).toHaveBeenCalledOnce();
   expect(onSource).toHaveBeenCalledWith(subject.sourceActivityId);

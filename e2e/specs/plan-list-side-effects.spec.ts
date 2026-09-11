@@ -355,5 +355,6 @@ test('meal detail: the ingredients section adds only the selected rows, then mar
   await expect(page.getByRole('checkbox', { name: 'Sour cream' })).toBeVisible();
   const items = await listItems(request, groceries);
   expect(items.map((i) => i.title).sort()).toEqual(['Chicken', 'Tortillas (8)']);
-  expect(items.every((i) => i.sourceLabel !== undefined)).toBe(true);
+  // §7.5, amended 2026-09-11: the provenance label is the plan's name, not its day.
+  expect(items.map((i) => i.sourceLabel)).toEqual(['Chicken tacos', 'Chicken tacos']);
 });

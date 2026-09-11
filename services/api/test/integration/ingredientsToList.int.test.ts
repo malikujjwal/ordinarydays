@@ -145,7 +145,10 @@ const INGREDIENTS = [
   { ingredientId: SOUR_CREAM, name: 'Sour cream' },
 ];
 
-/** A Sunday, so §7.5 rule 1 produces the doc's own `Sunday dinner`. */
+/**
+ * A Sunday dinner. Before 2026-09-11 §7.5 labelled it `Sunday dinner`; the label is now the
+ * plan's name, `Chicken tacos`, and the date is kept so every test proves the day is ignored.
+ */
 const SUNDAY = nextSunday();
 
 function nextSunday(): string {
@@ -248,7 +251,7 @@ describe('the confirmed action', () => {
 
     expect(res.status).toBe(201);
     const body = (await res.json()).data as Json;
-    expect(body.sourceLabel).toBe('Sunday dinner');
+    expect(body.sourceLabel).toBe('Chicken tacos');
 
     const rows = await itemRows(list.listId);
     expect(rows).toHaveLength(3);
@@ -259,9 +262,9 @@ describe('the confirmed action', () => {
     ]);
     for (const row of rows) {
       expect(row.sourceActivityId).toBe(MEAL);
-      expect(row.sourceLabel).toBe('Sunday dinner');
+      expect(row.sourceLabel).toBe('Chicken tacos');
       expect(row.sourceProvenance).toEqual([
-        { activityId: MEAL, label: 'Sunday dinner' },
+        { activityId: MEAL, label: 'Chicken tacos' },
       ]);
     }
 
@@ -385,7 +388,7 @@ describe('the duplicate rule, in all three states', () => {
     // The match is case-insensitive, and it is the **existing** row that survives — the
     // user's own capitalisation is not overwritten by the ingredient's.
     expect(rows[0]?.title).toBe('chicken');
-    expect(rows[0]?.sourceLabel).toBe('Sunday dinner');
+    expect(rows[0]?.sourceLabel).toBe('Chicken tacos');
   });
 
   it('extends an existing label rather than replacing it', async () => {
@@ -413,14 +416,14 @@ describe('the duplicate rule, in all three states', () => {
 
     const rows = await itemRows(list.listId);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.sourceLabel).toBe('Sunday lunch · Sunday dinner');
+    expect(rows[0]?.sourceLabel).toBe('Chicken soup · Chicken tacos');
     expect(rows[0]?.sourceProvenance).toEqual([
-      { activityId: OTHER_MEAL, label: 'Sunday lunch' },
-      { activityId: MEAL, label: 'Sunday dinner' },
+      { activityId: OTHER_MEAL, label: 'Chicken soup' },
+      { activityId: MEAL, label: 'Chicken tacos' },
     ]);
 
     const later = await addToList(list.listId, [TOMATOES]);
-    expect(((await later.json()).data as Json).sourceLabel).toBe('Sunday dinner');
+    expect(((await later.json()).data as Json).sourceLabel).toBe('Chicken tacos');
   });
 
   it('groups same-title selections into one new unchecked row', async () => {
@@ -461,8 +464,9 @@ describe('the duplicate rule, in all three states', () => {
   });
 });
 
-describe('rule 5: two meals that produced the same words', () => {
-  it('appends the meal title when another meal already used the label', async () => {
+/** §7.5, amended 2026-09-11 (founder): the label names the plan, never its day. */
+describe('the label is the plan’s name', () => {
+  it('does not change because another meal on the same day is on the list', async () => {
     const { list } = await setUp();
     await createMeal(
       {
@@ -480,16 +484,40 @@ describe('rule 5: two meals that produced the same words', () => {
     const res = await addToList(list.listId, [CHICKEN]);
 
     const body = (await res.json()).data as Json;
-    expect(body.sourceLabel).toBe('Sunday dinner · Chicken tacos');
+    expect(body.sourceLabel).toBe('Chicken tacos');
   });
 
-  it('does not disambiguate a meal from itself', async () => {
+  /**
+   * Two different meals that share a title produce the same words. Segment ownership is by
+   * `activityId`, so the second still extends the row with a segment of its own.
+   */
+  it('gives a same-titled second meal its own segment', async () => {
+    const { list } = await setUp();
+    await createMeal({ details: { kind: 'meal', ingredients: INGREDIENTS } }, OTHER_MEAL);
+
+    await addToList(list.listId, [CHICKEN], {}, OTHER_MEAL);
+    const res = await request('POST', `/v1/activities/${MEAL}/ingredients/add-to-list`, {
+      listId: list.listId,
+      ingredients: [{ ingredientId: CHICKEN }],
+    });
+    expect(res.status).toBe(201);
+
+    const rows = await itemRows(list.listId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.sourceLabel).toBe('Chicken tacos · Chicken tacos');
+    expect(rows[0]?.sourceProvenance).toEqual([
+      { activityId: OTHER_MEAL, label: 'Chicken tacos' },
+      { activityId: MEAL, label: 'Chicken tacos' },
+    ]);
+  });
+
+  it('does not repeat a meal on its own row', async () => {
     const { list } = await setUp();
 
     await addToList(list.listId, [CHICKEN]);
     const res = await addToList(list.listId, [TOMATOES]);
 
-    expect(((await res.json()).data as Json).sourceLabel).toBe('Sunday dinner');
+    expect(((await res.json()).data as Json).sourceLabel).toBe('Chicken tacos');
   });
 });
 
@@ -512,6 +540,25 @@ describe('the label is computed once and stored', () => {
     expect((await itemRows(list.listId))[0]).toEqual(before);
   });
 
+  /** The label is the title now, so a rename is the edit most likely to tempt a recompute. */
+  it('is unchanged after the source meal is renamed', async () => {
+    const { list } = await setUp();
+    await addToList(list.listId, [CHICKEN]);
+    const before = (await itemRows(list.listId))[0];
+
+    const meal = await storedMeal();
+    const res = await request(
+      'PATCH',
+      `/v1/activities/${MEAL}`,
+      { title: 'Chicken fajitas' },
+      { 'If-Match': String(meal?.updatedAt) },
+    );
+    expect(res.status).toBe(200);
+
+    expect((await itemRows(list.listId))[0]).toEqual(before);
+    expect(before?.sourceLabel).toBe('Chicken tacos');
+  });
+
   it('is unchanged after the source meal is deleted, and the item survives', async () => {
     const { list } = await setUp();
     await addToList(list.listId, [CHICKEN]);
@@ -522,7 +569,7 @@ describe('the label is computed once and stored', () => {
 
     const after = (await itemRows(list.listId))[0];
     expect(after).toEqual(before);
-    expect(after?.sourceLabel).toBe('Sunday dinner');
+    expect(after?.sourceLabel).toBe('Chicken tacos');
     // The back-link is retained and simply stops resolving — §6.5's non-navigable back-link.
     expect(after?.sourceActivityId).toBe(MEAL);
   });
@@ -657,8 +704,8 @@ describe('replay adds nothing twice', () => {
     const rows = await itemRows(list.listId);
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.sourceLabel)).toEqual([
-      'Sunday dinner',
-      'Sunday dinner',
+      'Chicken tacos',
+      'Chicken tacos',
     ]);
   });
 
@@ -932,7 +979,7 @@ describe('what it refuses, and writes nothing for', () => {
         items: [
           {
             title: 'Chicken',
-            [field]: field === 'sourceLabel' ? 'Sunday dinner' : MEAL,
+            [field]: field === 'sourceLabel' ? 'Chicken tacos' : MEAL,
           },
         ],
       });
@@ -948,7 +995,7 @@ describe('what it refuses, and writes nothing for', () => {
 
     const res = await request('POST', `/v1/lists/${list.listId}/items`, {
       title: 'Chicken',
-      sourceLabel: 'Sunday dinner',
+      sourceLabel: 'Chicken tacos',
     });
 
     expect(res.status).toBe(400);
@@ -1276,7 +1323,7 @@ describe('a change landing between the read and the commit', () => {
     const chicken = rows.filter((row) => String(row.title).toLowerCase() === 'chicken');
     expect(chicken).toHaveLength(1);
     // Reclassified: the row that appeared is unchecked, so it was labelled, not duplicated.
-    expect(chicken[0]?.sourceLabel).toBe('Sunday dinner');
+    expect(chicken[0]?.sourceLabel).toBe('Chicken tacos');
     expect(
       ((await res.json()).data as { ingredients: Json[] }).ingredients[0]?.outcome,
     ).toBe('labelled');
@@ -1311,7 +1358,7 @@ describe('a change landing between the read and the commit', () => {
     );
     expect(chicken).toHaveLength(1);
     expect(chicken[0]?.itemId).toBe(existing.itemId);
-    expect(chicken[0]?.sourceLabel).toBe('Sunday dinner');
+    expect(chicken[0]?.sourceLabel).toBe('Chicken tacos');
   });
 
   /**

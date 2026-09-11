@@ -333,12 +333,14 @@ Provenance is then stored per item, not recomputed:
 
 ```
 LIST#lst_groceries | ITEM#c4#itm_chicken
-  { title: "Chicken", sourceActivityId: "act_tacos", sourceLabel: "Sunday dinner" }
+  { title: "Chicken", sourceActivityId: "act_tacos", sourceLabel: "Chicken tacos" }
 ```
 
-That `sourceLabel` is exactly the `Chicken — Sunday dinner` line in the concept. It is
-computed once at creation and frozen, so renaming or rescheduling the meal does not
-silently rewrite a grocery list the user is standing in a shop reading.
+That `sourceLabel` is the `Chicken — Chicken tacos` line: the source plan's name. (Amended
+2026-09-11 (founder): it named the meal's day — the concept's `Chicken — Sunday dinner` — until
+then; `plans-and-lists.md` §7.5.) It is computed once at creation and frozen, so renaming or
+rescheduling the meal does not silently rewrite a grocery list the user is standing in a shop
+reading.
 
 **Prep tasks are ordinary Activities** with `parentActivityId` set, plus a thin `SUB#`
 pointer in the parent's partition:

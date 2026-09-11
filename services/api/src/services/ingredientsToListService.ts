@@ -1,7 +1,6 @@
 import { MAX_LIST_ITEMS, MAX_SOURCE_PROVENANCE_SEGMENTS } from '@od/shared';
 import { formatIngredientTitle, provenanceLabel } from '@od/shared/lists';
 import { type AddIngredientsToListInput, listItemSourceLabel } from '@od/shared/schemas';
-import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import type { Activity, List, ListItem, MealIngredient } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
@@ -231,11 +230,7 @@ async function attemptAdd(
   const existing = snapshot.items;
   assertDestinationsNotTombstoned(selected, snapshot.tombstonedDestinationIds);
 
-  const sourceLabel = provenanceLabel(
-    labelSource(activity),
-    labelsFromOtherMeals(existing, activityId),
-    today(activity, now),
-  );
+  const sourceLabel = provenanceLabel(activity);
   assertRenderedSourceLabel(sourceLabel);
 
   const plan = classify(
@@ -453,16 +448,6 @@ async function commit(builder: TransactionBuilder, spans: CommitSpans): Promise<
     }
     throw error;
   }
-}
-
-/** The three fields §7.5's rules read, and nothing else the Activity happens to carry. */
-function labelSource(activity: Activity) {
-  const slot = activity.details?.kind === 'meal' ? activity.details.mealSlot : undefined;
-  return {
-    title: activity.title,
-    ...(activity.schedule === undefined ? {} : { date: activity.schedule.date }),
-    ...(slot === undefined ? {} : { mealSlot: slot }),
-  };
 }
 
 /**
@@ -779,7 +764,8 @@ function provenanceOf(
   }
   if (item.sourceActivityId === undefined || item.sourceLabel === undefined) return [];
   // Legacy P3-17 rows had only these two fields. The entire rendered value belongs to the
-  // recorded Activity; splitting it would corrupt a valid rule-5 label containing ` · `.
+  // recorded Activity; splitting it would corrupt a valid label containing ` · ` — a meal
+  // title may contain it, and so may a stored pre-2026-09-11 `Sunday dinner · Chicken tacos`.
   return [{ activityId: item.sourceActivityId, label: item.sourceLabel }];
 }
 
@@ -801,23 +787,6 @@ function extendProvenance(item: ListItem, activityId: string, label: string): Li
   };
 }
 
-/**
- * The labels on this list that belong to **other** meals (§7.5 rule 5).
- *
- * Rule 5 disambiguates two meals that produced the same words. Structured segments retain
- * their Activity owner, so labels containing the display delimiter remain one label. Legacy
- * rows are treated as one whole segment owned by their original `sourceActivityId`.
- */
-function labelsFromOtherMeals(items: readonly ListItem[], activityId: string): string[] {
-  const labels = new Set<string>();
-  for (const item of items) {
-    for (const segment of provenanceOf(item)) {
-      if (segment.activityId !== activityId) labels.add(segment.label);
-    }
-  }
-  return [...labels];
-}
-
 function assertRenderedSourceLabel(value: string): void {
   if (listItemSourceLabel.safeParse(value).success) return;
   refuse('ingredients', PROVENANCE_FULL);
@@ -825,21 +794,6 @@ function assertRenderedSourceLabel(value: string): void {
 
 function destinationUnavailable(): never {
   throw new AppError('conflict', ID_UNAVAILABLE);
-}
-
-/**
- * The wall date rules 1–3 measure from, in the zone the meal itself is scheduled in.
- *
- * `provenanceLabel` takes `today` rather than reading a clock, and this is where that
- * decision is paid for. The meal's own timezone is the right frame: `Sunday dinner` means the
- * Sunday of that dinner, not the Sunday of whichever machine served the request. An
- * unscheduled meal takes rule 4 and never reaches the comparison, so the request instant is a
- * safe frame for the one case with no zone to borrow.
- */
-function today(activity: Activity, now: string): string {
-  const timezone = activity.schedule?.timezone;
-  if (timezone === undefined) return now.slice(0, 10);
-  return toWallDate(now as Instant, timezone as TimeZone);
 }
 
 /** The response, in the order the ingredients were sent, whatever happened to each. */

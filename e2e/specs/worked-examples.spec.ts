@@ -374,8 +374,12 @@ test('9.2 Meal → Groceries: three labelled items, Added on the meal, checking 
     'Tomatoes',
     'Tortillas (8)',
   ]);
-  // One provenance label for all three (`Chicken — Sunday dinner`): the meal's own words.
-  expect(new Set(labelled.map((row) => row.sourceLabel)).size).toBe(1);
+  // One provenance label for all three (`Chicken — Chicken tacos`): the plan's name.
+  expect(labelled.map((row) => row.sourceLabel)).toEqual([
+    'Chicken tacos',
+    'Chicken tacos',
+    'Chicken tacos',
+  ]);
   expect(rows.find((row) => row.title === 'Milk')?.sourceLabel).toBeUndefined();
 
   // Step 6: the meal shows Added for three and an action for Sour cream.

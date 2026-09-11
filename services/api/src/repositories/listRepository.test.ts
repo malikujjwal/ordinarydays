@@ -1964,7 +1964,7 @@ describe('the composable list-write primitives', () => {
   });
 
   describe('appendSourceLabelExtension', () => {
-    const appended = (value: ListItem, segment = 'Sunday dinner') => {
+    const appended = (value: ListItem, segment = 'Chicken tacos') => {
       const builder = new tx.TransactionBuilder('test');
       repository.appendSourceLabelExtension(
         builder,
@@ -1992,7 +1992,7 @@ describe('the composable list-write primitives', () => {
       const items = appended(target);
 
       expect(items[0]?.Update?.ExpressionAttributeValues).toMatchObject({
-        ':sourceLabel': 'Sunday dinner',
+        ':sourceLabel': 'Chicken tacos',
         ':expectedRevision': 4,
         ':nextRevision': 5,
       });

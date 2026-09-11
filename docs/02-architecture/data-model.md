@@ -1161,8 +1161,10 @@ interface ListItem {
       rank: string;
     }[] };
   };
-  sourceActivityId?: string;       // "Chicken — Sunday dinner"
-  sourceLabel?: string;            // joined display, max 4,000; segments never recomputed/truncated
+  sourceActivityId?: string;       // "Chicken — Chicken tacos"
+  sourceLabel?: string;            // joined display, max 4,000; segments never recomputed/truncated.
+                                   // Each segment is the source plan's trimmed title (amended
+                                   // 2026-09-11 (founder); earlier day labels stay as stored)
   sourceProvenance?: {             // storage-only ordered ownership; never serialised
     activityId: string;
     label: string;

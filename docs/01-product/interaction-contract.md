@@ -662,7 +662,7 @@ appends the `Reorder <item title>` grip defined in §3.2. `accessibilityRole` is
 | Date suggestion row | 1. Row body<br>2. `Works for me` toggle<br>3. `Use this date` (owner only) | 1. `Saturday 9 August, 7:00 PM, suggested by Alice, before the show. Works for you and Ben.`<br>2. `Works for me, on`<br>3. `Use this date` | `text`, `switch`, `button` | `Delete` on your own |
 | List member row | 1. Row body<br>2. Trailing control | 1. `Alice, member` / `Ben, invited, we emailed them`<br>2. `Remove Alice from this list` / `Leave this list` | `text`, `button` | — |
 | UP NEXT card | 1. Card body | `Up next. Pick up groceries, in 2 hours, 5:30 PM` | `button` | Same as the row |
-| List item, checkbox mode | 1. Checkbox<br>2. Row body | 1. `Chicken, not checked`<br>2. `Chicken, from Sunday dinner` | `checkbox`, `button` | `Plan this item`, `Delete` |
+| List item, checkbox mode | 1. Checkbox<br>2. Row body | 1. `Chicken, not checked`<br>2. `Chicken, from Chicken tacos` | `checkbox`, `button` | `Plan this item`, `Delete` |
 | List item, state hidden | 1. Row body<br>2. linked Plan state line when present | 1. `Zahav`<br>2. `Planned Saturday 7:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
 | List item with enabled, populated Place | 1. Row body including address<br>2. Maps button | 1. `Zahav, 237 St James Place`<br>2. `237 St James Place, open in Maps` | `button`, `button` | `Plan this item`, `Delete` |
 | List item in configured Watching stage with episode Progress | 1. Row body<br>2. linked Plan state line | 1. `Severance, watching, season 2 episode 4`<br>2. `Next session Friday 8:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |

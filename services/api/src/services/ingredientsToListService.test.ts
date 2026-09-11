@@ -72,7 +72,10 @@ const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1';
 const TORTILLAS = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2';
 const ITEM_ONE = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B1';
 const ITEM_TWO = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B2';
-/** A Sunday, five days after `NOW`, so §7.5 rule 1 applies. */
+/**
+ * A Sunday dinner five days after `NOW`. Before 2026-09-11 that produced `Sunday dinner`;
+ * §7.5 now names the plan, so every label below is the meal's title whatever its day.
+ */
 const NOW = instant.parse('2026-08-18T09:00:00.000Z');
 const SUNDAY = '2026-08-23';
 const READ_AT = instant.parse('2026-08-17T09:00:00.000Z');
@@ -487,7 +490,7 @@ describe('what it derives, and what it refuses to be told', () => {
         itemId: ITEM_ONE,
         title: 'Chicken',
         sourceActivityId: MEAL,
-        sourceLabel: 'Sunday dinner',
+        sourceLabel: 'Chicken tacos',
         state: 'open',
       }),
       expect.objectContaining({ itemId: ITEM_TWO, title: 'Tortillas (8)' }),
@@ -538,48 +541,24 @@ describe('what it derives, and what it refuses to be told', () => {
     expect(result.ingredients[0]?.item.sourceLabel).toHaveLength(200);
   });
 
-  it('appends the meal title when another meal already used the label', async () => {
+  it('names the plan, not the day it is scheduled for', async () => {
+    expect((await run()).sourceLabel).toBe('Chicken tacos');
+  });
+
+  /**
+   * The day-label collision rule (old rule 5) is gone: another meal with the same title
+   * already on the list does not change this meal's words. Ownership is by `activityId`.
+   */
+  it('does not disambiguate from another meal that produced the same words', async () => {
     snapshot([
       existingItem({
         title: 'Potatoes',
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
-        sourceLabel: 'Sunday dinner',
+        sourceLabel: 'Chicken tacos',
       }),
     ]);
 
-    const result = await run();
-
-    expect(result.sourceLabel).toBe('Sunday dinner · Chicken tacos');
-  });
-
-  it('does not split a rule-5 label when checking collisions', async () => {
-    snapshot([
-      existingItem({
-        title: 'Potatoes',
-        sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
-        sourceLabel: 'Sunday dinner · Other meal',
-        sourceProvenance: [
-          {
-            activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
-            label: 'Sunday dinner · Other meal',
-          },
-        ],
-      }),
-    ]);
-
-    expect((await run()).sourceLabel).toBe('Sunday dinner');
-  });
-
-  it('ignores its own earlier rows when deciding whether the label collides', async () => {
-    snapshot([
-      existingItem({
-        title: 'Tomatoes',
-        sourceActivityId: MEAL,
-        sourceLabel: 'Sunday dinner',
-      }),
-    ]);
-
-    expect((await run()).sourceLabel).toBe('Sunday dinner');
+    expect((await run()).sourceLabel).toBe('Chicken tacos');
   });
 
   it('uses the meal title for an unscheduled meal', async () => {
@@ -633,6 +612,24 @@ describe('the duplicate rule chooses which row is written', () => {
     snapshot([
       existingItem({
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        sourceLabel: 'Burgers',
+      }),
+    ]);
+
+    const result = await run();
+
+    expect(result.ingredients[0]?.item.sourceLabel).toBe('Burgers · Chicken tacos');
+    expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
+      { activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8', label: 'Burgers' },
+      { activityId: MEAL, label: 'Chicken tacos' },
+    ]);
+  });
+
+  /** Stored, never recomputed: a day label written before 2026-09-11 stays as it was. */
+  it('keeps an earlier day label when extending it', async () => {
+    snapshot([
+      existingItem({
+        sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
         sourceLabel: 'Thursday lunch',
       }),
     ]);
@@ -640,20 +637,34 @@ describe('the duplicate rule chooses which row is written', () => {
     const result = await run();
 
     expect(result.ingredients[0]?.item.sourceLabel).toBe(
-      'Thursday lunch · Sunday dinner',
+      'Thursday lunch · Chicken tacos',
     );
+  });
+
+  /**
+   * Two different meals with one title still get a segment each, because a segment is owned
+   * by its `activityId` and never by its words.
+   */
+  it('extends a row labelled with the same words by a different meal', async () => {
+    snapshot([
+      existingItem({
+        sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        sourceLabel: 'Chicken tacos',
+      }),
+    ]);
+
+    const result = await run();
+
+    expect(result.ingredients[0]?.item.sourceLabel).toBe('Chicken tacos · Chicken tacos');
     expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
-      {
-        activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
-        label: 'Thursday lunch',
-      },
-      { activityId: MEAL, label: 'Sunday dinner' },
+      { activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8', label: 'Chicken tacos' },
+      { activityId: MEAL, label: 'Chicken tacos' },
     ]);
   });
 
-  /** A re-tap after a lost response must not read `Sunday dinner · Sunday dinner`. */
+  /** A re-tap after a lost response must not read `Chicken tacos · Chicken tacos`. */
   it('writes nothing for a row that already carries this label', async () => {
-    snapshot([existingItem({ sourceActivityId: MEAL, sourceLabel: 'Sunday dinner' })]);
+    snapshot([existingItem({ sourceActivityId: MEAL, sourceLabel: 'Chicken tacos' })]);
 
     const result = await run();
 
@@ -681,7 +692,11 @@ describe('the duplicate rule chooses which row is written', () => {
 
     const result = await run();
 
-    expect(result.sourceLabel).toBe('Sunday dinner · Chicken tacos');
+    expect(result.sourceLabel).toBe('Chicken tacos');
+    // The stored segments are not rewritten to today's rule.
+    expect(result.ingredients[0]?.item.sourceLabel).toBe(
+      'Sunday dinner · Sunday dinner · Chicken tacos',
+    );
     expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
   });
 
@@ -701,7 +716,7 @@ describe('the duplicate rule chooses which row is written', () => {
     snapshot([
       existingItem({
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
-        sourceLabel: 'Sunday',
+        sourceLabel: 'Chicken',
       }),
     ]);
 

@@ -1621,7 +1621,7 @@ The flow, exactly:
    can render `Added` for those rows and offer only the remaining ones next time.
 6. Duplicate handling: if an item with the same case-insensitive, trimmed title already
    exists **unchecked** on the target list, no second row is created; the existing row's
-   `sourceLabel` is extended (`Sunday dinner · Thursday lunch`). If the existing row is
+   `sourceLabel` is extended (`Chicken tacos · Burgers`). If the existing row is
    **checked**, a new row is created — the previous one was already bought. Ingredients in
    the same confirmed action are grouped by that normalized title, so the group uses one
    existing unchecked row or creates exactly one new row. A client-supplied destination id
@@ -1663,30 +1663,36 @@ an em dash:
 
 ```
 Groceries
-  Chicken          — Sunday dinner
-  Tortillas (8)    — Sunday dinner
-  Tomatoes         — Sunday dinner
+  Chicken          — Chicken tacos
+  Tortillas (8)    — Chicken tacos
+  Tomatoes         — Chicken tacos
   Milk
 ```
 
 > **Decision — label format.** `sourceLabel` is computed at creation time and stored, never
-> recomputed:
+> recomputed. It is the source plan's title, trimmed — `Chicken tacos` — whether or not the
+> meal is scheduled, and whatever its day or slot.
 >
-> 1. If the source meal is scheduled within the next 7 days **and** has a `mealSlot`:
->    `"<Weekday> <slot>"` — `Sunday dinner`.
-> 2. If it is scheduled within 7 days with no slot: `"<Weekday>"` — `Sunday`.
-> 3. If it is scheduled beyond 7 days: `"<d MMM> <slot>"` — `23 Aug dinner`.
-> 4. If it is unscheduled: the meal's title — `Chicken tacos`.
-> 5. If a label produced by rules 1–3 already exists on the target list from a *different*
->    meal, the meal title is appended: `Sunday dinner · Chicken tacos`.
+> **Amended 2026-09-11 (founder).** The label names the plan, not its day: `Chicken (8) —
+> Chicken tacos` rather than `Chicken (8) — Sunday dinner`, because the plan's name says more
+> about why an item is on the list. This replaces the earlier five rules (weekday plus slot
+> within 7 days, `d MMM` plus slot beyond, the title only when unscheduled, and appending the
+> title when a day label already on the list came from a different meal). Items created
+> before the amendment keep their stored day labels; nothing migrates them. Two different
+> meals with the same title now produce the same words; nothing depends on telling them
+> apart by text, because segment ownership is by `activityId` (below). The concept's
+> illustrative `Chicken — Sunday dinner` ([`original-concept.md`](original-concept.md) §9)
+> predates this decision.
 >
-> Storing rather than recomputing means the label stays truthful after the meal is
+> Storing rather than recomputing means the label stays truthful after the meal is renamed,
 > rescheduled or deleted. A manually added item has no label and renders no dash. Internally,
 > the row retains ordered `{ activityId, label }` segments and renders `sourceLabel` by joining
-> them. Ownership is never inferred by splitting display text: a rule-5 label legitimately
-> contains ` · `. A canonical segment may contain the complete 200-character meal title;
-> rendered provenance has a dedicated 4,000-character bound and is never truncated. An
-> extension that would exceed it rejects the whole action before any write.
+> them with ` · ` — `Chicken tacos · Burgers` when a second meal extends the row. Ownership is
+> never inferred by splitting display text: a meal title, and a label stored under the earlier
+> rules, may legitimately contain ` · `. A canonical segment may contain the complete
+> 200-character meal title; rendered provenance has a dedicated 4,000-character bound and is
+> never truncated. An extension that would exceed it rejects the whole action before any
+> write.
 
 The label is not a link in v1; it is text. Tapping the item opens item detail, which shows
 `From Chicken tacos` as a navigable row when `sourceActivityId` still resolves.
@@ -1852,7 +1858,8 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 
 ### 9.2 Meal → Groceries
 
-**Goal:** Chicken tacos for Sunday dinner; the ingredients need buying.
+**Goal:** Chicken tacos for Sunday dinner; the ingredients need buying. (Step 5 amended
+2026-09-11 (founder): the provenance label is the plan's name, §7.5.)
 
 | Step | User action | Writes |
 | --- | --- | --- |
@@ -1860,7 +1867,7 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 | 2 | Ingredients: `Chicken`, `Tortillas` qty `8`, `Tomatoes`, `Sour cream` (unchecks Sour cream — already has it) | Local |
 | 3 | `Add selected ingredients to:` — the destination row already reads `Groceries`, the user's only list holding the `groceries` slot, so nothing was asked (§5.8) | Local |
 | 4 | `Save plan and add 3 items to Groceries` | `POST /v1/activities` → `act_12` with `objectKind: 'plan'`, `type: 'meal'`, and `details.ingredients` = all four rows, each carrying its stable client-minted `ingredientId`. Then `POST /v1/activities/act_12/ingredients/add-to-list` with `listId: 'lst_g'` and the three checked source `ingredientId`s. |
-| 5 | Groceries list now reads | `Chicken — Sunday dinner` · `Tortillas (8) — Sunday dinner` · `Tomatoes — Sunday dinner` · `Milk` (added manually last week, no label) |
+| 5 | Groceries list now reads | `Chicken — Chicken tacos` · `Tortillas (8) — Chicken tacos` · `Tomatoes — Chicken tacos` · `Milk` (added manually last week, no label) |
 | 6 | Meal detail | Chicken / Tortillas / Tomatoes render `Added`; Sour cream renders with `Add to Groceries`. |
 | 7 | Saturday: user shops, checks all three | `PATCH` on each item, `state: 'done'`. **The meal is untouched** — provenance is not linkage (§6.5). |
 | 8 | Sunday 19:00, Today | `7:30 PM ◇ Chicken tacos   Meal · Dinner`. (Time as entered; the 19:00 default was overridden.) |

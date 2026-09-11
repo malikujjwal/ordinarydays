@@ -126,7 +126,7 @@ describe('the create body is strict at the edge', () => {
     ['itemRevision', 1],
     ['listId', LST],
     ['sourceActivityId', ACT],
-    ['sourceLabel', 'Sunday dinner'],
+    ['sourceLabel', 'Chicken tacos'],
   ])('400s the server-owned field %s before anything is loaded', async (field, value) => {
     const res = await post({ title: 'Eggs', [field]: value });
 
@@ -169,7 +169,9 @@ describe('the bulk body is strict at the edge', () => {
     '400s the provenance field %s',
     async (field) => {
       const res = await bulk({
-        items: [{ title: 'Chicken', [field]: field === 'sourceLabel' ? 'Sunday' : ACT }],
+        items: [
+          { title: 'Chicken', [field]: field === 'sourceLabel' ? 'Chicken tacos' : ACT },
+        ],
       });
 
       expect(res.status).toBe(400);
@@ -205,7 +207,7 @@ describe('the patch body is strict at the edge', () => {
     ['rank', 'a0'],
     ['itemRevision', 2],
     ['itemId', ITM],
-    ['sourceLabel', 'Sunday dinner'],
+    ['sourceLabel', 'Chicken tacos'],
   ])('400s the server-owned field %s', async (field, value) => {
     expect((await patch({ [field]: value })).status).toBe(400);
   });

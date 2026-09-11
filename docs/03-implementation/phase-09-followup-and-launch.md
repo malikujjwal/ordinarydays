@@ -163,7 +163,8 @@ personalisation on top of it.
 `Add selected` resolves the destination through the `groceries` slot rule
 ([`../02-architecture/data-model.md#default-slots`](../02-architecture/data-model.md#default-slots),
 implemented in P3-12), shows it, and posts there with `sourceActivityId` and a `sourceLabel`
-so the item reads `Chicken — Sunday dinner`. There is no single "the Groceries list" to post
+so the item reads `Chicken — Chicken tacos` (the plan's name; `plans-and-lists.md` §7.5,
+amended 2026-09-11 (founder)). There is no single "the Groceries list" to post
 to; the destination is whichever list holds the slot, and the user can change it for that one
 operation.
 

@@ -88,7 +88,7 @@ describe('the SQLite item slice', () => {
       state: 'done',
       features: { place: { label: 'Philadelphia' } },
       sourceActivityId: 'act_01J0000000000000000000000A',
-      sourceLabel: 'Sunday dinner',
+      sourceLabel: 'Chicken tacos',
     });
 
     await transactions.run((transaction) =>

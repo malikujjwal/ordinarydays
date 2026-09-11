@@ -1245,6 +1245,16 @@ non-meal activity, or an inaccessible destination is rejected without partial wr
 5. If rules 1–3 produce a label already on the list **from a different meal**, append the
    meal title: `Sunday dinner · Chicken tacos`.
 
+> **Amended 2026-09-11 (founder).** The five rules above are superseded: the label is the
+> source plan's trimmed title, always (`Chicken (8) — Chicken tacos`), per
+> [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §7.5. The function is
+> now `provenanceLabel(meal)` — no `existingLabelsOnList`, no reference date — and the service
+> no longer collects other meals' labels. Everything else here stands: computed once and
+> stored, ordered `{ activityId, label }` segments joined with ` · ` (`Chicken tacos ·
+> Burgers`), the 4,000-character rendered bound and the whole-action rejection. Items written
+> under the old rules keep their stored labels; there is no migration. Dropping rule 5 is
+> safe because segment ownership was always by `activityId`, never by label text.
+
 The label is **computed once and stored, never recomputed**, so it stays truthful after the
 meal is rescheduled or deleted. A manually added item has no label and renders no dash. A
 single canonical segment may contain a full 200-character meal title. The rendered field
@@ -1254,7 +1264,8 @@ before composing the transaction and rejects the whole action if the bound would
 
 **Duplicate handling.** If an item with the same case-insensitive, trimmed title already
 exists **unchecked** on the target list, no second row is created — the existing row's
-`sourceLabel` is extended (`Sunday dinner · Thursday lunch`). If the existing row is
+`sourceLabel` is extended (`Sunday dinner · Thursday lunch`; `Chicken tacos · Burgers` since
+the 2026-09-11 amendment). If the existing row is
 **checked**, a new row is created: the previous one was already bought. Selections in one
 request are classified by normalized-title group, so two selected ingredients with the same
 title use the same existing unchecked row or create one new row. Storage also retains
@@ -1288,7 +1299,8 @@ writes zero grocery items until the user taps the button. Provenance is **not** 
 `Chicken`, and deleting the meal leaves `Chicken` with its label intact and a non-navigable
 back-link.
 
-**Tests.** `provenanceLabel` unit tests for all five rules including the collision case.
+**Tests.** `provenanceLabel` unit tests for all five rules including the collision case
+(amended 2026-09-11: for the title rule, including that a scheduled meal's day is ignored).
 `formatIngredientTitle` tests no quantity, an exact-boundary quantity and the 120 + 120
 maximum; the last preserves all 120 name characters, has one ellipsis, and is exactly
 `MAX_TITLE_LEN` characters. Integration for the duplicate rule in all three states (absent, present-unchecked,
@@ -1901,7 +1913,7 @@ comparison against a template key, the model has been misunderstood.
 | `behaviour: 'watch'` | Renders `S2 E4` and the status chip instead of a checkbox |
 | `behaviour: 'meals'` | Renders the ingredient count |
 | Caller-scoped `viewerLink` whose hydrated Activity has `schedule.date` | Renders the state line (P3-35) |
-| `item.sourceLabel` | Renders `— Sunday dinner` |
+| `item.sourceLabel` | Renders `— Chicken tacos` (the plan's name since 2026-09-11; stored day labels render as stored) |
 
 **Edge cases.**
 
@@ -3631,13 +3643,15 @@ place.
     Tapping `Add 3 selected`
     and confirming the destination calls the activity-scoped ingredient action and writes
     exactly three, into the list the user confirmed,
-    each with `sourceActivityId` and a `sourceLabel` of `Sunday dinner`. A valid maximum-length
+    each with `sourceActivityId` and a `sourceLabel` of `Sunday dinner` (`Chicken tacos` —
+    the plan's name — since the 2026-09-11 amendment to §7.5). A valid maximum-length
     ingredient name and quantity succeeds with a deterministic `MAX_TITLE_LEN` title that
     preserves the full name and truncates only the quantity with an ellipsis. Ingredient
     selection is by stable `ing_` id, not array index; reorder before offline replay cannot
     redirect the action, and a deleted selected id rejects the whole write.
 14. Adding the same ingredient again while the existing row is not `done` extends its label to
-    `Sunday dinner · Thursday lunch` and creates no second row; doing it while the row is
+    `Sunday dinner · Thursday lunch` (now `Chicken tacos · Burgers`) and creates no second
+    row; doing it while the row is
     `done` creates a second row.
 15. Rescheduling the source meal does not change any existing item's label; deleting the meal
     leaves the items and their labels intact.
