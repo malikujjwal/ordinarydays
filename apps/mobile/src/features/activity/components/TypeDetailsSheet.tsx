@@ -12,12 +12,12 @@ import type { Activity, ActivityDetails, ActivityLocation } from '@od/shared/typ
 import { Button, Field, SegmentedControl, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Keyboard, View } from 'react-native';
+import { IngredientsControl } from '@/components/IngredientsControl';
+import type { DraftIngredient } from '@/components/ingredientDraft';
 import {
   buildDetailsPatch,
   type DetailsEdits,
 } from '@/features/activity/model/buildDetailsPatch';
-import { IngredientsControl } from '@/features/compose/controls/FormControls';
-import type { DraftIngredient } from '@/features/compose/model/draft';
 import type { PendingActivity } from '@/lib/pendingActivity';
 import { DiscardChangesPrompt } from './DiscardChangesPrompt';
 
@@ -508,7 +508,7 @@ function MealFields({
         />
       </View>
       {/**
-       * The compose control, reused rather than rebuilt (2026-09-10): the same rows, the same
+       * The shared control, reused rather than rebuilt (2026-09-10): the same rows, the same
        * cap at `MAX_INGREDIENTS`, the same `newIngredient()` minting for a new row. A row
        * loaded from the meal keeps its stored id, so the server can carry its `Added` marker.
        */}

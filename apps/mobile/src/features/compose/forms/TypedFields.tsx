@@ -3,12 +3,12 @@ import { DisclosureRow, Field, RowGroup, useTheme } from '@od/ui';
 import { Fragment } from 'react';
 import { View } from 'react-native';
 import { IngredientPicker } from '@/components/IngredientPicker';
+import { IngredientsControl } from '@/components/IngredientsControl';
 import { RepeatControl } from '@/components/RepeatControl';
 import { WatchListDestination } from '@/components/WatchListDestination';
 import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
   DateControl,
-  IngredientsControl,
   KindControl,
   LocationControl,
   NotesControl,
