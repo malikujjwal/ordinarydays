@@ -1152,14 +1152,16 @@ Add ingredients to:
                             [ Add 3 to Groceries ]
 ```
 
-When the app asks and when it does not, following the four-step rule in
-[`../02-architecture/data-model.md#default-slots`](../02-architecture/data-model.md#default-slots):
+What the destination row shows, and what the picker behind its `▾` offers, keyed to how many
+capable lists exist and whether a default is set
+(`../02-architecture/data-model.md#default-slots`; ADR-060 flattened the picker itself —
+there is no one-time question and no `Remember this choice` control):
 
 | Situation | What the user sees |
 | --- | --- |
-| Exactly one list holds the slot | The destination row shows it. No question is asked. The dropdown still works. |
-| Several, and a default is set | The destination row shows the default. Changing it in the dropdown applies **to this operation only** and does not change the default. |
-| Several, no default set | A one-time sheet: `Which list should ingredients go to?` with the eligible lists and `Remember this choice`, checked by default (unchecking makes the choice one-off — P3-43). The answer is stored in `user.defaultLists`. |
+| Exactly one capable list | The destination row shows it. Opening the picker still works; nothing is asked. |
+| Several, and a default is set | The destination row shows the default. The picker lists every capable list flat; choosing a different one applies **to this operation only** and does not change the default. |
+| Several, no default set | The destination row reads `Choose or create a list`. The picker lists every capable list flat, with nothing pre-selected. Choosing one is both this operation's destination **and** silently becomes the default from then on, confirmed with one non-blocking toast (`<List> is now your default list for …`). |
 | None | The destination row reads `Choose or create a list` and opens the catalogue, limited to list types that can hold the pending items, with nothing selected. After `Create list`, the original flow returns with that List visibly named; adding still requires its own named confirmation. |
 
 **In settings.** Profile → Settings → **Default lists** shows three rows — Groceries,
@@ -1600,11 +1602,12 @@ The flow, exactly:
    the eventual list write contains only ingredients the user explicitly selected.
 2. Below it: `Add 4 selected to Groceries`, with the destination shown by name and
    changeable in a dropdown. The destination is resolved through the **`groceries` slot**,
-   by the four-step rule in §5.8 — one eligible list, use it silently; several with a
-   default, use the default and let the dropdown override it for this operation only;
-   several with no default, ask once and remember; none, show `Choose or create a list`.
-   Choosing `New list` opens the fixed catalogue, limited to checkbox list types that can
-   receive ingredients, with nothing selected. The user explicitly chooses a style and taps
+   by §5.8's rule — one capable list, use it silently; several with a default, use the
+   default and let the dropdown override it for this operation only; several with no
+   default, the dropdown lists every capable list flat and the pick becomes the default.
+   There is no one-time question and no `Remember this choice` control (ADR-060). Choosing
+   `New list` opens the fixed catalogue, limited to checkbox list types that can receive
+   ingredients, with nothing selected. The user explicitly chooses a style and taps
    `Create list`, then returns here with the new destination named.
    Which list was opened most recently is never consulted.
 3. Tapping the separate `Add <n> to <list name>` action issues one

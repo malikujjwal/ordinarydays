@@ -1048,7 +1048,7 @@ standing destination.
 
 ## ADR-033 — Semantic default slots, not behaviour-keyed defaults
 
-**Status:** Accepted · **Date:** 2026-08-07
+**Status:** Partially superseded by ADR-060 · **Date:** 2026-08-07
 
 **Context.** "Add these ingredients to a shopping list" needs a target. When lists were
 keyed by kind, `kind === 'groceries'` answered it. Once groceries, packing and shopping are
@@ -2401,7 +2401,7 @@ of server-known recurrence — duplicates the server's authoritative occurrence 
 ## ADR-058 — One List model with intrinsic state and keyed typed features
 
 **Status:** Accepted · **Date:** 2026-08-28 · **Supersedes ADR-031; amends ADR-032, ADR-033,
-ADR-043 and ADR-044**
+ADR-043 and ADR-044; amended by ADR-060**
 
 **Context.** ADR-031 correctly rejected a growing enum of purposes, but its replacement still
 made optional Watch progress and Meal ingredients into whole-List behaviours. That boundary
@@ -2484,3 +2484,86 @@ hiding that link from a mounted Plan. The delete, retry and rejection transactio
 canonical detail replacement preserves a hidden bit until the List root is restored. Ordinary
 projection readers remain independent of outbox tables and payload JSON. This does not add a new
 projection, collection, queue or reconciliation owner.
+
+---
+
+## ADR-060 — One derived list capability; the destination picker flattens onto it
+
+**Status:** Accepted · **Date:** 2026-09-16 · **Partially supersedes ADR-033; amends ADR-058's
+routing sentence**
+
+**Context.** A manual-testing session reached exactly the failure ADR-033/ADR-058 exist to
+prevent: a user created a Blank list, the ingredients destination picker offered it, and the API
+refused it ("Ingredients can only be added to a simple list"). The cause was three independent
+implementations of one eligibility question — the API's write guard (`itemStateMode.mode ===
+'checkbox'`), the client's slot-candidate filter (`slot === 'groceries'`), and the picker's
+`Choose another list` escape (no filter at all) — agreeing by discipline, not by construction.
+Fixing the immediate bug (`cf71244`) exposed two further seams under fresh-context review: on
+native, destination resolution read a server/TanStack cache instead of the SQLite projection
+ADR-057 makes authoritative, so a list edited or created locally could be offered or lost
+incorrectly (`536ce7d`); and a locally-committed, still-queued capability change left a send-time
+window in which the stale view could reach the API (`e53911d`). Each fix closed one seam without
+removing the structural cause: capability was computed independently wherever it was needed.
+Full analysis, three options and the audited trade-offs are in
+`docs/reports/destination-flow-simplification-20260916.md` (Option B1, chosen).
+
+**Decision.** One function, `listCapabilities`
+(`packages/shared/src/lists/ingredientDestination.ts`), derives what a list can structurally
+receive from the fields already stored on it (`itemStateMode`, `featureConfig`) — no new
+storage, no migration. It is the
+**only** place that rule is computed: the API write guard, an additive `List.capabilities` field
+on API list responses, the creation-template catalogue, the native SQLite list projection, and
+the optimistic pending-create row all call it rather than re-deriving it.
+
+The destination picker for a slot becomes one flat list — every capable, non-archived list, in
+server order — replacing ADR-033's `ask`/`Remember this choice` ceremony. `user.defaultLists`
+and `slot` are **unchanged**: same shape (`Partial<Record<DefaultSlot, string>>`), same
+per-category default, same transactional cleanup on a list's delete or slot change
+(`removeDefaultListTransactItem`, still keyed on `slot`). ADR-033's central rule — "destinations
+must be chosen, not accumulated" — is not reopened, and most-recently-used is still rejected:
+what changes is that the first pick made while no default is stored silently becomes the
+default, confirmed with one non-blocking toast, rather than asked for with a checkbox. A default
+is still changeable afterward, from the picker or from list settings' now capability-labelled
+"Default destination" row (`plans-and-lists.md` §5.5). ADR-058's "slots remain independent
+semantic routing declarations" still holds exactly as written — slots still name a category
+independently of what a list can hold — this ADR removes only the modal question built on top
+of that routing, not the routing itself.
+
+Watch and Meals have no additional capability requirement (the API accepts a plain title or row
+on any list for those flows), so their reachable set is unchanged: every non-archived list.
+Watch list creation stays constrained to the Watch Later template. `meals` remains a valid
+stored slot — an existing Meal Ideas list keeps displaying and routing through it — but drops
+out of the user-facing settings choices, since no flow offers it as a destination.
+
+`packages/shared/src/lists/resolveSlot.ts`, ADR-033's four-step resolver, and its unused
+server-side mirror `resolveListSlot` (`services/api/src/services/listSlotService.ts`, no caller
+outside its own test) are deleted; resolution is a capability filter plus a lookup, not a
+state machine with an `ask`/`use`/`none` result.
+
+**Consequences.**
+- The bug class this ADR responds to becomes structurally impossible rather than policed by
+  discipline: there is exactly one place capability is computed, so an offer and a refusal
+  cannot disagree.
+- `List` responses grow one additive, optional field (`capabilities`); no existing reader is
+  affected by its absence.
+- The destination flow's implementation and tests shrink materially: `resolveSlot.ts` and its
+  test, the `ask`/`use`/`none` machinery in `useDestination.ts`, and the slot-keyed ceremony copy
+  in `destinationCopy.ts` are deleted; `DestinationSheet.tsx` and three consumer screens
+  (`IngredientsSection.tsx`, `ComposeScreen.tsx`, `WatchListDestination.tsx`) are simplified
+  rather than rewritten.
+- A future destination flow needs only a capability predicate, not a fourth resolution branch.
+- `user.defaultLists`'s wire shape and every existing stored default keep working unmodified.
+
+**Alternatives rejected.**
+- *Re-key `defaultLists` by capability instead of slot.* Would require a profile migration and
+  would silently disconnect the server's existing transactional default-cleanup, which is keyed
+  on `slot` at the repository layer and knows nothing about capabilities. Rejected as an
+  unforced, riskier change with no user-visible benefit over keeping `slot` as the stored key.
+- *Default to the most recently used list (Option B2).* The specific alternative ADR-033
+  rejected by name ("destinations must be chosen, not accumulated"). Not adopted here; left in
+  the destination-flow-simplification report as an open question for the founder, not decided
+  by this ADR.
+- *Keep the two-tier candidate/escape picker and only fix the capability predicate (Option A).*
+  Narrows the reachable set to slot-marked lists only and reintroduces a reachability trap for a
+  capable list created from the picker without a slot. Rejected in favour of the strictly more
+  permissive flat list.

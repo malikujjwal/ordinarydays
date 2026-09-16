@@ -1225,26 +1225,42 @@ correct, because there are no siblings to lose — and a writer that loses that 
 nested operation. Removing the last key leaves an empty map rather than deleting the
 attribute; empty and absent are the same state to every reader.
 
-**Resolution reads both sides strongly.** The profile `GetItem` and every page of the list
-index — its pointer `Query` and its `META`/tombstone `BatchGetItem` alike — are issued with
-`ConsistentRead` when a slot is being resolved, and only then. The four-step rule turns on
-current state the user may have changed a moment ago: the default they have just chosen, a
-list they have just archived, a membership just revoked, and the pointer count that separates
-"exactly one" from "several". Serving those from a stale replica manufactures the dead end the
-read-side guard exists to prevent. Ordinary list browsing keeps the cheaper eventually
-consistent read.
+**Resolution is entirely client-side, against the list index the client already holds**
+(ADR-060, `docs/reports/destination-flow-simplification-20260916.md`, Option B1). There is no
+resolution endpoint and no server round trip: the client filters its cached list page (web:
+TanStack; native: the SQLite list projection, ADR-057) using the same eventually consistent
+read ordinary list browsing already uses. A server-side mirror of the rule (`resolveListSlot`)
+was built once and never given a caller; it and the client's own `resolveSlot` were both
+deleted with this change, since a resolution rule can drift the moment it exists in two
+places.
 
-Resolution rule for any "add to X" flow:
+**Capability is the only filter on which lists are offered; a list's own `slot` field no
+longer is.** A list is a candidate only if
+`packages/shared/src/lists/ingredientDestination.ts`'s `listCapabilities` says it can
+structurally receive the write (for ingredients: `itemStateMode.mode === 'checkbox'`); Watch
+and Meals have no additional capability requirement. `slot` still names the *stored default*
+— `user.defaultLists.groceries`, for example, is looked up among the capable candidates by
+that key — but the default it names need not itself carry `slot: 'groceries'`: any capable
+list a user has picked can become it. A list's own `slot` remains meaningful only at creation
+(seeded from the template) and in list settings, where it is display provenance rather than a
+filter.
 
-1. Exactly one list with `slot === 'groceries'` → use it, do not ask.
-2. Several, and `user.defaultLists.groceries` is set → use it, show it in the sheet,
-   let the user change it **for this operation only**.
-3. Several, and no default set → ask once, remember the answer.
-4. None → return `none`; the client may offer `New list`. General and ingredient flows open
-   the ordinary full catalogue with no template selected. A Watch destination, already
-   chosen explicitly by the user, opens exactly the three `watch` templates in canonical
-   relative order, also unselected. Creating the List and adding the items are separate
-   named confirmations. Slot resolution never returns a `templateKey`.
+Resolution rule for any "add to X" flow, over the capability-filtered list set:
+
+1. Exactly one capable list → use it, do not ask.
+2. Several, and `user.defaultLists.groceries` names one that is still capable and present →
+   use it, show it, let the user change it **for this operation only** from the flat picker
+   (step 3).
+3. Several, and no valid default set → the picker lists every capable list flat, with
+   nothing pre-selected — no one-time question, no `Remember this choice` checkbox. Picking
+   one is both this operation's destination and, silently, the new default from then on
+   (confirmed with one non-blocking toast, never a write the user cannot see the result of).
+4. None → the client may offer `New list`. General and ingredient flows open the ordinary
+   full catalogue, limited to the templates capable of the pending write, with no template
+   selected. A Watch destination, already chosen explicitly by the user, opens exactly the
+   three `watch` templates in canonical relative order, also unselected. Creating the List
+   and adding the items are separate named confirmations. Slot resolution never returns a
+   `templateKey`.
 
 Opening a list must never change where future items go. Most-recently-used is explicitly
 rejected.

@@ -284,15 +284,19 @@ LIST#lst_lisbon | META        { slot: null,        … }  ─┘
 ```
 
 The flow is a query for the user's list pointers plus one batch get for their `META` rows
-(access pattern 7), a filter on `slot`, and then the four-step rule in
-[`data-model.md`](data-model.md#default-slots):
+(access pattern 7), filtered by capability (`listCapabilities`,
+`packages/shared/src/lists/ingredientDestination.ts`), entirely client-side (ADR-060). A
+list's own `slot` does not filter this set — only capability does; `slot` is the key
+`defaultLists.<slot>` is looked up
+under among the capable lists, and the list it names need not itself carry that slot. Then
+the resolution rule in [`data-model.md`](data-model.md#default-slots):
 
-| Eligible lists | What happens | What is written |
+| Eligible, capable lists | What happens | What is written |
 | --- | --- | --- |
 | Exactly one | Use it, do not ask | The items only |
-| Several, `defaultLists.<slot>` set | Use the default, show it, allow a one-off override | The items only — an override is not remembered |
-| Several, no default | Ask once | The items, plus `defaultLists.<slot>` on the profile |
-| None | Offer `New list`; open the ordinary seven-preset catalogue with nothing selected | First `Create list`, then—only after the new destination is visibly named—the separate item write |
+| Several, `defaultLists.<slot>` names a capable, present list | Use the default, show it, allow a one-off override | The items only — an override is not remembered |
+| Several, no valid default | The picker lists every capable list flat, nothing pre-selected — no question, no `Remember this choice` control | The items, plus — silently, confirmed with one toast — `defaultLists.<slot>` on the profile |
+| None | Offer `New list`; open the ordinary seven-preset catalogue, limited to capable templates, with nothing selected | First `Create list`, then—only after the new destination is visibly named—the separate item write |
 
 Two properties fall out of storing the answer on the profile rather than deriving it.
 Opening a list writes nothing, so browsing `Costco` cannot change where tomorrow's

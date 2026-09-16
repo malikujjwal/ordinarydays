@@ -914,8 +914,8 @@ re-adding one fails — and that each bulk operation's toast appears with a 10-s
 
 ### P3-12 — `User.defaultLists` and slot resolution
 
-**Files.** `packages/shared/src/lists/resolveSlot.ts` (pure),
-`services/api/src/services/listSlotService.ts`.
+**Files.** `packages/shared/src/lists/resolveSlot.ts` (pure) — **deleted 2026-09-16, see the
+amendment at the end of this section** — and `services/api/src/services/listSlotService.ts`.
 
 **What to build.** The four-step rule in
 [`../02-architecture/data-model.md#default-slots`](../02-architecture/data-model.md#default-slots),
@@ -997,6 +997,22 @@ action uses that list and leaves `defaultLists` unchanged" — is **deferred to 
 owns that endpoint and already carries the same assertion in its own test list; a
 per-operation override is a parameter to that request, so P3-12 has no surface to point it
 at.
+
+> **Amended 2026-09-16 (Option B1, ADR-060) — resolution moves fully client-side;
+> `resolveSlot` and `resolveListSlot` are deleted.** The pure four-step function above and its
+> server-side mirror `resolveListSlot` (never called outside its own test) are gone.
+> `apps/mobile/src/hooks/useDestination.ts` now filters and preselects directly against its
+> own cached list index — no `ask`/`use`/`none` result type, no one-time question, no
+> `Remember this choice` write gated on answering it. Unchanged: `user.defaultLists`'s shape,
+> the per-operation-override rule and the most-recently-used rejection in the Decision above,
+> the stale-default edge case, and `profileDefaultToClear`/`removeDefaultListTransactItem`
+> (still in `listSlotService.ts`/`userRepository.ts`), which keep clearing a default on delete
+> or slot change exactly as before. What changes: a default is now written **silently on the
+> first pick** while none is stored, confirmed with one toast instead of a checkbox; and the
+> candidate set is capability alone — `packages/shared/src/lists/ingredientDestination.ts`'s
+> `listCapabilities` — not a list's own `slot`; `slot` now names only which key in
+> `user.defaultLists` the stored default is looked up under. Full
+> rationale: `docs/reports/destination-flow-simplification-20260916.md`, ADR-060.
 
 ---
 
@@ -3239,6 +3255,22 @@ A forced offline gap after item creation shows `Plan will finish syncing`; repla
 bridge key and `activityId`, including after simulated receipt expiry, creates exactly one Plan
 and one caller pointer, then clears that state.
 
+> **Amended 2026-09-16 (Option B1, ADR-060) — one flat picker replaces `use`/`ask`/`none`, the
+> `Remember this choice` control, and the `Choose another list` escape.** The resolution-states
+> table above, the `Remember this choice` Decision immediately below it, and the "picker lists
+> only lists whose `slot` matches, plus a `Choose another list` escape" edge case are
+> superseded. The picker is now one flat list of every list
+> `packages/shared/src/lists/ingredientDestination.ts`'s `listCapabilities` says can receive
+> the write — there is no separate slot-matched tier and no escape from it, because the flat
+> list already is the full eligible set. There is no `ask` state, no checkbox and no one-time
+> question: picking a list while none is stored silently sets it as the default, confirmed
+> with one toast, and the destination is still always visible before the write exactly as
+> written above. The Watch destination is unaffected — no capability narrows its reachable
+> set, and its creation stays constrained to the Watch Later template as written above. Full
+> design and the two review-found seams closed before this shipped (native list-authority
+> staleness; a queued-sync send-time race): `docs/reports/
+> destination-flow-simplification-20260916.md`, ADR-060.
+
 ---
 
 ### P3-44 — Follow-up suggestions after completion
@@ -3602,9 +3634,11 @@ place.
    Readers never expose a mixed generation; cutover invalidates an old item cursor exactly
    once. The compatibility path drains legacy rows/intents before removal, and the final API
    and UI contain no user-invokable behaviour transition, destructive preview or confirmation.
-5. Slot resolution behaves correctly in all four cases: one eligible list is used silently
-   but still shown; several with a default use the default; several with none ask once and
-   store the answer; none offers creation and writes nothing until confirmed. **Opening a
+5. Destination resolution behaves correctly in all four cases (ADR-060, resolution moved
+   fully client-side and the picker flattened): one capable, eligible list is used silently
+   but still shown; several with a default use the default; several with none show a flat
+   picker of every capable list with nothing pre-selected, and picking one silently stores it
+   as the default; none offers creation and writes nothing until confirmed. **Opening a
    list never changes the default** — verified by resolving, opening a different eligible
    list, and resolving again to the same answer.
 6. List creation shows, in exact order, Blank, Checklist, Groceries, Watch Later, Books to

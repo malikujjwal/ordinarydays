@@ -1,11 +1,30 @@
-# Destination-flow simplification — proposal, 2026-09-16
+# Destination-flow simplification — approved and implemented, 2026-09-16
 
-**Status: proposal, not approved. Changes no code, no schema, no stored data.** This report
-recommends nothing be built yet; it exists so the founder can decide, with the evidence in
-one place, whether the "where do these items go?" flow should be simplified. Two real bugs
-in it were found during manual testing and are already fixed on `integration/activity-detail-fixes`
-(commits `cf71244`, `536ce7d`, `e53911d`, `a4fedb5`); this report is the follow-up question
-they raised, not a description of outstanding defects.
+**Status: approved and implemented as Option B1**, `docs/02-architecture/decisions.md`
+ADR-060. Shipped on `integration/activity-detail-fixes` in `7885efd`..`da81e01`: `7885efd`
+(shared `listCapabilities` + additive `List.capabilities.ingredients`), `f986ede` (the client
+flattening), and the review-fix commits after it. Two real bugs that motivated this report
+were fixed first and are unaffected by the choice of option (`cf71244`, `536ce7d`, `e53911d`,
+`a4fedb5`).
+
+Two of this report's own audit findings changed what shipped, relative to Option B as first
+written below: **`slot` and `user.defaultLists` stay exactly as ADR-033 defined them** — no
+profile migration, no re-keying by capability — because the server's transactional
+default-cleanup on a list's delete or slot change is keyed on `slot` and would otherwise
+silently stop working; and **capability is derived, never stored** — one function,
+`listCapabilities` (`packages/shared/src/lists/ingredientDestination.ts`), computed from
+fields already on the List, with no new column, no migration and no second implementation on
+native or web. Both are recorded in ADR-060.
+
+Three changes are intentionally user-visible: there is no more one-time "Which list should
+ingredients go to?" question; there is no more `Remember this choice` checkbox (the first
+pick while no default is stored silently becomes the default, confirmed with one toast); and
+slot-flavoured copy and the separate `Choose another list` escape are gone, replaced by one
+flat, plainly-labelled list of every capable list — the escape's own reachable set *is* the
+picker now, so there is nothing left to escape to. Everything else — the named destination
+always shown before a write, the per-operation override, the Watch destination's unchanged
+reachable set, native list authority and the send-time revalidation from `536ce7d`/`e53911d`
+— is unchanged.
 
 ## 1. What the user sees today, and the two traps
 

@@ -763,6 +763,15 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 | `POST` | `/v1/lists/:id/members` | `{ personId }` or `{ displayName, email }`. Owner only and always an explicit confirmation. A registered add is active immediately and creates/reuses reciprocal owner-scoped People records plus active `LLINK#` rows on both sides. If the email belongs to no account, it creates an invited member and owner-side invited `LLINK#`, sends email, and writes no recipient pointer. Invited members count toward `memberCount` and the cap of 20 people total, including the owner, but not `sharedListCount`. |
 | `DELETE` | `/v1/lists/:id/members/:personId` | Owner removes any non-owner; a member may remove **themselves** (leave). Deletes the member's index entry and both active `LLINK#` rows, or the owner's invited link for a pending member. Authored items and both People records stay. |
 
+**`capabilities` on every List response (ADR-060).** Every List a `GET`, `POST` or `PATCH` on
+this surface returns carries an additive, optional `capabilities: { ingredients: boolean }`,
+derived server-side from that same response's `itemStateMode`/`featureConfig` by
+`packages/shared/src/lists/ingredientDestination.ts`'s `listCapabilities` — the one place
+this rule is computed, also used by the write guard on
+`POST /v1/activities/:id/ingredients/add-to-list` above, the template catalogue, and the
+native list projection. A client that ignores the field is unaffected; nothing is stored that
+was not already derivable from existing fields.
+
 **Durable List and ListItem creation — Phase 3 extension of ADR-055.** Native clients mint
 monotonic `lst_` and `itm_` ids before committing the visible SQLite row and outbox intent.
 The server validates a supplied id but still derives ownership, timestamps, ranks and copied
@@ -973,12 +982,17 @@ client does not compose this invariant from a second `PATCH /v1/me`.
 stored List carries its copied icon and empty-state copy, so no read path resolves the key.
 
 **Default-slot resolution.** Any "add these to X" flow (ingredients to a shopping list,
-save to a watchlist) follows the four-step rule in
-[`data-model.md`](data-model.md#default-slots): one eligible list, use it; several with a
-default, use the default and let the user override for this operation only; several with no
-default, ask once and store the answer in `user.defaultLists`; none, return no destination.
-The client may then offer `New list`. General and ingredient flows open the full standard
-catalogue with no selection. A Watch destination—the user already enabled the typed Watch
+save to a watchlist) is resolved entirely client-side (ADR-060): every list is filtered by
+capability first (a list's own `slot` does not gate which lists are offered — only a stored
+default, keyed by slot, is looked up among them), per the rule in
+[`data-model.md`](data-model.md#default-slots): one capable eligible list, use it; several
+with a default, use the default and let the user override for this operation only from a
+flat picker of every capable list; several with no default, the same flat picker with
+nothing pre-selected, and the pick silently becomes the new default (no server round trip,
+no one-time question, no `Remember this choice` control); none, return no destination. The
+client may then offer `New list`. General and ingredient flows open the full standard
+catalogue, limited to templates capable of the pending write, with no selection. A Watch
+destination—the user already enabled the typed Watch
 second-object control—shows exactly `watchlist`, `movies-to-watch`, and `tv-shows` in their
 canonical relative order, with no selection. This is an eligibility constraint, not title or
 model inference. `Create list` and the later named add-to-list action are separate requests
