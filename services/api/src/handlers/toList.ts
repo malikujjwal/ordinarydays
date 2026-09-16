@@ -1,3 +1,4 @@
+import { listCapabilities } from '@od/shared/lists';
 import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
 
 /**
@@ -8,6 +9,12 @@ import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
  * `itemVersion`, `rankRepairId` and `schemaMigrationId` are deliberately absent: they are
  * storage-level concurrency state and never serialised (`data-model.md` §4.6).
  * `rankVersion` stays — item-page cursors are bound to it.
+ *
+ * `capabilities` is computed here, from the row this function was already given, rather than
+ * carried in from a caller — the **only** place a List response is shaped is this function,
+ * so this is the one call site that can go stale relative to a `slot`/`itemStateMode` change
+ * made earlier in the same request, and computing it last, from the final `list`, rules that
+ * out (`packages/shared/src/lists/ingredientDestination.ts`).
  */
 export function toList(list: List): Record<string, unknown> {
   return {
@@ -21,6 +28,7 @@ export function toList(list: List): Record<string, unknown> {
     itemStateMode: list.itemStateMode,
     featureConfig: list.featureConfig,
     slot: list.slot,
+    capabilities: listCapabilities(list),
     ...(list.sourceActivityId === undefined
       ? {}
       : { sourceActivityId: list.sourceActivityId }),

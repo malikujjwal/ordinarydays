@@ -317,8 +317,17 @@ describe('the generated document', () => {
       ]),
     );
     expect(list.properties).not.toHaveProperty('behaviour');
-    expect(list.properties).not.toHaveProperty('capabilities');
     expect(list.properties).not.toHaveProperty('uncheckedCount');
+    /**
+     * `capabilities` is the one deliberate addition (`docs/reports/
+     * destination-flow-simplification-20260916.md`, slice 1): the server-derived destination
+     * capability a client reads instead of re-deriving `itemStateMode`/`featureConfig` itself.
+     * Optional — a schema-shape assertion, not a presence requirement on every List value.
+     */
+    const capabilities = asSchema(list.properties?.capabilities, 'ListView.capabilities');
+    expect(capabilities.properties).toEqual({ ingredients: { type: 'boolean' } });
+    expect(capabilities.required).toEqual(['ingredients']);
+    expect(list.required).not.toContain('capabilities');
 
     expect(Object.keys(item.properties ?? {})).toEqual(
       expect.arrayContaining(['state', 'features']),

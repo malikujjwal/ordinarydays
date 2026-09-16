@@ -4581,6 +4581,18 @@
               null
             ]
           },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "ingredients": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ingredients"
+            ],
+            "additionalProperties": false
+          },
           "sourceActivityId": {
             "type": "string",
             "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"

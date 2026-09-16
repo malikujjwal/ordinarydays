@@ -146,6 +146,13 @@ export const list = z
     itemStateMode,
     featureConfig: listFeatureConfig,
     slot: defaultSlot.nullable(),
+    /**
+     * Derived, never stored: whether the row can be a destination for a given write, e.g.
+     * `ingredients`. Optional because it exists only once the API has shaped a response
+     * (`services/api/src/handlers/toList.ts`) — a row read from storage has no such
+     * attribute, and `.parse`-ing one must not fail for lacking it.
+     */
+    capabilities: z.strictObject({ ingredients: z.boolean() }).optional(),
     sourceActivityId: ulidId('act').optional(),
     itemCount: z.number().int().nonnegative(),
     doneCount: z.number().int().nonnegative(),

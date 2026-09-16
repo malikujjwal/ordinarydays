@@ -69,6 +69,17 @@ export interface ListFeatureConfig {
   subItems?: SubItemsFeatureConfig;
 }
 
+/**
+ * What a List can be a destination for, derived from `itemStateMode`/`featureConfig` and
+ * never stored — `packages/shared/src/lists/ingredientDestination.ts` is the one place that
+ * computes it. Optional on `List` because it exists only on a response the API has shaped
+ * (`services/api/src/handlers/toList.ts`); a row read from storage or from the native
+ * projection carries the fields it is derived from instead.
+ */
+export interface ListCapabilities {
+  ingredients: boolean;
+}
+
 /** One List model. `templateKey` is immutable creation provenance only. */
 export interface List {
   schemaVersion: 2;
@@ -81,6 +92,7 @@ export interface List {
   itemStateMode: ItemStateMode;
   featureConfig: ListFeatureConfig;
   slot: DefaultSlot | null;
+  capabilities?: ListCapabilities;
   sourceActivityId?: string;
   itemCount: number;
   doneCount: number;

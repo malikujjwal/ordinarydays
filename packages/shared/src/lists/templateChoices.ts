@@ -1,4 +1,5 @@
-import type { ListTemplate } from '../types/list.js';
+import type { ListCapabilities, ListTemplate } from '../types/list.js';
+import { listCapabilities } from './ingredientDestination.js';
 import { LIST_TEMPLATES } from './templates.js';
 
 /**
@@ -44,7 +45,15 @@ import { LIST_TEMPLATES } from './templates.js';
 export type ListTemplateChoice = Pick<
   ListTemplate,
   'templateKey' | 'chooserLabel' | 'icon' | 'summary' | 'defaultTitle' | 'itemStateMode'
->;
+> & {
+  /**
+   * The same derivation the API guard and a stored List's response field use
+   * (`listCapabilities`, `ingredientDestination.ts`) — computed here, not filtered here.
+   * A caller that needs only capable templates filters this array itself; nothing in this
+   * module chooses or hides a style.
+   */
+  capabilities: ListCapabilities;
+};
 
 /**
  * Computed once at module load and frozen: the catalogue is a shipped constant, so its
@@ -59,6 +68,7 @@ const CHOICES: readonly ListTemplateChoice[] = Object.freeze(
       summary: template.summary,
       defaultTitle: template.defaultTitle,
       itemStateMode: template.itemStateMode,
+      capabilities: listCapabilities(template),
     }),
   ),
 );

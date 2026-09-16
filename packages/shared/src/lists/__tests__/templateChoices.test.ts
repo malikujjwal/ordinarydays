@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { ListTemplate } from '../../types/list.js';
+import type { ListCapabilities, ListTemplate } from '../../types/list.js';
+import { listCapabilities } from '../ingredientDestination.js';
 import { type ListTemplateChoice, listTemplateChoices } from '../templateChoices.js';
 import { LIST_TEMPLATES } from '../templates.js';
 
@@ -10,6 +11,7 @@ import { LIST_TEMPLATES } from '../templates.js';
  */
 
 const CHOICE_FIELDS = [
+  'capabilities',
   'chooserLabel',
   'defaultTitle',
   'icon',
@@ -17,6 +19,9 @@ const CHOICE_FIELDS = [
   'summary',
   'templateKey',
 ] as const;
+
+/** `capabilities` is derived, not a `ListTemplate` field — verbatim copy does not apply to it. */
+const COPIED_FIELDS = CHOICE_FIELDS.filter((field) => field !== 'capabilities');
 
 describe('the projection', () => {
   it('is every catalogue entry, exactly once, in catalogue order', () => {
@@ -60,7 +65,7 @@ describe('the projection', () => {
     for (const choice of listTemplateChoices()) {
       const source = byKey.get(choice.templateKey);
       expect(source, choice.templateKey).toBeDefined();
-      for (const field of CHOICE_FIELDS) {
+      for (const field of COPIED_FIELDS) {
         expect(choice[field], `${choice.templateKey}.${field}`).toBe(
           (source as ListTemplate)[field],
         );
@@ -68,7 +73,13 @@ describe('the projection', () => {
     }
   });
 
-  it('is a Pick of the catalogue record, so a field cannot drift in type', () => {
+  it('derives capabilities from the same shared rule the API guard uses, not a copy', () => {
+    for (const choice of listTemplateChoices()) {
+      expect(choice.capabilities, choice.templateKey).toEqual(listCapabilities(choice));
+    }
+  });
+
+  it('is a Pick of the catalogue record plus the one derived field, so a field cannot drift in type', () => {
     expectTypeOf<ListTemplateChoice>().toEqualTypeOf<
       Pick<
         ListTemplate,
@@ -78,7 +89,7 @@ describe('the projection', () => {
         | 'summary'
         | 'defaultTitle'
         | 'itemStateMode'
-      >
+      > & { capabilities: ListCapabilities }
     >();
   });
 
@@ -119,6 +130,7 @@ describe('the order the sheet renders', () => {
       defaultTitle: 'Untitled list',
       icon: 'list',
       itemStateMode: { mode: 'none' },
+      capabilities: { ingredients: false },
     });
   });
 
@@ -186,6 +198,7 @@ describe('nothing but a tap may choose a style', () => {
       'adaptListItemToPlan',
       'canReceiveIngredients',
       'formatIngredientTitle',
+      'listCapabilities',
       'listTemplateChoices',
       // P3-26's creation seed: the other half of what a create resolves, and narrowed to the
       // durable-create path by `check-forbidden.mjs`'s `template-seed-is-creation-only`.

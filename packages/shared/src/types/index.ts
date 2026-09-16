@@ -67,6 +67,7 @@ export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type {
   ItemStateMode,
   List,
+  ListCapabilities,
   ListFeatureConfig,
   ListIndex,
   ListItem,

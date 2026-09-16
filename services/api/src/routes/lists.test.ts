@@ -484,6 +484,33 @@ describe('GET /v1/lists/:id', () => {
     expect(body.data.list).not.toHaveProperty('pk');
   });
 
+  /**
+   * `capabilities` (`docs/reports/destination-flow-simplification-20260916.md`, slice 1):
+   * the derived destination-capability field a client reads instead of re-deriving
+   * `itemStateMode` itself. A checkbox list (the seeded `groceries` fixture) can receive
+   * ingredients; a Blank list (`itemStateMode: { mode: 'none' }`) cannot — the exact
+   * distinction the API guard in `ingredientsToListService.ts` enforces on the write side.
+   */
+  it('carries capabilities.ingredients, true for a checkbox list and false for a Blank one', async () => {
+    seedGets([pointerRow(), listMetaRow()]);
+    const checkbox = await (await get(createApp(), `/v1/lists/${LST}`)).json();
+    expect(checkbox.data.list.capabilities).toEqual({ ingredients: true });
+
+    ddbMock.reset();
+    ddbMock.on(TransactWriteCommand).resolves({});
+    seedGets([
+      pointerRow(),
+      listMetaRow({
+        templateKey: 'blank',
+        title: 'Untitled list',
+        itemStateMode: { mode: 'none' },
+        slot: null,
+      }),
+    ]);
+    const blank = await (await get(createApp(), `/v1/lists/${LST}`)).json();
+    expect(blank.data.list.capabilities).toEqual({ ingredients: false });
+  });
+
   it('never serialises the repair or migration markers', async () => {
     seedGets([pointerRow(), listMetaRow()]);
 
