@@ -5,6 +5,11 @@ import { useRef } from 'react';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { INGREDIENTS_CHANGED } from '@/lib/destinationCopy';
+import { validateIngredientDestination } from '@/lib/ingredientDestinationValidation';
+import {
+  INGREDIENT_DESTINATION_UNAVAILABLE,
+  isIngredientDestinationUnavailable,
+} from '@/lib/ingredientDestinationValidationError';
 import { activityKey, LISTS_KEY } from '@/lib/queryKeys';
 import { getActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
@@ -52,8 +57,9 @@ export function useAddIngredients(
   const inFlight = useRef(false);
 
   const add = useMutation({
-    mutationFn: (input: AddIngredientsInput) =>
-      addIngredientsToList(
+    mutationFn: async (input: AddIngredientsInput) => {
+      await validateIngredientDestination(input.listId);
+      return addIngredientsToList(
         apiClient,
         activityId,
         {
@@ -61,27 +67,37 @@ export function useAddIngredients(
           ingredients: input.ingredientIds.map((ingredientId) => ({ ingredientId })),
         },
         randomUUID(),
-      ),
+      );
+    },
     onSuccess: async (_result, input) => {
       await refreshAfterAdd(queryClient, activityId, input.listId);
       onSettledSelection();
     },
     onError: (error: unknown, variables) => {
+      const destinationUnavailable = isIngredientDestinationUnavailable(error);
       const changed = error instanceof ApiError && error.status === 409;
       const failure = describeApiFailure(error, "Couldn't add those ingredients.");
       useToast.getState().show({
-        message: changed ? INGREDIENTS_CHANGED : failure.message,
+        message: destinationUnavailable
+          ? INGREDIENT_DESTINATION_UNAVAILABLE
+          : changed
+            ? INGREDIENTS_CHANGED
+            : failure.message,
         tone: 'error',
         ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
-        action: changed
-          ? {
-              label: 'Reopen',
-              onPress: () => {
-                onSettledSelection();
-                void refreshAfterAdd(queryClient, activityId, undefined);
-              },
-            }
-          : { label: 'Retry', onPress: () => mutate(variables) },
+        ...(destinationUnavailable
+          ? {}
+          : {
+              action: changed
+                ? {
+                    label: 'Reopen',
+                    onPress: () => {
+                      onSettledSelection();
+                      void refreshAfterAdd(queryClient, activityId, undefined);
+                    },
+                  }
+                : { label: 'Retry', onPress: () => mutate(variables) },
+            }),
       });
     },
     onSettled: () => {

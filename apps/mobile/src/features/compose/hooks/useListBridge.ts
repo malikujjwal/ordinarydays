@@ -15,6 +15,11 @@ import {
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { INGREDIENTS_CHANGED } from '@/lib/destinationCopy';
+import { validateIngredientDestination } from '@/lib/ingredientDestinationValidation';
+import {
+  INGREDIENT_DESTINATION_UNAVAILABLE,
+  isIngredientDestinationUnavailable,
+} from '@/lib/ingredientDestinationValidationError';
 import { newLocalId } from '@/lib/localIds';
 import { listMutationKeys } from '@/lib/mutationKeys';
 import { activityKey, LISTS_KEY } from '@/lib/queryKeys';
@@ -64,12 +69,13 @@ export function useListBridge(): ListBridge {
   const details = useComposeDraft((s) => s.details);
 
   const ingredients = useMutation({
-    mutationFn: (input: {
+    mutationFn: async (input: {
       activityId: string;
       listId: string;
       ingredientIds: readonly string[];
-    }) =>
-      addIngredientsToList(
+    }) => {
+      await validateIngredientDestination(input.listId);
+      return addIngredientsToList(
         apiClient,
         input.activityId,
         {
@@ -77,7 +83,8 @@ export function useListBridge(): ListBridge {
           ingredients: input.ingredientIds.map((ingredientId) => ({ ingredientId })),
         },
         randomUUID(),
-      ),
+      );
+    },
   });
 
   const schedule = useMutation({
@@ -108,12 +115,16 @@ export function useListBridge(): ListBridge {
         ]);
         return true;
       } catch (error) {
+        const destinationUnavailable = isIngredientDestinationUnavailable(error);
         const changed = error instanceof ApiError && error.status === 409;
         const failure = describeApiFailure(error, "Couldn't add those ingredients.");
+        const message = destinationUnavailable
+          ? INGREDIENT_DESTINATION_UNAVAILABLE
+          : failure.message;
         useToast.getState().show({
           message: changed
             ? INGREDIENTS_CHANGED
-            : `The meal was saved, but ${failure.message.charAt(0).toLowerCase()}${failure.message.slice(1)}`,
+            : `The meal was saved, but ${message.charAt(0).toLowerCase()}${message.slice(1)}`,
           tone: 'error',
           ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
         });

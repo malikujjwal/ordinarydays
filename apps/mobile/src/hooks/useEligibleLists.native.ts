@@ -8,6 +8,12 @@ interface EligibleListsView {
   readonly complete: boolean;
 }
 
+const PENDING_VIEW: EligibleListsView = {
+  lists: [],
+  status: 'pending',
+  complete: false,
+};
+
 function requireListsDependencies() {
   const state = requireActiveNativeState();
   if (state.lists === undefined || state.sync.pullLists === undefined) {
@@ -44,11 +50,7 @@ export function useEligibleLists(enabled = true): EligibleListsView {
     () => pullListsMethod.call(sync),
     [pullListsMethod, sync],
   );
-  const [view, setView] = useState<EligibleListsView>({
-    lists: [],
-    status: 'pending',
-    complete: false,
-  });
+  const [view, setView] = useState<EligibleListsView>(PENDING_VIEW);
   const active = useRef(false);
   const generation = useRef(0);
 
@@ -57,6 +59,11 @@ export function useEligibleLists(enabled = true): EligibleListsView {
       const requestGeneration = generation.current + 1;
       generation.current = requestGeneration;
       let retryDelayMs = 50;
+
+      // A commit notification invalidates the published snapshot immediately. Keeping its
+      // rows visible until this asynchronous read completed was enough for a stale native
+      // destination to reach the send seam while the corresponding sync intent was queued.
+      if (active.current && isCurrentSession(state)) setView(PENDING_VIEW);
 
       while (active.current && generation.current === requestGeneration) {
         try {
@@ -98,7 +105,7 @@ export function useEligibleLists(enabled = true): EligibleListsView {
     if (!enabled) {
       active.current = false;
       generation.current += 1;
-      setView({ lists: [], status: 'pending', complete: false });
+      setView(PENDING_VIEW);
       return;
     }
 
