@@ -3,7 +3,6 @@ import { View } from 'react-native';
 import {
   addSelectedLabel,
   addSelectedPendingLabel,
-  CHOOSE_A_LIST,
   CHOOSE_OR_CREATE,
   destinationLead,
 } from '@/lib/destinationCopy';
@@ -46,14 +45,8 @@ export interface IngredientPickerProps {
   rows: readonly IngredientRow[];
   selected: ReadonlySet<string>;
   onToggle: (ingredientId: string, selected: boolean) => void;
-  /** The resolved destination's title, or nothing when no list holds the slot. */
+  /** The resolved destination's title, or nothing when nothing is chosen or capable yet. */
   destinationTitle: string | undefined;
-  /**
-   * Why there is no title yet: `ask` — several eligible lists, the one-time question is
-   * due (the row reads `Choose a list`); `none` — nothing holds the slot (the row reads
-   * `Choose or create a list`). Ignored while a title is present.
-   */
-  destinationState?: 'use' | 'ask' | 'none' | undefined;
   /** The `▾` (or the `Choose or create a list` row): opens the destination picker. */
   onChangeDestination: () => void;
   /**
@@ -76,7 +69,6 @@ export function IngredientPicker({
   selected,
   onToggle,
   destinationTitle,
-  destinationState,
   onChangeDestination,
   onAdd,
   busy = false,
@@ -91,7 +83,7 @@ export function IngredientPicker({
   );
   const chosen = selectable.filter((row) => selected.has(row.ingredientId));
   const count = chosen.length;
-  const placeholder = destinationState === 'ask' ? CHOOSE_A_LIST : CHOOSE_OR_CREATE;
+  const placeholder = CHOOSE_OR_CREATE;
 
   const footer = layout === 'footer';
   const addLabel =
@@ -240,9 +232,7 @@ export function IngredientPicker({
               label={addLabel}
               variant="secondary"
               contentSized
-              disabled={
-                (destinationTitle === undefined && destinationState !== 'ask') || busy
-              }
+              disabled={destinationTitle === undefined || busy}
               loading={busy}
               onPress={add}
               testID={`${testID}-add`}
@@ -254,11 +244,7 @@ export function IngredientPicker({
           label={addLabel}
           size="lg"
           fullWidth
-          disabled={
-            count === 0 ||
-            (destinationTitle === undefined && destinationState !== 'ask') ||
-            busy
-          }
+          disabled={count === 0 || destinationTitle === undefined || busy}
           loading={busy}
           onPress={add}
           testID={`${testID}-add`}

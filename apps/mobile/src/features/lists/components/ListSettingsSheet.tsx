@@ -16,6 +16,7 @@ import { View } from 'react-native';
 import type { ListSettings } from '../hooks/useListSettings';
 import {
   NO_SLOT_LABEL,
+  SELECTABLE_SLOTS,
   SLOT_CLEARS_PROFILE_DEFAULT,
   SLOT_LABELS,
   SLOT_MEANINGS,
@@ -31,7 +32,6 @@ export interface ListSettingsSheetProps {
   testID?: string;
 }
 
-const SLOTS: readonly DefaultSlot[] = ['groceries', 'watch', 'meals'];
 const MODES: readonly ItemStateMode['mode'][] = ['none', 'checkbox', 'stages'];
 type SettingsEditor = 'main' | 'subItems' | 'stages' | 'slot';
 
@@ -226,7 +226,7 @@ export function ListSettingsSheet({
       ) : editor === 'slot' ? (
         <View style={{ gap: theme.space[4] }}>
           <RowGroup label="Default destination">
-            {SLOTS.map((slot) => (
+            {SELECTABLE_SLOTS.map((slot) => (
               <SettingRow
                 key={slot}
                 label={SLOT_LABELS[slot]}

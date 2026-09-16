@@ -1,3 +1,4 @@
+import { listCapabilities } from '@od/shared/lists';
 import { listView } from '@od/shared/schemas';
 import type { List, ListFeatureConfig } from '@od/shared/types';
 import { activitySubscriptionScope } from '@/lib/sqlite/activityRepository';
@@ -25,8 +26,16 @@ function json(row: SqliteRow, column: string): unknown {
   return value === undefined ? undefined : (JSON.parse(value) as unknown);
 }
 
+/**
+ * Derives `capabilities` the one shared way (`listCapabilities`, `@od/shared/lists`) from the
+ * stored `itemStateMode`, rather than a second, local rule — the same fields the API's own
+ * `toList.ts` reads to compute the field it sends. Every row this projection publishes
+ * carries it, so a destination flow reading native state never needs a network round trip to
+ * know what a list can receive (ADR-057).
+ */
 function fromRow(row: SqliteRow): List {
   const sourceActivityId = text(row, 'source_activity_id');
+  const itemStateMode = json(row, 'item_state_mode_json') as List['itemStateMode'];
   return listView.parse({
     schemaVersion: number(row, 'schema_version'),
     listId: text(row, 'list_id'),
@@ -35,9 +44,10 @@ function fromRow(row: SqliteRow): List {
     title: text(row, 'title'),
     icon: text(row, 'icon'),
     emptyStateCopy: text(row, 'empty_state_copy'),
-    itemStateMode: json(row, 'item_state_mode_json'),
+    itemStateMode,
     featureConfig: json(row, 'feature_config_json'),
     slot: text(row, 'slot') ?? null,
+    capabilities: listCapabilities({ itemStateMode }),
     ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
     itemCount: number(row, 'item_count'),
     doneCount: number(row, 'done_count'),

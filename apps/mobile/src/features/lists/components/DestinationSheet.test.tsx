@@ -3,7 +3,8 @@ import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useToast } from '@/stores/toast';
 import { DestinationSheet } from './DestinationSheet';
 
 vi.mock('expo-crypto', () => ({
@@ -57,6 +58,7 @@ const INCAPABLE_GROCERIES = list(
 
 function mount(
   lists: readonly List[] = [GROCERIES, CHECKLIST, UNTITLED, INCAPABLE_GROCERIES],
+  defaultLists: Record<string, string> = {},
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
@@ -71,7 +73,7 @@ function mount(
     timezone: 'America/New_York',
     currency: 'USD',
     weekStartsOn: 1,
-    defaultLists: {},
+    defaultLists,
   });
   const onChoose = vi.fn();
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -92,29 +94,31 @@ function mount(
   return { onChoose };
 }
 
+beforeEach(() => {
+  useToast.setState({ current: undefined });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('ingredient destination capability', () => {
-  it('never offers Blank or an incapable groceries-slot list', async () => {
+  it('offers every capable list directly, with no escape hatch to reach it', async () => {
     const { onChoose } = mount();
 
+    // Both capable lists are rows from the start — no `Choose another list` step (Option B1).
     await screen.findByTestId(`destination-sheet-list-${GROCERIES.listId}`);
-    expect(
-      screen.queryByTestId(`destination-sheet-list-${INCAPABLE_GROCERIES.listId}`),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Choose another list' }));
-
     expect(
       screen.getByTestId(`destination-sheet-list-${CHECKLIST.listId}`),
     ).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Choose another list' })).toBeNull();
+
+    expect(
+      screen.queryByTestId(`destination-sheet-list-${INCAPABLE_GROCERIES.listId}`),
+    ).toBeNull();
     expect(screen.queryByText('Untitled list')).toBeNull();
     expect(screen.queryByText('Groceries without checkboxes')).toBeNull();
     expect(onChoose).not.toHaveBeenCalled();
-  });
-
-  it('hides Choose another list when every capable list already holds the slot', async () => {
-    mount([GROCERIES, UNTITLED, INCAPABLE_GROCERIES]);
-    await screen.findByTestId(`destination-sheet-list-${GROCERIES.listId}`);
-    expect(screen.queryByRole('button', { name: 'Choose another list' })).toBeNull();
   });
 
   it('limits New list to the three checkbox templates', async () => {
@@ -131,6 +135,67 @@ describe('ingredient destination capability', () => {
     expect(screen.getByTestId('list-style-groceries')).toBeDefined();
     expect(screen.getByTestId('list-style-places-to-visit')).toBeDefined();
     expect(screen.getByTestId('list-style-grid').children).toHaveLength(3);
+  });
+
+  it('remembers the first pick as the default, with one confirmation toast', async () => {
+    const fetchSpy = vi.fn(async (_url: string, init?: { body?: string }) => {
+      const body = {
+        data: {
+          userId: OWNER,
+          displayName: 'Dev',
+          timezone: 'America/New_York',
+          currency: 'USD',
+          weekStartsOn: 1,
+          defaultLists: JSON.parse(init?.body ?? '{}').defaultLists,
+          createdAt: '2026-08-01T00:00:00.000Z',
+          updatedAt: '2026-08-01T00:00:00.000Z',
+          schemaVersion: 1,
+        },
+        meta: { requestId: 'req_test' },
+      };
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+      };
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const { onChoose } = mount([GROCERIES, CHECKLIST]);
+
+    fireEvent.click(
+      await screen.findByTestId(`destination-sheet-list-${GROCERIES.listId}`),
+    );
+    expect(onChoose).toHaveBeenCalledWith(GROCERIES.listId);
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const patches = fetchSpy.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === 'PATCH',
+    );
+    expect(patches).toHaveLength(1);
+    const [, init] = patches[0] as [string, { method: string; body: string }];
+    expect(JSON.parse(init.body)).toEqual({
+      defaultLists: { groceries: GROCERIES.listId },
+    });
+    expect(useToast.getState().current?.message).toBe(
+      'Groceries is now your default list for ingredients.',
+    );
+  });
+
+  it('does not remember a pick made while a default is already stored', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { onChoose } = mount([GROCERIES, CHECKLIST], { groceries: GROCERIES.listId });
+
+    fireEvent.click(
+      await screen.findByTestId(`destination-sheet-list-${CHECKLIST.listId}`),
+    );
+    expect(onChoose).toHaveBeenCalledWith(CHECKLIST.listId);
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(useToast.getState().current).toBeUndefined();
   });
 });
 

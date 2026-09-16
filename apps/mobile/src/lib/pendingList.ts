@@ -1,4 +1,4 @@
-import type { ListTemplateSeed } from '@od/shared/lists';
+import { type ListTemplateSeed, listCapabilities } from '@od/shared/lists';
 import type { CreateListInput } from '@od/shared/schemas';
 import type { Instant } from '@od/shared/time';
 import type { List } from '@od/shared/types';
@@ -23,6 +23,13 @@ import type { List } from '@od/shared/types';
  * mint time: they are server-derived, and the row is replaced wholesale by the canonical List
  * on acknowledgement — until then `updatedAt` is not an `If-Match` anybody may use, which is
  * why the coordinator refuses dependent writes on a list whose create has not settled.
+ *
+ * ## `capabilities`
+ *
+ * Derived the one shared way (`listCapabilities`, `@od/shared/lists`) from the same seeded
+ * `itemStateMode` this row carries — never a second rule, and never left unset. A destination
+ * picker reads this row the moment it commits, offline included; without it, a list created
+ * from that exact picker would fail its own capability filter until the next sync pass.
  */
 export function pendingListFromInput(
   input: CreateListInput,
@@ -41,6 +48,7 @@ export function pendingListFromInput(
     emptyStateCopy: seed.emptyStateCopy,
     itemStateMode: structuredClone(seed.itemStateMode),
     featureConfig: structuredClone(seed.featureConfig),
+    capabilities: listCapabilities(seed),
     /*
      * A list made for one Plan is forced to `slot: null` by the server, so the optimistic row
      * says the same thing rather than briefly claiming to be a standing destination (§P3-05

@@ -28,7 +28,8 @@ export function savePlanAndAddTitleLabel(title: string, listTitle: string): stri
   return `Save plan and add ${title} to ${listTitle}`;
 }
 
-/** The destination row's leading copy, per slot. */
+/** The destination row's leading copy, per flow. Persistent — shown in every state, not
+ *  tied to any one-time question (`WatchListDestination.tsx`, `IngredientPicker.tsx`). */
 export function destinationLead(slot: DefaultSlot): string {
   switch (slot) {
     case 'groceries':
@@ -40,23 +41,26 @@ export function destinationLead(slot: DefaultSlot): string {
   }
 }
 
-/** The one-time question (§5.8), per slot. */
-export function destinationQuestion(slot: DefaultSlot): string {
+/**
+ * The one-line, non-blocking confirmation the picker shows after silently setting a default
+ * (Option B1: no one-time question, no `Remember this choice` checkbox — the first pick
+ * while none is stored becomes the default, and this is the only word said about it).
+ */
+export function destinationRememberedMessage(
+  slot: DefaultSlot,
+  listTitle: string,
+): string {
   switch (slot) {
     case 'groceries':
-      return 'Which list should ingredients go to?';
+      return `${listTitle} is now your default list for ingredients.`;
     case 'watch':
-      return 'Which list should this go to?';
+      return `${listTitle} is now your default list for watch items.`;
     case 'meals':
-      return 'Which list should this go to?';
+      return `${listTitle} is now your default list for meal ideas.`;
   }
 }
 
 export const CHOOSE_OR_CREATE = 'Choose or create a list';
-/** The `ask` case's row, before the one-time question has been answered. */
-export const CHOOSE_A_LIST = 'Choose a list';
-export const REMEMBER_THIS_CHOICE = 'Remember this choice';
-export const CHOOSE_ANOTHER_LIST = 'Choose another list';
 export const NEW_LIST = 'New list';
 /** §5.3's row for a refused ingredient action: the whole write is refused, nothing partial. */
 export const INGREDIENTS_CHANGED =

@@ -15,9 +15,16 @@ export const STATE_MODE_LABELS = {
   stages: 'Stages',
 } as const;
 
+/**
+ * Capability-flavoured, not slot-named (Option B1, `docs/reports/
+ * destination-flow-simplification-20260916.md`): this row is the one place a slot's name
+ * still reaches the user, and it now reads what the list *receives* rather than a routing
+ * term. `meals` keeps an entry so an already-set list still displays correctly; it is not
+ * offered as a choice — see {@link SELECTABLE_SLOTS}.
+ */
 export const SLOT_LABELS: Record<DefaultSlot, string> = {
-  groceries: 'Groceries',
-  watch: 'Watch later',
+  groceries: 'Ingredients from meals',
+  watch: 'Things to watch',
   meals: 'Meal ideas',
 };
 export const SLOT_MEANINGS: Record<DefaultSlot, string> = {
@@ -25,9 +32,18 @@ export const SLOT_MEANINGS: Record<DefaultSlot, string> = {
   watch: 'Receive things you plan to watch.',
   meals: 'Receive meal ideas.',
 };
-export const NO_SLOT_LABEL = 'Not a default';
+export const NO_SLOT_LABEL = 'No default';
 export const SLOT_CLEARS_PROFILE_DEFAULT =
   'Choosing a different default replaces the current one for that destination.';
+
+/**
+ * The choices the settings picker offers. `meals` is deliberately excluded: no destination
+ * flow reads it today (`docs/reports/destination-flow-simplification-20260916.md` §2), so
+ * offering it would let someone set a default that names nothing. A list already carrying
+ * `slot: 'meals'` (a Meal Ideas list, set at creation) keeps that value and still displays it
+ * via {@link SLOT_LABELS} — only the choice to set it from here is hidden.
+ */
+export const SELECTABLE_SLOTS: readonly DefaultSlot[] = ['groceries', 'watch'];
 
 export function withPendingSettings(
   list: List,

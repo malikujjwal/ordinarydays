@@ -52,4 +52,29 @@ describe('pendingListFromInput', () => {
     expect(row.slot).toBeNull();
     expect(row.sourceActivityId).toBe(PLAN);
   });
+
+  /**
+   * The one shared capability rule (`listCapabilities`, `@od/shared/lists`), applied at the
+   * moment a native create commits — never left unset until the next sync (`useDestination`'s
+   * flat picker reads this row before any acknowledgement can arrive).
+   */
+  it('derives capabilities from the seeded item state mode, the one shared way', () => {
+    const checkbox = pendingListFromInput(
+      { listId: LIST, title: 'Groceries', templateKey: 'groceries' },
+      seedOf('groceries'),
+      LIST,
+      'usr_local_dev',
+      NOW,
+    );
+    expect(checkbox.capabilities).toEqual({ ingredients: true });
+
+    const blank = pendingListFromInput(
+      { listId: LIST, title: 'Untitled list', templateKey: 'blank' },
+      seedOf('blank'),
+      LIST,
+      'usr_local_dev',
+      NOW,
+    );
+    expect(blank.capabilities).toEqual({ ingredients: false });
+  });
 });

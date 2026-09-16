@@ -76,9 +76,7 @@ export interface TypedFieldsProps {
    */
   listBridge: {
     groceriesTitle: string | undefined;
-    groceriesState: 'use' | 'ask' | 'none' | undefined;
     watchTitle: string | undefined;
-    watchState: 'use' | 'ask' | 'none' | undefined;
     alsoAddToList: boolean;
     onAlsoAddToListChange: (enabled: boolean) => void;
     onChangeDestination: (slot: 'groceries' | 'watch') => void;
@@ -381,21 +379,8 @@ function renderField(
                 row.id === ingredientId ? { ...row, selected } : row,
               ),
             });
-            /**
-             * §5.8's `ask` case opens the one-time question the moment it is due — on the
-             * first selection — rather than waiting for the row; the answer is remembered
-             * there, so the next meal never asks.
-             */
-            if (
-              selected &&
-              props.listBridge.groceriesState === 'ask' &&
-              !details.ingredients.some((row) => row.selected)
-            ) {
-              props.listBridge.onChangeDestination('groceries');
-            }
           }}
           destinationTitle={props.listBridge.groceriesTitle}
-          destinationState={props.listBridge.groceriesState}
           onChangeDestination={() => props.listBridge.onChangeDestination('groceries')}
           lead={spec.label}
           testID="compose-ingredient-destination"
@@ -408,7 +393,6 @@ function renderField(
           enabled={props.listBridge.alsoAddToList}
           onEnabledChange={props.listBridge.onAlsoAddToListChange}
           destinationTitle={props.listBridge.watchTitle}
-          destinationState={props.listBridge.watchState}
           onChangeDestination={() => props.listBridge.onChangeDestination('watch')}
         />
       );

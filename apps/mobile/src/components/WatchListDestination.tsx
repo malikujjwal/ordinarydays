@@ -1,6 +1,6 @@
 import { SettingRow, Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
-import { CHOOSE_A_LIST, CHOOSE_OR_CREATE, destinationLead } from '@/lib/destinationCopy';
+import { CHOOSE_OR_CREATE, destinationLead } from '@/lib/destinationCopy';
 
 /**
  * The Watch form's separate `Also add a list item to…` control (P3-43, `plans-and-lists.md`
@@ -8,16 +8,17 @@ import { CHOOSE_A_LIST, CHOOSE_OR_CREATE, destinationLead } from '@/lib/destinat
  * always shows the named destination before a write. Nothing here writes; the form's save
  * button becomes `Save plan and add <title> to <list>` and carries both writes.
  *
- * With no eligible destination the row reads `Choose or create a list`; the picker it opens
- * offers `New list` constrained to the one `Watch Later` type, still unselected — the
- * constraint is this control's, not the title's.
+ * With no destination chosen yet the row reads `Choose or create a list`; the picker it
+ * opens offers `New list` constrained to the one `Watch Later` type, still unselected — the
+ * constraint is this control's, not the title's. Turning the toggle on no longer forces the
+ * picker open (Option B1 removes the one-time-question ceremony that did that): the row is
+ * always tappable, and nothing is asked until the user taps it.
  */
 export interface WatchListDestinationProps {
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
-  /** The resolved list's title; nothing when no list holds the slot. */
+  /** The resolved list's title; nothing when nothing is chosen or capable yet. */
   destinationTitle: string | undefined;
-  destinationState?: 'use' | 'ask' | 'none' | undefined;
   onChangeDestination: () => void;
   testID?: string;
 }
@@ -26,12 +27,11 @@ export function WatchListDestination({
   enabled,
   onEnabledChange,
   destinationTitle,
-  destinationState,
   onChangeDestination,
   testID = 'watch-destination',
 }: WatchListDestinationProps) {
   const theme = useTheme();
-  const placeholder = destinationState === 'ask' ? CHOOSE_A_LIST : CHOOSE_OR_CREATE;
+  const placeholder = CHOOSE_OR_CREATE;
   return (
     <View style={{ gap: theme.space[3] }} testID={testID}>
       <SettingRow
@@ -42,11 +42,7 @@ export function WatchListDestination({
             : 'Off — the plan is saved on its own'
         }
         switchValue={enabled}
-        onPress={() => {
-          onEnabledChange(!enabled);
-          // The one-time question is due the moment the toggle makes a destination needed.
-          if (!enabled && destinationState === 'ask') onChangeDestination();
-        }}
+        onPress={() => onEnabledChange(!enabled)}
         testID={`${testID}-toggle`}
       />
       {enabled ? (

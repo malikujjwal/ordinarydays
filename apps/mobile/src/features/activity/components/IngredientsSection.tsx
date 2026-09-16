@@ -75,7 +75,6 @@ export function IngredientsSection({
           })
         }
         destinationTitle={destination.list?.title}
-        destinationState={destination.resolution?.kind}
         onChangeDestination={onChangeDestination}
         onAdd={(ingredientIds) => {
           const listId = destination.list?.listId;

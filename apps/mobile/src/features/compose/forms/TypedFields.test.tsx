@@ -80,9 +80,7 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     attachments: idleAttachments,
     listBridge: {
       groceriesTitle: undefined,
-      groceriesState: undefined,
       watchTitle: undefined,
-      watchState: undefined,
       alsoAddToList: false,
       onAlsoAddToListChange: vi.fn(),
       onChangeDestination: vi.fn(),

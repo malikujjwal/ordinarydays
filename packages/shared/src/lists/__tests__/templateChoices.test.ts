@@ -205,7 +205,9 @@ describe('nothing but a tap may choose a style', () => {
       'listTemplateSeed',
       'migrateLegacyListAggregate',
       'provenanceLabel',
-      'resolveSlot',
+      // `resolveSlot` is gone (Option B1, `docs/reports/
+      // destination-flow-simplification-20260916.md`): resolving a destination is client-only
+      // now, filtered from the same cached list index a picker already holds.
     ]);
     for (const key of Object.keys(barrel)) {
       expect(key.toLowerCase()).not.toContain('suggest');

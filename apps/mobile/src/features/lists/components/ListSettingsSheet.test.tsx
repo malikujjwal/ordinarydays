@@ -148,17 +148,24 @@ describe('the P3-33 List settings hierarchy', () => {
     const actions = mount(list({ slot: 'groceries' }));
 
     expect(
-      screen.getByRole('button', { name: /Default destination.*Groceries/i }),
+      screen.getByRole('button', {
+        name: /Default destination.*Ingredients from meals/i,
+      }),
     ).toBeTruthy();
     expect(screen.queryByText(SLOT_MEANINGS.groceries)).toBeNull();
 
     fireEvent.click(
-      screen.getByRole('button', { name: /Default destination.*Groceries/i }),
+      screen.getByRole('button', {
+        name: /Default destination.*Ingredients from meals/i,
+      }),
     );
     expect(screen.getByRole('dialog', { name: 'Default destination' })).toBeTruthy();
     expect(screen.getByText(SLOT_MEANINGS.groceries)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /Watch Later/i }));
+    // `meals` is a valid stored slot but is not offered here (Option B1): only two choices.
+    expect(screen.queryByText('Meal ideas')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Things to watch/i }));
     expect(actions.setSlot).toHaveBeenCalledWith('watch');
   });
 

@@ -1,43 +1,33 @@
-import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
-import type { List, User } from '@od/shared/types';
+import type { User } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { documents, TEST_TABLE, useTestTable } from './harness.js';
+import { useTestTable } from './harness.js';
 
 useTestTable();
 
 /**
- * Default slots end to end against DynamoDB Local (`phase-03` §P3-12): the nested per-slot
- * `PATCH /v1/me`, and slot resolution over lists the API actually created.
+ * The nested per-slot `PATCH /v1/me` end to end against DynamoDB Local (`phase-03` §P3-12).
  *
- * The four-step rule itself is proved pure in
- * `packages/shared/src/lists/__tests__/resolveSlot.test.ts`, and the exact three-attempt
- * sequence inside `patchProfile` in `src/repositories/userRepository.test.ts`. What is here
- * is what only a real table can settle: that a document-path `SET` and `REMOVE` really leave
- * the sibling keys alone, that a `REMOVE` deletes the key rather than storing a null, that
- * the map is genuinely created on a profile that has none, and that concurrent writers do
- * not lose each other's slots.
+ * The exact three-attempt retry sequence inside `patchProfile` is pinned in
+ * `src/repositories/userRepository.test.ts`, where the command input is observable. What is
+ * here is what only a real table can settle: that a document-path `SET` and `REMOVE` really
+ * leave the sibling keys alone, that a `REMOVE` deletes the key rather than storing a null,
+ * that the map is genuinely created on a profile that has none, and that concurrent writers
+ * do not lose each other's slots.
  *
- * **What this file cannot prove:** DynamoDB Local answers every read immediately, so nothing
- * here can distinguish a strong read from an eventually consistent one. That the resolver
- * asks for `ConsistentRead` on all three of its read shapes is pinned in the repository and
- * service unit suites instead, where the command input is observable.
- *
- * **Deferred here, deliberately:** §P3-12's test line "passing the visibly chosen `listId` to
- * the ingredient action uses that list and leaves `defaultLists` unchanged" needs the
- * activity-scoped ingredient action, which is P3-17's endpoint. The per-operation override is
- * a parameter to that request, so there is nothing on this task's surface to point it at; it
- * is recorded in the PR rather than dropped silently.
+ * **What resolving a destination no longer needs from this file:** this suite used to also
+ * cover `resolveListSlot` — the four-step rule read back over lists this table actually held
+ * — but Option B1 (`docs/reports/destination-flow-simplification-20260916.md`) moved
+ * destination resolution onto the client alone and deleted the server-side mirror as dead
+ * code (it had no caller outside its own tests). The nested profile write this suite proves
+ * is exactly the wire shape the client's `remember()` still calls; only the resolution half
+ * left with the function it tested.
  */
 
 type AppModule = typeof import('../../src/app.js');
 type UserRepository = typeof import('../../src/repositories/userRepository.js');
-type SlotService = typeof import('../../src/services/listSlotService.js');
-type Keys = typeof import('../../src/repositories/keys.js');
 
 let createApp: AppModule['createApp'];
 let userRepository: UserRepository;
-let resolveListSlot: SlotService['resolveListSlot'];
-let keys: Keys;
 
 const DEV = 'usr_local_dev';
 const NOW = '2026-08-24T09:00:00.000Z';
@@ -47,9 +37,6 @@ const GONE = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X9';
 beforeAll(async () => {
   createApp = (await import('../../src/app.js')).createApp;
   userRepository = await import('../../src/repositories/userRepository.js');
-  resolveListSlot = (await import('../../src/services/listSlotService.js'))
-    .resolveListSlot;
-  keys = await import('../../src/repositories/keys.js');
 });
 
 const app = () => createApp();
@@ -82,12 +69,6 @@ const seedProfile = (defaultLists?: User['defaultLists']) =>
     updatedAt: NOW,
     schemaVersion: 1,
   });
-
-const createList = async (title: string, templateKey = 'groceries') => {
-  const res = await request('POST', '/v1/lists', { title, templateKey });
-  expect(res.status).toBe(201);
-  return (await res.json()).data as List;
-};
 
 const storedDefaults = async () => (await userRepository.getProfile(DEV))?.defaultLists;
 
@@ -211,182 +192,5 @@ describe('PATCH /v1/me — a legacy profile with no slot map', () => {
     ]);
 
     expect(await storedDefaults()).toEqual({ groceries: A, watch: B, meals: C });
-  });
-});
-
-describe('slot resolution over real lists', () => {
-  it('uses the only grocery list silently, and still names it', async () => {
-    await seedProfile();
-    const only = await createList('Trader Joe’s');
-
-    expect(await resolveListSlot(DEV, 'groceries')).toEqual({
-      kind: 'use',
-      listId: only.listId,
-      wasDefault: false,
-    });
-  });
-
-  /**
-   * The §P3-12 round trip: two eligible lists and no default ask; the answer is stored
-   * through the ordinary profile patch; the next resolve uses it and says it was the
-   * default.
-   */
-  it('asks once, then uses the stored answer', async () => {
-    await seedProfile();
-    const traderJoes = await createList('Trader Joe’s');
-    const cornerShop = await createList('Corner shop');
-
-    const asked = await resolveListSlot(DEV, 'groceries');
-    expect(asked.kind).toBe('ask');
-    expect(
-      asked.kind === 'ask' && asked.candidates.map((row) => row.listId).sort(),
-    ).toEqual([traderJoes.listId, cornerShop.listId].sort());
-
-    const stored = await patchMe({ defaultLists: { groceries: cornerShop.listId } });
-    expect(stored.status).toBe(200);
-
-    expect(await resolveListSlot(DEV, 'groceries')).toEqual({
-      kind: 'use',
-      listId: cornerShop.listId,
-      wasDefault: true,
-    });
-  });
-
-  /**
-   * ADR-033: opening a list writes nothing at all, so browsing cannot redirect tomorrow's
-   * ingredients. Asserted on the profile row specifically — the request does touch storage,
-   * because every authenticated request writes a rate-limit counter.
-   */
-  it('opening the non-default list writes no profile row and changes no answer', async () => {
-    await seedProfile();
-    const traderJoes = await createList('Trader Joe’s');
-    const cornerShop = await createList('Corner shop');
-    await patchMe({ defaultLists: { groceries: cornerShop.listId } });
-    const before = await userRepository.getProfile(DEV);
-
-    const opened = await request('GET', `/v1/lists/${traderJoes.listId}`);
-    expect(opened.status).toBe(200);
-
-    expect(await userRepository.getProfile(DEV)).toEqual(before);
-    expect(await resolveListSlot(DEV, 'groceries')).toEqual({
-      kind: 'use',
-      listId: cornerShop.listId,
-      wasDefault: true,
-    });
-  });
-
-  it('falls back to asking when the default list is deleted', async () => {
-    await seedProfile();
-    const traderJoes = await createList('Trader Joe’s');
-    await createList('Corner shop');
-    await createList('Costco');
-    await patchMe({ defaultLists: { groceries: traderJoes.listId } });
-
-    const deleted = await request('DELETE', `/v1/lists/${traderJoes.listId}`);
-    expect(deleted.status).toBe(200);
-
-    expect((await resolveListSlot(DEV, 'groceries')).kind).toBe('ask');
-    /**
-     * P3-05 clears the pointer in the delete transaction, so nothing stale is left pointing
-     * anywhere. Removing the last key leaves the parent map behind as an empty one rather
-     * than deleting the attribute — which reads identically to absent, because every slot is
-     * unset either way, and is why the stored map is `Partial` rather than required.
-     */
-    expect(await storedDefaults()).toEqual({});
-  });
-
-  /**
-   * The belt to those braces. A pointer at a list this table has never held must produce the
-   * question, not a destination the user cannot reach (§P3-12 edge cases).
-   */
-  it('treats a default naming a list that does not exist as unset', async () => {
-    await seedProfile({ groceries: GONE });
-    await createList('Trader Joe’s');
-    await createList('Corner shop');
-
-    expect((await resolveListSlot(DEV, 'groceries')).kind).toBe('ask');
-  });
-
-  /**
-   * Archiving does not clear the profile pointer — only a slot change or a delete does — so
-   * this is the read-side guard doing the whole job on its own.
-   */
-  it('treats a default naming an archived list as unset', async () => {
-    await seedProfile();
-    const traderJoes = await createList('Trader Joe’s');
-    await createList('Corner shop');
-    await createList('Costco');
-    await patchMe({ defaultLists: { groceries: traderJoes.listId } });
-
-    const archived = await request(
-      'PATCH',
-      `/v1/lists/${traderJoes.listId}`,
-      { archived: true },
-      { 'If-Match': traderJoes.updatedAt },
-    );
-    expect(archived.status).toBe(200);
-
-    const result = await resolveListSlot(DEV, 'groceries');
-    expect(result.kind).toBe('ask');
-    expect(
-      result.kind === 'ask' &&
-        result.candidates.some((row) => row.listId === traderJoes.listId),
-    ).toBe(false);
-    // The pointer is still stored; the read is what refuses to follow it.
-    expect(await storedDefaults()).toEqual({ groceries: traderJoes.listId });
-  });
-
-  /**
-   * Eligibility follows the caller's own index pointer, so a membership that has been revoked
-   * stops being a candidate. Resolving a list the caller can no longer write to would hand
-   * the ingredients flow a destination whose add is about to be refused.
-   */
-  it('stops offering a list once the caller’s pointer is gone', async () => {
-    await seedProfile();
-    const traderJoes = await createList('Trader Joe’s');
-    const cornerShop = await createList('Corner shop');
-    expect((await resolveListSlot(DEV, 'groceries')).kind).toBe('ask');
-
-    await documents.send(
-      new DeleteCommand({
-        TableName: TEST_TABLE,
-        Key: keys.listPointer(DEV, cornerShop.listId),
-      }),
-    );
-
-    expect(await resolveListSlot(DEV, 'groceries')).toEqual({
-      kind: 'use',
-      listId: traderJoes.listId,
-      wasDefault: false,
-    });
-  });
-
-  it('returns exactly none, with no template or title, when no list holds the slot', async () => {
-    await seedProfile();
-    await createList('Packing', 'blank');
-
-    const result = await resolveListSlot(DEV, 'groceries');
-
-    expect(result).toEqual({ kind: 'none', slot: 'groceries' });
-  });
-
-  /** A Watch destination with nowhere to go is the same shape, naming its own slot. */
-  it('returns none for a watch destination with no watch list', async () => {
-    await seedProfile();
-    await createList('Trader Joe’s');
-
-    expect(await resolveListSlot(DEV, 'watch')).toEqual({ kind: 'none', slot: 'watch' });
-  });
-
-  it('ignores a list holding a different slot', async () => {
-    await seedProfile();
-    const watchlist = await createList('Watchlist', 'watch-later');
-    await createList('Trader Joe’s');
-
-    expect(await resolveListSlot(DEV, 'watch')).toEqual({
-      kind: 'use',
-      listId: watchlist.listId,
-      wasDefault: false,
-    });
   });
 });

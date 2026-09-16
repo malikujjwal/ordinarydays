@@ -1,5 +1,4 @@
 import { patchMe } from '@od/shared/client';
-import { resolveSlot, type SlotResolution } from '@od/shared/lists';
 import type { DefaultSlot, List, User } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -9,31 +8,36 @@ import { apiClient } from '@/lib/apiClient';
 import { destinationCapableLists } from '@/lib/destinationCapability';
 
 /**
- * Where an add-to flow puts things (P3-12's four-step rule on the client, P3-43).
+ * Where an add-to flow puts things, flattened (P3-43; supersedes P3-12's four-step rule —
+ * `docs/reports/destination-flow-simplification-20260916.md` Option B1).
  *
- * One resolver — `resolveSlot` from `@od/shared` — used by every add-to flow, so Meal
- * ingredients and Watch items cannot drift apart (the phase's risk row on hard-coding "the
- * Groceries list"). The answer is always **shown** before a write; this hook only decides
- * what the row says and whether a question is due.
+ * One capability boundary — `destinationCapableLists`, itself the one shared
+ * `canReceiveIngredients`/`listCapabilities` rule — filters every list this hook can ever
+ * return, so the picker can never offer, and an override or a stored default can never
+ * resolve to, a list the API would refuse.
  *
- * - `override` is this operation's one-off choice from the `▾`. It never touches the
- *   stored default (§5.8: changing the destination from the `use` case writes nothing).
- * - `remember` stores the answer to the one-time question in `user.defaultLists`, which is
- *   the only write here and the only way a default is ever set from a flow.
- * - Opening a list never changes anything here: the resolver reads slots and the profile,
- *   never browsing history (ADR-033).
+ * - `override` is this operation's one-off choice from the `▾`. It never touches the stored
+ *   default: an override always wins for this operation, and changing it writes nothing.
+ * - The stored `slot` on `user.defaultLists` **is** the remembered default — unchanged wire
+ *   shape, unchanged server-side cleanup on a list's delete or slot change. B1 removes the
+ *   one-time question and its checkbox, not the default itself (ADR-033 still holds).
+ * - `remember` is the only write here, and the only way a default is ever set: the caller
+ *   fires it once, silently, the first time the user picks a list while none is stored.
+ * - A single capable list is still used silently and named, exactly as ADR-033's step 1 —
+ *   `hasDefault` stays `false` for it, so picking a *different* list still writes a default.
+ * - A stored default that no longer names a capable, present list is treated as absent
+ *   (deleted, archived, or its state/slot changed since) and never surfaces as an error.
  */
 export interface Destination {
   readonly status: 'pending' | 'success' | 'error';
-  readonly resolution: SlotResolution<List> | undefined;
-  /** The list the write would go to right now — the override, else the resolver's `use`. */
+  /** Every capable, non-archived list the viewer holds, in server order — the picker's rows. */
+  readonly lists: readonly List[];
+  /** The list this write would go to right now: the override, the stored default, or (only
+   *  while it is the sole capable list) that list, silently. */
   readonly list: List | undefined;
-  /** Every capable list holding the slot and not archived, in server order. */
-  readonly candidates: readonly List[];
-  /** Every capable, non-archived list the viewer holds, for `Choose another list`. */
-  readonly all: readonly List[];
-  /** `true` while the answer is a one-time question the user has not yet answered. */
-  readonly needsAnswer: boolean;
+  /** A default is stored and still names a capable, present list — the caller must not
+   *  `remember` silently again until the user deliberately picks a different one. */
+  readonly hasDefault: boolean;
   readonly remember: (listId: string) => Promise<void>;
   readonly remembering: boolean;
 }
@@ -59,30 +63,23 @@ export function useDestination(
   });
 
   return useMemo(() => {
-    // Apply write capability before routing. This keeps slot candidates, one-off choices and
-    // stale stored defaults inside the exact boundary enforced by the API.
     const capableLists = destinationCapableLists(slot, lists);
-    const resolution =
-      status === 'success'
-        ? resolveSlot(slot, capableLists, viewer?.defaultLists)
-        : undefined;
-    const candidates = capableLists.filter((list) => list.slot === slot);
     const overridden =
       override === undefined
         ? undefined
-        : capableLists.find((list) => list.listId === override);
-    const resolved =
-      resolution?.kind === 'use'
-        ? capableLists.find((list) => list.listId === resolution.listId)
-        : undefined;
-    const list = overridden ?? resolved;
+        : capableLists.find((candidate) => candidate.listId === override);
+    const storedDefaultId = viewer?.defaultLists?.[slot];
+    const defaulted =
+      storedDefaultId === undefined
+        ? undefined
+        : capableLists.find((candidate) => candidate.listId === storedDefaultId);
+    const onlyCapable = capableLists.length === 1 ? capableLists[0] : undefined;
+    const list = overridden ?? defaulted ?? onlyCapable;
     return {
       status,
-      resolution,
+      lists: capableLists,
       list,
-      candidates,
-      all: capableLists,
-      needsAnswer: overridden === undefined && resolution?.kind === 'ask',
+      hasDefault: defaulted !== undefined,
       remember: async (listId) => {
         await remember.mutateAsync(listId);
       },

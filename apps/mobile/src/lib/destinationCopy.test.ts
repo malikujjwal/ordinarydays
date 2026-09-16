@@ -3,7 +3,7 @@ import {
   addSelectedLabel,
   addSelectedPendingLabel,
   destinationLead,
-  destinationQuestion,
+  destinationRememberedMessage,
   savePlanAndAddItemsLabel,
   savePlanAndAddTitleLabel,
 } from './destinationCopy';
@@ -27,9 +27,18 @@ describe('the add-to copy', () => {
     );
   });
 
-  it('leads and asks per slot, and never names a list on its own', () => {
+  it('leads per flow, persistently, and never names a list on its own', () => {
     expect(destinationLead('groceries')).toBe('Add ingredients to:');
     expect(destinationLead('watch')).toBe('Also add a list item to:');
-    expect(destinationQuestion('groceries')).toBe('Which list should ingredients go to?');
+  });
+
+  /** Option B1's one confirmation: named, non-blocking, no ceremony (`DestinationSheet.tsx`). */
+  it('names the list and the capability when a default is silently set', () => {
+    expect(destinationRememberedMessage('groceries', 'Groceries')).toBe(
+      'Groceries is now your default list for ingredients.',
+    );
+    expect(destinationRememberedMessage('watch', 'Watch Later')).toBe(
+      'Watch Later is now your default list for watch items.',
+    );
   });
 });

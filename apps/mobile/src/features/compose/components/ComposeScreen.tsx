@@ -482,9 +482,7 @@ export function ComposeScreen({
                     attachments={attachments}
                     listBridge={{
                       groceriesTitle: groceries.list?.title,
-                      groceriesState: groceries.resolution?.kind,
                       watchTitle: watchList.list?.title,
-                      watchState: watchList.resolution?.kind,
                       alsoAddToList: draft.alsoAddToList,
                       onAlsoAddToListChange: draft.setAlsoAddToList,
                       onChangeDestination: (slot) => onChooseDestination?.(slot),

@@ -1,6 +1,6 @@
 /**
  * `@od/shared/lists` — the list template catalogue, its creation-choice projection (P3-07)
- * and, from P3-12, the pure slot-resolution rule.
+ * and the one destination-capability rule (`ingredientDestination.ts`).
  *
  * **Deliberately not re-exported from the root barrel.** `LIST_TEMPLATES` is creation-time
  * data with an import boundary (`list-templates-are-creation-data` in
@@ -32,10 +32,5 @@ export {
   type ListItemPlanDraft,
 } from './planAdapters.js';
 export { type LabelSourceMeal, provenanceLabel } from './provenanceLabel.js';
-export {
-  resolveSlot,
-  type SlotEligibleList,
-  type SlotResolution,
-} from './resolveSlot.js';
 export { type ListTemplateChoice, listTemplateChoices } from './templateChoices.js';
 export { LIST_TEMPLATES } from './templates.js';

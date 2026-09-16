@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { listCapabilities } from '@od/shared/lists';
 import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -87,8 +88,38 @@ describe('the native Lists SQLite index', () => {
 
     const [read] = await repository.read();
     // Parsed back through `listView`, so this is the shape the renderer will actually get —
-    // including `lastItemActivityAt`, which the card renders instead of `updatedAt` (P3-47).
-    expect(read).toEqual(stored);
+    // including `lastItemActivityAt`, which the card renders instead of `updatedAt` (P3-47),
+    // and `capabilities`, derived on every read from the same `itemStateMode` the row stores
+    // rather than a second, local rule (`fromRow`, ADR-057).
+    expect(read).toEqual({ ...stored, capabilities: listCapabilities(stored) });
+  });
+
+  /**
+   * The one shared capability rule (`listCapabilities`, `@od/shared/lists`) applied on every
+   * read, from `itemStateMode` alone — never a second, local predicate, and never left unset
+   * regardless of what the row was stored with (a canonical pull writes no `capabilities`
+   * column at all; there is none to write).
+   */
+  it("derives capabilities from the row's item state mode, not from what was stored", async () => {
+    if (database === undefined) throw new Error('test database not open');
+    const { repository, transactions } = harness(database);
+    const blank = list({
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X9',
+      slot: null,
+      itemStateMode: { mode: 'none' },
+    });
+
+    await transactions.run((transaction) =>
+      repository.replaceCanonical(transaction, [list({ slot: null }), blank]),
+    );
+
+    const rows = await repository.read();
+    expect(rows.find((row) => row.listId === list().listId)?.capabilities).toEqual({
+      ingredients: true,
+    });
+    expect(rows.find((row) => row.listId === blank.listId)?.capabilities).toEqual({
+      ingredients: false,
+    });
   });
 
   /**

@@ -6,12 +6,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useDestination } from './useDestination';
 
 /**
- * The client half of P3-12's four-step rule (P3-43). Lists and the profile are seeded into
- * the cache; the resolver's answer and the one profile write are what these read.
+ * The client half of Option B1's flattened destination (`docs/reports/
+ * destination-flow-simplification-20260916.md`). Lists and the profile are seeded into the
+ * cache; the resolved `list`, the flat `lists` set and the one profile write are what these
+ * read. There is no `resolution` kind to assert on any more — a default naming a capable,
+ * present list is `hasDefault: true`; anything else that names a destination is `false`.
  */
 
 const OWNER = 'usr_01J0000000000000000000000B';
-const list = (listId: string, title: string, slot: List['slot']): List =>
+const list = (
+  listId: string,
+  title: string,
+  slot: List['slot'],
+  itemStateMode: List['itemStateMode'] = { mode: 'checkbox' },
+): List =>
   ({
     schemaVersion: 2,
     listId,
@@ -20,7 +28,7 @@ const list = (listId: string, title: string, slot: List['slot']): List =>
     title,
     icon: 'cart',
     emptyStateCopy: '',
-    itemStateMode: { mode: 'checkbox' },
+    itemStateMode,
     featureConfig: {},
     slot,
     itemCount: 0,
@@ -34,11 +42,12 @@ const list = (listId: string, title: string, slot: List['slot']): List =>
 
 const GROCERIES = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A1', 'Groceries', 'groceries');
 const COSTCO = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A2', 'Costco', 'groceries');
-const PACKING = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A3', 'Packing', null);
+/** Capable, but never held the groceries slot — reachable only because B1 has no escape to
+ *  restrict to: every capable list is already in the flat set. */
+const CHECKLIST = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A3', 'Camping checklist', null);
 const UNTITLED = {
-  ...list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A4', 'Untitled list', null),
+  ...list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A4', 'Untitled list', null, { mode: 'none' }),
   templateKey: 'blank',
-  itemStateMode: { mode: 'none' as const },
 };
 const INCAPABLE_GROCERIES = {
   ...UNTITLED,
@@ -74,30 +83,41 @@ function seeded(lists: readonly List[], defaultLists: Record<string, string> = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('useDestination', () => {
-  it('uses the only eligible list silently, and still names it', async () => {
-    const { wrapper } = seeded([GROCERIES, PACKING]);
+  it('uses the only capable list silently, with no default write', async () => {
+    const { wrapper } = seeded([GROCERIES]);
     const { result } = renderHook(() => useDestination('groceries', undefined), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.resolution?.kind).toBe('use'));
-    expect(result.current.list?.title).toBe('Groceries');
-    expect(result.current.needsAnswer).toBe(false);
-    // Packing holds no slot: never a candidate, but reachable through `Choose another list`.
-    expect(result.current.candidates.map((l) => l.title)).toEqual(['Groceries']);
-    expect(result.current.all.map((l) => l.title)).toEqual(['Groceries', 'Packing']);
+    await waitFor(() => expect(result.current.list?.title).toBe('Groceries'));
+    expect(result.current.hasDefault).toBe(false);
+    expect(result.current.lists.map((l) => l.title)).toEqual(['Groceries']);
   });
 
-  it('excludes an Untitled blank list from every ingredient destination set', async () => {
+  it('excludes an Untitled blank list and a slotted-but-incapable list from the flat set', async () => {
     const { wrapper } = seeded([GROCERIES, UNTITLED, INCAPABLE_GROCERIES]);
     const { result } = renderHook(() => useDestination('groceries', undefined), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.resolution?.kind).toBe('use'));
-
-    expect(result.current.candidates.map((candidate) => candidate.title)).toEqual([
+    await waitFor(() => expect(result.current.list?.title).toBe('Groceries'));
+    expect(result.current.lists.map((candidate) => candidate.title)).toEqual([
       'Groceries',
     ]);
-    expect(result.current.all.map((candidate) => candidate.title)).toEqual(['Groceries']);
+  });
+
+  it('offers every capable list regardless of slot, not only ones marked as the destination', async () => {
+    const { wrapper } = seeded([GROCERIES, CHECKLIST]);
+    const { result } = renderHook(() => useDestination('groceries', undefined), {
+      wrapper,
+    });
+    await waitFor(() =>
+      expect(result.current.lists.map((l) => l.title).sort()).toEqual([
+        'Camping checklist',
+        'Groceries',
+      ]),
+    );
+    // Two capable lists and no default: nothing is silently chosen.
+    expect(result.current.list).toBeUndefined();
+    expect(result.current.hasDefault).toBe(false);
   });
 
   it('ignores an incapable override and falls back to the resolved destination', async () => {
@@ -106,19 +126,43 @@ describe('useDestination', () => {
       wrapper,
     });
     await waitFor(() => expect(result.current.list?.title).toBe('Groceries'));
-    expect(result.current.needsAnswer).toBe(false);
   });
 
-  it('treats an incapable stored default as absent and asks among capable lists', async () => {
+  it('treats an incapable stored default as absent among several capable lists', async () => {
     const { wrapper } = seeded([GROCERIES, COSTCO, INCAPABLE_GROCERIES], {
       groceries: INCAPABLE_GROCERIES.listId,
     });
     const { result } = renderHook(() => useDestination('groceries', undefined), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.resolution?.kind).toBe('ask'));
+    await waitFor(() =>
+      expect(result.current.lists.map((l) => l.title).sort()).toEqual([
+        'Costco',
+        'Groceries',
+      ]),
+    );
     expect(result.current.list).toBeUndefined();
-    expect(result.current.needsAnswer).toBe(true);
+    expect(result.current.hasDefault).toBe(false);
+  });
+
+  it('treats a default naming an archived list as absent', async () => {
+    const { wrapper } = seeded([GROCERIES, { ...COSTCO, archived: true }], {
+      groceries: COSTCO.listId,
+    });
+    const { result } = renderHook(() => useDestination('groceries', undefined), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.list?.title).toBe('Groceries'));
+    expect(result.current.hasDefault).toBe(false);
+  });
+
+  it('treats a default naming a deleted list as absent', async () => {
+    const { wrapper } = seeded([GROCERIES], { groceries: COSTCO.listId });
+    const { result } = renderHook(() => useDestination('groceries', undefined), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.list?.title).toBe('Groceries'));
+    expect(result.current.hasDefault).toBe(false);
   });
 
   it('keeps Watch unrestricted and honours a one-off blank-list override', async () => {
@@ -127,24 +171,26 @@ describe('useDestination', () => {
       wrapper,
     });
     await waitFor(() => expect(result.current.status).toBe('success'));
-    expect(result.current.all.map((candidate) => candidate.title)).toEqual([
+    expect(result.current.lists.map((candidate) => candidate.title).sort()).toEqual([
       'Groceries',
       'Untitled list',
     ]);
     expect(result.current.list?.title).toBe('Untitled list');
   });
 
-  it('asks once when several are eligible and no default is set', async () => {
-    const { wrapper } = seeded([GROCERIES, COSTCO]);
+  it('preselects a stored default among several capable lists, without writing', async () => {
+    const { wrapper } = seeded([GROCERIES, COSTCO], { groceries: COSTCO.listId });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
     const { result } = renderHook(() => useDestination('groceries', undefined), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.resolution?.kind).toBe('ask'));
-    expect(result.current.list).toBeUndefined();
-    expect(result.current.needsAnswer).toBe(true);
+    await waitFor(() => expect(result.current.list?.title).toBe('Costco'));
+    expect(result.current.hasDefault).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('honours a stored default among several, and a one-off override over it', async () => {
+  it('honours a one-off override over a stored default, and never writes it', async () => {
     const { wrapper } = seeded([GROCERIES, COSTCO], { groceries: COSTCO.listId });
     const { result, rerender } = renderHook(
       ({ override }: { override: string | undefined }) =>
@@ -154,19 +200,22 @@ describe('useDestination', () => {
     await waitFor(() => expect(result.current.list?.title).toBe('Costco'));
     rerender({ override: GROCERIES.listId });
     expect(result.current.list?.title).toBe('Groceries');
-    expect(result.current.needsAnswer).toBe(false);
+    // The override displaced the default; whether a *later* pick without an override would
+    // remember is the picker's call (`DestinationSheet.test.tsx`), not this hook's.
+    expect(result.current.hasDefault).toBe(true);
   });
 
-  it('offers nothing but creation when no list holds the slot', async () => {
-    const { wrapper } = seeded([PACKING]);
+  it('offers nothing but creation when no list is capable', async () => {
+    const { wrapper } = seeded([UNTITLED]);
     const { result } = renderHook(() => useDestination('groceries', undefined), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.resolution?.kind).toBe('none'));
+    await waitFor(() => expect(result.current.status).toBe('success'));
+    expect(result.current.lists).toEqual([]);
     expect(result.current.list).toBeUndefined();
   });
 
-  /** Remembering is the one profile write, and it lands in the same cache the tabs read. */
+  /** The only write this hook makes, and the only way a default is ever set. */
   it('remembers through PATCH /v1/me and updates the cached profile', async () => {
     const { wrapper, client } = seeded([GROCERIES, COSTCO]);
     const fetchSpy = vi.fn(async (_url: string, init?: { body?: string }) => {
@@ -196,7 +245,8 @@ describe('useDestination', () => {
     const { result } = renderHook(() => useDestination('groceries', undefined), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.resolution?.kind).toBe('ask'));
+    await waitFor(() => expect(result.current.status).toBe('success'));
+    expect(result.current.hasDefault).toBe(false);
 
     await act(() => result.current.remember(COSTCO.listId));
 
@@ -215,6 +265,7 @@ describe('useDestination', () => {
       groceries: COSTCO.listId,
     });
     await waitFor(() => expect(result.current.list?.title).toBe('Costco'));
+    expect(result.current.hasDefault).toBe(true);
   });
 
   it('issues no request while disabled', async () => {
@@ -229,6 +280,7 @@ describe('useDestination', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.current.resolution).toBeUndefined();
+    expect(result.current.lists).toEqual([]);
+    expect(result.current.list).toBeUndefined();
   });
 });
