@@ -57,6 +57,16 @@ export function DestinationSheet({
   const templatePredicate = capabilityFor(slot);
   const [remember, setRemember] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  /**
+   * `New list` is a **request**, not the open itself.
+   *
+   * `Sheet` keeps its modal mounted through the exit animation (it is the only state in which
+   * the modal unmounts), so opening the create sheet the moment the button is tapped mounts a
+   * second modal over one that is still leaving — which is invisible and swallows every tap.
+   * The request closes this sheet; `onClosed` — the signal that the exit finished and the modal
+   * unmounted — is what opens the child. Same shape as `AddListToPlanSheet`.
+   */
+  const [createRequested, setCreateRequested] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const asking = destination.resolution?.kind === 'ask' && current === undefined;
@@ -71,6 +81,8 @@ export function DestinationSheet({
   function close() {
     setShowAll(false);
     setRemember(true);
+    // An ordinary dismissal must not leave a create pending for the next time this opens.
+    setCreateRequested(false);
     onClose();
   }
 
@@ -96,8 +108,13 @@ export function DestinationSheet({
   return (
     <>
       <Sheet
-        open={open && !creating}
+        open={open && !createRequested && !creating}
         onClose={close}
+        onClosed={() => {
+          if (!createRequested) return;
+          setCreateRequested(false);
+          setCreating(true);
+        }}
         title={title}
         detent="medium"
         testID={testID}
@@ -106,7 +123,7 @@ export function DestinationSheet({
             label={NEW_LIST}
             variant="secondary"
             fullWidth
-            onPress={() => setCreating(true)}
+            onPress={() => setCreateRequested(true)}
             testID={`${testID}-new-list`}
           />
         }
