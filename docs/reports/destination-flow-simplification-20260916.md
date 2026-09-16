@@ -27,7 +27,7 @@ question — "which list?" — through a **slot**: `groceries`, `watch` or `meal
 **Trap 1 (fixed in `cf71244`/`536ce7d`/`e53911d`).** The most obvious thing to create is
 **Blank** (`defaultTitle: 'Untitled list'`, `packages/shared/src/lists/templates.ts:9-11`),
 and it was the one type that could never receive ingredients — the picker offered it, the
-API refused it (`services/api/src/services/ingredientsToListService.ts:857`, message
+API refused it (`services/api/src/services/ingredientsToListService.ts:856`, message
 `'Ingredients can only be added to a simple list.'`), and setting that same list's `slot` to
 `groceries` did not change the outcome, because `slot` and capability are unrelated fields.
 This was reported live: create an "Untitled list", add ingredients from a Meal to it, get
@@ -49,7 +49,7 @@ is — the destination model itself did not cause the deadlock.
 | Concern | Question it answers | Vocabulary | Who enforces it | Where |
 | --- | --- | --- | --- | --- |
 | Routing | Which list did the user mean, of several equally valid ones? | `slot: 'groceries' \| 'watch' \| 'meals' \| null` on `List`; `user.defaultLists` | `resolveSlot`'s four-step rule | `packages/shared/src/lists/resolveSlot.ts` (106 lines), ADR-033 |
-| Capability | Can this specific list structurally hold what is being added? | `itemStateMode.mode: 'none' \| 'checkbox' \| 'stages'`, `featureConfig.*` | The API write guard, now re-exposed to the client | `services/api/src/services/ingredientsToListService.ts:857`; shared predicate `packages/shared/src/lists/ingredientDestination.ts` |
+| Capability | Can this specific list structurally hold what is being added? | `itemStateMode.mode: 'none' \| 'checkbox' \| 'stages'`, `featureConfig.*` | The API write guard, now re-exposed to the client | `services/api/src/services/ingredientsToListService.ts:856`; shared predicate `packages/shared/src/lists/ingredientDestination.ts` |
 | Creation | What kind of list may the user make here? | `templateKey`, one of seven fixed presets | The creation catalogue, filtered per flow | `packages/shared/src/lists/templates.ts` (98 lines), `templateChoices.ts` (75 lines) |
 
 Three concerns, three vocabularies, one underlying question — "what is this list for, and
@@ -78,7 +78,9 @@ The predicate drift is not hypothetical — it is what shipped, three times, bef
   itself is specified on purpose (`phase-03-plans-and-lists.md:3219-3220`: *"the picker lists
   only lists whose `slot` matches, plus a `Choose another list` escape that opens the full
   index. A user is allowed to put ingredients in a list that is not marked as a
-  destination"*) — its breadth was intentional; its missing capability floor was not.
+  destination"*) — its breadth was intentional. The capability floor it lacked at the time is
+  now supplied by `cf71244`, so what remains a judgement call is the breadth itself: a
+  destination outside the slot rule, rather than one the API would refuse.
 - `cf71244` unified capability behind one shared predicate (`canReceiveIngredients`,
   consumed by both the API guard and the client). A first-pass fresh review rejected it: on
   native, `useEligibleLists` read only the TanStack/API cache
@@ -122,7 +124,7 @@ Core destination-routing files, current tree:
 | **Test subtotal** | **1,297** |
 | **Total, 14 files** | **2,217** |
 
-This excludes the API guard and its tests, `useEligibleLists.ts`/`.native.ts` themselves (73
+This excludes the API guard and its tests, `useEligibleLists.ts`/`.native.ts` themselves (173
 lines, required independently by ADR-057 — see the note below), and the three screens that
 consume the hook (`IngredientsSection.tsx`, `ComposeScreen.tsx`,
 `apps/mobile/src/components/WatchListDestination.tsx`). All figures above were measured with
@@ -249,8 +251,9 @@ recur in the current shape) and do not revert it regardless of what happens with
 proposal. Beyond that:
 
 - If the priority is finishing the current feature set and moving on: **Option A**. It is a
-  same-day change, removes the one piece of the current model (`Choose another list`) that
-  has no capability floor even after today's fix, and touches no ADR the founder has not
+  same-day change, removes the one piece of the current model (`Choose another list`) that is
+  still slot-agnostic rather than slot-ruled — capability-filtered since `cf71244`, so this is
+  scope reduction rather than a bug fix — and touches no ADR the founder has not
   already amended once today (`plans-and-lists.md` §5.8/§7.3 already carry the "limited to
   list types that can hold the pending items" wording from `cf71244`).
 - If the priority is the flow being obviously right to a new user, and the founder is
