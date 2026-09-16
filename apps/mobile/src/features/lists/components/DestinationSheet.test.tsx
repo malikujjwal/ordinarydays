@@ -197,6 +197,42 @@ describe('ingredient destination capability', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(useToast.getState().current).toBeUndefined();
   });
+
+  it('does not remember when the only capable list already named the destination', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    // One capable list: it resolved the row on its own, so the user is not choosing between
+    // anything and a profile write would be one they never asked for.
+    const { onChoose } = mount([GROCERIES]);
+
+    fireEvent.click(
+      await screen.findByTestId(`destination-sheet-list-${GROCERIES.listId}`),
+    );
+    expect(onChoose).toHaveBeenCalledWith(GROCERIES.listId);
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(useToast.getState().current).toBeUndefined();
+  });
+
+  it('writes the default once when a second pick lands before the first response', async () => {
+    // Never resolves: the first write stays in flight while the user picks again.
+    const fetchSpy = vi.fn(() => new Promise(() => {}));
+    vi.stubGlobal('fetch', fetchSpy);
+    const { onChoose } = mount([GROCERIES, CHECKLIST]);
+
+    fireEvent.click(
+      await screen.findByTestId(`destination-sheet-list-${GROCERIES.listId}`),
+    );
+    await act(() => Promise.resolve());
+    fireEvent.click(screen.getByTestId(`destination-sheet-list-${CHECKLIST.listId}`));
+
+    expect(onChoose).toHaveBeenCalledTimes(2);
+    const patches = fetchSpy.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === 'PATCH',
+    );
+    expect(patches).toHaveLength(1);
+  });
 });
 
 /**

@@ -90,10 +90,9 @@ export function IngredientPicker({
     destinationTitle === undefined
       ? addSelectedPendingLabel(count)
       : addSelectedLabel(count, destinationTitle);
-  const add = () =>
-    destinationTitle === undefined
-      ? onChangeDestination()
-      : onAdd?.(chosen.map((row) => row.ingredientId));
+  // The destination row above is the only way to choose one, and the add button is disabled
+  // while none is resolved — so this path adds and never opens the picker.
+  const add = () => onAdd?.(chosen.map((row) => row.ingredientId));
 
   return (
     <View style={{ gap: theme.space[4] }} testID={testID}>

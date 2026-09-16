@@ -70,7 +70,16 @@ export function DestinationSheet({
   }
 
   async function choose(list: List) {
-    const shouldRemember = !destination.hasDefault;
+    /**
+     * Remember only when the user was actually choosing.
+     *
+     * `destination.list` is what resolved *before* this tap: a stored default, or the only
+     * capable list. When either already answered, this tap is a one-off change and writes
+     * nothing — including the single-capable-list case, where the row already named the list
+     * and the user was never offered a choice. `remembering` closes the window in which a
+     * second tap would write and toast twice before the first response lands.
+     */
+    const shouldRemember = destination.list === undefined && !destination.remembering;
     onChoose(list.listId);
     close();
     if (!shouldRemember) return;

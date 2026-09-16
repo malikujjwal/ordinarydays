@@ -130,7 +130,7 @@ test('one grocery list: the row names it, nothing is asked, and the write lands 
   expect((await me(request)).defaultLists?.groceries).toBeUndefined();
 });
 
-test('two lists, no default: asked once with Remember checked, then never asked again', async ({
+test('two lists, no default: one flat picker, and the choice becomes the default', async ({
   page,
   request,
 }) => {
@@ -138,23 +138,24 @@ test('two lists, no default: asked once with Remember checked, then never asked 
   const costco = await createList(request, 'Costco', 'groceries');
 
   await openMealForm(page, 'Chicken tacos', ['Chicken']);
-  // The `ask` case reads `Choose a list` (§5.8's question is due); `none` reads
-  // `Choose or create a list`.
+  // Nothing is asked up front: with two capable lists and no default the row invites a
+  // choice, and the picker lists every capable list in one flat list — no question step, no
+  // `Remember this choice` control, no `Choose another list` escape (Option B1).
   await expect(
     testId(page, 'compose-ingredient-destination-destination-name'),
-  ).toHaveText('Choose a list');
+  ).toHaveText('Choose or create a list');
   await testId(page, 'compose-ingredient-destination-destination').click();
-  await expect(
-    page.getByRole('heading', { name: 'Which list should ingredients go to?' }),
-  ).toBeVisible();
-  await expect(testId(page, 'destination-sheet-remember')).toHaveAttribute(
-    'aria-checked',
-    'true',
-  );
+  await expect(page.getByRole('heading', { name: 'Choose a list' })).toBeVisible();
+  await expect(testId(page, 'destination-sheet-remember')).toHaveCount(0);
   await testId(page, `destination-sheet-list-${costco}`).click();
   await expect(
     testId(page, 'compose-ingredient-destination-destination-name'),
   ).toHaveText('Costco');
+  // Choosing is what remembers: one profile write, one name-the-list toast, and the pick
+  // itself stands for this plan regardless of what the write does.
+  await expect(
+    page.getByText('Costco is now your default list for ingredients.'),
+  ).toBeVisible();
   await expect.poll(async () => (await me(request)).defaultLists?.groceries).toBe(costco);
 
   await page.getByRole('checkbox', { name: 'Chicken' }).click();
@@ -163,7 +164,7 @@ test('two lists, no default: asked once with Remember checked, then never asked 
   await expect.poll(async () => (await listItems(request, costco)).length).toBe(1);
   expect(await listItems(request, groceries)).toHaveLength(0);
 
-  // The next meal skips the question: the default answers, and is still shown.
+  // The next meal needs no choice: the default answers, and is still shown.
   await openMealForm(page, 'Chicken soup', ['Stock']);
   await expect(
     testId(page, 'compose-ingredient-destination-destination-name'),
@@ -187,8 +188,8 @@ test('changing the destination from the row writes elsewhere and leaves the defa
     testId(page, 'compose-ingredient-destination-destination-name'),
   ).toHaveText('Costco');
   await testId(page, 'compose-ingredient-destination-destination').click();
-  // A one-off change: no Remember control on this path.
-  await expect(testId(page, 'destination-sheet-remember')).toHaveCount(0);
+  // A one-off change: the picker is the same flat list, and the stored default is untouched
+  // (asserted below, after the write).
   await testId(page, `destination-sheet-list-${groceries}`).click();
   await expect(
     testId(page, 'compose-ingredient-destination-destination-name'),
