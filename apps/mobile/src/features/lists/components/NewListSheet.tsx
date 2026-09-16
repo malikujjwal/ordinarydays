@@ -77,6 +77,11 @@ export interface NewListSheetProps {
    * text are not inputs. Any other caller sees the seven types.
    */
   constrainTo?: 'watch-later';
+  /**
+   * Limits destination creation to templates the pending write can use. The predicate comes
+   * from the same shared capability rule as the API guard, never a second template allowlist.
+   */
+  templatePredicate?: (template: ListTemplateChoice) => boolean;
 }
 
 export function NewListSheet({
@@ -85,6 +90,7 @@ export function NewListSheet({
   onCreated,
   source,
   constrainTo,
+  templatePredicate,
 }: NewListSheetProps) {
   const theme = useTheme();
   const create = useCreateList();
@@ -95,12 +101,13 @@ export function NewListSheet({
   const [style, setStyle] = useState<ListTemplateChoice>();
   const [title, setTitle] = useState('');
   const catalogue = listTemplateChoices();
-  const choices =
-    constrainTo === undefined
-      ? catalogue
-      : catalogue.filter((choice) => choice.templateKey === constrainTo);
-  const blank = constrainTo === undefined ? choices[0] : undefined;
-  const typedChoices = constrainTo === undefined ? choices.slice(1) : choices;
+  const choices = catalogue.filter(
+    (choice) =>
+      (constrainTo === undefined || choice.templateKey === constrainTo) &&
+      (templatePredicate === undefined || templatePredicate(choice)),
+  );
+  const blank = choices.find((choice) => choice.templateKey === 'blank');
+  const typedChoices = choices.filter((choice) => choice.templateKey !== 'blank');
 
   /** §5.4 rule 1: `Back` retains nothing, so the chooser is never returned to pre-selected. */
   function back() {

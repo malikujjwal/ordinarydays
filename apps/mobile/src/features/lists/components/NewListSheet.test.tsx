@@ -1,4 +1,4 @@
-import { listTemplateChoices } from '@od/shared/lists';
+import { canReceiveIngredients, listTemplateChoices } from '@od/shared/lists';
 import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -122,6 +122,33 @@ describe('the style chooser comes first', () => {
       expect(row.getAttribute('aria-pressed'), choice.templateKey).toBeNull();
       expect(row.getAttribute('aria-checked'), choice.templateKey).toBeNull();
     }
+  });
+});
+
+describe('a destination-constrained catalogue', () => {
+  it('offers exactly the three templates that can receive ingredients', () => {
+    render(
+      <ThemeProvider scheme="light">
+        <NewListSheet open onClose={() => {}} templatePredicate={canReceiveIngredients} />
+      </ThemeProvider>,
+    );
+
+    expect(screen.queryByTestId('list-style-blank')).toBeNull();
+    expect(screen.getByTestId('list-style-checklist')).toBeDefined();
+    expect(screen.getByTestId('list-style-groceries')).toBeDefined();
+    expect(screen.getByTestId('list-style-places-to-visit')).toBeDefined();
+    expect(screen.getByTestId('list-style-grid').children).toHaveLength(3);
+  });
+
+  it('keeps the Watch creation nudge constrained to Watch Later', () => {
+    render(
+      <ThemeProvider scheme="light">
+        <NewListSheet open onClose={() => {}} constrainTo="watch-later" />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('list-style-watch-later')).toBeDefined();
+    expect(screen.getByTestId('list-style-grid').children).toHaveLength(1);
   });
 });
 

@@ -5,8 +5,9 @@ import { LIST_TEMPLATES } from './templates.js';
  * The explicit template/style selection contract (`phase-03` §P3-07, ADR-032).
  *
  * What the creation sheet renders **before** the user names the list: every catalogue record,
- * exactly once, in the catalogue's own fixed order, projected to the five fields a chooser
- * row displays. Nothing is selected, recommended, pinned, reordered or hidden.
+ * exactly once, in the catalogue's own fixed order, projected to the fields a chooser needs
+ * to display and to apply a write-capability constraint. Nothing is selected, recommended,
+ * pinned, reordered or hidden.
  *
  * ## What this module deliberately is not
  *
@@ -42,7 +43,7 @@ import { LIST_TEMPLATES } from './templates.js';
  */
 export type ListTemplateChoice = Pick<
   ListTemplate,
-  'templateKey' | 'chooserLabel' | 'icon' | 'summary' | 'defaultTitle'
+  'templateKey' | 'chooserLabel' | 'icon' | 'summary' | 'defaultTitle' | 'itemStateMode'
 >;
 
 /**
@@ -57,6 +58,7 @@ const CHOICES: readonly ListTemplateChoice[] = Object.freeze(
       icon: template.icon,
       summary: template.summary,
       defaultTitle: template.defaultTitle,
+      itemStateMode: template.itemStateMode,
     }),
   ),
 );

@@ -6,6 +6,7 @@ import { useMemo } from 'react';
 import { useEligibleLists } from '@/hooks/useEligibleLists';
 import { ME_QUERY_KEY, useViewer } from '@/hooks/useViewer';
 import { apiClient } from '@/lib/apiClient';
+import { capabilityFor } from '@/lib/destinationCapability';
 
 /**
  * Where an add-to flow puts things (P3-12's four-step rule on the client, P3-43).
@@ -27,9 +28,9 @@ export interface Destination {
   readonly resolution: SlotResolution<List> | undefined;
   /** The list the write would go to right now — the override, else the resolver's `use`. */
   readonly list: List | undefined;
-  /** Every list holding the slot and not archived, in server order — the picker's rows. */
+  /** Every capable list holding the slot and not archived, in server order. */
   readonly candidates: readonly List[];
-  /** Every list the viewer holds, for `Choose another list`. */
+  /** Every capable, non-archived list the viewer holds, for `Choose another list`. */
   readonly all: readonly List[];
   /** `true` while the answer is a one-time question the user has not yet answered. */
   readonly needsAnswer: boolean;
@@ -58,14 +59,24 @@ export function useDestination(
   });
 
   return useMemo(() => {
+    const capability = capabilityFor(slot);
+    // Apply write capability before routing. This keeps slot candidates, one-off choices and
+    // stale stored defaults inside the exact boundary enforced by the API.
+    const capableLists = lists.filter(
+      (list) => !list.archived && (capability === undefined || capability(list)),
+    );
     const resolution =
-      status === 'success' ? resolveSlot(slot, lists, viewer?.defaultLists) : undefined;
-    const candidates = lists.filter((list) => list.slot === slot && !list.archived);
+      status === 'success'
+        ? resolveSlot(slot, capableLists, viewer?.defaultLists)
+        : undefined;
+    const candidates = capableLists.filter((list) => list.slot === slot);
     const overridden =
-      override === undefined ? undefined : lists.find((l) => l.listId === override);
+      override === undefined
+        ? undefined
+        : capableLists.find((list) => list.listId === override);
     const resolved =
       resolution?.kind === 'use'
-        ? lists.find((list) => list.listId === resolution.listId)
+        ? capableLists.find((list) => list.listId === resolution.listId)
         : undefined;
     const list = overridden ?? resolved;
     return {
@@ -73,7 +84,7 @@ export function useDestination(
       resolution,
       list,
       candidates,
-      all: lists.filter((list) => !list.archived),
+      all: capableLists,
       needsAnswer: overridden === undefined && resolution?.kind === 'ask',
       remember: async (listId) => {
         await remember.mutateAsync(listId);

@@ -1160,7 +1160,7 @@ When the app asks and when it does not, following the four-step rule in
 | Exactly one list holds the slot | The destination row shows it. No question is asked. The dropdown still works. |
 | Several, and a default is set | The destination row shows the default. Changing it in the dropdown applies **to this operation only** and does not change the default. |
 | Several, no default set | A one-time sheet: `Which list should ingredients go to?` with the eligible lists and `Remember this choice`, checked by default (unchecking makes the choice one-off — P3-43). The answer is stored in `user.defaultLists`. |
-| None | The destination row reads `Choose or create a list` and opens the seven-type catalogue with nothing selected. After `Create list`, the original flow returns with that List visibly named; adding still requires its own named confirmation. |
+| None | The destination row reads `Choose or create a list` and opens the catalogue, limited to list types that can hold the pending items, with nothing selected. After `Create list`, the original flow returns with that List visibly named; adding still requires its own named confirmation. |
 
 **In settings.** Profile → Settings → **Default lists** shows three rows — Groceries,
 Watchlist, Meals — each naming the list currently in the slot, or `Ask each time`. The same
@@ -1603,8 +1603,9 @@ The flow, exactly:
    by the four-step rule in §5.8 — one eligible list, use it silently; several with a
    default, use the default and let the dropdown override it for this operation only;
    several with no default, ask once and remember; none, show `Choose or create a list`.
-   Choosing `New list` opens the fixed catalogue with nothing selected. The user explicitly
-   chooses a style and taps `Create list`, then returns here with the new destination named.
+   Choosing `New list` opens the fixed catalogue, limited to checkbox list types that can
+   receive ingredients, with nothing selected. The user explicitly chooses a style and taps
+   `Create list`, then returns here with the new destination named.
    Which list was opened most recently is never consulted.
 3. Tapping the separate `Add <n> to <list name>` action issues one
    `POST /v1/activities/:id/ingredients/add-to-list` with the explicit `listId` and selected

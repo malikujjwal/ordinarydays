@@ -197,6 +197,15 @@ describe('what it refuses, before it writes anything', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
+  it('rejects a groceries-slot destination without checkbox capability', async () => {
+    vi.mocked(listRepository.getListMeta).mockResolvedValue(
+      list({ slot: 'groceries', itemStateMode: { mode: 'none' } }),
+    );
+
+    await expect(run()).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
   it.each([
     { mode: 'none' as const },
     {
@@ -299,6 +308,18 @@ describe('what it refuses, before it writes anything', () => {
  * never ran that write, leaving the meal permanently disagreeing with the list.
  */
 describe('everything commits in one transaction', () => {
+  it('accepts a checkbox destination without a slot', async () => {
+    const checkboxWithoutSlot = list({ slot: null, itemStateMode: { mode: 'checkbox' } });
+    vi.mocked(listRepository.getListMeta).mockResolvedValue(checkboxWithoutSlot);
+    vi.mocked(listRepository.planListItemWrites).mockResolvedValue({
+      list: checkboxWithoutSlot,
+      ranks: ['n0'],
+    });
+
+    await expect(run()).resolves.toBeDefined();
+    expect(tx.transactWrite).toHaveBeenCalledOnce();
+  });
+
   it('issues exactly one transactWrite', async () => {
     await run(meal(), [
       { ingredientId: CHICKEN, itemId: ITEM_ONE },

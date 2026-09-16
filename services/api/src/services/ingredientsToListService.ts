@@ -1,5 +1,9 @@
 import { MAX_LIST_ITEMS, MAX_SOURCE_PROVENANCE_SEGMENTS } from '@od/shared';
-import { formatIngredientTitle, provenanceLabel } from '@od/shared/lists';
+import {
+  canReceiveIngredients,
+  formatIngredientTitle,
+  provenanceLabel,
+} from '@od/shared/lists';
 import { type AddIngredientsToListInput, listItemSourceLabel } from '@od/shared/schemas';
 import type { Activity, List, ListItem, MealIngredient } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
@@ -849,7 +853,8 @@ async function loadCheckboxDestination(
 }
 
 function assertCollection(list: List): void {
-  if (list.itemStateMode.mode !== 'checkbox') refuse('listId', NOT_A_COLLECTION);
+  // Shared with the destination picker so every client-offered list passes this last-line guard.
+  if (!canReceiveIngredients(list)) refuse('listId', NOT_A_COLLECTION);
 }
 
 /**

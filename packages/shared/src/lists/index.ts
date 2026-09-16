@@ -20,6 +20,7 @@
 
 export { type ListTemplateSeed, listTemplateSeed } from './creationSeed.js';
 export { formatIngredientTitle } from './formatIngredientTitle.js';
+export { canReceiveIngredients } from './ingredientDestination.js';
 export {
   type LegacyListAggregate,
   type ListAggregate,

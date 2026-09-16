@@ -9,10 +9,11 @@ import { LIST_TEMPLATES } from '../templates.js';
  * `templateKey`, and these tests are what stop a matcher, a ranking or a fallback returning.
  */
 
-const DISPLAYED_FIELDS = [
+const CHOICE_FIELDS = [
   'chooserLabel',
   'defaultTitle',
   'icon',
+  'itemStateMode',
   'summary',
   'templateKey',
 ] as const;
@@ -29,21 +30,18 @@ describe('the projection', () => {
     );
   });
 
-  it('carries the five displayed fields and nothing else', () => {
+  it('carries displayed fields plus item state for destination capability', () => {
     for (const choice of listTemplateChoices()) {
-      expect(Object.keys(choice).sort(), choice.templateKey).toEqual([
-        ...DISPLAYED_FIELDS,
-      ]);
+      expect(Object.keys(choice).sort(), choice.templateKey).toEqual([...CHOICE_FIELDS]);
     }
   });
 
   /**
-   * Item state, features and slot are structural: the chooser shows what a preset looks
-   * like, and the server copies what it does. A renderer that received them here would be
-   * one step from replacing stored List state with catalogue state.
+   * Features and slot remain structural: the chooser only receives item state because the
+   * shared ingredient-destination predicate needs it to prevent creating an unusable list.
    */
-  it.each(['itemStateMode', 'featureConfig', 'slot', 'emptyStateCopy'])(
-    'does not carry the structural field %s',
+  it.each(['featureConfig', 'slot', 'emptyStateCopy'])(
+    'does not carry the unrelated structural field %s',
     (field) => {
       for (const choice of listTemplateChoices()) {
         expect(choice).not.toHaveProperty(field);
@@ -62,7 +60,7 @@ describe('the projection', () => {
     for (const choice of listTemplateChoices()) {
       const source = byKey.get(choice.templateKey);
       expect(source, choice.templateKey).toBeDefined();
-      for (const field of DISPLAYED_FIELDS) {
+      for (const field of CHOICE_FIELDS) {
         expect(choice[field], `${choice.templateKey}.${field}`).toBe(
           (source as ListTemplate)[field],
         );
@@ -74,7 +72,12 @@ describe('the projection', () => {
     expectTypeOf<ListTemplateChoice>().toEqualTypeOf<
       Pick<
         ListTemplate,
-        'templateKey' | 'chooserLabel' | 'icon' | 'summary' | 'defaultTitle'
+        | 'templateKey'
+        | 'chooserLabel'
+        | 'icon'
+        | 'summary'
+        | 'defaultTitle'
+        | 'itemStateMode'
       >
     >();
   });
@@ -115,6 +118,7 @@ describe('the order the sheet renders', () => {
       summary: 'Start without a category or item details',
       defaultTitle: 'Untitled list',
       icon: 'list',
+      itemStateMode: { mode: 'none' },
     });
   });
 
@@ -180,6 +184,7 @@ describe('nothing but a tap may choose a style', () => {
     expect(Object.keys(barrel).sort()).toEqual([
       'LIST_TEMPLATES',
       'adaptListItemToPlan',
+      'canReceiveIngredients',
       'formatIngredientTitle',
       'listTemplateChoices',
       // P3-26's creation seed: the other half of what a create resolves, and narrowed to the

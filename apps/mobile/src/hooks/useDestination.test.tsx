@@ -35,6 +35,17 @@ const list = (listId: string, title: string, slot: List['slot']): List =>
 const GROCERIES = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A1', 'Groceries', 'groceries');
 const COSTCO = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A2', 'Costco', 'groceries');
 const PACKING = list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A3', 'Packing', null);
+const UNTITLED = {
+  ...list('lst_01J8XKQ2M4N5P6R7S8T9V0W1A4', 'Untitled list', null),
+  templateKey: 'blank',
+  itemStateMode: { mode: 'none' as const },
+};
+const INCAPABLE_GROCERIES = {
+  ...UNTITLED,
+  listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1A5',
+  title: 'Groceries without checkboxes',
+  slot: 'groceries' as const,
+};
 
 function seeded(lists: readonly List[], defaultLists: Record<string, string> = {}) {
   const client = new QueryClient({
@@ -74,6 +85,53 @@ describe('useDestination', () => {
     // Packing holds no slot: never a candidate, but reachable through `Choose another list`.
     expect(result.current.candidates.map((l) => l.title)).toEqual(['Groceries']);
     expect(result.current.all.map((l) => l.title)).toEqual(['Groceries', 'Packing']);
+  });
+
+  it('excludes an Untitled blank list from every ingredient destination set', async () => {
+    const { wrapper } = seeded([GROCERIES, UNTITLED, INCAPABLE_GROCERIES]);
+    const { result } = renderHook(() => useDestination('groceries', undefined), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.resolution?.kind).toBe('use'));
+
+    expect(result.current.candidates.map((candidate) => candidate.title)).toEqual([
+      'Groceries',
+    ]);
+    expect(result.current.all.map((candidate) => candidate.title)).toEqual(['Groceries']);
+  });
+
+  it('ignores an incapable override and falls back to the resolved destination', async () => {
+    const { wrapper } = seeded([GROCERIES, UNTITLED]);
+    const { result } = renderHook(() => useDestination('groceries', UNTITLED.listId), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.list?.title).toBe('Groceries'));
+    expect(result.current.needsAnswer).toBe(false);
+  });
+
+  it('treats an incapable stored default as absent and asks among capable lists', async () => {
+    const { wrapper } = seeded([GROCERIES, COSTCO, INCAPABLE_GROCERIES], {
+      groceries: INCAPABLE_GROCERIES.listId,
+    });
+    const { result } = renderHook(() => useDestination('groceries', undefined), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.resolution?.kind).toBe('ask'));
+    expect(result.current.list).toBeUndefined();
+    expect(result.current.needsAnswer).toBe(true);
+  });
+
+  it('keeps Watch unrestricted and honours a one-off blank-list override', async () => {
+    const { wrapper } = seeded([GROCERIES, UNTITLED]);
+    const { result } = renderHook(() => useDestination('watch', UNTITLED.listId), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.status).toBe('success'));
+    expect(result.current.all.map((candidate) => candidate.title)).toEqual([
+      'Groceries',
+      'Untitled list',
+    ]);
+    expect(result.current.list?.title).toBe('Untitled list');
   });
 
   it('asks once when several are eligible and no default is set', async () => {

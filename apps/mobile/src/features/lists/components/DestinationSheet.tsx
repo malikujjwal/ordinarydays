@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { NewListSheet } from '@/features/lists/components/NewListSheet';
 import { useDestination } from '@/hooks/useDestination';
 import { describeApiFailure } from '@/lib/apiFailure';
+import { capabilityFor } from '@/lib/destinationCapability';
 import {
   CHOOSE_ANOTHER_LIST,
   destinationQuestion,
@@ -28,9 +29,10 @@ import { useToast } from '@/stores/toast';
  *   `Create list` the caller's flow returns with the new list named and still requires
  *   its own named confirmation — creating the destination never also adds anything.
  *
- * `Choose another list` escapes to the full index: a user may put ingredients in a list
- * that is not marked as a destination. Composed at the routes (features may not import each
- * other); the flows receive the chosen `listId` back and show it before any write.
+ * `Choose another list` escapes to every capable list in the index: a user may put
+ * ingredients in a checkbox list that is not marked as a groceries destination, but can
+ * never choose a list the API would refuse. Composed at the routes (features may not import
+ * each other); the flows receive the chosen `listId` back and show it before any write.
  */
 export interface DestinationSheetProps {
   open: boolean;
@@ -52,6 +54,7 @@ export function DestinationSheet({
 }: DestinationSheetProps) {
   const theme = useTheme();
   const destination = useDestination(slot, current);
+  const templatePredicate = capabilityFor(slot);
   const [remember, setRemember] = useState(true);
   const [showAll, setShowAll] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -150,6 +153,7 @@ export function DestinationSheet({
       <NewListSheet
         open={creating}
         {...(slot === 'watch' ? { constrainTo: 'watch-later' as const } : {})}
+        {...(templatePredicate === undefined ? {} : { templatePredicate })}
         onClose={() => setCreating(false)}
         onCreated={({ listId }) => {
           // The new list is this operation's destination; nothing is added to it here.
