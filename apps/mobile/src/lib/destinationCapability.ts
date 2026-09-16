@@ -13,3 +13,14 @@ export type DestinationCapability = (list: Pick<List, 'itemStateMode'>) => boole
 export function capabilityFor(slot: DefaultSlot): DestinationCapability | undefined {
   return slot === 'groceries' ? canReceiveIngredients : undefined;
 }
+
+/** Applies an operation's capability boundary before slot routing or one-off selection. */
+export function destinationCapableLists(
+  slot: DefaultSlot,
+  lists: readonly List[],
+): readonly List[] {
+  const capability = capabilityFor(slot);
+  return lists.filter(
+    (list) => !list.archived && (capability === undefined || capability(list)),
+  );
+}

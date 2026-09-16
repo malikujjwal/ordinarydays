@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { useEligibleLists } from '@/hooks/useEligibleLists';
 import { ME_QUERY_KEY, useViewer } from '@/hooks/useViewer';
 import { apiClient } from '@/lib/apiClient';
-import { capabilityFor } from '@/lib/destinationCapability';
+import { destinationCapableLists } from '@/lib/destinationCapability';
 
 /**
  * Where an add-to flow puts things (P3-12's four-step rule on the client, P3-43).
@@ -59,12 +59,9 @@ export function useDestination(
   });
 
   return useMemo(() => {
-    const capability = capabilityFor(slot);
     // Apply write capability before routing. This keeps slot candidates, one-off choices and
     // stale stored defaults inside the exact boundary enforced by the API.
-    const capableLists = lists.filter(
-      (list) => !list.archived && (capability === undefined || capability(list)),
-    );
+    const capableLists = destinationCapableLists(slot, lists);
     const resolution =
       status === 'success'
         ? resolveSlot(slot, capableLists, viewer?.defaultLists)
