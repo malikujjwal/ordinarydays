@@ -1,5 +1,6 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { fixedClock, MAX_INGREDIENTS_PER_ADD, timeZone } from '@od/shared';
+import { type ItemOrigin, itemOriginatesFrom } from '@od/shared/lists';
 import { addWallDays } from '@od/shared/recurrence';
 import { instant } from '@od/shared/schemas';
 import type { List, ListItem } from '@od/shared/types';
@@ -33,6 +34,12 @@ useTestTable();
  *   request being composed and replayed is a real mutation of a real `details.ingredients`
  *   array, and the per-index write condition either holds against it or does not.
  * - **Replay adds nothing twice**, under the same key and after the receipt is gone.
+ * - **`Added` is read off the list, never off the meal** (Option B, 2026-09-16). The action
+ *   writes no marker and advances no version on the Activity side; it fences the meal it read
+ *   with a `ConditionCheck` and records each ingredient's identity on the destination item's
+ *   `sourceProvenance`. Whether that claim survives — through a rename, a reorder, an edit,
+ *   or a second call from the same meal onto a row it already labelled — is a claim about the
+ *   real table, not about which repository method a mock saw.
  */
 
 type AppModule = typeof import('../../src/app.js');
@@ -127,6 +134,26 @@ const receiptFor = async (key: string, userId = DEV) =>
 
 const itemRows = async (listId: string) =>
   (await partition(`LIST#${listId}`)).filter((row) => String(row.sk).startsWith('ITEM#'));
+
+/**
+ * The item as a client would actually read it — through `GET`, so `origins` is the response
+ * mapper's derivation (`toListItem`) rather than something this suite recomputes from raw
+ * `sourceProvenance` (Option B, 2026-09-16).
+ */
+const getItem = async (listId: string, itemId: string): Promise<Json> => {
+  const res = await request('GET', `/v1/lists/${listId}/items/${itemId}`);
+  expect(res.status).toBe(200);
+  return (await res.json()).data as Json;
+};
+
+/** The one predicate for "does this item answer for this meal's ingredient?", against a
+ *  `GET` response's loosely-typed JSON rather than the `ListItem` shape it structurally is. */
+const originates = (item: Json, activityId: string, ingredientId: string): boolean =>
+  itemOriginatesFrom(
+    item as unknown as { origins?: ItemOrigin[] },
+    activityId,
+    ingredientId,
+  );
 
 const storedMeal = async (activityId = MEAL) =>
   (await rawItem(`ACT#${activityId}`, 'META')) as Json | undefined;
@@ -244,13 +271,13 @@ describe('nothing happens until the user asks for it', () => {
 });
 
 describe('the confirmed action', () => {
-  it('writes exactly the three selected rows, labelled and attributed', async () => {
+  it('writes exactly the three selected rows, labelled, attributed and carrying their ingredient origin', async () => {
     const { list } = await setUp();
 
     const res = await addToList(list.listId, [CHICKEN, TORTILLAS, TOMATOES]);
 
     expect(res.status).toBe(201);
-    const body = (await res.json()).data as Json;
+    const body = (await res.json()).data as { sourceLabel: string; ingredients: Json[] };
     expect(body.sourceLabel).toBe('Chicken tacos');
 
     const rows = await itemRows(list.listId);
@@ -260,11 +287,34 @@ describe('the confirmed action', () => {
       'Tomatoes',
       'Tortillas (8)',
     ]);
+    const ingredientIdByTitle: Record<string, string> = {
+      Chicken: CHICKEN,
+      Tomatoes: TOMATOES,
+      'Tortillas (8)': TORTILLAS,
+    };
     for (const row of rows) {
       expect(row.sourceActivityId).toBe(MEAL);
       expect(row.sourceLabel).toBe('Chicken tacos');
       expect(row.sourceProvenance).toEqual([
-        { activityId: MEAL, label: 'Chicken tacos' },
+        {
+          activityId: MEAL,
+          label: 'Chicken tacos',
+          ingredientIds: [ingredientIdByTitle[String(row.title)]],
+        },
+      ]);
+    }
+
+    // The response item already carries the derived origin (Option B, 2026-09-16) — exactly
+    // the selected ingredient, and nothing a client would have to re-fetch to learn.
+    const originByIngredient = new Map(
+      (body.ingredients as { ingredientId: string; item: Json }[]).map((row) => [
+        row.ingredientId,
+        row.item.origins,
+      ]),
+    );
+    for (const ingredientId of [CHICKEN, TORTILLAS, TOMATOES]) {
+      expect(originByIngredient.get(ingredientId)).toEqual([
+        { activityId: MEAL, ingredientId },
       ]);
     }
 
@@ -281,72 +331,124 @@ describe('the confirmed action', () => {
     });
   });
 
-  it('leaves the unselected ingredient off the list and unmarked', async () => {
+  it('leaves the unselected ingredient off the list, recorded on no item’s origin', async () => {
     const { list } = await setUp();
 
     await addToList(list.listId, [CHICKEN, TORTILLAS, TOMATOES]);
 
     const rows = await itemRows(list.listId);
     expect(rows.map((row) => row.title)).not.toContain('Sour cream');
-
-    const ingredients = await storedIngredients();
-    const sourCream = ingredients.find((row) => row.ingredientId === SOUR_CREAM);
-    expect(sourCream).not.toHaveProperty('addedToListId');
+    for (const row of rows) {
+      const ids = ((row.sourceProvenance as Json[] | undefined) ?? []).flatMap(
+        (segment) => (segment.ingredientIds as string[] | undefined) ?? [],
+      );
+      expect(ids).not.toContain(SOUR_CREAM);
+    }
   });
 
-  it('marks each selected source ingredient as added, and only those', async () => {
+  /**
+   * **Rewritten for Option B (2026-09-16).** `Added` used to be a marker on the meal
+   * (`addedToListId`); it is now presence, derived from whether the destination list's own
+   * item still originates from this meal's ingredient (`itemOriginatesFrom`,
+   * `packages/shared/src/lists/itemOrigin.ts`) — read here exactly as a client would, through
+   * `GET`, not by inspecting stored `sourceProvenance` directly.
+   */
+  it('exposes each selected ingredient’s presence through the shared origin predicate, and only those', async () => {
     const { list } = await setUp();
 
     await addToList(list.listId, [CHICKEN, TORTILLAS, TOMATOES]);
 
-    const byId = new Map(
-      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
+    const items = await Promise.all(
+      (await itemRows(list.listId)).map((row) =>
+        getItem(list.listId, String(row.itemId)),
+      ),
     );
-    expect(byId.get(CHICKEN)).toBe(list.listId);
-    expect(byId.get(TORTILLAS)).toBe(list.listId);
-    expect(byId.get(TOMATOES)).toBe(list.listId);
-    expect(byId.get(SOUR_CREAM)).toBeUndefined();
+    const presentFor = (ingredientId: string) =>
+      items.some((item) => originates(item, MEAL, ingredientId));
+
+    expect(presentFor(CHICKEN)).toBe(true);
+    expect(presentFor(TORTILLAS)).toBe(true);
+    expect(presentFor(TOMATOES)).toBe(true);
+    expect(presentFor(SOUR_CREAM)).toBe(false);
   });
 
   /**
-   * **Corrected in review.** The first version deliberately left `updatedAt` alone, mirroring
-   * `clearListProvenance`. That was wrong: `addedToListId` is rendered — it is what makes an
-   * ingredient row say `Added` — and it lives inside `details`, which `PATCH` replaces
-   * wholesale under `If-Match`. A field that changes what the user sees, on a versioned
-   * object, has to move the version.
-   *
-   * `lastActivityAt` is a different question and still does not move: that field is about
-   * discussion, not edits (P2-06).
+   * **Rewritten for Option B (2026-09-16).** The action used to write the meal — bumping
+   * `updatedAt` and setting `addedToListId` — because that marker was what made a row read
+   * `Added`. Presence now lives entirely on the destination item's `sourceProvenance`
+   * (`ingredientMealUnchangedCheck`, `services/api/src/repositories/activityRepository.ts`),
+   * so there is nothing left on the Activity side for this action to change: it fences the
+   * meal it read with a `ConditionCheck` and writes nothing to it. `activityUpdatedAt` in the
+   * response is therefore the version the caller already read, returned so it never has to
+   * refetch to learn its own `If-Match` is still good.
    */
-  it('advances the meal’s updatedAt, and returns the new version', async () => {
+  it('does not write the meal — updatedAt is unchanged, and activityUpdatedAt is the read version', async () => {
     const { list } = await setUp();
     const before = await storedMeal();
 
     const res = await addToList(list.listId, [CHICKEN]);
 
     const after = await storedMeal();
-    expect(after?.updatedAt).not.toBe(before?.updatedAt);
-    expect(((await res.json()).data as Json).activityUpdatedAt).toBe(after?.updatedAt);
-    expect(after?.lastActivityAt).toBe(before?.lastActivityAt);
+    expect(after).toEqual(before);
+    expect(((await res.json()).data as Json).activityUpdatedAt).toBe(before?.updatedAt);
   });
 
-  /** The version it returns is usable: a PATCH carrying the stale one must lose. */
-  it('makes a pre-add If-Match stale, so it cannot overwrite the markers', async () => {
+  /**
+   * The mirror of the old "stale If-Match" test, inverted: nothing wrote the meal, so a
+   * version read before the add is not stale after it — it is still the current one.
+   */
+  it('leaves a pre-add If-Match valid, because the add never advances the meal’s version', async () => {
     const { list } = await setUp();
     const before = await storedMeal();
 
     await addToList(list.listId, [CHICKEN]);
 
-    const stale = await request(
+    const stillCurrent = await request(
       'PATCH',
       `/v1/activities/${MEAL}`,
       { title: 'Chicken tacos, revised' },
       { 'If-Match': String(before?.updatedAt) },
     );
 
-    expect(stale.status).toBe(409);
-    const ingredients = await storedIngredients();
-    expect(ingredients[0]?.addedToListId).toBe(list.listId);
+    expect(stillCurrent.status).toBe(200);
+    expect((await storedMeal())?.title).toBe('Chicken tacos, revised');
+  });
+
+  /**
+   * The extend path's equivalent of the create path's grouping test above: two ingredients of
+   * the same meal, sent in the same request, absorbed into the one row their shared title
+   * matches — both must be recorded, not only the one classification happened to pick first.
+   */
+  it('records a second ingredient of the same meal onto a row this meal already labelled', async () => {
+    await createMeal({
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        ingredients: [
+          { ingredientId: CHICKEN, name: 'Chicken' },
+          { ingredientId: TORTILLAS, name: 'chicken' },
+        ],
+      },
+    });
+    const list = await createList();
+
+    const first = await addToList(list.listId, [CHICKEN]);
+    expect(first.status).toBe(201);
+    const second = await addToList(list.listId, [TORTILLAS]);
+    expect(second.status).toBe(201);
+    const secondBody = (await second.json()).data as { ingredients: Json[] };
+    expect(secondBody.ingredients[0]?.outcome).toBe('labelled');
+
+    const rows = await itemRows(list.listId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.sourceProvenance).toEqual([
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN, TORTILLAS] },
+    ]);
+
+    const item = await getItem(list.listId, String(rows[0]?.itemId));
+    expect(originates(item, MEAL, CHICKEN)).toBe(true);
+    expect(originates(item, MEAL, TORTILLAS)).toBe(true);
+    expect(item.origins).toHaveLength(2);
   });
 
   it('reports what happened to each ingredient, in the order they were sent', async () => {
@@ -418,8 +520,8 @@ describe('the duplicate rule, in all three states', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.sourceLabel).toBe('Chicken soup · Chicken tacos');
     expect(rows[0]?.sourceProvenance).toEqual([
-      { activityId: OTHER_MEAL, label: 'Chicken soup' },
-      { activityId: MEAL, label: 'Chicken tacos' },
+      { activityId: OTHER_MEAL, label: 'Chicken soup', ingredientIds: [CHICKEN] },
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
     ]);
 
     const later = await addToList(list.listId, [TOMATOES]);
@@ -445,6 +547,12 @@ describe('the duplicate rule, in all three states', () => {
     const outcomes = ((await res.json()).data as { ingredients: Json[] }).ingredients;
     expect(outcomes.map((row) => row.outcome)).toEqual(['created', 'labelled']);
     expect(new Set(outcomes.map((row) => (row.item as Json).itemId)).size).toBe(1);
+    // Both ingredients merged into the one created row, so both are recorded on it — the
+    // 'labelled' outcome is not a second-class citizen as far as presence is concerned.
+    const created = (await itemRows(list.listId))[0];
+    expect(created?.sourceProvenance).toEqual([
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN, TORTILLAS] },
+    ]);
     expect(await itemRows(list.listId)).toHaveLength(1);
   });
 
@@ -506,8 +614,8 @@ describe('the label is the plan’s name', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.sourceLabel).toBe('Chicken tacos · Chicken tacos');
     expect(rows[0]?.sourceProvenance).toEqual([
-      { activityId: OTHER_MEAL, label: 'Chicken tacos' },
-      { activityId: MEAL, label: 'Chicken tacos' },
+      { activityId: OTHER_MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
     ]);
   });
 
@@ -606,13 +714,17 @@ describe('selection is by id, never by position', () => {
       'Tortillas (8)',
     ]);
 
-    // And the flags landed on those same two rows, wherever they now sit.
-    const byId = new Map(
-      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
-    );
-    expect(byId.get(CHICKEN)).toBe(list.listId);
-    expect(byId.get(TORTILLAS)).toBe(list.listId);
-    expect(byId.get(TOMATOES)).toBeUndefined();
+    // And presence landed on those same two rows, wherever they now sit — read the way a
+    // client would, not by inspecting the reordered `details.ingredients` array.
+    const rows = await itemRows(list.listId);
+    const chicken = rows.find((row) => row.title === 'Chicken');
+    const tortillas = rows.find((row) => row.title === 'Tortillas (8)');
+    const chickenItem = await getItem(list.listId, String(chicken?.itemId));
+    const tortillasItem = await getItem(list.listId, String(tortillas?.itemId));
+    expect(originates(chickenItem, MEAL, CHICKEN)).toBe(true);
+    expect(originates(tortillasItem, MEAL, TORTILLAS)).toBe(true);
+    expect(originates(chickenItem, MEAL, TOMATOES)).toBe(false);
+    expect(originates(tortillasItem, MEAL, TOMATOES)).toBe(false);
   });
 
   it('rejects the whole action when one selected row has been deleted', async () => {
@@ -636,10 +748,10 @@ describe('selection is by id, never by position', () => {
 
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('validation_failed');
+    // The meal is never written by this action at all, so there is nothing on it a failed
+    // attempt could have changed (Option B, 2026-09-16) — the assertion that mattered here is
+    // the one above: no item exists to carry anyone's origin.
     expect(await itemRows(list.listId)).toHaveLength(0);
-    for (const ingredient of await storedIngredients()) {
-      expect(ingredient).not.toHaveProperty('addedToListId');
-    }
   });
 });
 
@@ -684,12 +796,16 @@ describe('replay adds nothing twice', () => {
     for (const response of [first, second]) expect(response.status).toBe(201);
     expect(await first.json()).toEqual(await second.json());
 
-    // And the meal agrees with the list, once.
-    const byId = new Map(
-      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
-    );
-    expect(byId.get(CHICKEN)).toBe(list.listId);
-    expect(byId.get(TOMATOES)).toBe(list.listId);
+    // And each item answers for its own ingredient, once — not the meal agreeing with the
+    // list, since Option B (2026-09-16) put presence on the item and nothing on the meal.
+    const chicken = rows.find((row) => row.title === 'Chicken');
+    const tomatoes = rows.find((row) => row.title === 'Tomatoes');
+    expect(
+      originates(await getItem(list.listId, String(chicken?.itemId)), MEAL, CHICKEN),
+    ).toBe(true);
+    expect(
+      originates(await getItem(list.listId, String(tomatoes?.itemId)), MEAL, TOMATOES),
+    ).toBe(true);
   });
 
   it('creates no duplicate under a new key, because the item ids are the same', async () => {
@@ -766,12 +882,11 @@ describe('replay adds nothing twice', () => {
     );
 
     expect(reused.status).toBe(409);
-    expect((await itemRows(list.listId)).map((row) => row.title)).toEqual(['Chicken']);
-    const byId = new Map(
-      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
-    );
-    expect(byId.get(CHICKEN)).toBe(list.listId);
-    expect(byId.get(TOMATOES)).toBeUndefined();
+    const rows = await itemRows(list.listId);
+    expect(rows.map((row) => row.title)).toEqual(['Chicken']);
+    const item = await getItem(list.listId, String(rows[0]?.itemId));
+    expect(originates(item, MEAL, CHICKEN)).toBe(true);
+    expect(originates(item, MEAL, TOMATOES)).toBe(false);
   });
 
   it('keeps a created destination bound through delete and Undo', async () => {
@@ -1036,11 +1151,16 @@ describe('the destination the user confirmed', () => {
 });
 
 /**
- * The provenance the client may **not** author, and the provenance the server must **not**
- * lose. Both raised in review; both were real, and the second was reachable from the app's
- * ordinary meal-edit screen.
+ * The provenance the client may **not** author, and the presence the server keeps honest
+ * regardless of what the meal does to itself afterward.
+ *
+ * `addedToListId` is deliberately still rejected on input — the field stays on the schema,
+ * `deprecated`, purely so a pre-2026-09-16 stored row still parses (`mealIngredient` is a
+ * `strictObject`); `mealIngredientInput` has never accepted it, and neither test below
+ * depends on the marker's old write-side behaviour, which no longer exists (Option B,
+ * 2026-09-16 — `docs/reports/destination-flow-simplification-20260916.md`).
  */
-describe('addedToListId is server-owned in both directions', () => {
+describe('addedToListId is rejected on input; presence lives on the item, not the meal', () => {
   it.each([
     ['create', '/v1/activities'],
     ['patch', `/v1/activities/${MEAL}`],
@@ -1079,13 +1199,20 @@ describe('addedToListId is server-owned in both directions', () => {
   });
 
   /**
-   * An ordinary edit — renaming an ingredient, fixing a quantity, reordering — used to wipe
-   * every marker, because `PATCH` replaces `details` wholesale and the client cannot send the
-   * field back. The server retains them, matched by `ingredientId`.
+   * **Rewritten for Option B (2026-09-16).** An ordinary edit — renaming an ingredient,
+   * fixing a quantity, reordering — used to wipe every marker, because `PATCH` replaces
+   * `details` wholesale and the client cannot send the field back; the server used to retain
+   * them by matching `ingredientId`. There is nothing left to retain: presence lives on the
+   * list item's own `sourceProvenance`, which this edit never touches, so the point worth
+   * proving is the opposite of the old test's — that an edit to the **meal** cannot change
+   * what the **item** already answers for, in either direction.
    */
-  it('keeps markers across an edit that renames and reorders ingredients', async () => {
+  it('an ingredient edit that renames and reorders the meal does not change which items answer for it', async () => {
     const { list } = await setUp();
     await addToList(list.listId, [CHICKEN, TORTILLAS]);
+    const rows = await itemRows(list.listId);
+    const chickenItemId = rows.find((row) => row.title === 'Chicken')?.itemId;
+    const tortillasItemId = rows.find((row) => row.title === 'Tortillas (8)')?.itemId;
 
     const res = await request(
       'PATCH',
@@ -1106,20 +1233,29 @@ describe('addedToListId is server-owned in both directions', () => {
     );
     expect(res.status).toBe(200);
 
+    const chickenItem = await getItem(list.listId, String(chickenItemId));
+    const tortillasItem = await getItem(list.listId, String(tortillasItemId));
+    expect(originates(chickenItem, MEAL, CHICKEN)).toBe(true);
+    expect(originates(tortillasItem, MEAL, TORTILLAS)).toBe(true);
+    expect(originates(chickenItem, MEAL, TOMATOES)).toBe(false);
+
+    // The edit itself still applied to the meal.
     const byId = new Map(
       (await storedIngredients()).map((row) => [row.ingredientId, row]),
     );
-    expect(byId.get(CHICKEN)?.addedToListId).toBe(list.listId);
-    expect(byId.get(TORTILLAS)?.addedToListId).toBe(list.listId);
-    expect(byId.get(TOMATOES)).not.toHaveProperty('addedToListId');
-    // The edit itself still applied.
     expect(byId.get(CHICKEN)?.name).toBe('Chicken thighs');
     expect(byId.get(TORTILLAS)?.quantity).toBe('12');
   });
 
-  it('does not resurrect a marker for a replaced row', async () => {
+  /**
+   * A replaced ingredient id must not inherit the old one's presence just because a later
+   * row happens to share its title — identity is the `ingredientId` recorded at add time,
+   * never a title match recomputed later.
+   */
+  it('a replaced ingredient id does not inherit the old one’s presence on the list', async () => {
     const { list } = await setUp();
     await addToList(list.listId, [CHICKEN]);
+    const chickenRow = (await itemRows(list.listId))[0];
 
     await request(
       'PATCH',
@@ -1133,6 +1269,10 @@ describe('addedToListId is server-owned in both directions', () => {
       },
       { 'If-Match': String((await storedMeal())?.updatedAt) },
     );
+
+    const item = await getItem(list.listId, String(chickenRow?.itemId));
+    expect(originates(item, MEAL, CHICKEN)).toBe(true);
+    expect(originates(item, MEAL, SOUR_CREAM)).toBe(false);
 
     const ingredients = await storedIngredients();
     expect(ingredients).toHaveLength(1);
@@ -1150,18 +1290,20 @@ describe('addedToListId is server-owned in both directions', () => {
  * trusting the response.
  */
 describe('one commit, or none', () => {
-  it('never stores a receipt without the provenance it describes', async () => {
+  it('never stores a receipt without the item provenance it describes', async () => {
     const { list } = await setUp();
     const key = crypto.randomUUID();
 
     await addToList(list.listId, [CHICKEN, TORTILLAS], { 'Idempotency-Key': key });
 
     expect(await receiptFor(key)).toBeDefined();
-    const byId = new Map(
-      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
+    const items = await Promise.all(
+      (await itemRows(list.listId)).map((row) =>
+        getItem(list.listId, String(row.itemId)),
+      ),
     );
-    expect(byId.get(CHICKEN)).toBe(list.listId);
-    expect(byId.get(TORTILLAS)).toBe(list.listId);
+    expect(items.some((item) => originates(item, MEAL, CHICKEN))).toBe(true);
+    expect(items.some((item) => originates(item, MEAL, TORTILLAS))).toBe(true);
   });
 
   it('caps one operation at MAX_INGREDIENTS_PER_ADD', async () => {
@@ -1268,6 +1410,21 @@ describe('a change landing between the read and the commit', () => {
           fired = true;
           await injected();
         }
+        return original(...args);
+      });
+  };
+
+  /**
+   * Runs `injected` before **every** attempt, unlike {@link injectOnce} — so a fence that
+   * keeps failing exhausts every one of `ATTEMPTS` rather than succeeding on the retry.
+   */
+  const injectEveryAttempt = async (injected: () => Promise<unknown>) => {
+    const listRepository = await import('../../src/repositories/listRepository.js');
+    const original = listRepository.planListItemWrites;
+    return vi
+      .spyOn(listRepository, 'planListItemWrites')
+      .mockImplementation(async (...args) => {
+        await injected();
         return original(...args);
       });
   };
@@ -1386,11 +1543,49 @@ describe('a change landing between the read and the commit', () => {
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.title).sort()).toEqual(['Chicken', 'Tortillas (8)']);
 
-    const byId = new Map(
-      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
-    );
-    expect(byId.get(CHICKEN)).toBe(list.listId);
-    expect(byId.get(TORTILLAS)).toBe(list.listId);
+    const chicken = rows.find((row) => row.title === 'Chicken');
+    const tortillas = rows.find((row) => row.title === 'Tortillas (8)');
+    expect(
+      originates(await getItem(list.listId, String(chicken?.itemId)), MEAL, CHICKEN),
+    ).toBe(true);
+    expect(
+      originates(await getItem(list.listId, String(tortillas?.itemId)), MEAL, TORTILLAS),
+    ).toBe(true);
+  });
+
+  /**
+   * The load-bearing half of the fence (Option B, 2026-09-16): `ingredientMealUnchangedCheck`
+   * writes nothing, but a `ConditionCheck` failure still cancels the **whole** transaction,
+   * every time. Patch the meal before every one of `ATTEMPTS` commits and the operation must
+   * give up with the retryable conflict, having written nothing at all — not "nothing except
+   * a marker", literally nothing, because there was never anything on the Activity side to
+   * write in the first place.
+   */
+  it('exhausts every retry and writes nothing when the meal keeps changing under it', async () => {
+    const { list } = await setUp();
+
+    const spy = await injectEveryAttempt(async () => {
+      const meal = await storedMeal();
+      const patched = await request(
+        'PATCH',
+        `/v1/activities/${MEAL}`,
+        { title: `Chicken tacos, revised ${crypto.randomUUID()}` },
+        { 'If-Match': String(meal?.updatedAt) },
+      );
+      expect(patched.status).toBe(200);
+    });
+
+    const key = crypto.randomUUID();
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS], {
+      'Idempotency-Key': key,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(res.status).toBe(500);
+    expect((await res.json()).error.code).toBe('internal');
+    expect(res.headers.get('Retry-After')).toBe('1');
+    expect(await itemRows(list.listId)).toHaveLength(0);
+    expect(await receiptFor(key)).toBeUndefined();
   });
 
   /**
@@ -1425,13 +1620,11 @@ describe('a change landing between the read and the commit', () => {
     expect(spy).toHaveBeenCalled();
     expect(res.status).toBe(400);
 
-    // The pre-existing row is byte-identical: no label was extended by the failed attempt.
+    // The pre-existing row is byte-identical: no label was extended by the failed attempt,
+    // and there is nothing on the meal a failed attempt could have changed either way.
     expect(await itemRows(list.listId)).toEqual(before);
     expect(before.map((row) => row.itemId)).toEqual([existing.itemId]);
-    for (const ingredient of await storedIngredients()) {
-      expect(ingredient).not.toHaveProperty('addedToListId');
-    }
-    // And the third thing this test is named for: the receipt rode in the same transaction,
+    // And the second thing this test is named for: the receipt rode in the same transaction,
     // so a rolled-back attempt must leave none under its key.
     expect(await receiptFor(key)).toBeUndefined();
   });
@@ -1492,9 +1685,6 @@ describe('a tombstoned destination id', () => {
       await rawItem(`LIST#${list.listId}`, `ITEMID#${doomed.itemId}`),
     ).toBeUndefined();
     expect(await receiptFor(key)).toBeUndefined();
-    for (const ingredient of await storedIngredients()) {
-      expect(ingredient).not.toHaveProperty('addedToListId');
-    }
   });
 
   /** The point of refusing: the Undo that owns that id still works. */
