@@ -62,9 +62,11 @@ import { repairListRanks } from './listRankRepairService.js';
  * ## One transaction, and why it had to become one
  *
  * Everything this action writes — created rows, structured/rendered label extensions,
- * permanent bindings for supplied ids absorbed by deduplication, the List META counters,
- * the meal's `addedToListId` markers and new version, and the idempotency receipt — commits
- * in a single `TransactWriteItems`.
+ * permanent bindings for supplied ids absorbed by deduplication, the List META counters, a
+ * `ConditionCheck` proving the meal is unchanged since read (`ingredientMealUnchangedCheck`,
+ * which writes nothing to it — Option B, 2026-09-16 replaced the meal's own `addedToListId`
+ * marker with presence derived from the destination list), and the idempotency receipt —
+ * commits in a single `TransactWriteItems`.
  *
  * The first version did not. It ran three ordered steps and argued that making every step
  * before the receipt idempotent was equivalent. Review found two holes in that, and both were
@@ -632,6 +634,18 @@ function classify(
           outcome: binding.outcome,
           itemId: target.itemId,
         });
+        /*
+         * A replay of an already-bound selection answers here and never reaches
+         * `extendProvenance` below — correctly: the identity was already committed, and
+         * replaying it must not write again. Known gap, legacy data only: a binding recorded
+         * before Option B (2026-09-16) has no `ingredientIds` to have carried, so this exact
+         * replay does not retroactively add this ingredient's id to the target's
+         * `sourceProvenance`, and presence-derived `Added` (`itemOriginatesFrom`) will not
+         * answer for it from this row. It self-heals the moment a *non-replay* selection of
+         * the same ingredient runs — a fresh create records `ingredientIds` from the start,
+         * and an extension of a different already-labelled row appends to it — so this is not
+         * a durable hole, only a pre-release one.
+         */
         continue;
       }
 

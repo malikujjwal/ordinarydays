@@ -118,7 +118,7 @@ export const mealIngredient = z.strictObject({
   name: freeText.min(1),
   quantity: freeText.optional(),
   /** @deprecated Superseded by derived presence (`origins`). Never written; see above. */
-  addedToListId: ulidId('lst').optional(),
+  addedToListId: ulidId('lst').optional().meta({ deprecated: true }),
 });
 
 /** What a client may say about an ingredient. `addedToListId` is deliberately absent. */

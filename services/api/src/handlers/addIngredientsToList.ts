@@ -23,9 +23,10 @@ import { toListItem } from './toList.js';
  * endpoint alone leaked would be a field one call site forgot — the reason the trim lives in
  * the projection rather than at each handler.
  *
- * `activityUpdatedAt` is the meal's new version. The action advances it, because the markers
- * it writes are rendered on the meal, so a client holding the previous value would draw stale
- * rows *and* pass its next `If-Match` (raised in review). Returning it saves that refetch.
+ * `activityUpdatedAt` is the version the meal was **read and classified against**, not a new
+ * one — since Option B (2026-09-16) this action no longer writes the meal (a `ConditionCheck`
+ * replaces the old marker `SET`), so there is no new version to report. A caller already
+ * holding that same `updatedAt` from its own read is not stale.
  */
 export const ADD_INGREDIENTS_TO_LIST_PATH = '/:id/ingredients/add-to-list';
 

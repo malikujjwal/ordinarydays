@@ -50,9 +50,12 @@ export type DetailsEdits =
 /**
  * Wholesale-replace payload for a type-details save.
  *
- * Starts from the full current `details`, overlays the edited keys, and strips
- * server-owned `addedToListId` from every ingredient — the input schema rejects it
- * rather than dropping it. Provenance is reattached on the server after the write.
+ * Starts from the full current `details`, overlays the edited keys, and strips the
+ * deprecated, server-owned `addedToListId` from every ingredient — the input schema rejects
+ * the key outright rather than dropping it silently, so a save that still carried it would
+ * `400`. There is nothing left on the server to reattach it from: an add no longer writes it,
+ * and `Added` is derived from the destination list's own items (Option B, 2026-09-16), not
+ * from anything carried across this patch.
  */
 export function buildDetailsPatch(
   current: ActivityDetails,
@@ -135,8 +138,10 @@ function pickMeal(current: Extract<ActivityDetails, { kind: 'meal' }>): {
 
 /**
  * An edited row as the input schema takes it, or nothing when its name is blank. Edited rows
- * never carry `addedToListId` — the server reattaches it by `ingredientId` (P3-17), so a
- * renamed row keeps its `Added` marker and a removed row takes its marker with it.
+ * never carry `addedToListId` (the input schema rejects it). Renaming or re-quantifying a row
+ * has nothing to preserve for `Added` any more — it is read off the destination list by
+ * `ingredientId`, not off anything stored on the meal — so this strip is only about
+ * satisfying the schema, never about losing state.
  */
 function cleanIngredient(row: EditedIngredient): EditedIngredient[] {
   const name = row.name.trim();

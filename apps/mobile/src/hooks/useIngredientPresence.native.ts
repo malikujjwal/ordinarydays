@@ -65,9 +65,14 @@ function isCurrentSession(state: ReturnType<typeof requireActiveNativeState>): b
  * No local page for the destination yet means presence cannot be answered — rendering
  * `Added` from a guess is precisely the receipt bug Option B replaces, and rendering it
  * `false` forever would just move the bug from "always added" to "never added". So an
- * unknown destination requests exactly the read that would resolve it
- * (`sync.pullListItemPage`), the same way `useEligibleLists.native.ts` pulls once its own
- * committed read has answered.
+ * unknown destination requests exactly the read that installs one: `sync.pullListDetail`,
+ * the fenced install of page one (`syncEngine.ts`'s `pullListDetail`/`installFirstItemPage`).
+ * `pullListItemPage` is the wrong call here — it only merges the *next* page onto one already
+ * installed and returns immediately when `pageState` has no cursor to continue, which is
+ * exactly the never-pulled case this branch exists for; it would resolve nothing and this
+ * view would stay unknown forever. `useAddIngredients.ts` already calls `pullListDetail` for
+ * the same reason after a successful add, and `useEligibleLists.native.ts` pulls the same way
+ * once its own committed read has answered.
  *
  * ## Presence, not completeness
  *
@@ -112,9 +117,11 @@ export function useIngredientPresence(
           }
           if (snapshot.page === undefined) {
             // Never pulled locally: presence is unknown, never assumed absent, and the read
-            // that would resolve it is requested rather than left to the next unrelated wake.
+            // that installs page one is requested rather than left to the next unrelated
+            // wake. `pullListItemPage` would return immediately here — see the doc comment
+            // above — so this must be `pullListDetail`.
             setView(UNKNOWN_PRESENCE);
-            const pull = sync.pullListItemPage;
+            const pull = sync.pullListDetail;
             if (pull !== undefined) void pull.call(sync, listId).catch(() => undefined);
             return;
           }

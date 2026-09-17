@@ -14,14 +14,19 @@ useTestTable();
  */
 
 type AppModule = typeof import('../../src/app.js');
+type UserRepository = typeof import('../../src/repositories/userRepository.js');
 type Json = Record<string, unknown>;
 
 let createApp: AppModule['createApp'];
+let userRepository: UserRepository;
 
 const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const DEV = 'usr_local_dev';
+const NOW = '2026-09-16T00:00:00.000Z';
 
 beforeAll(async () => {
   createApp = (await import('../../src/app.js')).createApp;
+  userRepository = await import('../../src/repositories/userRepository.js');
 });
 
 const app = () => createApp();
@@ -86,6 +91,39 @@ const complete = async (activityId: string, body: Json = {}) => {
   const response = await request('POST', `/v1/activities/${activityId}/complete`, body);
   expect(response.status, await response.clone().text()).toBe(200);
   return (await response.json()).data as Json;
+};
+
+/** `PATCH /v1/me` requires an existing profile; this table starts with none. */
+const seedProfile = () =>
+  userRepository.putProfile({
+    userId: DEV,
+    displayName: 'Dev',
+    timezone: 'America/New_York',
+    currency: 'USD',
+    weekStartsOn: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    schemaVersion: 1,
+  });
+
+const patchMe = async (body: Json) => {
+  const response = await request('PATCH', '/v1/me', body);
+  expect(response.status, await response.clone().text()).toBe(200);
+};
+
+const addToList = async (
+  activityId: string,
+  listId: string,
+  ingredientIds: readonly string[],
+) => {
+  const response = await request(
+    'POST',
+    `/v1/activities/${activityId}/ingredients/add-to-list`,
+    { listId, ingredients: ingredientIds.map((ingredientId) => ({ ingredientId })) },
+  );
+  // Always 201, even when every ingredient dedupes onto an existing row — the status
+  // describes the operation, not the row count (`addIngredientsToList.ts`'s own doc comment).
+  expect(response.status, await response.clone().text()).toBe(201);
 };
 
 const listPartition = async (listId: string) =>
@@ -171,6 +209,90 @@ describe('a Meal from a List with the mealIngredients integration', () => {
       remaining: 2,
     });
     expect(await listPartition(list.listId)).toEqual(before);
+  });
+
+  /**
+   * `remaining` used to read the meal's own (now-deprecated) `addedToListId` marker; it now
+   * asks whether the caller's groceries default holds a live item for each ingredient
+   * (Option B, ADR-060). Without this, a test that never sets `defaultLists.groceries` would
+   * pass identically under either implementation — it exits before the presence read runs at
+   * all (`remainingIngredientCount`'s `destinationListId === undefined` branch).
+   */
+  it("counts only the ingredients not yet present on the caller's groceries default", async () => {
+    const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+    const RICE = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+    const source = await createList('Meal ideas', 'meal-ideas');
+    const item = await addItem(source.listId, 'Chicken curry');
+    await planItem(source.listId, item.itemId, 'meal', {
+      kind: 'meal',
+      ingredients: [
+        { ingredientId: CHICKEN, name: 'Chicken' },
+        { ingredientId: RICE, name: 'Rice' },
+      ],
+    });
+    const groceries = await createList('Groceries', 'groceries');
+    await seedProfile();
+    await patchMe({ defaultLists: { groceries: groceries.listId } });
+    await addToList(ACT, groceries.listId, [CHICKEN]);
+
+    expect((await complete(ACT)).followUp).toEqual({
+      kind: 'meal_ingredients',
+      remaining: 1,
+    });
+  });
+
+  it('offers nothing once every ingredient is already present on the default', async () => {
+    const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+    const RICE = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+    const source = await createList('Meal ideas', 'meal-ideas');
+    const item = await addItem(source.listId, 'Chicken curry');
+    await planItem(source.listId, item.itemId, 'meal', {
+      kind: 'meal',
+      ingredients: [
+        { ingredientId: CHICKEN, name: 'Chicken' },
+        { ingredientId: RICE, name: 'Rice' },
+      ],
+    });
+    const groceries = await createList('Groceries', 'groceries');
+    await seedProfile();
+    await patchMe({ defaultLists: { groceries: groceries.listId } });
+    await addToList(ACT, groceries.listId, [CHICKEN, RICE]);
+
+    expect((await complete(ACT)).followUp).toBeUndefined();
+  });
+
+  /**
+   * Deleting the stored default list is deliberately **not** this case: the delete
+   * transaction's own `clearProfileDefault` (`listSlotService.ts`'s `profileDefaultToClear`)
+   * unsets `defaultLists.groceries` in the same commit, so by the time this reads the
+   * profile there is no destination configured at all — the same, correct "nothing sent
+   * anywhere identifiable" branch as never having set one. What this test needs is a stored
+   * default that still **names** a list the caller can no longer reach, which only a stale or
+   * dangling pointer produces — seeded directly, the same way `listSlots.int.test.ts` seeds
+   * its `GONE` id.
+   */
+  it('degrades to silence, not a false count, when the stored default names an unreachable list', async () => {
+    const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+    const source = await createList('Meal ideas', 'meal-ideas');
+    const item = await addItem(source.listId, 'Chicken curry');
+    await planItem(source.listId, item.itemId, 'meal', {
+      kind: 'meal',
+      ingredients: [{ ingredientId: CHICKEN, name: 'Chicken' }],
+    });
+    const unreachable = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X9';
+    await userRepository.putProfile({
+      userId: DEV,
+      displayName: 'Dev',
+      timezone: 'America/New_York',
+      currency: 'USD',
+      weekStartsOn: 1,
+      defaultLists: { groceries: unreachable },
+      createdAt: NOW,
+      updatedAt: NOW,
+      schemaVersion: 1,
+    });
+
+    expect((await complete(ACT)).followUp).toBeUndefined();
   });
 
   it('offers nothing for a Meal typed by hand, whatever its ingredients say', async () => {

@@ -1259,6 +1259,26 @@ receipt-aware operation, each exact source ingredient, found again by `ingredien
 `addedToListId`, so the button renders `Added` for those rows next time. A missing/stale id, a
 non-meal activity, or an inaccessible destination is rejected without partial writes.
 
+> **Amended 2026-09-16 (Option B, ADR-060) — the meal is never written, and `Added` is
+> derived from the destination list, not stored on the meal.** The sentence above describes
+> the pre-Option-B shape. `activityRepository.ts`'s `ingredientsAddedToListItem` (a `SET
+> details.ingredients[i].addedToListId`) is replaced by `ingredientMealUnchangedCheck`: a
+> `ConditionCheck` on the same two facts — the meal's read `updatedAt` and each resolved
+> `ingredientId` still occupying its index — that writes nothing. The meal's own `updatedAt`
+> is therefore not advanced by an add. Instead, each created or extended `sourceProvenance`
+> segment now carries `ingredientIds` beside its `activityId` (recorded on create, and
+> appended on extend — including when the meal already owns a segment for a *different*
+> ingredient, which the pre-Option-B extend path silently skipped), and the item view exposes
+> a derived, label-free `origins: { activityId, ingredientId }[]` flattened from it
+> (`packages/shared/src/lists/itemOrigin.ts`). `Added` is `itemOriginatesFrom(item, activityId,
+> ingredientId)` against the resolved destination list's own items — present when a live item
+> answers for that meal's ingredient, absent otherwise, with no in-between state to fabricate
+> or forget to clear. `details.ingredients[].addedToListId` stays on the stored schema,
+> deprecated: it is a strict object, so a pre-existing row must still parse, but nothing
+> writes it, reads it for rendering, or carries it across a `details` replacement any more.
+> Full analysis: `docs/reports/destination-flow-simplification-20260916.md`, ADR-060's
+> follow-up amendment in `decisions.md`.
+
 `provenanceLabel(meal, existingLabelsOnList)` implements the five rules in §7.5:
 
 1. Scheduled within 7 days **and** has a slot → `"<Weekday> <slot>"` — `Sunday dinner`.
@@ -3208,8 +3228,11 @@ ordinary `/items/bulk`.
 > Changing the destination from the `use` case never writes the default — that path has no
 > `Remember` control at all.
 
-Once the write lands, each added ingredient shows `Added` and cannot be added twice from the
-same meal.
+Once the write lands, each added ingredient reads `Added` for as long as the destination
+list holds a live item tracing back to it (Option B, ADR-060) — derived from the destination
+list's own items, not a fixed state stored on the meal, so deleting that item or viewing a
+different destination offers the ingredient again, and the same ingredient may read `Added`
+on more than one list at once.
 
 The Watch Plan's separate `Also add a list item to…` toggle appears in the reviewed Watch form
 and is off in every context. Turning
@@ -3328,8 +3351,10 @@ individually and nothing else verifies together:
 
 1. **Watchlist → Today** (§9.1), all eight steps, asserting one row not two at step 5, the
    correct write set at step 4, and **nothing created** at step 8.
-2. **Meal → Groceries** (§9.2), all ten steps, asserting the three labelled items, the
-   `Added` state on the meal, and that checking items leaves the meal untouched.
+2. **Meal → Groceries** (§9.2), all ten steps, asserting the three labelled items, that each
+   reads `Added` on the meal because the destination list holds a live item for it (Option B,
+   ADR-060 — not a state stored on the meal), and that checking items leaves the meal
+   untouched.
 3. **Trip plan → Packing list** (§9.3), all eleven steps, asserting both lists survive the
    plan's completion, unarchived, with their items.
 

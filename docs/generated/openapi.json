@@ -954,7 +954,8 @@
                             },
                             "addedToListId": {
                               "type": "string",
-                              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                              "deprecated": true
                             }
                           },
                           "required": [
@@ -1377,7 +1378,8 @@
                             },
                             "addedToListId": {
                               "type": "string",
-                              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                              "deprecated": true
                             }
                           },
                           "required": [
@@ -6113,7 +6115,8 @@
                         },
                         "addedToListId": {
                           "type": "string",
-                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                          "deprecated": true
                         }
                       },
                       "required": [

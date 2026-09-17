@@ -69,10 +69,10 @@ describe('useIngredientPresence (native)', () => {
         }),
     };
     listItems = new ListItemsRepository(opened, subscriptions, projections);
-    const pullListItemPage = vi.fn().mockResolvedValue(undefined);
+    const pullListDetail = vi.fn().mockResolvedValue(undefined);
     nativeState.current = {
       listItems,
-      sync: { pullListItemPage, request: vi.fn() },
+      sync: { pullListDetail, request: vi.fn() },
     };
   });
 
@@ -116,13 +116,50 @@ describe('useIngredientPresence (native)', () => {
     expect(result.current.present.size).toBe(0);
   });
 
-  it('is unknown and requests a pull when the destination has never been fetched locally', async () => {
+  it('is unknown, requests `pullListDetail` (not `pullListItemPage`, which would return immediately with nothing to continue), and resolves once that pull lands', async () => {
+    // `pullListDetail` is the method a real device would use to install page one
+    // (`syncEngine.ts`'s fenced `installFirstItemPage`). Driving the mock through the real
+    // repository write, rather than leaving it a bare stub, is what proves the hook actually
+    // resolves once that read lands — a stub-only assertion would pass even if the hook asked
+    // for the wrong read entirely.
+    if (transactions === undefined || listItems === undefined)
+      throw new Error('not ready');
+    const repository = listItems;
+    const runner = transactions;
+    const { sync } = nativeState.current as {
+      sync: { pullListDetail: ReturnType<typeof vi.fn> };
+    };
+    // Gated rather than resolved immediately: an ungated mock can install the row before the
+    // assertion below ever observes the unknown state, which would let this test pass without
+    // proving the hook actually renders unknown while nothing has landed yet.
+    let releasePull: () => void = () => undefined;
+    const pullGate = new Promise<void>((resolve) => {
+      releasePull = resolve;
+    });
+    sync.pullListDetail.mockImplementation(async (listId: string) => {
+      await pullGate;
+      await runner.run((transaction) =>
+        repository.replaceFirstPage(
+          transaction,
+          listId,
+          [
+            item('itm_01J000000000000000000000AA', listId, {
+              origins: [{ activityId: ACTIVITY, ingredientId: INGREDIENT_1 }],
+            }),
+          ],
+          PAGE,
+        ),
+      );
+    });
+
     const { result } = renderHook(() => useIngredientPresence(ACTIVITY, LIST_A));
-    const pullListItemPage = (
-      nativeState.current as { sync: { pullListItemPage: ReturnType<typeof vi.fn> } }
-    ).sync.pullListItemPage;
-    await waitFor(() => expect(pullListItemPage).toHaveBeenCalledWith(LIST_A));
+
+    await waitFor(() => expect(sync.pullListDetail).toHaveBeenCalledWith(LIST_A));
     expect(result.current).toEqual({ present: new Set(), known: false });
+
+    releasePull();
+    await waitFor(() => expect(result.current.known).toBe(true));
+    expect(result.current.present.has(INGREDIENT_1)).toBe(true);
   });
 
   it('offers the ingredient again once the local projection loses the item', async () => {
