@@ -1164,9 +1164,13 @@ there is no one-time question and no `Remember this choice` control):
 | Several, no default set | The destination row reads `Choose or create a list`. The picker lists every capable list flat, with nothing pre-selected. Choosing one is both this operation's destination **and** silently becomes the default from then on, confirmed with one non-blocking toast (`<List> is now your default list for …`). |
 | None | The destination row reads `Choose or create a list` and opens the catalogue, limited to list types that can hold the pending items, with nothing selected. After `Create list`, the original flow returns with that List visibly named; adding still requires its own named confirmation. |
 
-**In settings.** Profile → Settings → **Default lists** shows three rows — Groceries,
-Watchlist, Meals — each naming the list currently in the slot, or `Ask each time`. The same
-setting is reachable from the list itself as `Use as my default for` (§5.5).
+**In settings.** A list's own settings carry **Default destination** (§5.5): `Ingredients
+from meals` makes that list the default for the ingredients flow, `Things to watch` for the
+Watch flow, and `No default` clears it. Setting it writes the same `user.defaultLists` entry
+the picker writes — the server does both in the one transaction that writes the list's slot,
+so a slot change cannot leave the profile pointing at a list that no longer holds it. There is
+no separate profile-level screen and no `Ask each time` state: the destination is either a list
+the user chose, or nothing.
 
 Two rules that hold everywhere:
 

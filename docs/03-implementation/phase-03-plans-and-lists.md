@@ -320,8 +320,9 @@ creation has exactly one code path after an explicit style selection.
 **Tests.** A snapshot asserts every field of all seventeen records matches the canonical
 table exactly; `templateKey` values are unique and the shipped catalogue matches its fixed
 order. Non-`collection` templates are the only ones with a non-`null`
-`details`-bearing behaviour. Every non-null slot is compatible with its behaviour, and the
-three Watch styles are all allowed to seed `watch`. The test that
+`details`-bearing behaviour. Every non-null slot is compatible with its behaviour, and only
+the one `watch-later` style seeds `watch` (ADR-058 constrained Watch creation to that single
+template, which is also the only style the Watch destination's `New list` offers). The test that
 matters most: **all copied fields are values, not live references** — create a list from
 `groceries`, mutate the in-memory template object's behaviour, capabilities, slot, icon and
 empty-state copy, re-read the list, and assert the stored behaviour, capabilities, slot, icon and
@@ -1007,8 +1008,14 @@ at.
 > the per-operation-override rule and the most-recently-used rejection in the Decision above,
 > the stale-default edge case, and `profileDefaultToClear`/`removeDefaultListTransactItem`
 > (still in `listSlotService.ts`/`userRepository.ts`), which keep clearing a default on delete
-> or slot change exactly as before. What changes: a default is now written **silently on the
-> first pick** while none is stored, confirmed with one toast instead of a checkbox; and the
+> or slot change. `P3-09`'s slot write gains the mirror half that ADR-060's follow-up added
+> (`profileDefaultToSet`/`setDefaultListTransactItem`): a list **gaining** a slot now sets that
+> slot's `defaultLists` entry to itself in the **same** transaction. That half is what makes
+> the list-settings control tell the truth — ADR-060 deleted the one-time question, so the
+> settings row is the only way left to *change* a stored default, and a picker choice made
+> while one is stored is deliberately one-off. What changes: a default is now written
+> **silently on the first pick** while none is stored, confirmed with one toast instead of a
+> checkbox; and the
 > candidate set is capability alone — `packages/shared/src/lists/ingredientDestination.ts`'s
 > `listCapabilities` — not a list's own `slot`; `slot` now names only which key in
 > `user.defaultLists` the stored default is looked up under. Full
