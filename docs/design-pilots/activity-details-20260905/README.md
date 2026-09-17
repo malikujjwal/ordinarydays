@@ -1,8 +1,11 @@
 # Activity details design pilot — checkpoint
 
-Status: v1 produced and reviewed through browser checks; explicit whole-mock approval has not been recorded. This checkpoint does not authorize production implementation or contract amendments.
+Status: v1 and v2 produced and reviewed through browser checks; explicit whole-mock approval has not been recorded for either. This checkpoint does not authorize production implementation or contract amendments.
 
 ## Reviewable artifacts
+- [Implementation prompt](IMPLEMENTATION-PROMPT.md)
+- [Interactive mock v2 — the type-specific details](activity-mock-v2/index.html)
+- [v2 rationale, decisions, conflicts and checks](activity-mock-v2/README.md)
 - [Interactive mock v1](activity-mock-v1/index.html)
 - [Mock behavior, checks and limitations](activity-mock-v1/README.md)
 - [Before: activity detail](activity-evidence/01-meal.png)
@@ -13,15 +16,39 @@ Status: v1 produced and reviewed through browser checks; explicit whole-mock app
 - [Earlier calendar findings, now parked](FINDINGS.md)
 - [Historical process log](PILOT.md)
 
-From the repository root, serve the mock with:
+From the repository root, serve the mocks with:
 
 ```sh
-python3 -m http.server 8100 --bind 127.0.0.1 --directory docs/design-pilots/activity-details-20260905/activity-mock-v1
+python -m http.server 8101 --bind 127.0.0.1 --directory docs/design-pilots/activity-details-20260905
 ```
 
-Preview: http://127.0.0.1:8100/ . Reuse the existing pilot server if running; do not stop an unknown service. The interactive mock needs only its HTML and bundled Newsreader font, whose license is included. The inspection export and its temporary fixture servers are not needed to run it and are not committed.
+Preview <http://127.0.0.1:8101/activity-mock-v1/> and <http://127.0.0.1:8101/activity-mock-v2/>. The server root is the pilot folder, so both mocks share the one bundled Newsreader font, whose license is included; v2 borrows it rather than duplicating the binary. A `design-pilot` entry in `.claude/launch.json` runs exactly this command. Reuse the existing pilot server if running; do not stop an unknown service. The inspection export and its temporary fixture servers are not needed to run either mock and are not committed.
+
+## What v2 adds
+
+v1 addressed the notes editor. It did not touch the type-specific details, and the
+`ACTIVITY-FINDINGS.md` inspection did not look for them.
+
+v2 renders them. `ActivityDetailScreen.tsx` touches `activity.details` in exactly two places,
+both meal ingredients, so a Watch plan loses its season and episode, a Meal loses its recipe
+link, and an Event loses its reservation, tickets, organiser and public description the moment
+it is saved. The pasted `sourceUrl`, the `listId` backlink and the parent plan's name are
+unrendered too.
+
+It also makes them **editable**, because everything else on that screen is and the API already
+accepts `details` on `PATCH /v1/activities/:id`. Editing is section-level, and one sheet per
+type carries the whole `details` object — `PATCH` replaces it wholesale, so a partial save
+would silently drop the rest. Its proposal, its thirteen raised conflicts and its verification
+are in [activity-mock-v2/README.md](activity-mock-v2/README.md). Nothing in it is approved, and
+it changes no production code.
 
 ## Decisions and input
+
+**2026-09-09, founder — Task detail gains an `Add to this task` row.** Task detail has no chip
+row today (`AddToPlanRow` is plans-only), so a Task whose `sourceUrl` was empty could not reach
+it. `Link` is the only chip a task can carry: no prep children, no lists, no attachments
+(`today-and-tasks.md` §5.6). That section still describes the screen as lacking the affordance,
+and must be amended by whoever implements this.
 The user selected Activity details after initial calendar exploration. They reported that notes are difficult to discover and require tapping outside to save despite scarce blank space. This drove the visible Add/Edit notes entry, labeled bordered editor, explicit Save/Cancel, draft retention and more spacing. Inspection also motivated wrapping titles and clearer Repeat/Reminder edit cues.
 
 Explicit notes saving is a proposed exception to blur-save, pending approval. Preserve title blur-save and existing scheduling, reminder, recurrence, permissions, relationships and content-section behavior. Removing the empty Related plan row remains a separate proposal; the implementation prompt should preserve current behavior unless authorized.

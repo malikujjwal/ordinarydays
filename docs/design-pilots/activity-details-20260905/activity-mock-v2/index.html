@@ -1,0 +1,932 @@
+<!doctype html>
+<!-- Throwaway Activity details v2. Renders the type-specific details. No production code, no persistence. -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
+<title>Ordinary Days · Activity details v2</title>
+<style>
+@font-face{font-family:Newsreader;src:url('../activity-mock-v1/Newsreader.ttf');font-weight:500;font-display:swap}
+
+/* design-system.md §5.1 light palette, verbatim. Same variable names as mock v1. */
+:root{
+  --surface:#F1EDE5; --raised:#F8F5EF; --overlay:#FCFAF6; --input:#F0EBE3; --sunken:#ECE7DE;
+  --ink:#292621; --secondary:#6E675F; --muted:#6E675F; --disabled:#978F84;
+  --line:#E1DAD0; --subtle:#D3C9BC; --strong:#6E675F;
+  --action:#795565; --accent:#8B6374; --control:#8B6374; --inverse:#FFFDF9;
+  --selected:#EEE3E7; --accent-border:#C7AAB6;
+  --success:#616F45; --success-surface:#EDF0E2;
+  --warning:#8A6520; --warning-surface:#F6F0E2;
+  --danger:#B3261E; --focus:#795565;
+  --s1:2px; --s2:4px; --s3:8px; --s4:12px; --s5:16px; --s6:20px; --s7:24px;
+  --s8:32px; --s9:40px; --s10:48px; --s11:64px;
+  --sm:8px; --md:12px; --lg:16px; --xl:22px; --sheet:28px; --pill:999px;
+}
+[data-theme=dark]{
+  --surface:#171613; --raised:#211F1B; --overlay:#292620; --input:#1C1B18; --sunken:#1C1B18;
+  --ink:#F4F0E8; --secondary:#D0C9BE; --muted:#9F988D; --disabled:#6E6C63;
+  --line:#34312B; --subtle:#34312B; --strong:#9F988D;
+  --action:#B58298; --accent:#9F667F; --control:#AD748C; --inverse:#171613;
+  --selected:#2D2026; --accent-border:#5A3A49;
+  --success:#A7B690; --success-surface:#252A20;
+  --warning:#E3C07A; --warning-surface:#332B1C;
+  --danger:#F08579; --focus:#9F667F;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--surface); color:var(--ink);
+  font:16px/21px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  letter-spacing:-.1px;
+}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:transparent;min-height:44px;padding:var(--s3) var(--s4);border-radius:var(--md);text-align:left}
+button:hover{background:var(--sunken)}
+button:disabled{cursor:default;opacity:.62}
+a{color:var(--action)}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button svg{width:20px;height:20px;flex-shrink:0}
+h1,h2,h3,p{margin:0}
+h1{font:500 34px/38px Newsreader,Georgia,'Times New Roman',serif;letter-spacing:-.4px;overflow-wrap:anywhere}
+h2{font:500 24px/29px Newsreader,Georgia,serif}
+.small{font-size:13px;line-height:18px;letter-spacing:0}
+.muted{color:var(--muted)}
+.secondary{color:var(--secondary)}
+.action{color:var(--action)}
+.caps{font-size:11px;line-height:14px;letter-spacing:.8px;font-weight:600;text-transform:uppercase}
+
+/* ---- lab shell (identical grammar to mock v1) ---- */
+.layout{display:grid;grid-template-columns:300px minmax(320px,430px);gap:var(--s11);max-width:940px;margin:var(--s8) auto;padding:0 var(--s5);align-items:start}
+.lab{position:sticky;top:var(--s8)}
+.lab h2{margin:var(--s4) 0}
+.lab p{margin-bottom:var(--s5)}
+.lab label{display:block;margin-top:var(--s5);font-size:13px;line-height:18px}
+.lab select{width:100%;margin-top:var(--s3)}
+select{border:1px solid var(--strong);border-radius:var(--md);background:var(--input);padding:var(--s4);min-height:44px;max-width:100%}
+.lab details{margin-top:var(--s7)}
+summary{min-height:44px;cursor:pointer;padding:var(--s4) 0}
+.lab .note{font-size:13px;line-height:18px;color:var(--secondary);margin:var(--s3) 0 0}
+.switchline{display:flex;align-items:center;gap:var(--s3);margin-top:var(--s5);font-size:13px;line-height:18px}
+.switchline input{width:20px;height:20px;accent-color:var(--accent)}
+
+/* ---- phone ---- */
+.phone{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--lg);min-height:844px;overflow:clip;width:100%;margin:0 auto}
+.phone[data-width="320"]{max-width:320px}
+.appbar{display:flex;justify-content:space-between;align-items:center;padding:var(--s4) var(--s5)}
+.icon{width:44px;padding:var(--s4);display:inline-flex;align-items:center;justify-content:center}
+.body{padding:var(--s4) var(--s5) var(--s9)}
+
+/* ---- header: title, subtitle, when/where, actions ---- */
+.title-wrap{display:flex;align-items:flex-start;gap:var(--s3)}
+.title-wrap h1{flex:1}
+.title-edit{color:var(--action);flex-shrink:0}
+.audience{margin:var(--s2) 0 var(--s5);font-size:15px;line-height:20px;color:var(--secondary)}
+.when{width:100%;display:flex;align-items:center;justify-content:space-between;padding:var(--s4) 0;gap:var(--s3);border-radius:0}
+.when .date{display:inline-block;font-weight:600;border-bottom:1px dashed var(--strong);padding-bottom:var(--s1)}
+.when .hint{display:block;font-size:13px;line-height:18px;color:var(--action);margin-top:var(--s2)}
+.when svg{color:var(--action)}
+.schedule-summary{font-size:13px;line-height:18px;color:var(--secondary);margin:0 0 var(--s4)}
+.place{width:100%;display:flex;align-items:center;justify-content:space-between;gap:var(--s3);padding:var(--s4) 0;border-radius:0;margin-bottom:var(--s5)}
+.place .label{display:block;font-size:16px;line-height:21px}
+.place .addr{display:block;font-size:13px;line-height:18px;color:var(--secondary);margin-top:var(--s1)}
+.place svg{color:var(--action)}
+.primary{background:var(--control);color:var(--inverse);font-weight:600;min-height:52px;text-align:center}
+.primary:hover{background:var(--control);filter:brightness(.97)}
+.full{width:100%}
+.outline{border:1px solid var(--strong);text-align:center}
+.pair{display:flex;gap:var(--s3);margin-top:var(--s3)}
+.pair>*{flex:1}
+
+/* ---- settings RowGroup: controls. 72pt floor, label left / value right. ---- */
+.settings{margin-top:var(--s7)}
+.row{width:100%;display:flex;justify-content:space-between;align-items:center;gap:var(--s3);padding:var(--s5) 0;min-height:72px;border-bottom:1px solid var(--line);border-radius:0;font-size:15px;line-height:20px}
+.row .value{font-size:13px;line-height:18px;display:flex;align-items:center;gap:var(--s3);color:var(--action);text-align:right}
+.row.inert{cursor:default}
+.row.inert:hover{background:transparent}
+.row.inert .value{color:var(--muted)}
+.notes{padding:var(--s3) 0 var(--s5);border-bottom:1px solid var(--line)}
+.notes-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s3)}
+.notes-head h3{font-size:15px;line-height:20px;font-weight:400}
+.notes-head .privacy{font-size:13px;line-height:18px;color:var(--muted)}
+.notes-preview{margin-top:var(--s2);font-size:13px;line-height:18px;color:var(--secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.notes-action{display:flex;align-items:center;gap:var(--s2);color:var(--action);padding:var(--s3) 0}
+.future{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);padding:var(--s4) 0;border-bottom:1px solid var(--line);font-size:13px;line-height:18px;color:var(--muted)}
+.future strong{font-weight:400;color:var(--secondary);display:block;font-size:15px;line-height:20px}
+
+/* ---- sections ---- */
+.section{margin-top:var(--s7)}
+.section-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s3)}
+.section-head h3{font-size:11px;line-height:14px;letter-spacing:.8px;font-weight:600;margin:0}
+.section-head .trailing{font-size:13px;line-height:18px;font-weight:600;color:var(--secondary);flex-shrink:0}
+.section-head .edit{font-size:13px;line-height:18px;font-weight:600;color:var(--action);flex-shrink:0;min-height:44px;padding:var(--s3);margin:calc(var(--s3) * -1) calc(var(--s3) * -1) calc(var(--s3) * -1) 0}
+.section-note{font-size:13px;line-height:18px;color:var(--muted);margin:calc(var(--s2) * -1) 0 var(--s3)}
+
+/* ---- edit sheet, inside the phone frame ---- */
+.scrim{position:absolute;inset:0;background:rgba(38,42,40,.40);z-index:4}
+[data-theme="dark"] .scrim{background:rgba(0,0,0,.60)}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:5;background:var(--overlay);border-top:1px solid var(--line);border-radius:var(--sheet) var(--sheet) 0 0;max-height:85%;display:flex;flex-direction:column}
+.sheet-grab{width:36px;height:4px;border-radius:var(--pill,999px);background:var(--line);margin:var(--s3) auto var(--s2)}
+.sheet-head{padding:var(--s3) var(--s5) 0;font-size:16px;line-height:21px;font-weight:600}
+.sheet-body{padding:var(--s5);overflow:auto;display:flex;flex-direction:column;gap:var(--s5)}
+.sheet-actions{display:flex;justify-content:flex-end;gap:var(--s3);padding:var(--s4) var(--s5) var(--s6);border-top:1px solid var(--line)}
+.f{display:flex;flex-direction:column;gap:var(--s3)}
+.f>label{font-size:13px;line-height:18px;font-weight:600;color:var(--secondary)}
+.f input,.f textarea{border:1px solid var(--strong);border-radius:var(--md);background:var(--input);color:var(--ink);padding:var(--s4);min-height:44px;width:100%;font:inherit}
+.f textarea{min-height:132px;resize:vertical;line-height:1.4}
+.f input:focus-visible,.f textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.pairfields{display:flex;gap:var(--s3)}
+.pairfields>*{flex:1;min-width:0}
+.f .seglabel{font-size:13px;line-height:18px;font-weight:600;color:var(--secondary)}
+.seg{display:flex;gap:var(--s2);background:var(--sunken);border-radius:var(--md);padding:var(--s1)}
+.seg button{flex:1;min-height:40px;border-radius:calc(var(--md) - 2px);text-align:center;font-size:15px;line-height:20px;padding:var(--s3)}
+.seg button[aria-pressed="true"]{background:var(--raised);font-weight:600}
+.hintline{font-size:13px;line-height:18px;color:var(--muted)}
+
+/* ---- section-content grammar: content the user typed. 44pt floor, no 72pt control rhythm. ---- */
+.fact{padding:var(--s4) 0;border-bottom:1px solid var(--line)}
+.fact-primary{font-size:16px;line-height:21px;overflow-wrap:anywhere}
+.fact-secondary{font-size:13px;line-height:18px;color:var(--secondary);margin-top:var(--s1);overflow-wrap:anywhere}
+.datarow{width:100%;display:flex;justify-content:space-between;align-items:center;gap:var(--s5);min-height:44px;padding:var(--s4) 0;border-bottom:1px solid var(--line);border-radius:0;font-size:16px;line-height:21px}
+.datarow .v{font-size:13px;line-height:18px;color:var(--secondary);text-align:right;overflow-wrap:anywhere}
+.datarow.linkrow{cursor:pointer}
+.datarow.linkrow .v{color:var(--action);display:flex;align-items:center;gap:var(--s3);flex-shrink:0}
+.datarow.linkrow .v svg{color:var(--action)}
+.datarow.inert{cursor:default}
+.datarow.inert:hover{background:transparent}
+.prose{font-size:16px;line-height:21px;padding:var(--s4) 0;overflow-wrap:anywhere}
+.prose.clamped{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.showmore{color:var(--action);font-size:15px;line-height:20px;padding:var(--s3) 0;border-bottom:1px solid var(--line);width:100%}
+
+/* ---- prep / lists / ingredients, carried from v1 ---- */
+.prep{display:flex;align-items:center;gap:var(--s3);border-bottom:1px solid var(--line)}
+.prep .prep-title{flex:1;padding:var(--s4) 0;overflow-wrap:anywhere}
+.box{display:flex;width:24px;height:24px;border:1px solid var(--strong);border-radius:var(--sm);align-items:center;justify-content:center}
+.done .box{background:var(--success);border-color:var(--success);color:var(--inverse)}
+.done .prep-title{text-decoration:line-through;color:var(--secondary)}
+.addaction{color:var(--action);display:flex;align-items:center;gap:var(--s3);padding:var(--s4) 0}
+.chips{display:flex;flex-wrap:wrap;gap:var(--s3);margin-top:var(--s4)}
+.chips button{border:1px solid var(--strong);color:var(--action);display:inline-flex;align-items:center;gap:var(--s3);min-height:44px}
+
+/* ---- "what changed" marker. Review aid only; not part of the design. ---- */
+.mark{position:relative}
+body.marks .mark::before{
+  content:"";position:absolute;left:calc(var(--s5) * -1);top:var(--s2);bottom:var(--s2);
+  width:var(--s1);border-radius:var(--sm);background:var(--accent);
+}
+body.marks .section.mark::before{top:0;bottom:0}
+
+.skip-link{position:fixed;top:-100px}
+.skip-link:focus{top:0;background:var(--overlay);padding:var(--s5);z-index:10}
+[hidden]{display:none!important}
+
+@media(max-width:820px){
+  .layout{display:block;padding:0;margin:0}
+  .lab{position:static;padding:var(--s5);border-bottom:1px solid var(--line)}
+  .lab .lab-body{display:none}
+  .lab.open .lab-body{display:block}
+  .lab h2{font:600 16px/21px -apple-system,sans-serif;display:inline;margin:0}
+  .lab .lab-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--s3)}
+  .phone{border:0;border-radius:0;min-height:100dvh}
+}
+@media(min-width:821px){#lab-toggle{display:none}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+</style>
+
+<body data-theme="light">
+<a class="skip-link" href="#app">Skip to activity</a>
+<div class="layout">
+  <aside class="lab" aria-label="Prototype controls">
+    <div class="lab-heading">
+      <div>
+        <span class="caps action">Ordinary Days · Design pilot</span>
+        <h2>Activity details / v2</h2>
+      </div>
+      <button type="button" id="lab-toggle">Controls</button>
+    </div>
+    <div class="lab-body">
+      <p class="small muted">The type-specific details, rendered and editable. Proposal awaiting review — nothing here is approved.<br>Edits are real but live in this page only, and reset on reload.</p>
+
+      <label for="fixture">Example</label>
+      <select id="fixture">
+        <optgroup label="Meal">
+          <option value="meal-full">Meal · everything set</option>
+          <option value="meal-bare">Meal · nothing type-specific set</option>
+        </optgroup>
+        <optgroup label="Watch">
+          <option value="watch-show">Watch · show, renamed, from a list</option>
+          <option value="watch-partial">Watch · season, no episode</option>
+          <option value="watch-movie">Watch · movie with a stored season</option>
+        </optgroup>
+        <optgroup label="Event">
+          <option value="event-full">Event · shared, everything set</option>
+          <option value="event-booking">Event · reservation, no tickets</option>
+        </optgroup>
+        <optgroup label="Task">
+          <option value="task-prep">Task · a prep task</option>
+          <option value="task-bare">Task · plain</option>
+        </optgroup>
+        <optgroup label="General">
+          <option value="general">General</option>
+        </optgroup>
+        <optgroup label="Stress">
+          <option value="long">Long title and long episode title</option>
+        </optgroup>
+      </select>
+
+      <label for="theme">Appearance</label>
+      <select id="theme">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+
+      <label for="width">Width</label>
+      <select id="width">
+        <option value="390">390 pt</option>
+        <option value="320">320 pt · smallest supported</option>
+      </select>
+
+      <div class="switchline">
+        <input type="checkbox" id="marks" checked>
+        <label for="marks" style="margin:0">Mark what v2 adds</label>
+      </div>
+
+      <details open>
+        <summary>What this example proves</summary>
+        <p class="note" id="proof"></p>
+      </details>
+
+      <details>
+        <summary>The rule this design follows</summary>
+        <p class="note"><strong>Above the type sections everything is a control</strong> — the 72&nbsp;pt label-left / value-right rhythm. <strong>Inside a type section everything is content</strong> — the 44&nbsp;pt floor the Lists, Prep and Ingredients sections already use. A reservation is something you typed, not something you set.</p>
+        <p class="note">Identity goes in the header line, not a section. Detail should never say less than the row that opened it.</p>
+        <p class="note"><strong>Editing is section-level, not row-level.</strong> Each section header carries one <em>Edit</em>; the rows stay content, so a tap on a link row still opens the link. One sheet per type carries the whole <code>details</code> object, because <code>PATCH</code> replaces it wholesale.</p>
+        <p class="note">An empty group is a named chip in <em>Add to this plan</em> — the same door the Edit action opens.</p>
+      </details>
+
+      <details>
+        <summary>Live state</summary>
+        <pre class="small secondary" id="state-json" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto"></pre>
+      </details>
+
+      <p class="small muted">No production code, API calls, storage or writes. Sheets, menus and links are inert.</p>
+    </div>
+  </aside>
+
+  <div class="phone" id="phone" data-width="390">
+    <main id="app" tabindex="-1"></main>
+  </div>
+</div>
+<div id="announce" role="status" aria-live="polite" class="small" style="position:absolute;width:1px;height:1px;overflow:hidden"></div>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const paths = {
+  back: 'M15 5l-7 7 7 7',
+  chevron: 'M9 5l7 7-7 7',
+  plus: 'M12 5v14M5 12h14',
+  edit: 'M4 20l4.2-1 10.9-10.9-3.2-3.2L5 15.8z M13.9 6.9l3.2 3.2',
+  check: 'M4.5 12.5l5 5L19.5 7',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+};
+const announce = (t) => { $('#announce').textContent = t; };
+const icon = (n) => `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${paths[n]}"/></svg>`;
+
+/* ------------------------------------------------------------------ *
+ * Formatting. Money is integer minor units end to end (CLAUDE.md #4). *
+ * No parseFloat, no toFixed arithmetic (expenses.md §3.1).            *
+ * ------------------------------------------------------------------ */
+const MINOR_DIGITS = { JPY: 0, KRW: 0, ISK: 0 };   // never assume 2
+function money(cents, currency) {
+  const digits = currency && currency in MINOR_DIGITS ? MINOR_DIGITS[currency] : 2;
+  const negative = cents < 0;
+  const abs = Math.abs(cents);
+  if (digits === 0) return `${negative ? '-' : ''}${abs}${currency ? ` ${currency}` : ''}`;
+  const unit = 10 ** digits;
+  const whole = Math.trunc(abs / unit);
+  const frac = abs % unit;
+  const s = `${negative ? '-' : ''}${whole}.${String(frac).padStart(digits, '0')}`;
+  return currency ? `${s} ${currency}` : s;
+}
+/* The inverse of money(): a typed "42.50" becomes 4250 by string concatenation,
+   never by multiplying a float (CLAUDE.md #4, expenses.md §3.1). */
+function centsFromInput(text, currency) {
+  const digits = currency && currency in MINOR_DIGITS ? MINOR_DIGITS[currency] : 2;
+  const t = String(text).trim();
+  if (!t) return undefined;
+  const m = /^(\d+)(?:\.(\d*))?$/.exec(t);
+  if (!m) return undefined;
+  const frac = (m[2] || '').slice(0, digits).padEnd(digits, '0');
+  return Number(m[1] + frac);
+}
+function host(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+function clock(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = hhmm.split(':');
+  return `${Number(h) % 12 || 12}:${m} ${Number(h) >= 12 ? 'PM' : 'AM'}`;
+}
+function dateText(a) {
+  if (!a.date) return 'Not scheduled';
+  const d = new Date(`${a.date}T12:00:00`);
+  const day = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  if (!a.time) return day;
+  const end = a.endTime ? ` – ${clock(a.endTime)}` : '';
+  return `${day} · ${clock(a.time)}${end}`;
+}
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+const TYPE_LABEL = { task: 'Task', meal: 'Meal', watch: 'Watch', event: 'Event', custom: 'General' };
+const SLOT_LABEL = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' };
+const VERB = { task: 'Complete', meal: 'Had it', watch: 'Watched', event: 'Attended', custom: 'Done' };
+
+/* A movie never renders a season or an episode, even when one is stored:
+   the form hides those fields at Kind = Movie but nothing clears them on a
+   Show -> Movie change, so stored values stay reachable. Suppress at render. */
+const isShow = (a) => a.type === 'watch' && a.details.mediaKind !== 'movie';
+const shownSeason = (a) => (isShow(a) ? a.details.season : undefined);
+const shownEpisode = (a) => (isShow(a) ? a.details.episode : undefined);
+
+/* design-system.md §5.3's middle clause, composed for detail as
+   `<type label> · <middle> · <audience>`. §5.3's locationLabel fallback for
+   an event is deliberately dropped here: the location renders in full two
+   lines below, and saying `Manhattan` twice in one screen height is noise. */
+function subtitleMiddle(a) {
+  if (a.type === 'meal') return a.details.mealSlot ? SLOT_LABEL[a.details.mealSlot] : '';
+  if (a.type === 'watch') {
+    const s = shownSeason(a), e = shownEpisode(a);
+    if (s !== undefined && e !== undefined) return `S${s} E${e}`;
+    if (s !== undefined) return `S${s}`;
+    if (e !== undefined) return `E${e}`;
+    if (a.details.mediaKind) return a.details.mediaKind === 'movie' ? 'Movie' : 'Show';
+    return a.details.service || '';
+  }
+  if (a.type === 'event') return a.details.organiser || '';
+  return '';
+}
+function subtitle(a) {
+  const parts = [TYPE_LABEL[a.type]];
+  const mid = subtitleMiddle(a);
+  if (mid) parts.push(mid);
+  if (a.objectKind === 'plan') parts.push(a.audience || 'Just you');
+  return parts.join(' · ');
+}
+
+/* The pasted link is not shown twice. Saving a pasted recipe or ticket link
+   into its own field is the common path, and two adjacent rows pointing at
+   the same host is a bug the user reports. */
+function shownSourceUrl(a) {
+  const u = a.sourceUrl;
+  if (!u) return undefined;
+  if (u === a.details.recipeUrl || u === a.details.ticketUrl) return undefined;
+  return u;
+}
+
+/* ------------------------------------------------------------------ */
+
+const base = {
+  objectKind: 'plan', audience: 'Just you', visibility: 'private',
+  date: '2026-09-12', time: '19:30', endTime: undefined,
+  repeat: 'Does not repeat', reminder: 'None',
+  notes: '', location: undefined, sourceUrl: undefined,
+  parentTitle: undefined, listTitle: undefined, listItemId: undefined,
+  prep: [], lists: [], ingredients: [],
+};
+
+const FIXTURES = {
+  'meal-full': {
+    ...base, type: 'meal', title: 'Chicken tacos',
+    time: '19:00', repeat: 'Weekly on Saturday', reminder: '1 hour before',
+    notes: 'Maya is bringing dessert. Jordan avoids dairy, so keep the sour cream on the side.',
+    sourceUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos',
+    details: { kind: 'meal', mealSlot: 'dinner', recipeUrl: 'https://www.bbcgoodfood.com/recipes/chicken-tacos' },
+    ingredients: [
+      { name: 'Chicken thighs', quantity: '600 g', added: true },
+      { name: 'Tortillas', quantity: '8' },
+      { name: 'Tomatoes', quantity: '' },
+      { name: 'Sour cream', quantity: '' },
+    ],
+    prep: [{ title: 'Defrost the chicken', done: true }, { title: 'Pick up tortillas', done: false }],
+    proof: 'The maximal Meal. Slot rides in the header line rather than taking a row. RECIPE shows the host, not the URL. The pasted link equals the recipe link, so the Link row is deliberately absent — one destination, one row.',
+  },
+  'meal-bare': {
+    ...base, type: 'meal', title: 'Leftovers', time: '12:30',
+    details: { kind: 'meal' },
+    proof: 'Nothing type-specific is set, so no RECIPE section, and no gap where one would be — but it stays reachable. The Recipe chip under Add to this plan opens the same sheet the Edit action does. Set a slot and watch the header line pick it up.',
+  },
+  'watch-show': {
+    ...base, type: 'watch', title: 'Severance — finale night', time: '21:00',
+    reminder: '15 minutes before',
+    notes: 'Rewatch the cold open first.',
+    listTitle: 'Movies to watch', listItemId: 'itm_1',
+    details: { kind: 'watch', mediaTitle: 'Severance', mediaKind: 'show', season: 2, episode: 4, episodeTitle: 'Chikhai Bardo', service: 'Apple TV+' },
+    proof: 'Season and episode are abbreviated in the header line and spelled out in the section — S2 alone reads as a typo when it is the only thing on a line. The title was renamed, so the watchlist name is shown. Edit, then switch Movie or show: a movie has no season or episode, and the fields go with it.',
+  },
+  'watch-partial': {
+    ...base, type: 'watch', title: 'The Bear', time: '20:00',
+    details: { kind: 'watch', mediaTitle: 'The Bear', mediaKind: 'show', season: 3, service: 'Disney+' },
+    proof: 'A season with no episode. §5.3 writes S3 E4 only when both are set, and would fall back to Show here — the header says S3 instead, a deliberate extension of that grammar, raised in the README. The section, which has room, spells out Season 3.',
+  },
+  'watch-movie': {
+    ...base, type: 'watch', title: 'Past Lives', time: '20:30',
+    details: { kind: 'watch', mediaTitle: 'Past Lives', mediaKind: 'movie', season: 2, episode: 4, service: 'Netflix' },
+    proof: 'This movie still carries a stored season 2 and episode 4 from when it was a show — nothing clears them on a Show to Movie change. Neither renders, in the header or the section. Only the service survives.',
+  },
+  'event-full': {
+    ...base, type: 'event', title: 'Fontaines D.C. at the Barbican',
+    audience: 'Alice + 2', visibility: 'shared',
+    date: '2026-09-19', time: '19:30', endTime: '22:00',
+    reminder: '1 hour before',
+    notes: 'Alice is paying me back for the tickets.',
+    location: { label: 'Barbican Centre', address: 'Silk St, London EC2Y 8DS' },
+    sourceUrl: 'https://www.instagram.com/p/Cx9pQ2v',
+    details: {
+      kind: 'event',
+      description: 'Doors at 7. They check ID at the door and the queue is outside, so come early and bring something warm. Support act starts at 8 sharp.',
+      priceCents: 4200, currency: 'GBP',
+      ticketUrl: 'https://www.ticketmaster.co.uk/event/48213',
+      organiser: 'Barbican Presents',
+      reservation: { name: 'Sarah Mendes', time: '19:00', partySize: 4, reference: 'ABC123' },
+    },
+    lists: [{ title: 'Things to bring', count: '4 items · 1 checked' }],
+    proof: 'Shared, so the two long-text fields declare themselves: the description says everyone you invite can read it, Notes says Private to you. Neither line appears on a private activity. Price is 4200 integer minor units in and out — type 37.5 in the editor and it stores 3750, never a float.',
+  },
+  'event-booking': {
+    ...base, type: 'event', title: 'Dinner at Noble Rot',
+    date: '2026-09-14', time: '19:45',
+    location: { label: 'Noble Rot', address: '51 Lamb’s Conduit St, London WC1N 3NB' },
+    details: { kind: 'event', reservation: { name: 'Sarah Mendes', partySize: 2, reference: 'NR-7741' } },
+    proof: 'A booking with no tickets, no description and no organiser. Only RESERVATION renders, and the reservation has no time — so the second line drops it rather than leaving a gap. The header line falls back to Event alone.',
+  },
+  'task-prep': {
+    ...base, type: 'task', objectKind: 'task', title: 'Buy the train tickets',
+    date: '2026-09-10', time: undefined, reminder: '1 day before',
+    notes: 'Off-peak returns are cheaper after 09:30.',
+    parentTitle: 'New York Trip',
+    sourceUrl: 'https://www.thetrainline.com/book',
+    details: { kind: 'task' },
+    proof: 'A task carries no type-specific details at all, so no type section is drawn — only its Link. Related plan now names the plan and navigates to it, instead of the current row that expands "Part of a plan" into "This task is part of a plan."',
+  },
+  'task-bare': {
+    ...base, type: 'task', objectKind: 'task', title: 'Water the balcony plants',
+    date: '2026-09-09', time: undefined, repeat: 'Every 3 days',
+    details: { kind: 'task' },
+    proof: 'No parent, so no Related plan row — today this renders an inert row reading None, for a capability that was never built. The chip row reads ADD TO THIS TASK, approved 2026-09-09 so a task can reach its own Link. Link is the only chip a task can carry: no prep children, no lists, no attachments.',
+  },
+  general: {
+    ...base, type: 'custom', title: 'A weekend by the coast',
+    date: '', time: undefined,
+    notes: 'Somewhere with a train station and a good pub.',
+    proof: 'General carries nothing type-specific either. details.shortcutId exists in the model but is not written in v1, so it must not render — not even as Coming later. Only its Link is offered.',
+    details: { kind: 'custom' },
+  },
+  long: {
+    ...base, type: 'watch',
+    title: 'Sunday night with the extended cut of the documentary Maya recommended',
+    time: '20:00',
+    details: { kind: 'watch', mediaTitle: 'The Century of the Self', mediaKind: 'show', season: 1, episode: 2, episodeTitle: 'There Is a Policeman Inside All Our Heads: He Must Be Destroyed', service: 'BBC iPlayer' },
+    listTitle: 'Documentaries', listItemId: 'itm_9',
+    proof: 'Overflow. The serif title wraps to its full height and an episode title longer than the line wraps rather than clipping. Check this one at 320 pt as well.',
+  },
+};
+
+let s;
+
+function reset() {
+  const key = $('#fixture').value;
+  s = JSON.parse(JSON.stringify(FIXTURES[key]));
+  s.key = key;
+  s.descriptionOpen = false;
+  s.sheet = null;
+  s.draft = null;
+  $('#proof').textContent = s.proof;
+  render();
+}
+
+function render() {
+  const a = s;
+  const task = a.objectKind === 'task';
+  let html = `<header class="appbar">
+    <button type="button" class="icon" aria-label="Back">${icon('back')}</button>
+    <button type="button" class="icon" aria-label="More actions">${icon('more')}</button>
+  </header><div class="body">`;
+
+  /* ---- header: title, subtitle, when/where, actions ---- */
+  html += `<div class="title-wrap"><h1>${esc(a.title)}</h1>
+    <button type="button" class="icon title-edit" aria-label="Edit title">${icon('edit')}</button></div>`;
+  html += `<p class="audience mark">${esc(subtitle(a))}</p>`;
+
+  html += `<button type="button" class="when" aria-label="${esc(dateText(a))}, change date and time">
+    <span><span class="date">${esc(dateText(a))}</span><span class="hint">${a.date ? 'Tap to edit' : 'Choose a date'}</span></span>${icon('chevron')}</button>`;
+  if (a.date) {
+    const rem = a.reminder === 'None' ? 'No reminder' : `Reminder ${a.reminder}`;
+    html += `<p class="schedule-summary">${esc(a.repeat)} · ${esc(rem)}</p>`;
+  }
+  if (a.location) {
+    html += `<button type="button" class="place" aria-label="${esc(a.location.label)}${a.location.address ? `, ${esc(a.location.address)}` : ''}, open in Maps">
+      <span><span class="label">${esc(a.location.label)}</span>${a.location.address ? `<span class="addr">${esc(a.location.address)}</span>` : ''}</span>${icon('chevron')}</button>`;
+  }
+
+  html += `<button type="button" class="primary full">${VERB[a.type]}</button>`;
+  if (task && a.date) {
+    html += `<div class="pair"><button type="button" class="outline">Snooze</button><button type="button" class="outline">Skip</button></div>`;
+  }
+
+  /* ---- settings: controls ---- */
+  html += `<div class="settings"><section class="notes" aria-label="Notes">
+    <div class="notes-head"><h3>Notes</h3>${a.visibility === 'shared' ? '<span class="privacy mark">Private to you</span>' : ''}</div>
+    ${a.notes ? `<p class="notes-preview">${esc(a.notes)}</p>` : ''}
+    <button type="button" class="notes-action">${a.notes ? 'Edit notes' : 'Add notes'} ${icon('edit')}</button>
+  </section>`;
+
+  if (a.date) {
+    html += settingRow('Repeat', a.repeat);
+    html += settingRow(a.visibility === 'shared' ? 'Your reminders' : 'Reminder', a.reminder === 'None' ? 'None' : a.reminder);
+  }
+  if (!task) {
+    html += `<div class="future"><span><strong>People</strong>Sharing and participants</span><span>Coming later</span></div>`;
+  }
+  /* Related plan renders only when there is a parent. A row reading "None" is
+     an inert row for a capability that was never built. */
+  if (a.parentTitle) html += settingRow('Related plan', a.parentTitle, true);
+  /* Mirrors ItemSheet's `From <name>` provenance row, in the opposite
+     direction. Never `From a list` — a row that navigates somewhere it
+     cannot name is worse than no row. */
+  if (a.listTitle) html += settingRowLabelled(`From ${a.listTitle}`, 'opens the list');
+  html += `</div>`;
+
+  /* ---- type sections: content ---- */
+  html += typeSections(a);
+
+  /* ---- the sections that already exist, for context ---- */
+  if (a.prep.length) {
+    const doneCount = a.prep.filter((p) => p.done).length;
+    html += section('PREPARATION', `${doneCount} of ${a.prep.length}`,
+      a.prep.map((p) => `<div class="prep ${p.done ? 'done' : ''}">
+        <button type="button" class="icon" role="checkbox" aria-checked="${p.done}" aria-label="${esc(p.title)}"><span class="box">${p.done ? icon('check') : ''}</span></button>
+        <button type="button" class="prep-title">${esc(p.title)}</button></div>`).join('') +
+      `<button type="button" class="addaction">${icon('plus')} Add prep task</button>`);
+  }
+  if (a.lists.length) {
+    html += section('LISTS', '', a.lists.map((l) => `<button type="button" class="datarow linkrow">
+      <span>${esc(l.title)}</span><span class="v">${esc(l.count)} ${icon('chevron')}</span></button>`).join('') +
+      `<button type="button" class="addaction">${icon('plus')} Add list</button>`);
+  }
+  if (a.ingredients.length) {
+    html += section('INGREDIENTS', `${a.ingredients.length} items`,
+      a.ingredients.map((i) => `<div class="prep">
+        <button type="button" class="icon" role="checkbox" aria-checked="false" aria-label="${esc(i.name)}"><span class="box"></span></button>
+        <span class="prep-title">${esc(i.name)}${i.quantity ? ` <span class="small secondary">${esc(i.quantity)}</span>` : ''}</span>
+        ${i.added ? '<span class="small muted">Added</span>' : ''}</div>`).join(''));
+  }
+
+  const missing = emptyChips(a);
+  const typeChips = missing.map((g) =>
+    `<button type="button" class="mark" data-act="edit" data-target="${g.sheet}" aria-label="Add ${esc(g.chip.toLowerCase())} to this ${task ? 'task' : 'plan'}">${icon('plus')} ${esc(g.chip)}</button>`).join('');
+  if (!task) {
+    html += `<section class="section"><div class="section-head"><h3 class="muted">ADD TO THIS PLAN</h3></div>
+      <div class="chips"><button type="button">${icon('plus')} Prep task</button><button type="button">${icon('plus')} List</button><button type="button">${icon('plus')} Photo</button>${typeChips}</div></section>`;
+  } else if (typeChips) {
+    html += `<section class="section mark"><div class="section-head"><h3 class="muted">ADD TO THIS TASK</h3></div>
+      <div class="chips">${typeChips}</div></section>`;
+  }
+
+  html += `</div>`;
+  html += sheetMarkup(a);
+  $('#app').innerHTML = html;
+  $('#state-json').textContent = JSON.stringify(
+    { example: a.key, type: a.type, objectKind: a.objectKind, visibility: a.visibility, subtitle: subtitle(a), details: a.details, sourceUrl: a.sourceUrl, linkRowShown: shownSourceUrl(a) !== undefined, emptyGroups: emptyChips(a).map((g) => g.chip) },
+    null, 2);
+}
+
+function settingRow(label, value, isNew) {
+  return `<button type="button" class="row ${isNew ? 'mark' : ''}" aria-label="${esc(label)}, ${esc(value)}">
+    <span>${esc(label)}</span><span class="value">${esc(value)} ${icon('chevron')}</span></button>`;
+}
+function settingRowLabelled(label, hint) {
+  return `<button type="button" class="row mark" aria-label="${esc(label)}, ${esc(hint)}">
+    <span>${esc(label)}</span><span class="value">${icon('chevron')}</span></button>`;
+}
+function section(title, trailing, inner, isNew, edit) {
+  const right = edit
+    ? `<button type="button" class="edit" data-act="edit" data-target="${esc(edit.target)}" aria-label="${esc(edit.label)}">${esc(edit.short)}</button>`
+    : trailing ? `<span class="trailing">${esc(trailing)}</span>` : '';
+  return `<section class="section ${isNew ? 'mark' : ''}"><div class="section-head">
+    <h3>${esc(title)}</h3>${right}</div>${inner}</section>`;
+}
+function factRow(primary, secondary, label) {
+  return `<div class="fact" ${label ? `role="group" aria-label="${esc(label)}"` : ''}>
+    <div class="fact-primary">${esc(primary)}</div>
+    ${secondary ? `<div class="fact-secondary">${esc(secondary)}</div>` : ''}</div>`;
+}
+function dataRow(label, value) {
+  return `<div class="datarow inert"><span>${esc(label)}</span><span class="v">${esc(value)}</span></div>`;
+}
+function linkRow(label, url) {
+  return `<button type="button" class="datarow linkrow" aria-label="${esc(label)}, ${esc(host(url))}, opens in your browser">
+    <span>${esc(label)}</span><span class="v">${esc(host(url))} ${icon('chevron')}</span></button>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Type-specific groups. Each renders when it holds something, carries   *
+ * its own Edit, and is reachable as a named chip when it is empty.      *
+ * ------------------------------------------------------------------ */
+function groupsFor(a) {
+  const d = a.details;
+  const out = [];
+  if (a.type === 'meal') {
+    out.push({ id: 'recipe', title: 'RECIPE', chip: 'Recipe', sheet: 'type',
+      filled: Boolean(d.recipeUrl) });
+  }
+  if (a.type === 'watch') {
+    const filled = shownSeason(a) !== undefined || shownEpisode(a) !== undefined ||
+      Boolean(d.episodeTitle) || Boolean(d.service) || divergedMediaTitle(a);
+    out.push({ id: 'watching', title: 'WATCHING', sheet: 'type',
+      chip: d.mediaKind === 'movie' ? 'Streaming service' : 'Episode', filled });
+  }
+  if (a.type === 'event') {
+    out.push({ id: 'description', title: 'DESCRIPTION', chip: 'Description', sheet: 'type',
+      filled: Boolean(d.description) });
+    const r = d.reservation || {};
+    out.push({ id: 'reservation', title: 'RESERVATION', chip: 'Booking', sheet: 'type',
+      filled: Boolean(r.name || r.time || r.partySize || r.reference) });
+    out.push({ id: 'tickets', title: 'TICKETS', chip: 'Tickets', sheet: 'type',
+      filled: d.priceCents !== undefined || Boolean(d.ticketUrl) });
+  }
+  /* sourceUrl is user-entered content, so it is edited like everything else.
+     `From <list>` and `Related plan` stay controls in the settings group: they
+     are derived provenance, and you do not edit a backlink. */
+  out.push({ id: 'link', title: 'LINK', chip: 'Link', sheet: 'link',
+    filled: shownSourceUrl(a) !== undefined });
+  return out;
+}
+
+/* mediaTitle is authoritative for the watchlist only once the activity has been
+   renamed AND there is a linked item. Equal, or unlinked, and the row is noise. */
+function divergedMediaTitle(a) {
+  const d = a.details;
+  return Boolean(d.mediaTitle && d.mediaTitle.trim() !== a.title.trim() && a.listItemId);
+}
+
+function editAction(group) {
+  return { target: group.sheet, short: 'Edit', label: `Edit ${group.title.toLowerCase()}` };
+}
+
+function typeSections(a) {
+  const d = a.details;
+  let out = '';
+  for (const g of groupsFor(a)) {
+    if (!g.filled) continue;
+    const edit = editAction(g);
+
+    if (g.id === 'recipe') {
+      out += section(g.title, '', linkRow('Recipe link', d.recipeUrl), true, edit);
+    }
+
+    if (g.id === 'watching') {
+      const season = shownSeason(a), episode = shownEpisode(a);
+      const hasMediaLine = season !== undefined || episode !== undefined;
+      let inner = '';
+      if (hasMediaLine) {
+        const parts = [];
+        if (season !== undefined) parts.push(`Season ${season}`);
+        if (episode !== undefined) parts.push(`Episode ${episode}`);
+        const line = parts.join(' · ');
+        inner += factRow(line, d.episodeTitle || '', [line, d.episodeTitle].filter(Boolean).join(', '));
+      } else if (d.episodeTitle) {
+        inner += dataRow('Episode title', d.episodeTitle);
+      }
+      if (d.service) inner += dataRow('Streaming service', d.service);
+      if (divergedMediaTitle(a)) inner += dataRow('Watchlist title', d.mediaTitle);
+      out += section(g.title, '', inner, true, edit);
+    }
+
+    if (g.id === 'description') {
+      const open = a.descriptionOpen;
+      /* Said only on a shared activity: privately there is nobody to distinguish from. */
+      const note = a.visibility === 'shared'
+        ? '<p class="section-note">Everyone you invite can read this.</p>' : '';
+      out += section(g.title, '', note +
+        `<p class="prose ${open ? '' : 'clamped'}">${esc(d.description)}</p>
+         <button type="button" class="showmore" data-act="toggle-description" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>`,
+        true, edit);
+    }
+
+    if (g.id === 'reservation') {
+      const r = d.reservation;
+      const rest = [];
+      if (r.time) rest.push(clock(r.time));
+      if (r.partySize) rest.push(plural(r.partySize, 'person', 'people'));
+      if (r.reference) rest.push(`Ref ${r.reference}`);
+      const label = `Reservation: ${[r.name, ...rest].filter(Boolean).join(', ')}`;
+      /* No name: line 2 is promoted rather than leaving line 1 empty. */
+      const inner = r.name ? factRow(r.name, rest.join(' · '), label) : factRow(rest.join(' · '), '', label);
+      out += section(g.title, '', inner, true, edit);
+    }
+
+    if (g.id === 'tickets') {
+      let inner = '';
+      if (d.priceCents !== undefined) inner += dataRow('Price', money(d.priceCents, d.currency));
+      if (d.ticketUrl) inner += linkRow('Ticket link', d.ticketUrl);
+      out += section(g.title, '', inner, true, edit);
+    }
+
+    if (g.id === 'link') {
+      out += section(g.title, '', linkRow('Opens', shownSourceUrl(a)), true, edit);
+    }
+  }
+  return out;
+}
+
+function emptyChips(a) {
+  return groupsFor(a).filter((g) => !g.filled);
+}
+
+/* ------------------------------------------------------------------ *
+ * The edit sheet. One sheet per type carries the whole `details`       *
+ * object, because PATCH replaces `details` wholesale — a partial save  *
+ * would silently drop the fields it did not send.                      *
+ * ------------------------------------------------------------------ */
+const SHEET_TITLE = { meal: 'Meal details', watch: 'Watch details', event: 'Event details' };
+
+function field(label, name, value, opts) {
+  const o = opts || {};
+  const id = `f-${name.replace(/\./g, '-')}`;
+  const input = o.multiline
+    ? `<textarea id="${id}" data-f="${name}">${esc(value ?? '')}</textarea>`
+    : `<input id="${id}" data-f="${name}" type="${o.type || 'text'}" value="${esc(value ?? '')}"${o.inputmode ? ` inputmode="${o.inputmode}"` : ''}${o.placeholder ? ` placeholder="${esc(o.placeholder)}"` : ''}>`;
+  return `<div class="f"><label for="${id}">${esc(label)}</label>${input}${o.hint ? `<p class="hintline">${esc(o.hint)}</p>` : ''}</div>`;
+}
+
+function segmented(label, name, value, options) {
+  return `<div class="f"><span class="seglabel">${esc(label)}</span>
+    <div class="seg" role="group" aria-label="${esc(label)}">${options.map((o) =>
+      `<button type="button" data-seg="${name}" data-val="${esc(o.value)}" aria-pressed="${value === o.value}">${esc(o.label)}</button>`).join('')}</div></div>`;
+}
+
+function sheetBody(a) {
+  const d = a.draft.details;
+  if (a.sheet === 'link') {
+    return field('Link', 'sourceUrl', a.draft.sourceUrl, {
+      type: 'url', placeholder: 'https://',
+      hint: 'Where this came from. Clear it to remove the link.',
+    });
+  }
+  if (a.type === 'meal') {
+    return segmented('Slot', 'mealSlot', d.mealSlot, [
+      { value: 'breakfast', label: 'Breakfast' }, { value: 'lunch', label: 'Lunch' },
+      { value: 'dinner', label: 'Dinner' }, { value: 'snack', label: 'Snack' },
+    ]) + field('Recipe link', 'recipeUrl', d.recipeUrl, { type: 'url', placeholder: 'https://' });
+  }
+  if (a.type === 'watch') {
+    const show = d.mediaKind !== 'movie';
+    return segmented('Movie or show', 'mediaKind', d.mediaKind || 'show', [
+      { value: 'movie', label: 'Movie' }, { value: 'show', label: 'Show' },
+    ])
+      + (show
+        ? `<div class="pairfields">${field('Season', 'season', d.season, { type: 'number', inputmode: 'numeric' })}${field('Episode', 'episode', d.episode, { type: 'number', inputmode: 'numeric' })}</div>`
+          + field('Episode title', 'episodeTitle', d.episodeTitle)
+        : '<p class="hintline">A movie has no season or episode. Choosing Show brings those fields back.</p>')
+      + field('Streaming service', 'service', d.service, { placeholder: 'Netflix, Apple TV+…', hint: 'Free text — there is no provider list.' });
+  }
+  if (a.type === 'event') {
+    const r = a.draft.reservation;
+    return field('Description', 'description', d.description, {
+        multiline: true,
+        hint: a.visibility === 'shared' ? 'Everyone you invite can read this.' : 'Shown on the invite page if you share this.',
+      })
+      + field('Reservation name', 'res.name', r.name)
+      + `<div class="pairfields">${field('Reservation time', 'res.time', r.time, { type: 'time' })}${field('Party size', 'res.partySize', r.partySize, { type: 'number', inputmode: 'numeric' })}</div>`
+      + field('Reservation reference', 'res.reference', r.reference)
+      + `<div class="pairfields">${field('Price', 'price', a.draft.priceText, { inputmode: 'decimal', placeholder: '0.00' })}${field('Currency', 'currency', d.currency, { placeholder: 'GBP' })}</div>`
+      + field('Ticket link', 'ticketUrl', d.ticketUrl, { type: 'url', placeholder: 'https://' })
+      + field('Organiser', 'organiser', d.organiser);
+  }
+  return '';
+}
+
+function sheetMarkup(a) {
+  if (!a.sheet) return '';
+  const title = a.sheet === 'link' ? 'Link' : SHEET_TITLE[a.type];
+  return `<div class="scrim" data-act="cancel-sheet"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="sheet-grab" aria-hidden="true"></div>
+      <p class="sheet-head">${esc(title)}</p>
+      <div class="sheet-body">${sheetBody(a)}</div>
+      <div class="sheet-actions">
+        <button type="button" class="outline" data-act="cancel-sheet">Cancel</button>
+        <button type="button" class="primary" data-act="save-sheet">Save</button>
+      </div>
+    </div>`;
+}
+
+function openSheet(target) {
+  const d = s.details;
+  s.sheet = target;
+  s.draft = {
+    details: { ...d },
+    reservation: { ...(d.reservation || {}) },
+    sourceUrl: s.sourceUrl || '',
+    priceText: d.priceCents === undefined ? '' : money(d.priceCents, undefined),
+  };
+  render();
+  document.querySelector('.sheet-body input, .sheet-body textarea, .sheet-body .seg button')?.focus();
+  announce(`${target === 'link' ? 'Link' : SHEET_TITLE[s.type]} editor opened`);
+}
+
+function closeSheet() {
+  s.sheet = null;
+  s.draft = null;
+  render();
+  announce('Closed without saving');
+}
+
+/* Saving writes the whole details object, never a partial. */
+function saveSheet() {
+  if (s.sheet === 'link') {
+    const url = s.draft.sourceUrl.trim();
+    s.sourceUrl = url || undefined;
+  } else {
+    const d = { ...s.draft.details };
+    for (const key of ['recipeUrl', 'episodeTitle', 'service', 'description', 'ticketUrl', 'organiser', 'currency', 'mealSlot']) {
+      if (key in d && !String(d[key] ?? '').trim()) delete d[key];
+    }
+    for (const key of ['season', 'episode']) {
+      const raw = String(d[key] ?? '').trim();
+      if (!raw) delete d[key];
+      else d[key] = Number(raw);
+    }
+    if (s.type === 'event') {
+      const r = {};
+      for (const key of ['name', 'time', 'reference']) {
+        const v = String(s.draft.reservation[key] ?? '').trim();
+        if (v) r[key] = v;
+      }
+      const size = String(s.draft.reservation.partySize ?? '').trim();
+      if (size) r.partySize = Number(size);
+      if (Object.keys(r).length) d.reservation = r;
+      else delete d.reservation;
+      const cents = centsFromInput(s.draft.priceText, d.currency);
+      if (cents === undefined) delete d.priceCents;
+      else d.priceCents = cents;
+    }
+    s.details = d;
+  }
+  s.sheet = null;
+  s.draft = null;
+  render();
+  announce('Saved');
+}
+
+/* ---- wiring. No inline handlers, for lint parity with mock v1. ---- */
+$('#fixture').addEventListener('change', reset);
+$('#theme').addEventListener('change', (e) => { document.body.dataset.theme = e.target.value; });
+$('#width').addEventListener('change', (e) => { $('#phone').dataset.width = e.target.value; });
+$('#marks').addEventListener('change', (e) => { document.body.classList.toggle('marks', e.target.checked); });
+$('#lab-toggle').addEventListener('click', () => { document.querySelector('.lab').classList.toggle('open'); });
+$('#app').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]');
+  const seg = e.target.closest('[data-seg]');
+  if (seg) {
+    const name = seg.dataset.seg;
+    /* Tapping the chosen segment again clears it — a meal need not have a slot. */
+    s.draft.details[name] = s.draft.details[name] === seg.dataset.val ? undefined : seg.dataset.val;
+    render();
+    document.querySelector(`.seg [data-seg="${name}"][aria-pressed="true"], .seg [data-seg="${name}"]`)?.focus();
+    return;
+  }
+  if (!act) return;
+  if (act.dataset.act === 'toggle-description') {
+    s.descriptionOpen = !s.descriptionOpen;
+    render();
+    announce(s.descriptionOpen ? 'Description expanded' : 'Description collapsed');
+    return;
+  }
+  if (act.dataset.act === 'edit') { openSheet(act.dataset.target); return; }
+  if (act.dataset.act === 'cancel-sheet') { closeSheet(); return; }
+  if (act.dataset.act === 'save-sheet') { saveSheet(); }
+});
+
+/* Text fields bind to the draft without re-rendering, so typing keeps focus. */
+$('#app').addEventListener('input', (e) => {
+  const f = e.target.closest('[data-f]');
+  if (!f || !s.draft) return;
+  const name = f.dataset.f;
+  if (name === 'sourceUrl') s.draft.sourceUrl = f.value;
+  else if (name === 'price') s.draft.priceText = f.value;
+  else if (name.startsWith('res.')) s.draft.reservation[name.slice(4)] = f.value;
+  else s.draft.details[name] = f.value;
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && s.sheet) { e.preventDefault(); closeSheet(); }
+});
+
+document.body.classList.add('marks');
+reset();
+</script>
+</body>
+</html>
