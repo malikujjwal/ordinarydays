@@ -1,3 +1,4 @@
+import { itemOriginatesFrom, originsFromProvenance } from '@od/shared/lists';
 import { toUtcInstant } from '@od/shared/recurrence';
 import {
   type ActivityCompletionResult,
@@ -19,6 +20,7 @@ import {
   type List,
   type ListItem,
   type ListItemActivityLink,
+  type MealIngredient,
   type Occurrence,
   type ProgressValue,
   scopeFromWire,
@@ -40,12 +42,14 @@ import {
 import { receiptItem } from '../repositories/idempotencyRepository.js';
 import {
   findViewerLinksTo,
+  readAllListItems,
   readLinkedItemSource,
   readWatchFollowUpSource,
 } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import * as occurrenceRepository from '../repositories/occurrenceRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
+import { getProfile } from '../repositories/userRepository.js';
 import { deriveActionCapabilities } from './actionCapabilities.js';
 import { assertListAccess } from './authz.js';
 import { hasUpdatesFeed, writeSystemUpdate } from './updatesService.js';
@@ -463,19 +467,62 @@ async function eventFollowUp(
   }
 }
 
+/**
+ * How many of the meal's ingredients have no live item on the caller's own groceries default
+ * (Option B, 2026-09-16; `docs/reports/destination-flow-simplification-20260916.md`). This
+ * used to read the meal's own `addedToListId` marker; that marker is never written again, so
+ * this asks the same question the API guard and the client presence hook already ask —
+ * whether a **destination-list item**'s `sourceProvenance` still names this ingredient —
+ * through the one shared predicate (`itemOriginatesFrom`) rather than a second copy of it.
+ *
+ * `defaultLists.groceries` unset is not a failure to recover from: it is the caller having no
+ * destination configured yet, so nothing has been sent anywhere identifiable and every
+ * ingredient counts as remaining — the same answer the deleted marker gave when it was never
+ * written. A destination that **is** set but no longer reachable (deleted, access revoked) is
+ * the caller's `catch`, not a branch here: this function is not itself best-effort,
+ * `mealFollowUp` is, and reporting a wrong count is worse than reporting none.
+ *
+ * The items read is `readAllListItems` — already the bounded whole-list read a preview or a
+ * count needs ("capped by `MAX_LIST_ITEMS`, so `queryAll` is safe", per its own doc), not a
+ * new one: a fourth caller of an existing pattern, never a second implementation of it.
+ */
+async function remainingIngredientCount(
+  userId: string,
+  activityId: string,
+  ingredients: readonly MealIngredient[],
+): Promise<number> {
+  const profile = await getProfile(userId);
+  const destinationListId = profile?.defaultLists?.groceries;
+  if (destinationListId === undefined) return ingredients.length;
+  const access = await assertListAccess(userId, destinationListId, 'read');
+  const items = await readAllListItems(userId, destinationListId, access.index);
+  return ingredients.filter(
+    (ingredient) =>
+      !items.some((item) =>
+        itemOriginatesFrom(
+          { origins: originsFromProvenance(item.sourceProvenance) },
+          activityId,
+          ingredient.ingredientId,
+        ),
+      ),
+  ).length;
+}
+
 /** `Add ingredients to a list?` — a Meal from the explicit `mealIngredients` integration. */
 async function mealFollowUp(
   userId: string,
   activity: Activity,
 ): Promise<CompletionFollowUp | undefined> {
   if (activity.details.kind !== 'meal') return undefined;
-  const remaining = (activity.details.ingredients ?? []).filter(
-    (ingredient) => ingredient.addedToListId === undefined,
-  ).length;
   const { listId, listItemId } = activity;
-  if (remaining === 0 || listId === undefined || listItemId === undefined)
-    return undefined;
+  if (listId === undefined || listItemId === undefined) return undefined;
   try {
+    const remaining = await remainingIngredientCount(
+      userId,
+      activity.activityId,
+      activity.details.ingredients ?? [],
+    );
+    if (remaining === 0) return undefined;
     const access = await assertListAccess(userId, listId, 'read');
     const source = await readLinkedItemSource(
       userId,

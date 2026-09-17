@@ -1624,12 +1624,23 @@ The flow, exactly:
    - `title` = ingredient `name`, with `quantity` appended in parentheses if present
      (`Tortillas (8)`),
    - `sourceActivityId` = the meal's `activityId`,
-   - `sourceLabel` = the provenance label (§7.5).
-5. Each source ingredient, identified by its stable `ingredientId`, gets `addedToListId` set, so the button
-   can render `Added` for those rows and offer only the remaining ones next time.
+   - `sourceLabel` = the provenance label (§7.5),
+   - the ingredient's own `ingredientId`, recorded in the row's provenance beside
+     `sourceActivityId` so step 5 can answer `Added` per ingredient, not only per meal.
+5. `Added` is not written anywhere on the meal. It is derived, per ingredient and per
+   destination, from whether the **currently shown destination list**'s own item still
+   carries this meal's `ingredientId` in its provenance (step 4) — so the button reads
+   `Added` and offers only the remaining ones by reading the list itself, never a marker
+   (Option B, 2026-09-16; `data-model.md` §7.3). A checked row still counts: this is
+   presence, not the item's state. Delete the item, delete or archive the list, or change
+   the destination, and the very next read says so — there is nothing stored to fall out of
+   date, because nothing is stored. The same ingredient may be added to more than one list;
+   each is judged only against the list currently shown.
 6. Duplicate handling: if an item with the same case-insensitive, trimmed title already
    exists **unchecked** on the target list, no second row is created; the existing row's
-   `sourceLabel` is extended (`Chicken tacos · Burgers`). If the existing row is
+   `sourceLabel` is extended (`Chicken tacos · Burgers`) and its provenance gains this
+   ingredient's id beside the meal's existing one, so both ingredients read `Added` from the
+   one absorbed row. If the existing row is
    **checked**, a new row is created — the previous one was already bought. Ingredients in
    the same confirmed action are grouped by that normalized title, so the group uses one
    existing unchecked row or creates exactly one new row. A client-supplied destination id
@@ -1650,16 +1661,18 @@ grocery items until step 3.
 > (or the `Ingredients` chip on a meal with none) opens the meal sheet, where rows can be
 > renamed, re-quantified, added and removed. Existing rows keep their stored `ingredientId`,
 > new rows mint one, blank names are dropped, and the save is the ordinary wholesale
-> `details` PATCH — the server re-attaches `addedToListId` by `ingredientId`, so a kept row
-> still reads `Added` and a removed row takes its marker with it.
+> `details` PATCH. `Added` (step 5) is not part of that PATCH at all: a kept row's
+> `ingredientId` is unchanged, so the next read of the destination list still says `Added`
+> exactly as before the edit; a removed row simply stops being asked about, on the list or
+> not.
 
 ### 7.4 Completion
 
 Completing a meal uses the verb `Had it` (`outcome: 'had_it'`) — see
 [`activities.md`](activities.md#52-completion-verbs). Follow-ups offered, each dismissible:
 
-- If ingredients exist that were never added to Groceries and the meal is likely to recur,
-  nothing is offered. The app does not ask about the past.
+- If ingredients still have no live item on the destination list (step 5) and the meal is
+  likely to recur, nothing is offered. The app does not ask about the past.
 - If the meal has participants and no expenses: `Add an expense?`
 - If the meal came from a Meal Ideas list item: the item's linked Plan state line becomes
   `Done Sunday`. The item is not checked, moved or removed (§5.10).
