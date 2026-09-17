@@ -14,8 +14,8 @@ import { addIngredientsToList } from './ingredientsToListService.js';
  * failure re-runs the whole read/classify/commit cycle rather than retrying a stale plan.
  */
 vi.mock('../repositories/activityRepository.js', () => ({
-  ingredientsAddedToListItem: vi.fn((activityId, listId, additions) => ({
-    Update: { Key: { pk: `ACT#${activityId}` }, listId, additions },
+  ingredientMealUnchangedCheck: vi.fn((activityId, additions) => ({
+    ConditionCheck: { Key: { pk: `ACT#${activityId}` }, additions },
   })),
 }));
 vi.mock('../repositories/idempotencyRepository.js', () => ({
@@ -344,21 +344,19 @@ describe('everything commits in one transaction', () => {
     );
 
     const items = committed();
-    // The label extension for Chicken, the create for Tortillas, the meal, the receipt.
+    // The label extension for Chicken, the create for Tortillas, the meal fence, the receipt.
     expect(items.some((item) => 'Put' in item)).toBe(true);
-    expect(activityRepository.ingredientsAddedToListItem).toHaveBeenCalledOnce();
+    expect(activityRepository.ingredientMealUnchangedCheck).toHaveBeenCalledOnce();
     expect(items.at(-1)).toEqual({ Put: { Item: { receipt: true } } });
   });
 
-  it('conditions the meal write on the version it read', async () => {
+  it('conditions (never writes) the meal fence on the version it read', async () => {
     await run();
 
-    expect(activityRepository.ingredientsAddedToListItem).toHaveBeenCalledWith(
+    expect(activityRepository.ingredientMealUnchangedCheck).toHaveBeenCalledWith(
       MEAL,
-      LIST,
       [{ index: 0, ingredientId: CHICKEN }],
       READ_AT,
-      NOW,
     );
   });
 
@@ -589,8 +587,12 @@ describe('what it derives, and what it refuses to be told', () => {
     expect((await run(undated)).sourceLabel).toBe('Chicken tacos');
   });
 
-  it('returns the meal’s new version', async () => {
-    expect((await run()).activityUpdatedAt).toBe(NOW);
+  /**
+   * Option B (2026-09-16): this action no longer writes the meal, so it has no new version
+   * to report — `activityUpdatedAt` is the version the plan was read and classified against.
+   */
+  it('returns the meal’s read version, not the write timestamp', async () => {
+    expect((await run()).activityUpdatedAt).toBe(READ_AT);
   });
 });
 
@@ -600,6 +602,11 @@ describe('the duplicate rule chooses which row is written', () => {
 
     expect(result.ingredients[0]?.outcome).toBe('created');
     expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
+    // Option B (2026-09-16): the created row records which ingredient produced it, so
+    // `Added` can later be derived from this row rather than a marker on the meal.
+    expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
+    ]);
   });
 
   it('extends and creates nothing when an open row matches', async () => {
@@ -640,9 +647,16 @@ describe('the duplicate rule chooses which row is written', () => {
     const result = await run();
 
     expect(result.ingredients[0]?.item.sourceLabel).toBe('Burgers · Chicken tacos');
+    // Option B (2026-09-16): every segment now also names which ingredient(s) it answers
+    // for. The pre-existing segment had none to normalise from, so it reads `[]`; the new
+    // one records this request's ingredient immediately.
     expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
-      { activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8', label: 'Burgers' },
-      { activityId: MEAL, label: 'Chicken tacos' },
+      {
+        activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        label: 'Burgers',
+        ingredientIds: [],
+      },
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
     ]);
   });
 
@@ -678,14 +692,29 @@ describe('the duplicate rule chooses which row is written', () => {
 
     expect(result.ingredients[0]?.item.sourceLabel).toBe('Chicken tacos · Chicken tacos');
     expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
-      { activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8', label: 'Chicken tacos' },
-      { activityId: MEAL, label: 'Chicken tacos' },
+      {
+        activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        label: 'Chicken tacos',
+        ingredientIds: [],
+      },
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
     ]);
   });
 
-  /** A re-tap after a lost response must not read `Chicken tacos · Chicken tacos`. */
-  it('writes nothing for a row that already carries this label', async () => {
-    snapshot([existingItem({ sourceActivityId: MEAL, sourceLabel: 'Chicken tacos' })]);
+  /**
+   * Option B (2026-09-16) narrowed this: a genuine replay of the *same* ingredient onto a
+   * segment that already names it writes nothing — but see the next test for what changed.
+   */
+  it('writes nothing for a row that already carries this label and this ingredient', async () => {
+    snapshot([
+      existingItem({
+        sourceActivityId: MEAL,
+        sourceLabel: 'Chicken tacos',
+        sourceProvenance: [
+          { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
+        ],
+      }),
+    ]);
 
     const result = await run();
 
@@ -696,7 +725,35 @@ describe('the duplicate rule chooses which row is written', () => {
     ).toHaveLength(0);
   });
 
-  it('recognises this meal on a row originally owned by another meal', async () => {
+  /**
+   * The consequence review asked to be stated in the open, not just fixed (Option B,
+   * 2026-09-16): before this, a row that already carried this Activity's *label* was assumed
+   * to already carry all of its ingredients too, and no write happened. A legacy row (or one
+   * written before this ingredient specifically reached it) cannot answer "was this exact
+   * ingredient recorded?" from the label alone, so the write now runs to record it — even
+   * though the rendered label, unchanged, makes the write look like a no-op from the outside.
+   * Skipping it would mean this ingredient's `Added` state depends on which other ingredient
+   * of the same meal happened to reach this row first.
+   */
+  it("records this ingredient even when the row already carries this meal's label", async () => {
+    snapshot([existingItem({ sourceActivityId: MEAL, sourceLabel: 'Chicken tacos' })]);
+
+    const result = await run();
+
+    expect(result.ingredients[0]?.outcome).toBe('labelled');
+    expect(listRepository.appendSourceLabelExtension).toHaveBeenCalledOnce();
+    expect(result.ingredients[0]?.item.sourceLabel).toBe('Chicken tacos');
+    expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN] },
+    ]);
+  });
+
+  /**
+   * Same consequence, on a segment shared with another meal. The stored **label** is still
+   * never rewritten to today's rule (`keeps an earlier day label` above), but this ingredient
+   * is still recorded now.
+   */
+  it("records this meal's ingredient on a row this meal already labelled, without touching the label", async () => {
     snapshot([
       existingItem({
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
@@ -714,11 +771,23 @@ describe('the duplicate rule chooses which row is written', () => {
     const result = await run();
 
     expect(result.sourceLabel).toBe('Chicken tacos');
-    // The stored segments are not rewritten to today's rule.
+    // The stored label is not rewritten to today's rule.
     expect(result.ingredients[0]?.item.sourceLabel).toBe(
       'Sunday dinner · Sunday dinner · Chicken tacos',
     );
-    expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
+    expect(listRepository.appendSourceLabelExtension).toHaveBeenCalledOnce();
+    expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
+      {
+        activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        label: 'Sunday dinner',
+        ingredientIds: [],
+      },
+      {
+        activityId: MEAL,
+        label: 'Sunday dinner · Chicken tacos',
+        ingredientIds: [CHICKEN],
+      },
+    ]);
   });
 
   it('rejects an extension whose completed rendered label exceeds its bound', async () => {
@@ -795,6 +864,11 @@ describe('the duplicate rule chooses which row is written', () => {
     expect(new Set(result.ingredients.map((row) => row.item.itemId))).toEqual(
       new Set([ITEM_ONE]),
     );
+    // Both ingredients merged into the one created row, so both are recorded on it —
+    // neither is a second-class "just labelled" outcome as far as presence is concerned.
+    expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
+      { activityId: MEAL, label: 'Chicken tacos', ingredientIds: [CHICKEN, TORTILLAS] },
+    ]);
     expect(
       vi.mocked(listRepository.appendListItemCreates).mock.calls[0]?.[2],
     ).toHaveLength(1);
@@ -980,15 +1054,13 @@ describe('the response', () => {
     ]);
 
     expect(result.ingredients).toHaveLength(2);
-    expect(activityRepository.ingredientsAddedToListItem).toHaveBeenCalledWith(
+    expect(activityRepository.ingredientMealUnchangedCheck).toHaveBeenCalledWith(
       MEAL,
-      LIST,
       [
         { index: 0, ingredientId: CHICKEN },
         { index: 1, ingredientId: TORTILLAS },
       ],
       READ_AT,
-      NOW,
     );
   });
 });

@@ -80,6 +80,17 @@ export interface ListCapabilities {
   ingredients: boolean;
 }
 
+/**
+ * One `(activityId, ingredientId)` pair a `ListItem` currently answers for (Option B,
+ * 2026-09-16). Flattened from `sourceProvenance` at response time — `origins` never exposes
+ * a segment's rendered `label` — by the one function that does it,
+ * `packages/shared/src/lists/itemOrigin.ts`'s `originsFromProvenance`.
+ */
+export interface ItemOrigin {
+  activityId: string;
+  ingredientId: string;
+}
+
 /** One List model. `templateKey` is immutable creation provenance only. */
 export interface List {
   schemaVersion: 2;
@@ -139,7 +150,15 @@ export interface ListItem {
   features?: ListItemFeatures;
   sourceActivityId?: string;
   sourceLabel?: string;
-  sourceProvenance?: { activityId: string; label: string }[];
+  /** `ingredientIds` is optional: a segment written before Option B (2026-09-16) has none. */
+  sourceProvenance?: { activityId: string; label: string; ingredientIds?: string[] }[];
+  /**
+   * Which meal ingredient(s) this row currently answers for, derived from `sourceProvenance`
+   * and never itself stored — optional for the same reason `List.capabilities` is: it exists
+   * only on a response the API has shaped (`toListItem`) or a native projection that derived
+   * it the same way. `itemOriginatesFrom` is the one predicate that reads it.
+   */
+  origins?: ItemOrigin[];
 }
 
 export interface ListItemActivityLink {

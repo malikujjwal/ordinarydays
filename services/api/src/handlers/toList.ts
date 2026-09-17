@@ -1,4 +1,4 @@
-import { listCapabilities } from '@od/shared/lists';
+import { listCapabilities, originsFromProvenance } from '@od/shared/lists';
 import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
 
 /**
@@ -68,11 +68,16 @@ export function toListSettings(result: {
 
 /**
  * The ListItem a response carries. Storage-only `itemRevision` and `sourceProvenance` are
- * deliberately absent; `rank` stays, opaque, because the shared `(rank, itemId)` comparator
- * is also the client's sort order. The client needs the rendered `sourceLabel`, never its
- * ownership ledger.
+ * deliberately absent as themselves; `rank` stays, opaque, because the shared `(rank, itemId)`
+ * comparator is also the client's sort order. The client needs the rendered `sourceLabel`,
+ * never its ownership ledger — and, since Option B (2026-09-16), it also needs `origins`:
+ * `sourceProvenance` flattened to `{ activityId, ingredientId }` pairs with every label
+ * stripped, computed **here** rather than carried in, for `capabilities` above's reason —
+ * this is the one place a `ListItem` becomes a response, so it is the one place that cannot
+ * go stale relative to a `sourceProvenance` write made earlier in the same request.
  */
 export function toListItem(item: ListItem): Record<string, unknown> {
+  const origins = originsFromProvenance(item.sourceProvenance);
   return {
     itemId: item.itemId,
     listId: item.listId,
@@ -85,6 +90,7 @@ export function toListItem(item: ListItem): Record<string, unknown> {
       : { sourceActivityId: item.sourceActivityId }),
     ...(item.sourceLabel === undefined ? {} : { sourceLabel: item.sourceLabel }),
     ...(item.features === undefined ? {} : { features: item.features }),
+    ...(origins.length === 0 ? {} : { origins }),
   };
 }
 

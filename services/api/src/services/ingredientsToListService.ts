@@ -10,7 +10,7 @@ import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   type IngredientAddition,
-  ingredientsAddedToListItem,
+  ingredientMealUnchangedCheck,
 } from '../repositories/activityRepository.js';
 import { loadReceipt, receiptItem } from '../repositories/idempotencyRepository.js';
 import {
@@ -266,10 +266,18 @@ async function attemptAdd(
     state: 'open',
     sourceActivityId: activityId,
     sourceLabel,
-    sourceProvenance: [{ activityId, label: sourceLabel }],
+    sourceProvenance: [
+      { activityId, label: sourceLabel, ingredientIds: [...row.ingredientIds] },
+    ],
   }));
 
-  const result = assemble(input.listId, sourceLabel, now, plan, created);
+  /**
+   * `activity.updatedAt` — the version this whole plan was read and classified against —
+   * never `now`. Since Option B (2026-09-16) this action does not write the meal, so it has
+   * no new version to report; a caller that still held `activity.updatedAt` from its own read
+   * is not stale.
+   */
+  const result = assemble(input.listId, sourceLabel, activity.updatedAt, plan, created);
 
   const builder = new TransactionBuilder(
     'addIngredientsToList',
@@ -309,9 +317,8 @@ async function attemptAdd(
   }
 
   builder.add(
-    ingredientsAddedToListItem(
+    ingredientMealUnchangedCheck(
       activityId,
-      input.listId,
       selected.map(
         (resolved): IngredientAddition => ({
           index: resolved.index,
@@ -319,7 +326,6 @@ async function attemptAdd(
         }),
       ),
       activity.updatedAt,
-      now,
     ),
   );
 
@@ -460,7 +466,7 @@ async function commit(builder: TransactionBuilder, spans: CommitSpans): Promise<
  * This is the function the stable id exists for. An action composed offline, queued, and
  * replayed after the user reordered their ingredients must still add the rows they picked —
  * so the id is looked up, and the index it happens to sit at now is only ever carried as a
- * write condition (`ingredientsAddedToListItem`).
+ * fence condition (`ingredientMealUnchangedCheck`).
  *
  * **A missing id fails the whole request** (§P3-17), before anything is written and before
  * the transaction is even composed. The row was deleted or replaced, so the thing the user
@@ -518,6 +524,8 @@ function resolveSelected(
 interface PlannedCreate {
   readonly itemId: string;
   readonly title: string;
+  /** Every selected ingredient this group merged into the one created row (Option B). */
+  readonly ingredientIds: readonly string[];
   readonly ingredientIdentity?: IngredientDestinationBinding;
 }
 
@@ -656,7 +664,12 @@ function classify(
         : undefined;
     const match = directTarget ?? eligibleReplayTarget ?? uncheckedByTitle.get(titleKey);
     if (match !== undefined) {
-      const next = extendProvenance(match, activityId, sourceLabel);
+      const next = extendProvenance(
+        match,
+        activityId,
+        sourceLabel,
+        unresolved.map((resolved) => resolved.ingredientId),
+      );
       const requestedIdentities = unresolved.flatMap((resolved) =>
         resolved.itemId === undefined
           ? []
@@ -720,6 +733,7 @@ function classify(
     creates.push({
       itemId: createdItemId,
       title: primary.title,
+      ingredientIds: unresolved.map((resolved) => resolved.ingredientId),
       ...(ingredientIdentity === undefined ? {} : { ingredientIdentity }),
     });
     for (const [index, resolved] of unresolved.entries()) {
@@ -760,27 +774,81 @@ function normalise(title: string): string {
   return title.trim().toLowerCase();
 }
 
+/**
+ * Every provenance segment on an item, `ingredientIds` normalised in.
+ *
+ * A row from before 2026-09-11 (P3-17) may carry only `sourceActivityId`/`sourceLabel` with
+ * no `sourceProvenance`; a row from between then and Option B (2026-09-16) may carry
+ * `sourceProvenance` segments with no `ingredientIds`. Both fall back to an **empty**
+ * ingredient list rather than fail to parse — a segment written before ingredient identity
+ * was recorded genuinely does not know which ingredient(s) produced it, and guessing would
+ * misattribute `Added` to a row that never earned it under the new rule.
+ */
 function provenanceOf(
   item: ListItem,
-): readonly { readonly activityId: string; readonly label: string }[] {
+): { activityId: string; label: string; ingredientIds: string[] }[] {
   if (item.sourceProvenance !== undefined && item.sourceProvenance.length > 0) {
-    return item.sourceProvenance;
+    return item.sourceProvenance.map((segment) => ({
+      activityId: segment.activityId,
+      label: segment.label,
+      ingredientIds: [...(segment.ingredientIds ?? [])],
+    }));
   }
   if (item.sourceActivityId === undefined || item.sourceLabel === undefined) return [];
   // Legacy P3-17 rows had only these two fields. The entire rendered value belongs to the
   // recorded Activity; splitting it would corrupt a valid label containing ` · ` — a meal
   // title may contain it, and so may a stored pre-2026-09-11 `Sunday dinner · Chicken tacos`.
-  return [{ activityId: item.sourceActivityId, label: item.sourceLabel }];
+  return [
+    { activityId: item.sourceActivityId, label: item.sourceLabel, ingredientIds: [] },
+  ];
 }
 
-function extendProvenance(item: ListItem, activityId: string, label: string): ListItem {
+/**
+ * Extends an existing target's provenance with a newly selected group of ingredients.
+ *
+ * ## The "no write" case, narrowed (Option B, 2026-09-16)
+ *
+ * Before this, a target that already carried a segment for this Activity was returned
+ * unchanged outright — read as "this meal already told this row about itself, nothing to
+ * repeat". That was right for the rendered `sourceLabel` (still is: one activity's label
+ * appears once, however many of its ingredients land here) but wrong for **presence**: it
+ * silently dropped every ingredient the segment did not already list. The first ingredient of
+ * a meal to reach a row recorded itself; a later, different ingredient of the *same* meal
+ * absorbed into the *same* row recorded nothing — and Option B's `origins`-derived `Added`
+ * would call it never added. So the merge always runs; only the write is skipped, and only
+ * once the merge proves there is genuinely nothing new to record.
+ *
+ * An existing segment's stored `label` is left as it was written, matching the prior
+ * behaviour exactly (a rename between two add-ingredient calls on the same meal is outside
+ * this change, as it always was).
+ */
+function extendProvenance(
+  item: ListItem,
+  activityId: string,
+  label: string,
+  ingredientIds: readonly string[],
+): ListItem {
   const existing = provenanceOf(item);
-  if (existing.some((segment) => segment.activityId === activityId)) return item;
-  if (existing.length >= MAX_SOURCE_PROVENANCE_SEGMENTS) {
+  const segment = existing.find((candidate) => candidate.activityId === activityId);
+  const mergedIds = new Set(segment?.ingredientIds ?? []);
+  for (const ingredientId of ingredientIds) mergedIds.add(ingredientId);
+
+  if (segment !== undefined && mergedIds.size === segment.ingredientIds.length) {
+    return item;
+  }
+  if (segment === undefined && existing.length >= MAX_SOURCE_PROVENANCE_SEGMENTS) {
     refuse('ingredients', PROVENANCE_FULL);
   }
-  const sourceProvenance = [...existing, { activityId, label }];
-  const sourceLabel = sourceProvenance.map((segment) => segment.label).join(' · ');
+
+  const sourceProvenance =
+    segment === undefined
+      ? [...existing, { activityId, label, ingredientIds: [...mergedIds] }]
+      : existing.map((candidate) =>
+          candidate.activityId === activityId
+            ? { ...candidate, ingredientIds: [...mergedIds] }
+            : candidate,
+        );
+  const sourceLabel = sourceProvenance.map((entry) => entry.label).join(' · ');
   assertRenderedSourceLabel(sourceLabel);
   return {
     ...item,

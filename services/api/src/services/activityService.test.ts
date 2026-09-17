@@ -1065,7 +1065,6 @@ describe('projectDetail', () => {
               ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MA',
               name: 'Tomatoes',
               quantity: '2',
-              addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1MB',
             },
           ],
           recipeUrl: 'https://example.com/recipe',
@@ -1118,6 +1117,42 @@ describe('projectDetail', () => {
       expect(Object.values(activity.details)).not.toContain(undefined);
     },
   );
+
+  /**
+   * Option B (2026-09-16): `addedToListId` is deprecated storage, kept on the schema only so
+   * a pre-existing row still parses. This is the one place a stored Activity becomes the
+   * domain `Activity` every read goes through, so it is the one place that must drop it —
+   * not merely never write it — or a row stored before this date would keep rendering `Added`
+   * forever.
+   */
+  it("drops a stored ingredient's deprecated addedToListId rather than projecting it", () => {
+    const { activity } = projectDetail(
+      [
+        {
+          ...meta,
+          objectKind: 'plan',
+          type: 'meal',
+          details: {
+            kind: 'meal',
+            ingredients: [
+              {
+                ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MA',
+                name: 'Tomatoes',
+                addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1MB',
+              },
+            ],
+          },
+        },
+      ],
+      'usr_a',
+      detailTarget,
+    );
+
+    expect(activity.details).toEqual({
+      kind: 'meal',
+      ingredients: [{ ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MA', name: 'Tomatoes' }],
+    });
+  });
 
   /**
    * **The two exceptions to "project every field", and the reason is the contract.**
@@ -1949,7 +1984,14 @@ describe('patchActivity', () => {
       expect(repository.patchActivity).not.toHaveBeenCalled();
     });
 
-    it('keeps addedToListId when same-kind details replace ingredients', async () => {
+    /**
+     * Option B (2026-09-16): `addedToListId` is deprecated storage. `Added` is now derived
+     * from the destination list's items, never from this field, so a `details` PATCH simply
+     * replaces `details` wholesale like every other field — there is nothing left to carry
+     * forward, and `projectStoredDetails` does not surface the stored row's deprecated value
+     * even for the ingredient a client left untouched.
+     */
+    it('replaces ingredients wholesale; the deprecated addedToListId is neither carried forward nor read back', async () => {
       seed(meal());
 
       const result = await patchActivity(
@@ -1982,7 +2024,6 @@ describe('patchActivity', () => {
             ingredientId: INGREDIENT_ID,
             name: 'Tomatoes',
             quantity: '3',
-            addedToListId: LIST_ID,
           },
         ],
       });
@@ -1991,10 +2032,10 @@ describe('patchActivity', () => {
 
     /**
      * 2026-09-10: the meal sheet edits ingredient rows after creation. A details PATCH that
-     * renames a kept row, drops another and adds a new one is accepted; the kept id keeps
-     * its marker, the new id has none, and the removed row takes its marker with it.
+     * renames a kept row, drops another and adds a new one is accepted. Option B (2026-09-16)
+     * superseded the marker this test used to track across that edit — see the previous test.
      */
-    it('accepts added and removed rows, keeping provenance only for kept ids', async () => {
+    it('accepts added and removed rows', async () => {
       const KEPT_ID = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MC';
       const NEW_ID = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1MD';
       seed(
@@ -2031,7 +2072,7 @@ describe('patchActivity', () => {
       expect(result.details).toEqual({
         kind: 'meal',
         ingredients: [
-          { ingredientId: KEPT_ID, name: 'Hot salsa', addedToListId: LIST_ID },
+          { ingredientId: KEPT_ID, name: 'Hot salsa' },
           { ingredientId: NEW_ID, name: 'Limes', quantity: '3' },
         ],
       });

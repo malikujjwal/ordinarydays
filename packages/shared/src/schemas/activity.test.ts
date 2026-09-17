@@ -16,6 +16,8 @@ import {
   completeActivityInput,
   completionFollowUp,
   createActivityInput,
+  mealIngredient,
+  mealIngredientInput,
   patchActivityInput,
   skipActivityInput,
   uncompleteActivityInput,
@@ -52,6 +54,41 @@ describe('the schema and the interface are the same shape', () => {
     expectTypeOf<
       z.infer<typeof activitySourceList>
     >().toEqualTypeOf<ActivitySourceList>();
+  });
+});
+
+/**
+ * `mealIngredient`'s deprecated `addedToListId` (Option B, 2026-09-16): tolerated on the
+ * stored shape so a pre-existing row still parses, rejected on the input shape as it always
+ * was — `Added` is presence now (`@od/shared/lists/itemOrigin`), never a client-set marker.
+ */
+describe('mealIngredient', () => {
+  const row = {
+    ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1',
+    name: 'Tomatoes',
+    quantity: '2',
+  };
+
+  it('still parses a row stored with the deprecated addedToListId', () => {
+    const stored = { ...row, addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3' };
+    expect(mealIngredient.parse(stored)).toEqual(stored);
+  });
+
+  it('parses a row with no addedToListId at all, unaffected by the deprecation', () => {
+    expect(mealIngredient.parse(row)).toEqual(row);
+  });
+
+  it('still rejects a client-supplied addedToListId on the input shape', () => {
+    expect(
+      mealIngredientInput.safeParse({
+        ...row,
+        addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts the same row once addedToListId is dropped', () => {
+    expect(mealIngredientInput.safeParse(row).success).toBe(true);
   });
 });
 

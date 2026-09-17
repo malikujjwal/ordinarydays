@@ -58,6 +58,13 @@ const listItemSourceProvenance = z
     z.strictObject({
       activityId: ulidId('act'),
       label: z.string().min(1).max(MAX_SOURCE_LABEL_LEN),
+      /**
+       * Which of that Activity's ingredients this row answers for (Option B, 2026-09-16).
+       * Optional: a segment written before this date has none, and stays that way — it is
+       * not backfilled, so it never claims presence for an ingredient it cannot name.
+       * Bounded by a meal's own `MAX_INGREDIENTS`, the most one Activity could ever supply.
+       */
+      ingredientIds: z.array(ulidId('ing')).max(MAX_INGREDIENTS).optional(),
     }),
   )
   .max(MAX_SOURCE_PROVENANCE_SEGMENTS);
@@ -201,6 +208,17 @@ export const listItem = z
     sourceActivityId: ulidId('act').optional(),
     sourceLabel: listItemSourceLabel.optional(),
     sourceProvenance: listItemSourceProvenance.optional(),
+    /**
+     * Derived, never stored: which meal ingredient(s) this row currently answers for,
+     * flattened from `sourceProvenance` and never itself the label it carries. Optional for
+     * the same reason `List.capabilities` is: it exists only once the API has shaped a
+     * response (`services/api/src/handlers/toList.ts`'s `toListItem`) or a native projection
+     * has derived it the same way — a row read from storage has no such attribute, and
+     * `.parse`-ing one must not fail for lacking it.
+     */
+    origins: z
+      .array(z.strictObject({ activityId: ulidId('act'), ingredientId: ulidId('ing') }))
+      .optional(),
   })
   .meta({ id: 'ListItem' });
 

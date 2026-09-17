@@ -16,7 +16,7 @@ import {
   createActivity,
   deleteActivity,
   detachChildFromParent,
-  ingredientsAddedToListItem,
+  ingredientMealUnchangedCheck,
   listOverdueTaskCandidates,
   listPrepTaskPointers,
   localDateTime,
@@ -801,35 +801,40 @@ describe('overdue task window', () => {
 });
 
 /**
- * The `addedToListId` write-back (P3-17).
+ * The ingredient add-to-list fence (P3-17; rewritten for Option B, 2026-09-16).
  *
  * DynamoDB addresses a list element by position, and position is the one thing about an
  * ingredient array that is not stable. These assertions are about the seam that makes that
  * safe: the caller resolves ids to indexes, and every index carries a condition that the id
- * still sitting there is the one that was resolved.
+ * still sitting there is the one that was resolved — without writing anything, since Option B
+ * moved `Added` off the meal entirely.
  */
-describe('ingredientsAddedToListItem', () => {
-  const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+describe('ingredientMealUnchangedCheck', () => {
   const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1';
   const TORTILLAS = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2';
   const READ_AT = '2026-08-25T09:00:00.000Z';
-  const NOW_AT = '2026-08-25T09:00:01.000Z';
 
   const built = (
     additions = [
       { index: 0, ingredientId: CHICKEN },
       { index: 3, ingredientId: TORTILLAS },
     ],
-  ) => ingredientsAddedToListItem(ACT, LIST, additions, READ_AT, NOW_AT).Update;
+  ) => ingredientMealUnchangedCheck(ACT, additions, READ_AT).ConditionCheck;
 
-  it('sets the flag at each resolved index', () => {
-    expect(built()?.UpdateExpression).toContain(
-      '#details.#ingredients[0].#addedToListId = :listId',
+  it('writes nothing — only a ConditionCheck, never an Update', () => {
+    const item = ingredientMealUnchangedCheck(
+      ACT,
+      [{ index: 0, ingredientId: CHICKEN }],
+      READ_AT,
     );
-    expect(built()?.UpdateExpression).toContain(
-      '#details.#ingredients[3].#addedToListId = :listId',
-    );
-    expect(built()?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST });
+    expect(item.Update).toBeUndefined();
+    expect(item.ConditionCheck).toBeDefined();
+  });
+
+  it('mentions no `addedToListId` and stamps no new `updatedAt`', () => {
+    expect(built()?.ExpressionAttributeNames).not.toHaveProperty('#addedToListId');
+    expect(built()?.ExpressionAttributeValues).not.toHaveProperty(':updatedAt');
+    expect(built()?.ExpressionAttributeValues).not.toHaveProperty(':listId');
   });
 
   /** A reorder between the read and the commit must fail, not mark a neighbour. */
@@ -846,18 +851,7 @@ describe('ingredientsAddedToListItem', () => {
     });
   });
 
-  /**
-   * The `updatedAt` correction (raised in review). `addedToListId` is rendered — it is what
-   * makes an ingredient row say `Added` — and it lives inside `details`, which `PATCH`
-   * replaces wholesale under `If-Match`. A field that changes what the user sees, on a
-   * versioned object, has to move the version.
-   */
-  it('advances updatedAt', () => {
-    expect(built()?.UpdateExpression).toContain('#updatedAt = :updatedAt');
-    expect(built()?.ExpressionAttributeValues).toMatchObject({ ':updatedAt': NOW_AT });
-  });
-
-  /** And conditions on the version it read, so a patch landing in between wins. */
+  /** The meal-unchanged-since-read fence: still load-bearing though nothing is written. */
   it('conditions on the version the caller read', () => {
     expect(built()?.ConditionExpression).toContain('#updatedAt = :expectedUpdatedAt');
     expect(built()?.ExpressionAttributeValues).toMatchObject({

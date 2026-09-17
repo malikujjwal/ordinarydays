@@ -3941,6 +3941,27 @@
           "sourceLabel": {
             "type": "string",
             "maxLength": 4000
+          },
+          "origins": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "activityId": {
+                  "type": "string",
+                  "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                "ingredientId": {
+                  "type": "string",
+                  "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                }
+              },
+              "required": [
+                "activityId",
+                "ingredientId"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [

@@ -98,25 +98,26 @@ export const activityLocation = z.strictObject({
  * which is precisely the thing that cannot be trusted. Removing or replacing a row makes its
  * id stale, and a stale id rejects the whole action rather than resolving to a neighbour.
  *
- * ## `addedToListId` is on the stored shape and **not** on the input one
+ * ## `addedToListId` is deprecated storage, kept only so an old row still parses
  *
- * It records that the authorised add-to-list action ran, so a client able to set it would be
- * fabricating that for any well-formed `lst_` id — the `Added` state on a meal would stop
- * meaning anything was added. The stored shape carries it because the server writes and reads
- * it back; {@link mealIngredientInput} omits and rejects it, and that is the shape create and
- * patch validate against.
- *
- * This is exactly the split `listItemDetailsInput` has made on the list side since P3-01, for
- * the same reason and in the same words. **An earlier version of this comment claimed the
- * activity side did not need it** — that `activityDetails` was "reached only through routes
- * that never let a client author it" — which was simply false: `activityDetails` *is* the
- * create and patch body, and a `POST /v1/activities` carrying a forged `addedToListId` stored
- * it. Raised in review of P3-17.
+ * Until 2026-09-16 (P3-17, then Option B) it recorded that the add-to-list action had run,
+ * and it was the sole source of a meal's `Added` state. It is superseded: `Added` is now
+ * derived from whether the destination list holds a live item originating from this meal and
+ * this `ingredientId` (`ListItemView.origins`, `@od/shared/lists/itemOrigin`), which self-
+ * corrects when the item is deleted, undone, or the destination changes — exactly what a
+ * write-once marker could never do. The field **must never be written again**: nothing in
+ * this codebase sets it, and the domain projection that turns a stored row into an `Activity`
+ * (`activityService.ts`'s `projectStoredDetails`) deliberately drops it rather than carry it
+ * forward, so a pre-existing stored value can neither render nor propagate. It stays on this
+ * **stored** schema, and only here, because `mealIngredient` is a `z.strictObject`: deleting
+ * the key would make every row written before this change fail to parse. `{@link
+ * mealIngredientInput}` has never accepted it from a client, unaffected by this change.
  */
 export const mealIngredient = z.strictObject({
   ingredientId: ulidId('ing'),
   name: freeText.min(1),
   quantity: freeText.optional(),
+  /** @deprecated Superseded by derived presence (`origins`). Never written; see above. */
   addedToListId: ulidId('lst').optional(),
 });
 

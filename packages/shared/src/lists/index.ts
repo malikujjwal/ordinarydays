@@ -22,6 +22,11 @@ export { type ListTemplateSeed, listTemplateSeed } from './creationSeed.js';
 export { formatIngredientTitle } from './formatIngredientTitle.js';
 export { canReceiveIngredients, listCapabilities } from './ingredientDestination.js';
 export {
+  type ItemOrigin,
+  itemOriginatesFrom,
+  originsFromProvenance,
+} from './itemOrigin.js';
+export {
   type LegacyListAggregate,
   type ListAggregate,
   migrateLegacyListAggregate,

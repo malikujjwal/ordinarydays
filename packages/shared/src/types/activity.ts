@@ -55,7 +55,12 @@ export interface MealIngredient {
   ingredientId: string;
   name: string;
   quantity?: string;
-  /** Set when the row has been sent to a list. Server-owned; written only by P3-17. */
+  /**
+   * @deprecated Superseded by derived presence (Option B, 2026-09-16): `Added` is whether the
+   * destination list holds a live item whose `sourceProvenance` names this `ingredientId`
+   * (`ListItemView.origins`, `@od/shared/lists/itemOrigin`). Never written since; kept only
+   * so a row stored before this date still parses.
+   */
   addedToListId?: string;
 }
 

@@ -198,12 +198,16 @@ describe('nothing but a tap may choose a style', () => {
       'adaptListItemToPlan',
       'canReceiveIngredients',
       'formatIngredientTitle',
+      // Option B (2026-09-16): the one predicate for "does this item answer for this meal's
+      // ingredient?", derived from `sourceProvenance` and never re-derived by a caller.
+      'itemOriginatesFrom',
       'listCapabilities',
       'listTemplateChoices',
       // P3-26's creation seed: the other half of what a create resolves, and narrowed to the
       // durable-create path by `check-forbidden.mjs`'s `template-seed-is-creation-only`.
       'listTemplateSeed',
       'migrateLegacyListAggregate',
+      'originsFromProvenance',
       'provenanceLabel',
       // `resolveSlot` is gone (Option B1, `docs/reports/
       // destination-flow-simplification-20260916.md`): resolving a destination is client-only

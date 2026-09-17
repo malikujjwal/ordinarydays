@@ -1786,52 +1786,44 @@ export interface IngredientAddition {
 }
 
 /**
- * The transact item that records these ingredients as added, for a caller composing one
- * transaction (P3-17).
+ * The transact item that fences an ingredient add-to-list write against the meal it was
+ * planned from (P3-17; rewritten for Option B, 2026-09-16).
  *
- * ## Located by id, written by index, guarded by both
+ * ## It no longer writes anything
  *
- * DynamoDB addresses a list element by position — `details.ingredients[3].addedToListId` —
- * and position is the one thing about an ingredient array that is not stable. So the caller
- * resolves each `ingredientId` to its **current** index and hands both over, and every index
- * carries its own condition that the id still sitting there is the id that was resolved. A
- * reorder between the read and the commit fails the condition and cancels the whole
- * transaction rather than marking a neighbour.
+ * Until 2026-09-16 this recorded `details.ingredients[i].addedToListId` on the meal, because
+ * that field was the sole source of a meal's `Added` state. `Added` is now derived from
+ * whether the destination list holds a live item that originates from this meal and this
+ * ingredient (`ListItemView.origins`, `packages/shared/src/lists/itemOrigin.ts`) — recorded on
+ * the **item's** `sourceProvenance` by `ingredientsToListService.ts`, not on the meal — so
+ * there is nothing left for this action to write on the Activity side. It reads the meal and
+ * never changes it.
  *
- * ## It advances `updatedAt`, and that was a correction
+ * ## The fence is still load-bearing
  *
- * The first version deliberately did not, treating provenance as bookkeeping about a
- * different object. Review pushed back and was right for a reason the original argument
- * missed: `addedToListId` is **rendered** — it is
- * what makes a meal's ingredient row say `Added` — and it lives inside `details`, which
- * `PATCH` replaces wholesale under `If-Match`. A field that changes what the user sees, on a
- * versioned object, has to move the version, or a client holding the pre-write copy both
- * renders staleness and passes the concurrency check.
- *
- * `expectedUpdatedAt` is therefore also a **condition**: the caller read this Activity to
- * resolve the ids, and a patch landing in between must lose here rather than silently having
- * its ingredient array overwritten by indexes resolved against the old one.
+ * DynamoDB addresses a list element by position — `details.ingredients[3]` — and position is
+ * the one thing about an ingredient array that is not stable. The caller resolved each
+ * `ingredientId` to its **current** index over one read of this meal, and a `ConditionCheck`
+ * keeps that read true inside the same atomic unit as the list write it accompanies:
+ * `expectedUpdatedAt` catches any change to the meal since the read, and each per-index
+ * condition catches a reorder that moved a different ingredient into a resolved slot. Either
+ * failing cancels the whole transaction — including the list writes — and the caller re-reads
+ * and reclassifies rather than risk adding the wrong ingredient.
  */
-export function ingredientsAddedToListItem(
+export function ingredientMealUnchangedCheck(
   activityId: string,
-  listId: string,
   additions: readonly IngredientAddition[],
   expectedUpdatedAt: string,
-  now: string,
 ): TransactItem {
   const names: Record<string, string> = {
     '#details': 'details',
     '#ingredients': 'ingredients',
-    '#addedToListId': 'addedToListId',
     '#ingredientId': 'ingredientId',
     '#updatedAt': 'updatedAt',
   };
   const values: Record<string, unknown> = {
-    ':listId': listId,
-    ':updatedAt': now,
     ':expectedUpdatedAt': expectedUpdatedAt,
   };
-  const sets: string[] = ['#updatedAt = :updatedAt'];
   const conditions: string[] = [
     'attribute_exists(pk)',
     '#updatedAt = :expectedUpdatedAt',
@@ -1840,14 +1832,12 @@ export function ingredientsAddedToListItem(
   for (const addition of additions) {
     const at = String(addition.index);
     values[`:id${at}`] = addition.ingredientId;
-    sets.push(`#details.#ingredients[${at}].#addedToListId = :listId`);
     conditions.push(`#details.#ingredients[${at}].#ingredientId = :id${at}`);
   }
 
   return {
-    Update: {
+    ConditionCheck: {
       Key: activityMeta(activityId),
-      UpdateExpression: `SET ${sets.join(', ')}`,
       ConditionExpression: conditions.join(' AND '),
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: values,
