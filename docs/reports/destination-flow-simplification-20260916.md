@@ -1,7 +1,7 @@
 # Destination-flow simplification — approved and implemented, 2026-09-16
 
 **Status: approved and implemented as Option B1**, `docs/02-architecture/decisions.md`
-ADR-060. Shipped on `integration/activity-detail-fixes` in `7885efd`..`da81e01`: `7885efd`
+ADR-060. Shipped on `integration/activity-detail-fixes` in `7885efd`..`d1e391e`: `7885efd`
 (shared `listCapabilities` + additive `List.capabilities.ingredients`), `f986ede` (the client
 flattening), and the review-fix commits after it. Two real bugs that motivated this report
 were fixed first and are unaffected by the choice of option (`cf71244`, `536ce7d`, `e53911d`,
