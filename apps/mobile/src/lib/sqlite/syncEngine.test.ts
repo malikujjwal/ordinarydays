@@ -5204,6 +5204,7 @@ describe('serialized native convergence guard', () => {
       ownerId: OWNER,
       schemaVersion: 2,
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
@@ -5278,6 +5279,7 @@ describe('serialized native convergence guard', () => {
       ownerId: OWNER,
       schemaVersion: 2,
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
@@ -5370,6 +5372,7 @@ describe('serialized native convergence guard', () => {
       ownerId: OWNER,
       schemaVersion: 2,
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
@@ -5391,6 +5394,8 @@ describe('serialized native convergence guard', () => {
         labels: { open: 'Queued', active: 'Watching', done: 'Watched' },
         groupByState: true,
       },
+      // The read projection derives this from the mode, so it follows the new one.
+      capabilities: { ingredients: false },
       updatedAt: instant.parse('2026-08-20T00:00:00.000Z'),
     };
     const lists = new ListsRepository(database, new RepositorySubscriptions());
@@ -5474,6 +5479,7 @@ describe('serialized native convergence guard', () => {
       ownerId: OWNER,
       schemaVersion: 2,
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
@@ -5575,6 +5581,7 @@ describe('serialized native convergence guard', () => {
     const LIST_ID = 'lst_01J0000000000000000000000D';
     const SEED = {
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: {
         subItems: {
           enabled: true,
@@ -5601,6 +5608,7 @@ describe('serialized native convergence guard', () => {
       ownerId: OWNER,
       schemaVersion: 2,
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: SEED.featureConfig,
       templateKey: 'groceries',
       title: 'Costco run',
@@ -6196,6 +6204,7 @@ describe('serialized native convergence guard', () => {
       ownerId: OWNER,
       schemaVersion: 2,
       itemStateMode: { mode: 'checkbox' },
+      capabilities: { ingredients: true },
       featureConfig: {},
       templateKey: 'groceries',
       title: 'Groceries',
