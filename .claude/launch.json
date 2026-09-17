@@ -36,6 +36,53 @@
         "8082"
       ],
       "port": 8082
+    },
+    {
+      "name": "dev-sdk57",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "C:/Git/worktrees/ordinarydays/codex-expo-sdk-57", "dev"],
+      "port": 8081
+    },
+    {
+      "name": "dev-slice",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "C:/Git/worktrees/ordinarydays/slice-1-guard", "dev"],
+      "port": 8081
+    },
+    {
+      "name": "dev-integration",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "C:/Git/worktrees/ordinarydays/detail-integration", "dev"],
+      "port": 8081
+    },
+    {
+      "name": "detail-integration-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--dir",
+        "C:/Git/worktrees/ordinarydays/detail-integration/apps/mobile",
+        "exec",
+        "expo",
+        "start",
+        "--web",
+        "--port",
+        "8083"
+      ],
+      "port": 8083
+    },
+    {
+      "name": "design-pilot",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8101",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "docs/design-pilots/activity-details-20260905"
+      ],
+      "port": 8101
     }
   ]
 }
