@@ -14,9 +14,11 @@ import type {
   ProgressFeatureConfig,
   SubItemsFeatureConfig,
 } from '@od/shared/types';
+import { useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useEffect, useState } from 'react';
 import { useClock } from '@/hooks/useClock';
+import { ME_QUERY_KEY } from '@/hooks/useViewer';
 import { apiClient } from '@/lib/apiClient';
 import { type ToastMessage, useToast } from '@/stores/toast';
 import {
@@ -89,6 +91,7 @@ export function undoOutcomeMessage(outcome: 'expired' | 'no_longer_applicable'):
 
 export function useListSettings({ list, onChanged }: ListSettingsInput): ListSettings {
   const clock = useClock();
+  const queryClient = useQueryClient();
   const show = useToast((state) => state.show);
   const showUndo = useToast((state) => state.showUndo);
   const dismiss = useToast((state) => state.dismiss);
@@ -122,6 +125,11 @@ export function useListSettings({ list, onChanged }: ListSettingsInput): ListSet
             void undoListOperation(apiClient, target.listId, result.undoToken, key)
               .then((response) => {
                 onChanged();
+                // A slot Undo may restore or clear a profile default on either side of the
+                // change it reverses (ADR-060); the same cache the forward change invalidates.
+                if (change.kind === 'slot' && response.data.outcome === 'applied') {
+                  void queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+                }
                 if (response.data.outcome === 'applied') return;
                 rollback(revert);
                 show({
@@ -138,7 +146,7 @@ export function useListSettings({ list, onChanged }: ListSettingsInput): ListSet
         }),
       );
     },
-    [clock, dismiss, onChanged, rollback, show, showUndo],
+    [clock, dismiss, onChanged, queryClient, rollback, show, showUndo],
   );
 
   const send = useCallback(
@@ -157,6 +165,17 @@ export function useListSettings({ list, onChanged }: ListSettingsInput): ListSet
         void patchList(apiClient, target.listId, patch, target.updatedAt, key)
           .then((result) => {
             onChanged();
+            /**
+             * A slot change that named a list (never a clear) may have just set
+             * `defaultLists[slot]` on this profile (ADR-060, "Default destination") — the
+             * settings PATCH's own response is the List, not the profile, so the only way
+             * the picker sees the new default without the user reopening it is to invalidate
+             * the shared `me` cache and let it refetch. Scoped to slot changes: every other
+             * settings field never touches `defaultLists`.
+             */
+            if ('slot' in patch && patch.slot !== null) {
+              void queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+            }
             offerUndo(target, result, change, revert);
           })
           .catch((error: unknown) => {
@@ -167,7 +186,7 @@ export function useListSettings({ list, onChanged }: ListSettingsInput): ListSet
       };
       run();
     },
-    [dismiss, offerUndo, onChanged, rollback, show],
+    [dismiss, offerUndo, onChanged, queryClient, rollback, show],
   );
 
   const rename = useCallback(

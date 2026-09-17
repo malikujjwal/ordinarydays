@@ -96,6 +96,7 @@ import { MAX_TRANSACT_ITEMS, TransactionBuilder, transactWrite } from './tx.js';
 import {
   removeDefaultListTransactItem,
   restoreDefaultListTransactItem,
+  setDefaultListTransactItem,
 } from './userRepository.js';
 
 /**
@@ -339,6 +340,21 @@ class StaleProfileDefaultError extends Error {
   constructor() {
     super('The profile default changed while the list was being written.');
     this.name = 'StaleProfileDefaultError';
+  }
+}
+
+/**
+ * The conditional profile-default **set** item failed on its structural guess: `defaultLists`
+ * either already existed when a create-shaped item assumed it did not, or still does not
+ * exist when a nested-shaped item assumed it did (ADR-060). Distinct from
+ * {@link StaleProfileDefaultError}, whose condition is about a *value* (a newer choice
+ * survives) rather than the *shape* of the attribute a document path is written through —
+ * the recovery is also different: flip the shape and retry, once, never drop the write.
+ */
+class StaleProfileDefaultMapError extends Error {
+  constructor() {
+    super('The profile default map changed shape while the list was being written.');
+    this.name = 'StaleProfileDefaultMapError';
   }
 }
 
@@ -1320,6 +1336,12 @@ export interface RemovedListDefault {
   readonly listId: string;
 }
 
+/** The exact profile default a forward settings change set, for its inverse (ADR-060). */
+export interface SetListDefault {
+  readonly slot: DefaultSlot;
+  readonly listId: string;
+}
+
 /**
  * What an Undo of one additive settings operation would write back
  * (`data-model.md` §3.3, §7 "Undo List operation").
@@ -1336,6 +1358,13 @@ export interface ListSettingsInverse {
   readonly archived?: boolean;
   /** Restored only while nothing newer occupies that slot (P3-12). */
   readonly removedDefault?: RemovedListDefault;
+  /**
+   * Cleared only while it still names this list (ADR-060) — the exact condition
+   * `removeDefaultListTransactItem` already enforces for `removedDefault`'s clear, reused
+   * here for the opposite direction: a newer choice made since the forward change survives
+   * undo, exactly as one made since a forward *clear* survives it.
+   */
+  readonly setDefault?: SetListDefault;
 }
 
 /**
@@ -1526,13 +1555,25 @@ export interface PatchListMetaOptions {
    */
   readonly clearProfileDefault?: { readonly slot: DefaultSlot };
   /**
-   * Builds the Undo record **after** it is known whether the profile default was actually
-   * removed, for `createListItems`'s reason: the stored inverse must describe what this
-   * transaction really wrote. A destination chosen concurrently on another device fails only
-   * that item, the write retries without it, and the inverse must then not claim to have
-   * removed a default it left standing.
+   * Sets `defaultLists[slot] = listId` on the **caller's** profile in the same transaction
+   * (ADR-060, "Default destination"). Unconditional on the slot's prior occupant — see
+   * `listSlotService.ts`'s `profileDefaultToSet` — so, unlike `clearProfileDefault`, this
+   * never degrades to skipping; a race is only ever over which DynamoDB shape the write needs
+   * (`setDefaultListTransactItem`'s `createMap`), and that is what retries.
    */
-  readonly undoFor?: (removedDefault?: RemovedListDefault) => ListSettingsUndo;
+  readonly setProfileDefault?: { readonly slot: DefaultSlot };
+  /**
+   * Builds the Undo record **after** it is known whether the profile default was actually
+   * removed and/or set, for `createListItems`'s reason: the stored inverse must describe what
+   * this transaction really wrote. A destination chosen concurrently on another device fails
+   * only that item, the write retries without it, and the inverse must then not claim to have
+   * removed a default it left standing; the set half has no such degrade (see above), so it is
+   * always the value `setProfileDefault` names whenever that option is present.
+   */
+  readonly undoFor?: (
+    removedDefault?: RemovedListDefault,
+    setDefault?: SetListDefault,
+  ) => ListSettingsUndo;
   /** Replay receipt for the durable settings PATCH. */
   readonly idempotencyReceipt?: IdempotencyReceipt;
 }
@@ -1585,9 +1626,22 @@ export async function patchListMeta(
   }
 
   let clearDefault = options.clearProfileDefault;
+  /**
+   * Whether `defaultLists` is assumed to already exist. Starts optimistic — true for every
+   * profile once any default has ever been set, which after ADR-060 ships is quickly the
+   * common case — and flips at most once, on this specific item's own condition failure, to
+   * the create-map shape. It never flips back: nothing removes the whole map once created, so
+   * a second failure of the same item is a real error (most plausibly no profile row at all),
+   * not another shape guess.
+   */
+  let createDefaultMap = false;
   for (;;) {
     const removedDefault =
       clearDefault === undefined ? undefined : { slot: clearDefault.slot, listId };
+    const setDefault =
+      options.setProfileDefault === undefined
+        ? undefined
+        : { slot: options.setProfileDefault.slot, listId };
     const builder = new TransactionBuilder(
       'patchListMeta',
       options.idempotencyReceipt === undefined ? 0 : 1,
@@ -1638,7 +1692,11 @@ export async function patchListMeta(
     if (options.undoFor !== undefined) {
       builder.add({
         Put: {
-          Item: settingsUndoItem(listId, options.undoFor(removedDefault), updatedAt),
+          Item: settingsUndoItem(
+            listId,
+            options.undoFor(removedDefault, setDefault),
+            updatedAt,
+          ),
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       });
@@ -1646,6 +1704,14 @@ export async function patchListMeta(
     const profileIndex = clearDefault === undefined ? -1 : builder.length;
     if (clearDefault !== undefined) {
       builder.add(removeDefaultListTransactItem(userId, clearDefault.slot, listId));
+    }
+    const setIndex = options.setProfileDefault === undefined ? -1 : builder.length;
+    if (options.setProfileDefault !== undefined) {
+      builder.add(
+        setDefaultListTransactItem(userId, options.setProfileDefault.slot, listId, {
+          createMap: createDefaultMap,
+        }),
+      );
     }
     const receiptIndex = builder.length;
     if (options.idempotencyReceipt !== undefined) {
@@ -1660,7 +1726,8 @@ export async function patchListMeta(
           if (index === receiptIndex && options.idempotencyReceipt !== undefined) {
             return new IdempotencyRaceError();
           }
-          return index === profileIndex ? new StaleProfileDefaultError() : undefined;
+          if (index === profileIndex) return new StaleProfileDefaultError();
+          return index === setIndex ? new StaleProfileDefaultMapError() : undefined;
         },
       });
       return;
@@ -1673,6 +1740,16 @@ export async function patchListMeta(
        */
       if (error instanceof StaleProfileDefaultError && clearDefault !== undefined) {
         clearDefault = undefined;
+        continue;
+      }
+      /**
+       * The set item's own structural guess was wrong — `defaultLists` did not have the
+       * shape `createDefaultMap` assumed. Flip it and retry the same write; a second failure
+       * of this same item after flipping is a real error (most plausibly no profile row at
+       * all) and propagates rather than looping.
+       */
+      if (error instanceof StaleProfileDefaultMapError && !createDefaultMap) {
+        createDefaultMap = true;
         continue;
       }
       throw error;
@@ -4580,6 +4657,23 @@ export async function applyListSettingsInverse(
       ),
     );
   }
+  /**
+   * The mirror of the restore above: undoing a settings change that **set** a default
+   * (ADR-060) clears it, and only while it still names this list — the same
+   * `removeDefaultListTransactItem` the forward path's own clearing uses, so "a newer choice
+   * survives" is one implementation on both sides of the operation, not two that could drift.
+   */
+  let setDefaultIndex = -1;
+  if (inverse.setDefault !== undefined) {
+    setDefaultIndex = builder.length;
+    builder.add(
+      removeDefaultListTransactItem(
+        userId,
+        inverse.setDefault.slot,
+        inverse.setDefault.listId,
+      ),
+    );
+  }
   builder.add(consumeUndoAction(listId, options.operationId, options.now));
   const consumeIndex = builder.length - 1;
   if (options.receiptFor !== undefined) {
@@ -4591,7 +4685,12 @@ export async function applyListSettingsInverse(
     operation: 'applyListSettingsInverse',
     onConditionFailed: (index) => {
       if (index === 0) return new ListNotFoundError();
-      if (index === metaIndex || index === profileIndex || index === consumeIndex) {
+      if (
+        index === metaIndex ||
+        index === profileIndex ||
+        index === setDefaultIndex ||
+        index === consumeIndex
+      ) {
         return new ListUndoNotApplicableError();
       }
       return new IdempotencyRaceError();

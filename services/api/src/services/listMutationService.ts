@@ -15,10 +15,11 @@ import {
   newListOperationId,
   patchListMeta,
   type RemovedListDefault,
+  type SetListDefault,
 } from '../repositories/listRepository.js';
 import { assertActivityAccess, assertListAccess, type ListAccess } from './authz.js';
 import { drainRankRepair } from './listRankRepairService.js';
-import { profileDefaultToClear } from './listSlotService.js';
+import { profileDefaultToClear, profileDefaultToSet } from './listSlotService.js';
 
 export interface ListSettingsResult {
   readonly list: List;
@@ -171,9 +172,15 @@ export async function patchListSettings(
   }
 
   const clearsDefault = 'slot' in changed ? profileDefaultToClear(list) : undefined;
+  const setsDefault = profileDefaultToSet(changed);
   const reversible = input.sourceActivityId === undefined;
   let undo: ListSettingsResult['undo'];
-  let undoFor: ((removedDefault?: RemovedListDefault) => ListSettingsUndo) | undefined;
+  let undoFor:
+    | ((
+        removedDefault?: RemovedListDefault,
+        setDefault?: SetListDefault,
+      ) => ListSettingsUndo)
+    | undefined;
   if (reversible) {
     const operationId = newListOperationId();
     const { token } = mintUndoToken(operationId);
@@ -181,7 +188,7 @@ export async function patchListSettings(
       new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
     );
     undo = { token, expiresAt };
-    undoFor = (removedDefault) => ({
+    undoFor = (removedDefault, setDefault) => ({
       operationId,
       kind: 'settings',
       tokenHash: hashUndoToken(token),
@@ -193,6 +200,7 @@ export async function patchListSettings(
         ...('slot' in changed ? { slot: list.slot } : {}),
         ...('archived' in changed ? { archived: list.archived } : {}),
         ...(removedDefault === undefined ? {} : { removedDefault }),
+        ...(setDefault === undefined ? {} : { setDefault }),
       },
       preconditions: {
         ...('title' in changed ? { title: changed.title } : {}),
@@ -215,6 +223,7 @@ export async function patchListSettings(
   try {
     await patchListMeta(userId, listId, access.index, changed, list.updatedAt, now, {
       ...(clearsDefault === undefined ? {} : { clearProfileDefault: clearsDefault }),
+      ...(setsDefault === undefined ? {} : { setProfileDefault: setsDefault }),
       ...(undoFor === undefined ? {} : { undoFor }),
       ...(input.sourceActivityId === undefined
         ? {}

@@ -658,6 +658,34 @@ describe('the settings inverse', () => {
     expect(profile?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST_ID });
   });
 
+  /**
+   * The mirror of the restore test above: undoing a settings change that **set** a default
+   * (ADR-060) clears it through the same `removeDefaultListTransactItem` the forward change's
+   * own clearing uses — one implementation on both sides of the operation.
+   */
+  it('clears the set profile default in the same transaction, only while it still names this list', async () => {
+    await repository.applyListSettingsInverse(
+      ALICE,
+      LIST_ID,
+      access,
+      {
+        slot: null,
+        setDefault: { slot: 'groceries', listId: LIST_ID },
+      },
+      { slot: 'groceries' },
+      inverseOptions,
+    );
+
+    const profile = transacted().find(
+      (entry) => entry.Update?.Key?.pk === keys.userProfile(ALICE).pk,
+    )?.Update;
+    expect(profile?.UpdateExpression).toBe('REMOVE #defaultLists.#slot');
+    expect(profile?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND #defaultLists.#slot = :listId',
+    );
+    expect(profile?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST_ID });
+  });
+
   it.each([
     ['the settings condition', 1],
     ['the profile default', 2],
@@ -994,6 +1022,93 @@ describe('identity and list storage', () => {
     });
     expect(writes?.[4]?.ConditionCheck?.Key).toEqual(
       keys.activityTombstone(sourceActivityId),
+    );
+  });
+
+  /**
+   * ADR-060's "Default destination": a slot change sets the caller's profile default in the
+   * same transaction as the list's own `slot` field, optimistically assuming `defaultLists`
+   * already exists — the steady state once any default has ever been set.
+   */
+  it('sets the profile default in the same transaction as a slot change', async () => {
+    await repository.patchListMeta(
+      ALICE,
+      LIST_ID,
+      access,
+      { slot: 'groceries' },
+      NOW,
+      LATER,
+      { setProfileDefault: { slot: 'groceries' } },
+    );
+
+    const profile = transacted().find(
+      (entry) => entry.Update?.Key?.pk === keys.userProfile(ALICE).pk,
+    )?.Update;
+    expect(profile?.UpdateExpression).toBe('SET #defaultLists.#slot = :listId');
+    expect(profile?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_exists(#defaultLists)',
+    );
+    expect(profile?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST_ID });
+  });
+
+  /**
+   * `defaultLists` does not exist on every profile — it is optional, and the only writer
+   * today omits it (`services/api/scripts/seed-local.ts`). The nested `SET` above fails on
+   * such a profile because DynamoDB will not create an absent parent map for a document-path
+   * write, so the write retries once with a whole-map create, holding only this one slot.
+   */
+  it('creates the profile default map once the nested set fails on an absent map', async () => {
+    vi.mocked(tx.transactWrite).mockImplementationOnce(async (_items, options) => {
+      throw options.onConditionFailed?.(2);
+    });
+
+    await repository.patchListMeta(
+      ALICE,
+      LIST_ID,
+      access,
+      { slot: 'groceries' },
+      NOW,
+      LATER,
+      { setProfileDefault: { slot: 'groceries' } },
+    );
+
+    expect(vi.mocked(tx.transactWrite)).toHaveBeenCalledTimes(2);
+    const items = vi.mocked(tx.transactWrite).mock.calls[1]?.[0] ?? [];
+    const profile = items.find(
+      (entry) => entry.Update?.Key?.pk === keys.userProfile(ALICE).pk,
+    )?.Update;
+    expect(profile?.UpdateExpression).toBe('SET #defaultLists = :map');
+    expect(profile?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_not_exists(#defaultLists)',
+    );
+    expect(profile?.ExpressionAttributeValues).toEqual({
+      ':map': { groceries: LIST_ID },
+    });
+  });
+
+  /** Sets and clears compose in one transaction: a slot moving from one value to another. */
+  it('sets the new default and clears the old one in the same transaction', async () => {
+    await repository.patchListMeta(
+      ALICE,
+      LIST_ID,
+      access,
+      { slot: 'groceries' },
+      NOW,
+      LATER,
+      {
+        clearProfileDefault: { slot: 'watch' },
+        setProfileDefault: { slot: 'groceries' },
+      },
+    );
+
+    const [writes] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    const profileWrites = (writes ?? []).filter(
+      (entry) => entry.Update?.Key?.pk === keys.userProfile(ALICE).pk,
+    );
+    expect(profileWrites).toHaveLength(2);
+    expect(profileWrites[0]?.Update?.UpdateExpression).toBe('REMOVE #defaultLists.#slot');
+    expect(profileWrites[1]?.Update?.UpdateExpression).toBe(
+      'SET #defaultLists.#slot = :listId',
     );
   });
 });

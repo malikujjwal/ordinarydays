@@ -29,6 +29,7 @@ type Keys = typeof import('../../src/repositories/keys.js');
 type Ddb = typeof import('../../src/lib/ddb.js');
 type Authz = typeof import('../../src/services/authz.js');
 type ActivityRepository = typeof import('../../src/repositories/activityRepository.js');
+type UserRepository = typeof import('../../src/repositories/userRepository.js');
 
 let repository: Repository;
 let base: Base;
@@ -36,6 +37,7 @@ let keys: Keys;
 let ddbModule: Ddb;
 let authz: Authz;
 let activityRepository: ActivityRepository;
+let userRepository: UserRepository;
 type ListAccessGrant = NonNullable<Awaited<ReturnType<Repository['getListPointer']>>>;
 const accessByListId = new Map<string, ListAccessGrant>();
 
@@ -51,7 +53,22 @@ beforeAll(async () => {
   ddbModule = await import('../../src/lib/ddb.js');
   authz = await import('../../src/services/authz.js');
   activityRepository = await import('../../src/repositories/activityRepository.js');
+  userRepository = await import('../../src/repositories/userRepository.js');
 });
+
+/** A profile carrying whatever slot map the case needs — or none at all (ADR-060). */
+const seedProfile = (userId: string, defaultLists?: Record<string, string>) =>
+  userRepository.putProfile({
+    userId,
+    displayName: 'Dev',
+    timezone: 'America/New_York',
+    currency: 'USD',
+    weekStartsOn: 1,
+    ...(defaultLists === undefined ? {} : { defaultLists }),
+    createdAt: NOW,
+    updatedAt: NOW,
+    schemaVersion: 1,
+  } as never);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -237,6 +254,63 @@ describe('canonical list storage and list index', () => {
       index: { role: 'owner' },
       isOwner: true,
     });
+  });
+
+  /**
+   * ADR-060's "Default destination": a slot change against DynamoDB Local really does write
+   * both the list's own `slot` field and `defaultLists[slot]` on the caller's profile, in one
+   * transaction, when the profile already carries the map — the steady-state shape.
+   */
+  it('sets the profile default alongside a slot change, against a real table', async () => {
+    await seedProfile(ALICE, { watch: 'lst_int_repo_unrelated' });
+    const list = await createSubject();
+
+    await repository.patchListMeta(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      { slot: 'groceries' },
+      NOW,
+      LATER,
+      { setProfileDefault: { slot: 'groceries' } },
+    );
+
+    await expect(
+      repository.getListMeta(ALICE, list.listId, accessFor(list)),
+    ).resolves.toMatchObject({ slot: 'groceries' });
+    const profile = await userRepository.getProfile(ALICE);
+    expect(profile?.defaultLists).toEqual({
+      groceries: list.listId,
+      watch: 'lst_int_repo_unrelated',
+    });
+  });
+
+  /**
+   * The map-shape retry, against a real table: `defaultLists` is genuinely absent —
+   * DynamoDB refuses the nested `SET`, and the write retries once as a whole-map create
+   * holding only this one slot, in the same call the caller made.
+   */
+  it('creates the profile default map on a real table that has none yet', async () => {
+    await seedProfile(ALICE);
+    const list = await createSubject();
+
+    await repository.patchListMeta(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      { slot: 'watch' },
+      NOW,
+      LATER,
+      { setProfileDefault: { slot: 'watch' } },
+    );
+
+    const profile = await userRepository.getProfile(ALICE);
+    expect(profile?.defaultLists).toEqual({ watch: list.listId });
+  });
+
+  it('refuses a stranger read, patch and delete alike, all as not_found', async () => {
+    const list = await createSubject();
+
     await expect(authz.assertListAccess(BEN, list.listId, 'read')).rejects.toMatchObject({
       code: 'not_found',
     });

@@ -217,7 +217,9 @@ describe('ingredient destination capability', () => {
 
   it('writes the default once when a second pick lands before the first response', async () => {
     // Never resolves: the first write stays in flight while the user picks again.
-    const fetchSpy = vi.fn(() => new Promise(() => {}));
+    const fetchSpy = vi.fn(
+      (_url: string, _init?: { method?: string }) => new Promise(() => {}),
+    );
     vi.stubGlobal('fetch', fetchSpy);
     const { onChoose } = mount([GROCERIES, CHECKLIST]);
 

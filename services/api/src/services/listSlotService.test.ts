@@ -1,7 +1,7 @@
 import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { profileDefaultToClear } from './listSlotService.js';
+import { profileDefaultToClear, profileDefaultToSet } from './listSlotService.js';
 
 /**
  * `profileDefaultToClear` is what remains of this service after Option B1 removed
@@ -63,6 +63,37 @@ describe('profileDefaultToClear', () => {
    */
   it('reads no profile to decide', () => {
     profileDefaultToClear(list(TRADER_JOES, 'groceries'));
+
+    expect(vi.mocked(userRepository.getProfile)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `profileDefaultToSet`'s mirror, added for ADR-060's "Default destination" list-settings
+ * control (`docs/reports/destination-flow-simplification-20260916.md`): a list write that
+ * changes `slot` to a named value now sets that profile default too, in the same transaction
+ * `listRepository.ts`'s `patchListMeta` already opens for the clear.
+ */
+describe('profileDefaultToSet', () => {
+  it('names the slot a patch newly assigns', () => {
+    expect(profileDefaultToSet({ slot: 'groceries' })).toEqual({ slot: 'groceries' });
+  });
+
+  it('names nothing for a patch that clears the slot', () => {
+    expect(profileDefaultToSet({ slot: null })).toBeUndefined();
+  });
+
+  it('names nothing for a patch that does not touch the slot at all', () => {
+    expect(profileDefaultToSet({})).toBeUndefined();
+  });
+
+  /**
+   * Unconditional on the slot's prior occupant — the whole point being that this is the
+   * user's explicit choice, the same as the flat picker's own `remember()`, not a merge that
+   * needs to protect an existing answer.
+   */
+  it('reads no profile to decide', () => {
+    profileDefaultToSet({ slot: 'watch' });
 
     expect(vi.mocked(userRepository.getProfile)).not.toHaveBeenCalled();
   });

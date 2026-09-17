@@ -137,6 +137,54 @@ describe('patchListSettings', () => {
     ).toBeUndefined();
   });
 
+  /**
+   * ADR-060's "Default destination": a slot named for the first time sets the caller's
+   * profile default in the same write, and the built Undo would clear exactly that if asked.
+   */
+  it('sets the profile default alongside a newly named slot, with a matching Undo', async () => {
+    await patchListSettings(USER, LIST_ID, { slot: 'groceries' }, NOW, LATER);
+
+    expect(repository.patchListMeta).toHaveBeenCalledWith(
+      USER,
+      LIST_ID,
+      GRANT,
+      { slot: 'groceries' },
+      NOW,
+      LATER,
+      expect.objectContaining({ setProfileDefault: { slot: 'groceries' } }),
+    );
+    const options = vi.mocked(repository.patchListMeta).mock.calls[0]?.[6];
+    expect(options?.clearProfileDefault).toBeUndefined();
+    expect(
+      options?.undoFor?.(undefined, { slot: 'groceries', listId: LIST_ID }),
+    ).toMatchObject({
+      inverse: { slot: null, setDefault: { slot: 'groceries', listId: LIST_ID } },
+      preconditions: { slot: 'groceries' },
+    });
+  });
+
+  /** Clearing a slot to `null` only clears the default; there is nothing to set. */
+  it('clears, and never sets, the profile default when a slot is cleared', async () => {
+    vi.mocked(repository.getListMeta).mockResolvedValue(list({ slot: 'watch' }));
+
+    await patchListSettings(USER, LIST_ID, { slot: null }, NOW, LATER);
+
+    const options = vi.mocked(repository.patchListMeta).mock.calls[0]?.[6];
+    expect(options?.clearProfileDefault).toEqual({ slot: 'watch' });
+    expect(options?.setProfileDefault).toBeUndefined();
+  });
+
+  /** Moving a slot from one value to another both sets the new one and clears the old. */
+  it('sets the new slot default and clears the old one when a slot moves', async () => {
+    vi.mocked(repository.getListMeta).mockResolvedValue(list({ slot: 'watch' }));
+
+    await patchListSettings(USER, LIST_ID, { slot: 'groceries' }, NOW, LATER);
+
+    const options = vi.mocked(repository.patchListMeta).mock.calls[0]?.[6];
+    expect(options?.clearProfileDefault).toEqual({ slot: 'watch' });
+    expect(options?.setProfileDefault).toEqual({ slot: 'groceries' });
+  });
+
   it.each([
     ['title', { title: 'Watch later' }],
     ['itemStateMode', { itemStateMode: list().itemStateMode }],

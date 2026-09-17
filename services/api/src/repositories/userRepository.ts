@@ -374,3 +374,63 @@ export function removeDefaultListTransactItem(
     },
   };
 }
+
+/**
+ * The transaction item that writes `defaultLists[slot] = listId` inside a list write's own
+ * `TransactWriteItems` — ADR-060's "Default destination" settings control, in the same
+ * transaction as the `slot` field it names (`listSlotService.ts`).
+ *
+ * ## Unconditional on the prior occupant, on purpose
+ *
+ * This is an explicit choice, not a merge: the same unconditional-per-slot overwrite
+ * `patchProfile`'s nested `SET` already gives the flat picker's `remember()`. A newer choice
+ * made on another device between read and commit is not protected here, matching that
+ * precedent — whichever settings change or picker choice commits last is the default, and
+ * both are the user saying so.
+ *
+ * ## Two shapes, because a document path cannot create its own parent
+ *
+ * `SET #defaultLists.#slot` fails outright when `defaultLists` is not already an attribute on
+ * the item — DynamoDB does not create an absent parent map for a nested `SET`, and
+ * `defaultLists` is genuinely absent on every profile until its first write (it is
+ * `.optional()`; today's only writer, the seed script, omits it). `createMap: true` asks for
+ * the other shape instead: a whole-map `SET` holding **only** this one slot, valid only while
+ * `defaultLists` is `attribute_not_exists` — the same one-key-map exception
+ * `userRepository.ts`'s `createdSlotMapUpdate` already carries for `PATCH /v1/me`, and for the
+ * same reason: a single key with `attribute_not_exists` can never overwrite a sibling, because
+ * there is no sibling to have.
+ *
+ * The caller does not read the profile first to choose a shape. It tries `createMap: false`
+ * (the steady state, once any default has ever been set) and, on that item's own condition
+ * failing, retries the whole transaction once with `createMap: true` — `listRepository.ts`'s
+ * `patchListMeta` owns that retry, mirroring the bounded degrade `clearProfileDefault` already
+ * uses in the same function.
+ */
+export function setDefaultListTransactItem(
+  userId: string,
+  slot: DefaultSlot,
+  listId: string,
+  options: { readonly createMap: boolean },
+): TransactItem {
+  if (options.createMap) {
+    return {
+      Update: {
+        Key: userProfile(userId),
+        UpdateExpression: 'SET #defaultLists = :map',
+        ConditionExpression:
+          'attribute_exists(pk) AND attribute_not_exists(#defaultLists)',
+        ExpressionAttributeNames: { '#defaultLists': 'defaultLists' },
+        ExpressionAttributeValues: { ':map': { [slot]: listId } },
+      },
+    };
+  }
+  return {
+    Update: {
+      Key: userProfile(userId),
+      UpdateExpression: 'SET #defaultLists.#slot = :listId',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_exists(#defaultLists)',
+      ExpressionAttributeNames: { '#defaultLists': 'defaultLists', '#slot': slot },
+      ExpressionAttributeValues: { ':listId': listId },
+    },
+  };
+}
