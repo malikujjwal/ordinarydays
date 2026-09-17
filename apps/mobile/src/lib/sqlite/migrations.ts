@@ -1444,6 +1444,25 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
             CHECK (visibility_hidden IN (0, 1));
       `),
   },
+  {
+    version: 29,
+    name: 'list-item-origins',
+    /**
+     * The only carrier for Option B's derived `Added` presence (ADR-059 amendment,
+     * 2026-09-16): which meal ingredient(s) a list item answers for. `features_json` is a
+     * strict object with no room for an unrelated concern, and `source_label` is rendered
+     * text a client must never parse for identity, so origins need their own column.
+     *
+     * Nullable, no backfill: `NULL` is honest unknown, not a guess of absence. An existing
+     * row reads as no-origins until the next list pull installs the server-derived value —
+     * which renders as not-`Added` in the meantime, the same safe default an item that
+     * never had an origin gets.
+     */
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE list_items ADD COLUMN source_origins_json TEXT;
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

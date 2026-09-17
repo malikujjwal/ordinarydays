@@ -2485,6 +2485,23 @@ canonical detail replacement preserves a hidden bit until the List root is resto
 projection readers remain independent of outbox tables and payload JSON. This does not add a new
 projection, collection, queue or reconciliation owner.
 
+**Amendment (2026-09-16 — list-item origins, Option B).** Migration 29 is permitted to add
+one nullable `source_origins_json` column to `list_items`, the sole carrier for ADR-060's
+follow-up: a meal's `Added` state stopped being a stored marker on the Activity and became
+presence derived from whether the **destination list's own item** still originates from that
+meal's ingredient (`docs/reports/destination-flow-simplification-20260916.md`, Option B). No
+other native column can hold it — `features_json` is a strict object with no room for an
+unrelated concern, and `source_label` is rendered text a client must never parse for identity
+— so without this column the derived-presence feature would be unavailable on device, same
+as ADR-059's original phone-use gate for migration 27. `NULL` is honest-unknown, not a guess
+of absence, and there is no backfill: an existing row reads as no-origins until the next list
+pull installs the server-derived value, which renders identically to a row that never had an
+origin (not-`Added`, never a false claim). Written and read by the item's one existing writer
+(`listItemsRepository.ts`'s `writeItemRow`/`fromRow`) exactly as `features_json` and the
+viewer pair already are — no new writer, no new table, no new reconciliation mechanism, and a
+corrupt or unparsable column degrades to absence rather than failing the row's read, the same
+tolerance the viewer pair already has for its own columns.
+
 ---
 
 ## ADR-060 — One derived list capability; the destination picker flattens onto it

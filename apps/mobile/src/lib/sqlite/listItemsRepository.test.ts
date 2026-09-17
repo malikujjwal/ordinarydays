@@ -379,4 +379,140 @@ describe('the SQLite item slice', () => {
     expect(await items.read(LIST)).toEqual([]);
     expect(await items.pageState(LIST)).toBeUndefined();
   });
+
+  /**
+   * Which meal ingredient(s) a row answers for (migration 29, ADR-059 amendment,
+   * 2026-09-16) — the only carrier for Option B's derived `Added` presence. `origins` is
+   * item truth like `sourceActivityId`/`sourceLabel`, so it round-trips through the same
+   * write path as every other item field; unlike them, a corrupt or absent column must never
+   * fail the read, because "unknown" is this feature's safe default.
+   */
+  describe('list item origins', () => {
+    it('round-trips a stored item that answers for a meal ingredient', async () => {
+      const stored = item('itm_01J000000000000000000000AA', 'a', {
+        origins: [
+          {
+            activityId: 'act_01J0000000000000000000000A',
+            ingredientId: 'ing_01J0000000000000000000000B',
+          },
+        ],
+      });
+
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(transaction, LIST, [stored], page()),
+      );
+
+      expect((await items.read(LIST))[0]).toEqual(stored);
+    });
+
+    it('allows the same ingredient to originate rows on two different lists', async () => {
+      const origin = [
+        {
+          activityId: 'act_01J0000000000000000000000A',
+          ingredientId: 'ing_01J0000000000000000000000B',
+        },
+      ];
+      await transactions.run(async (transaction) => {
+        await items.replaceFirstPage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a', { origins: origin })],
+          page(),
+        );
+        await items.replaceFirstPage(
+          transaction,
+          OTHER_LIST,
+          [
+            item('itm_01J000000000000000000000BB', 'a', {
+              listId: OTHER_LIST,
+              origins: origin,
+            }),
+          ],
+          page(),
+        );
+      });
+
+      expect((await items.read(LIST))[0]?.origins).toEqual(origin);
+      expect((await items.read(OTHER_LIST))[0]?.origins).toEqual(origin);
+    });
+
+    it('has no origins on an ordinary item, not an empty array', async () => {
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a')],
+          page(),
+        ),
+      );
+
+      expect((await items.read(LIST))[0]?.origins).toBeUndefined();
+    });
+
+    it('tolerates a NULL origins column as absence', async () => {
+      if (database === undefined) throw new Error('missing item database');
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a')],
+          page(),
+        ),
+      );
+
+      expect(
+        await database.first(
+          `SELECT source_origins_json FROM list_items WHERE item_id = 'itm_01J000000000000000000000AA';`,
+        ),
+      ).toEqual({ source_origins_json: null });
+      expect(
+        (await items.getLocal('itm_01J000000000000000000000AA'))?.origins,
+      ).toBeUndefined();
+    });
+
+    it('tolerates unparsable origins JSON as absence, never a throw', async () => {
+      if (database === undefined) throw new Error('missing item database');
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a')],
+          page(),
+        ),
+      );
+      await database.run(
+        'UPDATE list_items SET source_origins_json = ? WHERE item_id = ?;',
+        ['{not-valid-json', 'itm_01J000000000000000000000AA'],
+      );
+
+      const row = await items.getLocal('itm_01J000000000000000000000AA');
+      expect(row).toEqual(
+        expect.objectContaining({ itemId: 'itm_01J000000000000000000000AA' }),
+      );
+      expect(row?.origins).toBeUndefined();
+    });
+
+    it('tolerates a malformed origins shape as absence, never a throw', async () => {
+      if (database === undefined) throw new Error('missing item database');
+      await transactions.run((transaction) =>
+        items.replaceFirstPage(
+          transaction,
+          LIST,
+          [item('itm_01J000000000000000000000AA', 'a')],
+          page(),
+        ),
+      );
+      await database.run(
+        'UPDATE list_items SET source_origins_json = ? WHERE item_id = ?;',
+        [
+          JSON.stringify([{ activityId: 'act_only_no_ingredient' }]),
+          'itm_01J000000000000000000000AA',
+        ],
+      );
+
+      expect(
+        (await items.getLocal('itm_01J000000000000000000000AA'))?.origins,
+      ).toBeUndefined();
+    });
+  });
 });

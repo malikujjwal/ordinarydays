@@ -866,4 +866,39 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toEqual({ visibility_hidden: 0 });
   });
+
+  it('adds a nullable list-item origins column, honest-unknown for existing rows', async () => {
+    if (database === undefined) throw new Error('missing migration test database');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 28));
+    await database.run(
+      `INSERT INTO list_items (item_id, list_id, rank, title, state)
+       VALUES ('itm_existing_origin', 'lst_existing_origin', 'a0', 'Chicken', 'open');`,
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT source_origins_json FROM list_items WHERE item_id = 'itm_existing_origin';`,
+      ),
+    ).toEqual({ source_origins_json: null });
+
+    /* The column round-trips once a later write installs a derived value. */
+    await database.run(
+      'UPDATE list_items SET source_origins_json = ? WHERE item_id = ?;',
+      [
+        JSON.stringify([{ activityId: 'act_meal', ingredientId: 'ing_chicken' }]),
+        'itm_existing_origin',
+      ],
+    );
+    expect(
+      await database.first(
+        `SELECT source_origins_json FROM list_items WHERE item_id = 'itm_existing_origin';`,
+      ),
+    ).toEqual({
+      source_origins_json: JSON.stringify([
+        { activityId: 'act_meal', ingredientId: 'ing_chicken' },
+      ]),
+    });
+  });
 });

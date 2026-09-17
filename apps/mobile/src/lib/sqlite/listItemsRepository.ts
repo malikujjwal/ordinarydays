@@ -7,6 +7,7 @@ import {
 } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type {
+  ItemOrigin,
   ListItemActivityLink,
   ListItemPlanState,
   ListItemView,
@@ -78,6 +79,35 @@ function json(row: SqliteRow, column: string): unknown {
   return typeof value === 'string' ? (JSON.parse(value) as unknown) : undefined;
 }
 
+function isStoredOrigin(value: unknown): value is ItemOrigin {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { activityId?: unknown }).activityId === 'string' &&
+    typeof (value as { ingredientId?: unknown }).ingredientId === 'string'
+  );
+}
+
+/**
+ * Reads `source_origins_json` without ever throwing (migration 29, ADR-059 amendment,
+ * 2026-09-16): a missing column, a non-string value, unparsable JSON or a malformed shape
+ * all mean "unknown", which the presence predicate treats identically to "no origins" —
+ * absence is the safe default either way, never a guess. Unlike `json()` above, this does
+ * not let `JSON.parse` throw through a corrupt value, because a corrupt local column must
+ * degrade a row to "not derived yet" rather than fail the read.
+ */
+function readOrigins(row: SqliteRow): ItemOrigin[] | undefined {
+  const raw = row.source_origins_json;
+  if (typeof raw !== 'string') return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  return Array.isArray(parsed) && parsed.every(isStoredOrigin) ? parsed : undefined;
+}
+
 /**
  * Parsed through `listItemView`, not cast — the boundary rule `listsRepository` states: the
  * rows came from the network once, but they came back out of SQLite where a migration or a
@@ -88,6 +118,7 @@ function fromRow(row: SqliteRow): ListItemRow {
   const sourceActivityId = text(row, 'source_activity_id');
   const sourceLabel = text(row, 'source_label');
   const features = json(row, 'features_json');
+  const origins = readOrigins(row);
 
   const item = listItemView.parse({
     itemId: text(row, 'item_id'),
@@ -99,6 +130,7 @@ function fromRow(row: SqliteRow): ListItemRow {
     ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
     ...(sourceLabel === undefined ? {} : { sourceLabel }),
     ...(features === undefined ? {} : { features }),
+    ...(origins === undefined ? {} : { origins }),
   }) as ListItemView;
 
   /*
@@ -170,25 +202,27 @@ function assertBelongsToList(items: readonly ListItemRow[], listId: string): voi
 /** Two complete, greppable statements — never assembled by concatenating SQL fragments. */
 const ITEM_UPSERT_SQL = `INSERT INTO list_items (
   item_id, list_id, rank, title, note, state, features_json,
-  source_activity_id, source_label, viewer_link_json, viewer_plan_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(item_id) DO UPDATE SET
-  list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
-  note=excluded.note, state=excluded.state,
-  features_json=excluded.features_json,
-  source_activity_id=excluded.source_activity_id,
-  source_label=excluded.source_label;`;
-
-const ITEM_UPSERT_WITH_PAIR_SQL = `INSERT INTO list_items (
-  item_id, list_id, rank, title, note, state, features_json,
-  source_activity_id, source_label, viewer_link_json, viewer_plan_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  source_activity_id, source_label, source_origins_json, viewer_link_json, viewer_plan_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(item_id) DO UPDATE SET
   list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
   note=excluded.note, state=excluded.state,
   features_json=excluded.features_json,
   source_activity_id=excluded.source_activity_id,
   source_label=excluded.source_label,
+  source_origins_json=excluded.source_origins_json;`;
+
+const ITEM_UPSERT_WITH_PAIR_SQL = `INSERT INTO list_items (
+  item_id, list_id, rank, title, note, state, features_json,
+  source_activity_id, source_label, source_origins_json, viewer_link_json, viewer_plan_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_id) DO UPDATE SET
+  list_id=excluded.list_id, rank=excluded.rank, title=excluded.title,
+  note=excluded.note, state=excluded.state,
+  features_json=excluded.features_json,
+  source_activity_id=excluded.source_activity_id,
+  source_label=excluded.source_label,
+  source_origins_json=excluded.source_origins_json,
   viewer_link_json=excluded.viewer_link_json,
   viewer_plan_json=excluded.viewer_plan_json;`;
 
@@ -207,6 +241,9 @@ async function writeItemRow(
     item.features === undefined ? null : JSON.stringify(item.features),
     item.sourceActivityId ?? null,
     item.sourceLabel ?? null,
+    // Item truth, like every column above it: written whenever the item is, never preserved
+    // across a write the way the viewer pair below is.
+    item.origins === undefined ? null : JSON.stringify(item.origins),
     // Pointer and state travel together or not at all (§3): a half-pair stores as absence.
     ...(item.viewerLink === undefined || item.viewerPlan === undefined
       ? [null, null]

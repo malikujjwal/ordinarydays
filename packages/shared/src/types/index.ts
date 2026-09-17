@@ -65,6 +65,7 @@ export type {
 export type { DeletedList } from './deletedList.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type {
+  ItemOrigin,
   ItemStateMode,
   List,
   ListCapabilities,
