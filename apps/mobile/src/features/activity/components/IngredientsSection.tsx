@@ -4,6 +4,7 @@ import { IngredientPicker } from '@/components/IngredientPicker';
 import { SectionFrame } from '@/features/activity/components/SectionFrame';
 import { useAddIngredients } from '@/features/activity/hooks/useAddIngredients';
 import { useDestination } from '@/hooks/useDestination';
+import { useIngredientPresence } from '@/hooks/useIngredientPresence';
 
 /**
  * The INGREDIENTS section on a Meal (P3-43, `plans-and-lists.md` §7.3): rows with
@@ -11,6 +12,11 @@ import { useDestination } from '@/hooks/useDestination';
  * `groceries` slot and always shown, and the one named action `Add n to <list>` that calls
  * P3-17's activity-scoped route with the selected stable `ing_` ids. Rows already added
  * read `Added` and cannot be added twice from this meal.
+ *
+ * `Added` is derived, not stored (Option B, 2026-09-16): `useIngredientPresence` reads
+ * whether the **resolved destination** currently holds a live item for each ingredient, so
+ * changing the destination, deleting that item, or losing the list re-offers the row on the
+ * next read — there is no `MealIngredient.addedToListId` marker left to disagree with it.
  *
  * A refused write — the meal's rows changed under the selection — is the whole action
  * refused, never a partial add (§5.3): the toast's `Reopen` refetches the meal.
@@ -37,12 +43,17 @@ export function IngredientsSection({
   onEdit,
 }: IngredientsSectionProps) {
   const destination = useDestination('groceries', destinationOverride);
+  const presence = useIngredientPresence(activityId, destination.list?.listId);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const add = useAddIngredients(activityId, {
     onSettledSelection: () => setSelected(new Set()),
   });
 
-  const addedCount = ingredients.filter((row) => row.addedToListId !== undefined).length;
+  // Unknown presence renders as absent, never as `Added` on a guess (§7.3): an empty
+  // `presence.present` already produces the honest `0`/full count either way.
+  const addedCount = ingredients.filter((row) =>
+    presence.present.has(row.ingredientId),
+  ).length;
 
   return (
     <SectionFrame
@@ -64,7 +75,12 @@ export function IngredientsSection({
       testID="section-ingredients"
     >
       <IngredientPicker
-        rows={ingredients}
+        rows={ingredients.map((row) => ({
+          ingredientId: row.ingredientId,
+          name: row.name,
+          ...(row.quantity === undefined ? {} : { quantity: row.quantity }),
+          added: presence.present.has(row.ingredientId),
+        }))}
         selected={selected}
         onToggle={(ingredientId, on) =>
           setSelected((current) => {

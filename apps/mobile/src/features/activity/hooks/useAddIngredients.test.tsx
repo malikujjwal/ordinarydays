@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ingredientPresenceKey } from '@/hooks/useIngredientPresence';
 import { activityKey, LISTS_KEY } from '@/lib/queryKeys';
 import { type NativeActivityState, setActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useAddIngredients } from './useAddIngredients';
@@ -112,6 +113,9 @@ describe('web (React Query-backed detail)', () => {
     await waitFor(() => expect(cleared).toHaveBeenCalledOnce());
     expect(invalidate).toHaveBeenCalledWith({ queryKey: activityKey(ACTIVITY) });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: LISTS_KEY });
+    // Option B, 2026-09-16: `Added` is `useIngredientPresence`'s read of the destination, not
+    // the meal's marker, so that is the entry a successful add must invalidate.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ingredientPresenceKey(LIST) });
   });
 });
 

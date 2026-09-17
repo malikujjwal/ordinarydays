@@ -54,7 +54,10 @@ interface ActivityRow {
   status: string;
   objectKind: string;
   schedule?: { date: string };
-  details?: { ingredients?: { name: string; addedToListId?: string }[] };
+  // `Added` is presence on the destination list (Option B, 2026-09-16), not a field the
+  // meal carries any more — assert it by reading the list's items (`items()` below), never
+  // this shape.
+  details?: { ingredients?: { name: string }[] };
 }
 
 interface PlansData {

@@ -19,8 +19,8 @@ import {
  *   `Choose or create a list` when nothing holds the slot.
  * - **The action names the count and the list.** Until a destination exists it reads
  *   `Add n selected` and is disabled; nothing is written until it is tapped.
- * - A row already added (`addedToListId`) reads `Added` and cannot be added twice from the
- *   same meal (§7.3 step 5).
+ * - A row already `added` (Option B, 2026-09-16: presence on the destination list, never a
+ *   stored marker) reads `Added` and cannot be added twice from the same meal (§7.3 step 5).
  *
  * Used by the Meal's detail screen (writes through P3-17's action) and by the Meal creation
  * form (where the save carries the write). Neither path constructs provenance or calls the
@@ -38,7 +38,8 @@ export interface IngredientRow {
   readonly ingredientId: string;
   readonly name: string;
   readonly quantity?: string | undefined;
-  readonly addedToListId?: string | undefined;
+  /** Whether the current destination already holds a live item for this ingredient. */
+  readonly added: boolean;
 }
 
 export interface IngredientPickerProps {
@@ -78,9 +79,7 @@ export function IngredientPicker({
   testID = 'ingredient-picker',
 }: IngredientPickerProps) {
   const theme = useTheme();
-  const selectable = rows.filter(
-    (row) => row.addedToListId === undefined && row.name.trim() !== '',
-  );
+  const selectable = rows.filter((row) => !row.added && row.name.trim() !== '');
   const chosen = selectable.filter((row) => selected.has(row.ingredientId));
   const count = chosen.length;
   const placeholder = CHOOSE_OR_CREATE;
@@ -138,7 +137,7 @@ export function IngredientPicker({
 
       <View style={{ gap: theme.space[2] }}>
         {rows.map((row) => {
-          const added = row.addedToListId !== undefined;
+          const added = row.added;
           const title =
             row.quantity === undefined || row.quantity === ''
               ? row.name

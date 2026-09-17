@@ -6,13 +6,20 @@ import { IngredientPicker, type IngredientRow } from './IngredientPicker';
 /** The ingredient rows and the named action (P3-43, `plans-and-lists.md` §5.8, §7.3). */
 
 const ROWS: readonly IngredientRow[] = [
-  { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
-  { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2', name: 'Tortillas', quantity: '8' },
-  { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Tomatoes' },
+  { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken', added: false },
   {
+    ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
+    name: 'Tortillas',
+    quantity: '8',
+    added: false,
+  },
+  { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A3', name: 'Tomatoes', added: false },
+  {
+    // `added` is presence on the current destination (Option B), not a stored marker any
+    // more — this row is simply seeded as already present for the picker-rendering tests.
     ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A4',
     name: 'Sour cream',
-    addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1L1',
+    added: true,
   },
 ];
 

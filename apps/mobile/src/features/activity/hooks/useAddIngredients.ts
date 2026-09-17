@@ -2,6 +2,7 @@ import { ApiError, addIngredientsToList } from '@od/shared/client';
 import { type QueryClient, useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useRef } from 'react';
+import { ingredientPresenceKey } from '@/hooks/useIngredientPresence';
 import { apiClient } from '@/lib/apiClient';
 import { describeApiFailure } from '@/lib/apiFailure';
 import { INGREDIENTS_CHANGED } from '@/lib/destinationCopy';
@@ -31,9 +32,12 @@ import { useToast } from '@/stores/toast';
  * Activity is re-pulled through the sync engine's own `pullActivity` — the owner the detail
  * hook and the photo delete already use, which installs the canonical row the screen is
  * subscribed to — and the destination list's projection is refreshed through `pullListDetail`
- * without holding the button on it. Web keeps its query invalidation. The selection clears
- * only once the Activity refresh has landed, and the mutation stays pending until then, so
- * there is no window in which the rows look unadded while the add action is live.
+ * without holding the button on it. Web keeps its query invalidation, now including the
+ * destination's own `useIngredientPresence` entry (Option B, 2026-09-16): the row's `Added`
+ * state is that read, not the meal's, so nothing marks the row until the list itself has
+ * been re-fetched. The selection clears only once the Activity refresh has landed, and the
+ * mutation stays pending until then, so there is no window in which the rows look unadded
+ * while the add action is live.
  *
  * A second tap while one request is in flight is dropped here, synchronously, rather than
  * relying on the disabled button's next render.
@@ -140,5 +144,8 @@ async function refreshAfterAdd(
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: activityKey(activityId) }),
     queryClient.invalidateQueries({ queryKey: LISTS_KEY }),
+    ...(listId === undefined
+      ? []
+      : [queryClient.invalidateQueries({ queryKey: ingredientPresenceKey(listId) })]),
   ]);
 }

@@ -369,6 +369,8 @@ function renderField(
               ingredientId: row.id,
               name: row.name,
               ...(row.quantity === '' ? {} : { quantity: row.quantity }),
+              // The meal does not exist yet, so nothing it names can already be on a list.
+              added: false,
             }))}
           selected={
             new Set(details.ingredients.filter((r) => r.selected).map((r) => r.id))

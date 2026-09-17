@@ -704,11 +704,7 @@ describe('the sections', () => {
             kind: 'meal',
             ingredients: [
               { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1', name: 'Chicken' },
-              {
-                ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2',
-                name: 'Salsa',
-                addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1B1',
-              },
+              { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2', name: 'Salsa' },
             ],
           },
         }),
@@ -717,12 +713,15 @@ describe('the sections', () => {
     mount();
     await loaded();
 
+    // `Added` is presence on the destination (Option B, 2026-09-16), and no list has loaded
+    // in this harness, so nothing reads `Added` here — that path is
+    // `useIngredientPresence.native.test.tsx`/`.test.tsx`'s.
     expect(screen.getByTestId('section-ingredients').textContent).toContain(
-      '1 of 2 on a list',
+      'Ingredients2',
     );
     expect(
-      screen.getByTestId('ingredient-picker-added-ing_01J8XKQ2M4N5P6R7S8T9V0W1A2'),
-    ).toBeDefined();
+      screen.queryByTestId('ingredient-picker-added-ing_01J8XKQ2M4N5P6R7S8T9V0W1A2'),
+    ).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Edit ingredients' }));
     await screen.findByTestId('type-details-sheet');
     expect(fieldValue('Ingredient 2')).toBe('Salsa');

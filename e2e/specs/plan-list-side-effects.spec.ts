@@ -351,6 +351,8 @@ test('meal detail: the ingredients section adds only the selected rows, then mar
   await page.getByRole('checkbox', { name: 'Tortillas (8)' }).click();
   await page.getByRole('button', { name: 'Add 2 to Groceries' }).click();
 
+  // `Added` is presence on Groceries now (Option B, 2026-09-16), read fresh from the list
+  // this add just wrote to — not a marker stored on the meal.
   await expect(testId(page, `ingredient-picker-added-${ing('1')}`)).toHaveText('Added');
   await expect(testId(page, `ingredient-picker-added-${ing('2')}`)).toHaveText('Added');
   await expect(page.getByRole('checkbox', { name: 'Sour cream' })).toBeVisible();
